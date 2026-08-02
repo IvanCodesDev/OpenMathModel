@@ -5,7 +5,6 @@
 ## 当前状态
 
 - `apps/web/`：由原静态原型迁移完成的 React + Vite 前端，覆盖 14 个产品页面。
-- `audit-current/`：原型审计、React 迁移截图、对照证据与迁移前源码归档。
 - `references/`、`img/`：现有参考资料和品牌素材。
 - 产品工程骨架已经按“应用 / 服务 / Agent / 共享包 / 数据 / 基础设施”拆分，详见 [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)。
 
