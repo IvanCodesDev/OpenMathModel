@@ -1,0 +1,57 @@
+# JavaScript
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Rust / Tauri
+target/
+apps/desktop/src-tauri/gen/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data and artifacts
+datasets/raw/**
+datasets/interim/**
+datasets/processed/**
+!datasets/raw/.gitkeep
+!datasets/interim/.gitkeep
+!datasets/processed/.gitkeep
+artifacts/
+runs/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local project governance (never commit)
+/AGENTS.md
+/.agents/
+
+# Development-only material (never commit)
+/audit-current/
+/references/
+/tests/
+/doc/
+/design-qa.md
+
+# Keep /docs/ tracked: it is product documentation, distinct from /doc/.

@@ -1,0 +1,26 @@
+# React migration artifact manifest
+apps/web/package.json
+apps/web/package-lock.json
+apps/web/index.html
+apps/web/vite.config.js
+apps/web/eslint.config.js
+apps/web/.npmrc
+apps/web/src/main.jsx
+apps/web/src/App.jsx
+apps/web/src/screens.jsx
+apps/web/src/components/OpenMathModelScreen.jsx
+apps/web/src/legacy/openmathmodel-ui.js
+apps/web/src/styles.css
+apps/web/src/workflow-refresh.css
+apps/web/public/assets/
+audit-current/migration-backups/demo-source-before-react.zip
+audit-current/legacy-static-demo/
+audit-current/react-migration-*.png
+audit-current/react-migration-comparison/
+tools/verify-react-migration.ps1
+tools/rollback-react-migration.ps1
+design-qa.md
+docs/implementation/react-migration/verification-record.md
+docs/implementation/react-migration/root-height-fix.patch
+docs/implementation/react-migration/root-height-fix-verification.md
+tools/rollback-root-height-fix.ps1

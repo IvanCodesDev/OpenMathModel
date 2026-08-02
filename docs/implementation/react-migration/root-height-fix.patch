@@ -1,0 +1,7 @@
+--- a/apps/web/src/styles.css
++++ b/apps/web/src/styles.css
+@@
+-#app, .app-shell { width: 100%; height: 100%; }
++/* React mounts into #root; keep the full viewport height that the static #app
++   container previously provided so every percentage-based product shell works. */
++#root, #app, .app-shell { width: 100%; height: 100%; }
