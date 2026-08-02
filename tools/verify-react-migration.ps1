@@ -3,9 +3,9 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $required = @(
     'apps/web/package.json', 'apps/web/package-lock.json', 'apps/web/index.html',
-    'apps/web/vite.config.js', 'apps/web/src/main.jsx', 'apps/web/src/App.jsx',
-    'apps/web/src/screens.jsx', 'apps/web/src/components/OpenMathModelScreen.jsx',
-    'apps/web/src/legacy/openmathmodel-ui.js', 'apps/web/src/styles.css',
+    'apps/web/vite.config.ts', 'apps/web/src/main.tsx', 'apps/web/src/App.tsx',
+    'apps/web/src/screens.tsx', 'apps/web/src/components/OpenMathModelScreen.tsx',
+    'apps/web/src/legacy/openmathmodel-ui.ts', 'apps/web/src/styles.css',
     'apps/web/src/workflow-refresh.css', 'apps/web/public/assets/OpenMathModel_IP_Crop.png',
     'apps/web/dist/index.html', 'audit-current/migration-backups/demo-source-before-react.zip'
 )
@@ -20,14 +20,19 @@ if (Test-Path -LiteralPath (Join-Path $root 'demo')) {
     exit 1
 }
 
-$screens = Get-Content -LiteralPath (Join-Path $root 'apps/web/src/screens.jsx') -Raw
+$screens = Get-Content -LiteralPath (Join-Path $root 'apps/web/src/screens.tsx') -Raw
 $screenCount = ([regex]::Matches($screens, 'export const \w+Screen')).Count
 if ($screenCount -ne 14) {
     Write-Output "SCREEN_COUNT_INVALID $screenCount"
     exit 1
 }
 
-$legacy = Get-Content -LiteralPath (Join-Path $root 'apps/web/src/legacy/openmathmodel-ui.js') -Raw
+$javascriptSource = @(Get-ChildItem -LiteralPath (Join-Path $root 'apps/web/src') -Recurse -File | Where-Object { $_.Extension -in @('.js', '.jsx') })
+if ($javascriptSource.Count -gt 0) {
+    $javascriptSource | ForEach-Object { Write-Output "JAVASCRIPT_SOURCE_REMAINS $($_.FullName)" }
+    exit 1
+}
+$legacy = Get-Content -LiteralPath (Join-Path $root 'apps/web/src/legacy/openmathmodel-ui.ts') -Raw
 if ($legacy.Contains('.html"') -or $legacy.Contains('src="assets/')) {
     Write-Output 'LEGACY_ROUTE_OR_ASSET_REFERENCE_FOUND'
     exit 1

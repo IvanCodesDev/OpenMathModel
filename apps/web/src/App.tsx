@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import {
   ConfirmTaskScreen,
   DataScreen,
@@ -13,9 +14,9 @@ import {
   ProjectsScreen,
   TaskCompleteScreen,
   TaskRunningScreen,
-} from "./screens.jsx";
+} from "./screens";
 
-const routes = new Map([
+const routes = new Map<string, ComponentType>([
   ["/", NewTaskScreen],
   ["/confirm", ConfirmTaskScreen],
   ["/task/running", TaskRunningScreen],
@@ -32,7 +33,7 @@ const routes = new Map([
   ["/library/papers/detail", PaperDetailScreen],
 ]);
 
-function normalizePath(pathname) {
+function normalizePath(pathname: string): string {
   if (pathname.length > 1 && pathname.endsWith("/")) return pathname.slice(0, -1);
   return pathname;
 }

@@ -1,4 +1,4 @@
-import OpenMathModelScreen from "./components/OpenMathModelScreen.jsx";
+import OpenMathModelScreen from "./components/OpenMathModelScreen";
 
 export const NewTaskScreen = () => <OpenMathModelScreen screen="new" title="新任务" />;
 export const ConfirmTaskScreen = () => <OpenMathModelScreen screen="confirm" title="确认任务" />;

@@ -1,3 +1,6 @@
+// @ts-nocheck
+import type { ScreenId } from "../types/screens";
+
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
   const icon = (name, extra = "") => `<i class="ph ph-${name} ${extra}" aria-hidden="true"></i>`;
@@ -1886,11 +1889,11 @@ model.fit(X_train, y_train)</div></td></tr>
     }
   }
 
-export function getScreenMarkup(screen) {
+export function getScreenMarkup(screen: ScreenId): string {
   return (renderers[screen] || renderers.new)();
 }
 
-export function activateScreen(screen) {
+export function activateScreen(screen: ScreenId): void {
   document.body.dataset.screen = screen;
   bindCommon(screen);
   bindScreen(screen);

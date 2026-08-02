@@ -1,8 +1,15 @@
+import type { ReactNode } from "react";
 import { useLayoutEffect } from "react";
 import parse from "html-react-parser";
-import { activateScreen, getScreenMarkup } from "../legacy/openmathmodel-ui.js";
+import { activateScreen, getScreenMarkup } from "../legacy/openmathmodel-ui";
+import type { ScreenId } from "../types/screens";
 
-export default function OpenMathModelScreen({ screen, title }) {
+interface OpenMathModelScreenProps {
+  screen: ScreenId;
+  title: string;
+}
+
+export default function OpenMathModelScreen({ screen, title }: OpenMathModelScreenProps): ReactNode {
   const markup = getScreenMarkup(screen);
 
   useLayoutEffect(() => {

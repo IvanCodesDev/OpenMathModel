@@ -1,21 +1,23 @@
 import js from "@eslint/js";
 import globals from "globals";
+import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
-import react from "eslint-plugin-react";
+import tseslint from "typescript-eslint";
 
-export default [
-  { ignores: ["dist", "src/legacy/openmathmodel-ui.js"] },
+export default tseslint.config(
+  { ignores: ["dist", "src/legacy/openmathmodel-ui.ts"] },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
   {
-    files: ["**/*.{js,jsx}"],
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
       ecmaVersion: 2022,
       globals: globals.browser,
-      parserOptions: { ecmaVersion: "latest", sourceType: "module", ecmaFeatures: { jsx: true } },
+      parserOptions: { ecmaFeatures: { jsx: true } },
     },
     plugins: { react, "react-hooks": reactHooks, "react-refresh": reactRefresh },
     rules: {
-      ...js.configs.recommended.rules,
       ...react.configs.recommended.rules,
       ...react.configs["jsx-runtime"].rules,
       ...reactHooks.configs.recommended.rules,
@@ -24,4 +26,4 @@ export default [
     },
     settings: { react: { version: "detect" } },
   },
-];
+);
