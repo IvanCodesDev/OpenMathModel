@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omm-worker"
+version = "0.1.0"
+description = "执行面：JSONL 事件日志、文件队列、运行租约与幂等 Worker 运行时（驱动 Agent 状态机）"
+requires-python = ">=3.12"
+dependencies = ["omm-agent-core", "omm-agent-tools"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["omm_worker*"]
+
+[tool.setuptools.package-data]
+omm_worker = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

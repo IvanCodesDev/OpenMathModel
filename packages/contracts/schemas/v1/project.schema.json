@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.project",
+  "title": "Project",
+  "description": "一个持续存在的建模项目。领域对象事实来源为 PostgreSQL，本契约描述 API 对外表示。",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "#/$defs/project_id" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "所有者标识。MVP 单用户阶段固定为 local-dev，接入认证后为用户 ID。"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["learning", "collaboration", "auto_experiment", "review", "organization"],
+      "description": "产品模式，见规划文档 §1.2。"
+    },
+    "competition_policy": {
+      "type": ["string", "null"],
+      "maxLength": 200,
+      "description": "CompetitionPolicyProfile 引用 ID；MVP 允许为空。"
+    },
+    "workspace_uri": {
+      "type": ["string", "null"],
+      "maxLength": 1000,
+      "description": "工作区根 URI（对象存储前缀或本地路径）。"
+    },
+    "description": { "type": ["string", "null"], "maxLength": 2000 },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "required": ["id", "name", "owner", "mode", "created_at", "updated_at"],
+  "additionalProperties": false,
+  "$defs": {
+    "project_id": { "type": "string", "pattern": "^proj_[0-9a-f]{32}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "appr_99887766554433221100ffeeddccbbaa",
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "decision_type": "confirm_plan",
+  "title": "无选项应失败",
+  "options": [],
+  "status": "PENDING",
+  "created_at": "2026-08-04T08:06:00Z"
+}

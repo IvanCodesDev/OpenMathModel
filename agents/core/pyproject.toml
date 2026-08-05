@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omm-agent-core"
+version = "0.1.0"
+description = "数学建模 Agent 领域内核：显式状态机、StepRun、事件信封、端口与事件回放；框架无关，零三方运行时依赖"
+# 代码为纯标准库 + 惰性注解，运行时兼容 3.10（services/api 当前 venv）；3.12 仍是 uv workspace 目标（ADR-0003）
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["omm_agent_core*"]
+
+[tool.setuptools.package-data]
+omm_agent_core = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

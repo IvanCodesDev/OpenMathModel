@@ -1,0 +1,11 @@
+{
+  "id": "proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "name": "2024 高教社杯 A 题演练",
+  "owner": "local-dev",
+  "mode": "collaboration",
+  "competition_policy": "cumcm-default",
+  "workspace_uri": "local://workspaces/proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "description": "用于开发联调的样例项目。",
+  "created_at": "2026-08-04T08:00:00Z",
+  "updated_at": "2026-08-04T08:30:00.123456Z"
+}

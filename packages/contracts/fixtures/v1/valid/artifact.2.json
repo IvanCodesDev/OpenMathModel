@@ -1,0 +1,14 @@
+{
+  "id": "art_66778899aabbccddeeff001122334455",
+  "project_id": "proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "run_id": null,
+  "kind": "dataset",
+  "uri": "local://artifacts/art_66778899aabbccddeeff001122334455/data.parquet",
+  "sha256": "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9",
+  "size_bytes": 1048576,
+  "media_type": "application/vnd.apache.parquet",
+  "producer_step_id": null,
+  "inputs": [],
+  "status": "READY",
+  "created_at": "2026-08-04T08:01:00Z"
+}

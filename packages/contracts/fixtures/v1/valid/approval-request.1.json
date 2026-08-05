@@ -1,0 +1,17 @@
+{
+  "id": "appr_99887766554433221100ffeeddccbbaa",
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "step_id": "step_0123456789abcdef0123456789abcdef",
+  "decision_type": "confirm_plan",
+  "title": "确认建模方案",
+  "description": "主方案：时间序列基线 + 岭回归；备用：梯度提升。",
+  "options": [
+    { "id": "approve", "label": "批准并继续", "description": null },
+    { "id": "reject", "label": "退回重做", "description": "回到方法筛选阶段。" }
+  ],
+  "evidence_snapshot_id": null,
+  "status": "PENDING",
+  "resolution": null,
+  "expires_at": null,
+  "created_at": "2026-08-04T08:06:00Z"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@openmathmodel/config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenMathModel 共享工程配置：TypeScript 基线，后续可扩展 lint/格式化基线",
+  "files": [
+    "tsconfig.base.json",
+    "tsconfig.node.base.json"
+  ]
+}

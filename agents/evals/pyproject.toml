@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omm-agent-evals"
+version = "0.1.0"
+description = "Agent 质量回归：在真实引擎、沙箱与 Worker 运行时上执行金样端到端轨迹"
+requires-python = ">=3.12"
+dependencies = [
+  "omm-agent-core",
+  "omm-agent-tools",
+  "omm-agent-skills",
+  "omm-worker",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["omm_agent_evals*"]
+
+[tool.setuptools.package-data]
+omm_agent_evals = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

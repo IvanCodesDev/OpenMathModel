@@ -1,0 +1,16 @@
+{
+  "id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "project_id": "proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "goal": "完成 A 题基线建模与实验",
+  "workflow_version": "sim-0.1",
+  "status": "RUNNING",
+  "current_node": "EXPERIMENTING",
+  "budget": { "max_wall_time_s": 3600, "max_model_calls": 100, "cost_limit_usd": 5.0 },
+  "params": { "step_duration_s": 0.4 },
+  "parent_run_id": null,
+  "failure": null,
+  "created_at": "2026-08-04T08:05:00Z",
+  "updated_at": "2026-08-04T08:06:10Z",
+  "started_at": "2026-08-04T08:05:01Z",
+  "ended_at": null
+}

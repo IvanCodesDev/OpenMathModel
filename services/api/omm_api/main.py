@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from . import engine_glue
+from .blobstore import LocalContentStore
+from .config import Settings, get_settings
+from .db import Database
+from .errors import register_error_handlers
+from .middleware import OriginCheckMiddleware, RequestIdMiddleware
+from .routers import account, artifacts, auth, events, projects, task_runs
+from .runner import RunnerThread, WorkflowAdvancer
+
+
+def create_app(settings: Optional[Settings] = None) -> FastAPI:
+    resolved = settings or get_settings()
+    db = Database(resolved.database_url)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # 开发环境用 create_all 保证可用；PostgreSQL 部署走 Alembic 迁移。
+        db.create_all()
+        runner: Optional[RunnerThread] = None
+        if resolved.runner_enabled:
+            runner = RunnerThread(db, resolved)
+            runner.start()
+        app.state.runner = runner
+        try:
+            yield
+        finally:
+            if runner is not None:
+                runner.stop()
+            db.dispose()
+
+    app = FastAPI(
+        title="OpenMathModel API",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    app.state.settings = resolved
+    app.state.db = db
+    # Artifact 二进制内容存储（本地内容寻址）；引擎产物经同一存储端口写入
+    blobs = LocalContentStore(resolved.artifacts_dir)
+    app.state.blobs = blobs
+    engine_glue.set_blobstore(blobs)
+    # 测试与内部工具可直接驱动推进（runner_enabled=False 时手动 tick）
+    app.state.advancer = WorkflowAdvancer(db)
+    # 登录限速：数据库实现，多实例一致（后续可等接口替换为 Redis）
+    from .rate_limit import DbLoginRateLimiter
+
+    app.state.login_limiter = DbLoginRateLimiter(
+        db.session_factory,
+        resolved.login_max_attempts,
+        resolved.login_window_seconds,
+    )
+    # 注册验证码发送限速（独立窗口：每邮箱/每 IP）
+    app.state.email_code_limiter = DbLoginRateLimiter(
+        db.session_factory,
+        resolved.email_code_max_sends,
+        resolved.email_code_window_seconds,
+    )
+
+    # 中间件顺序（外→内）：CORS → RequestId → OriginCheck → 路由
+    # add_middleware 后添加者在外层，故按内层先加的顺序书写。
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=resolved.cors_origins)
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=resolved.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    register_error_handlers(app)
+
+    # 统一挂载在 /api 下：前端经 Vite 代理 /api → 8000 同源转发。
+    app.include_router(projects.router, prefix="/api")
+    app.include_router(task_runs.router, prefix="/api")
+    app.include_router(events.router, prefix="/api")
+    app.include_router(artifacts.router, prefix="/api")
+    app.include_router(auth.router, prefix="/api/auth")
+    app.include_router(account.router, prefix="/api/account")
+
+    @app.get("/api/health", tags=["ops"])
+    def api_health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/healthz", tags=["ops"])
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return app

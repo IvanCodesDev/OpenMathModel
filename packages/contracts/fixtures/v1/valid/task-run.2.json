@@ -1,0 +1,16 @@
+{
+  "id": "run_ffeeddccbbaa99887766554433221100",
+  "project_id": "proj_00112233445566778899aabbccddeeff",
+  "goal": "失败示例：数据缺陷终止",
+  "workflow_version": "sim-0.1",
+  "status": "FAILED",
+  "current_node": "DATA_PREPARATION",
+  "budget": null,
+  "params": null,
+  "parent_run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "failure": { "failure_class": "DATA_DEFECT", "message": "附件 Schema 与题目描述不一致。" },
+  "created_at": "2026-08-04T09:00:00Z",
+  "updated_at": "2026-08-04T09:02:00Z",
+  "started_at": "2026-08-04T09:00:01Z",
+  "ended_at": "2026-08-04T09:02:00Z"
+}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omm-agent-tools"
+version = "0.1.0"
+description = "工具适配器：任务工作区隔离、产物存储、工具注册表 allowlist、记录式调用器与 Python 子进程沙箱"
+requires-python = ">=3.12"
+dependencies = ["omm-agent-core"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["omm_agent_tools*"]
+
+[tool.setuptools.package-data]
+omm_agent_tools = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

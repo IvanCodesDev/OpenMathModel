@@ -1,0 +1,261 @@
+{
+  "schema_version": "1.0.0",
+  "updated_at": "2026-08-04",
+  "sources": [
+    {
+      "id": "comap_mcm_icm",
+      "name": "COMAP MCM/ICM previous contests",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "pending_human_confirmation",
+      "competition": "MCM/ICM",
+      "domains": [
+        "www.contest.comap.org",
+        "contest.comap.org"
+      ],
+      "entrypoints": [
+        {
+          "kind": "archive",
+          "url": "https://www.contest.comap.org/undergraduate/contests/mcm/previous-contests.php"
+        }
+      ],
+      "allowed_paths": [
+        "/undergraduate/contests/mcm/"
+      ],
+      "denied_paths": [
+        "/undergraduate/contests/mcm/register.php",
+        "/undergraduate/contests/mcm/login.php",
+        "/undergraduate/contests/mcm/forgot.php"
+      ],
+      "year_range": {
+        "from": 2021,
+        "to": 2025
+      },
+      "crawl_policy": {
+        "requests_per_minute": 12,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 30
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "COMAP, Inc.",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": false,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Internal immutable snapshots only until a human rights review is recorded."
+      },
+      "contact": "info@comap.org",
+      "notes": "Initial five-year Wave A source. Product publication remains gated on human confirmation."
+    },
+    {
+      "id": "cmathc_cpmcm",
+      "name": "中国研究生数学建模竞赛",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "pending_human_confirmation",
+      "competition": "中国研究生数学建模竞赛",
+      "domains": [
+        "www.cmathc.org.cn",
+        "cmathc.org.cn"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "https://www.cmathc.org.cn/cpmcm/"
+        },
+        {
+          "kind": "problems",
+          "url": "https://www.cmathc.org.cn/cpmcm/tm/325.html"
+        },
+        {
+          "kind": "results",
+          "url": "https://www.cmathc.org.cn/cpmcm/lw/529.html"
+        }
+      ],
+      "allowed_paths": [
+        "/cpmcm/",
+        "/upload/"
+      ],
+      "denied_paths": [
+        "/member/",
+        "/login/"
+      ],
+      "year_range": {
+        "from": 2021,
+        "to": 2025
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 30
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "中国研究生数学建模竞赛组织方",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": false,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Collect metadata and internal snapshots; do not publish full text before review."
+      },
+      "contact": "gscpc3@seu.edu.cn",
+      "notes": "Archive structure and official/partner status require explicit human confirmation."
+    },
+    {
+      "id": "apmcm_problems",
+      "name": "APMCM 竞赛题目",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "pending_human_confirmation",
+      "competition": "APMCM 亚太地区大学生数学建模竞赛",
+      "domains": [
+        "www.apmcm.org",
+        "apmcm.org"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "https://www.apmcm.org/list/problems"
+        }
+      ],
+      "allowed_paths": [
+        "/list/problems",
+        "/detail/",
+        "/article/",
+        "/uploads/"
+      ],
+      "denied_paths": [
+        "/login/",
+        "/member/"
+      ],
+      "year_range": {
+        "from": 2021,
+        "to": 2025
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 30
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "APMCM 赛事组织方",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": false,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Collect metadata and internal snapshots; do not publish full text before review."
+      },
+      "contact": "apmcm@mathor.com",
+      "notes": "Initial five-year Wave A source."
+    },
+    {
+      "id": "github_zhanwen_mathmodel",
+      "name": "zhanwen/MathModel ??????",
+      "tier": "T5",
+      "enabled": true,
+      "official_status": "community",
+      "competition": "???????????",
+      "domains": [
+        "github.com",
+        "raw.githubusercontent.com",
+        "api.github.com"
+      ],
+      "entrypoints": [
+        {
+          "kind": "repository",
+          "url": "https://github.com/zhanwen/MathModel"
+        }
+      ],
+      "allowed_paths": [
+        "/zhanwen/MathModel/"
+      ],
+      "denied_paths": [],
+      "year_range": {
+        "from": 2023,
+        "to": 2024
+      },
+      "crawl_policy": {
+        "requests_per_minute": 30,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 90
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "Repository contributors and original competition organizers",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Pinned Git commit snapshot; each extracted problem retains source file hashes and blob links."
+      },
+      "contact": "https://github.com/zhanwen/MathModel/issues",
+      "notes": "User-designated community source for complete 2023?2024 CPMCM problem statements and supporting documents."
+    },
+    {
+      "id": "cumcm_official",
+      "name": "???????????",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "official",
+      "competition": "???????????????",
+      "domains": [
+        "www.mcm.edu.cn",
+        "mcm.edu.cn"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "https://www.mcm.edu.cn/html_cn/block/018500ec1a6bd8c7e9997133def2b590.html"
+        }
+      ],
+      "allowed_paths": [
+        "/html_cn/node/",
+        "/html_cn/block/",
+        "/upload_cn/node/"
+      ],
+      "denied_paths": [],
+      "year_range": {
+        "from": 2021,
+        "to": 2025
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 240
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "??????????????",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Official annual problem archive pages and immutable local snapshots."
+      },
+      "contact": "https://www.mcm.edu.cn/",
+      "notes": "2021?2025 A?E complete official problem statements rendered from archived PDFs."
+    }
+  ]
+}

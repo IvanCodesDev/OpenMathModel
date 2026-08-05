@@ -1,0 +1,11 @@
+{
+  "id": "art_5566778899aabbccddeeff0011223344",
+  "project_id": "proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "kind": "figure",
+  "uri": "local://artifacts/x.svg",
+  "sha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "size_bytes": 100,
+  "media_type": "image/svg+xml",
+  "status": "READY",
+  "created_at": "2026-08-04T08:07:00Z"
+}

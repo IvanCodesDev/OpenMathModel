@@ -1,0 +1,760 @@
+{
+  "schemas": {
+    "agent-event": {
+      "$defs": {
+        "timestamp": {
+          "description": "UTC ISO-8601，统一以 Z 结尾。",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "$id": "openmathmodel.contracts.v1.agent-event",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "供 Web/Desktop 实时呈现的统一事件信封。PostgreSQL 事件表是时间线事实来源；sequence 在 run 内单调递增且唯一，SSE 的事件 id 即 sequence。",
+      "properties": {
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "id": {
+          "pattern": "^evt_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "payload": {
+          "description": "按 type 解释的载荷。消费方必须容忍未知字段。",
+          "type": "object"
+        },
+        "run_id": {
+          "pattern": "^run_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "step_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^step_[0-9a-f]{32}$",
+              "type": "string"
+            }
+          ]
+        },
+        "type": {
+          "enum": [
+            "run.created",
+            "run.status_changed",
+            "run.node_changed",
+            "run.log",
+            "step.started",
+            "step.succeeded",
+            "step.failed",
+            "approval.requested",
+            "approval.resolved"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "run_id",
+        "sequence",
+        "type",
+        "payload",
+        "created_at"
+      ],
+      "title": "AgentEvent",
+      "type": "object"
+    },
+    "approval-request": {
+      "$defs": {
+        "timestamp": {
+          "description": "UTC ISO-8601，统一以 Z 结尾。",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "$id": "openmathmodel.contracts.v1.approval-request",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "人工确认（HIL）请求。人工确认是正式状态转换：审批解决后运行才能离开 WAITING_APPROVAL。",
+      "properties": {
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "decision_type": {
+          "enum": [
+            "confirm_plan",
+            "confirm_method",
+            "confirm_results",
+            "generic"
+          ],
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 4000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_snapshot_id": {
+          "description": "审批所依据的证据快照引用；Evidence 体系落地前允许为空。",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        },
+        "id": {
+          "pattern": "^appr_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "maxLength": 1000,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "resolution": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "actor": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "comment": {
+                  "maxLength": 2000,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "option_id": {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "resolved_at": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              },
+              "required": [
+                "option_id",
+                "actor",
+                "resolved_at"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "run_id": {
+          "pattern": "^run_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "RESOLVED",
+            "EXPIRED",
+            "CANCELLED"
+          ],
+          "type": "string"
+        },
+        "step_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^step_[0-9a-f]{32}$",
+              "type": "string"
+            }
+          ]
+        },
+        "title": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "run_id",
+        "decision_type",
+        "title",
+        "options",
+        "status",
+        "created_at"
+      ],
+      "title": "ApprovalRequest",
+      "type": "object"
+    },
+    "artifact": {
+      "$defs": {
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "UTC ISO-8601，统一以 Z 结尾。",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "$id": "openmathmodel.contracts.v1.artifact",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "图表、数据、代码、日志、论文等交付物的元数据。内容本体在对象存储中内容寻址，服务端负责重新计算并核验 sha256。",
+      "properties": {
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "id": {
+          "pattern": "^art_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "上游 Artifact 血缘；失效传播沿此边计算。",
+          "items": {
+            "pattern": "^art_[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "dataset",
+            "code",
+            "figure",
+            "table",
+            "log",
+            "report",
+            "paper",
+            "model",
+            "other"
+          ],
+          "type": "string"
+        },
+        "media_type": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "producer_step_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^step_[0-9a-f]{32}$",
+              "type": "string"
+            }
+          ]
+        },
+        "project_id": {
+          "pattern": "^proj_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "run_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^run_[0-9a-f]{32}$",
+              "type": "string"
+            }
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "READY",
+            "STALE",
+            "DELETED"
+          ],
+          "type": "string"
+        },
+        "uri": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "kind",
+        "uri",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "inputs",
+        "status",
+        "created_at"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "error": {
+      "$id": "openmathmodel.contracts.v1.error",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "API 统一错误返回。异步动作返回任务状态而不是伪装成同步成功；错误码只增不改、不复用旧码表达新语义。",
+      "properties": {
+        "code": {
+          "description": "机器可分类错误码，如 VALIDATION_ERROR / NOT_FOUND / CONFLICT / IDEMPOTENCY_KEY_REUSED / INVALID_ACTION。",
+          "maxLength": 100,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "type": "string"
+        },
+        "details": {
+          "description": "结构化补充信息（字段级校验错误等），不得包含堆栈或敏感信息。",
+          "type": [
+            "object",
+            "array",
+            "null"
+          ]
+        },
+        "message": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "request_id"
+      ],
+      "title": "ErrorEnvelope",
+      "type": "object"
+    },
+    "project": {
+      "$defs": {
+        "project_id": {
+          "pattern": "^proj_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "UTC ISO-8601，统一以 Z 结尾。",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "$id": "openmathmodel.contracts.v1.project",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "一个持续存在的建模项目。领域对象事实来源为 PostgreSQL，本契约描述 API 对外表示。",
+      "properties": {
+        "competition_policy": {
+          "description": "CompetitionPolicyProfile 引用 ID；MVP 允许为空。",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "description": {
+          "maxLength": 2000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/project_id"
+        },
+        "mode": {
+          "description": "产品模式，见规划文档 §1.2。",
+          "enum": [
+            "learning",
+            "collaboration",
+            "auto_experiment",
+            "review",
+            "organization"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "owner": {
+          "description": "所有者标识。MVP 单用户阶段固定为 local-dev，接入认证后为用户 ID。",
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "workspace_uri": {
+          "description": "工作区根 URI（对象存储前缀或本地路径）。",
+          "maxLength": 1000,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "owner",
+        "mode",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "Project",
+      "type": "object"
+    },
+    "step-run": {
+      "$defs": {
+        "nullable_timestamp": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+              "type": "string"
+            }
+          ]
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "UTC ISO-8601，统一以 Z 结尾。",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "$id": "openmathmodel.contracts.v1.step-run",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "状态机中单个节点的一次执行记录。同一节点重试产生新的 attempt。",
+      "properties": {
+        "attempt": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "ended_at": {
+          "$ref": "#/$defs/nullable_timestamp"
+        },
+        "failure_class": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "TRANSIENT",
+                "TOOL_ENV",
+                "CODE_DEFECT",
+                "METHOD_INVALID",
+                "DATA_DEFECT",
+                "EVIDENCE_GAP",
+                "POLICY_BLOCK",
+                "NON_PROGRESS"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "failure_message": {
+          "maxLength": 4000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "pattern": "^step_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "input_hash": {
+          "description": "本次执行输入的内容哈希，幂等与重放依据。",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "node": {
+          "maxLength": 100,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^run_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "started_at": {
+          "$ref": "#/$defs/nullable_timestamp"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "RUNNING",
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED",
+            "SKIPPED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "run_id",
+        "node",
+        "attempt",
+        "status",
+        "created_at"
+      ],
+      "title": "StepRun",
+      "type": "object"
+    },
+    "task-run": {
+      "$defs": {
+        "failure_class": {
+          "description": "失败分类，见规划文档 §8.6。",
+          "enum": [
+            "TRANSIENT",
+            "TOOL_ENV",
+            "CODE_DEFECT",
+            "METHOD_INVALID",
+            "DATA_DEFECT",
+            "EVIDENCE_GAP",
+            "POLICY_BLOCK",
+            "NON_PROGRESS"
+          ],
+          "type": "string"
+        },
+        "nullable_timestamp": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+              "type": "string"
+            }
+          ]
+        },
+        "run_id": {
+          "pattern": "^run_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "UTC ISO-8601，统一以 Z 结尾。",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+          "type": "string"
+        }
+      },
+      "$id": "openmathmodel.contracts.v1.task-run",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "一次可暂停、恢复、重试、分支的 Agent 运行。status 是稳定生命周期枚举；current_node 是随 workflow_version 演进的领域阶段，消费方必须容忍未知节点名。",
+      "properties": {
+        "budget": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "cost_limit_usd": {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "max_model_calls": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max_wall_time_s": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "current_node": {
+          "maxLength": 100,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "type": "string"
+        },
+        "ended_at": {
+          "$ref": "#/$defs/nullable_timestamp"
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "failure_class": {
+                  "$ref": "#/$defs/failure_class"
+                },
+                "message": {
+                  "maxLength": 4000,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "failure_class",
+                "message"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "goal": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/run_id"
+        },
+        "params": {
+          "description": "运行输入参数（题目引用、模拟钩子等），按 workflow_version 解释。",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "parent_run_id": {
+          "description": "分支来源运行（规划文档 §7.1 的 parent_branch）。",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/run_id"
+            }
+          ]
+        },
+        "project_id": {
+          "pattern": "^proj_[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "started_at": {
+          "$ref": "#/$defs/nullable_timestamp"
+        },
+        "status": {
+          "enum": [
+            "QUEUED",
+            "RUNNING",
+            "WAITING_APPROVAL",
+            "PAUSED",
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED"
+          ],
+          "type": "string"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "workflow_version": {
+          "description": "工作流定义版本。首个模拟实现为 sim-0.1，节点集合：CREATED, PROBLEM_ANALYSIS, DATA_PREPARATION, MODEL_PLANNING, EXPERIMENTING, VALIDATING, PAPER_WRITING, COMPLETED。",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "goal",
+        "workflow_version",
+        "status",
+        "current_node",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "TaskRun",
+      "type": "object"
+    }
+  },
+  "version": "v1"
+}

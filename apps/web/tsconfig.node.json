@@ -1,16 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": false,
-    "isolatedModules": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "strict": true,
-    "types": ["node"]
-  },
+  "extends": "@openmathmodel/config/tsconfig.node.base.json",
   "include": ["vite.config.ts"]
 }

@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openmathmodel.dev/schemas/knowledge-library.schema.json",
+  "title": "OpenMathModel frontend knowledge library",
+  "type": "object",
+  "required": ["schema_version", "dataset_version", "generated_at", "stats", "problems", "papers"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "dataset_version": { "type": "string" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "stats": {
+      "type": "object",
+      "required": ["problem_count", "paper_count", "source_count"],
+      "properties": {
+        "problem_count": { "type": "integer", "minimum": 0 },
+        "paper_count": { "type": "integer", "minimum": 0 },
+        "source_count": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } },
+    "papers": { "type": "array", "items": { "$ref": "#/$defs/paper" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "attachment": {
+      "type": "object",
+      "required": ["title", "url", "kind"],
+      "properties": {
+        "title": { "type": "string" },
+        "url": { "type": "string", "format": "uri-reference" },
+        "kind": { "enum": ["problem", "data", "results", "collection", "policy", "other"] },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "sourceDocument": {
+      "type": "object",
+      "required": ["title", "role", "url", "bytes", "sha256", "git_blob_sha"],
+      "properties": {
+        "title": { "type": "string" },
+        "role": { "enum": ["problem_statement", "supporting_document"] },
+        "url": { "type": "string", "format": "uri" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "git_blob_sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+      },
+      "additionalProperties": false
+    },
+    "contentBlock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "enum": ["paragraph", "list_item"] },
+            "text": { "type": "string" },
+            "lead": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "text", "level"],
+          "properties": {
+            "type": { "const": "heading" },
+            "text": { "type": "string" },
+            "level": { "type": "integer", "minimum": 1, "maximum": 6 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "rows"],
+          "properties": {
+            "type": { "const": "table" },
+            "rows": {
+              "type": "array",
+              "items": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "src", "alt"],
+          "properties": {
+            "type": { "const": "image" },
+            "src": { "type": "string", "pattern": "^/problem-(assets|figures)/" },
+            "alt": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "title"],
+          "properties": {
+            "type": { "const": "document_break" },
+            "title": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "problem": {
+      "type": "object",
+      "required": ["id", "code", "title", "competition", "category", "year", "problem_type", "modeling_directions", "keywords", "data_requirement", "status", "summary", "source_id", "source_url", "source_status", "access_scope", "attachments"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "code": { "type": "string" },
+        "title": { "type": "string" },
+        "competition": { "type": "string" },
+        "category": { "type": "string" },
+        "year": { "type": "integer" },
+        "problem_type": { "type": "string" },
+        "modeling_directions": { "type": "array", "items": { "type": "string" } },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "data_requirement": { "type": "string" },
+        "status": { "enum": ["完整题面", "已索引", "元数据", "待审核"] },
+        "summary": { "type": "string" },
+        "source_id": { "type": "string" },
+        "source_url": { "type": "string", "format": "uri" },
+        "source_status": { "type": "string" },
+        "access_scope": { "enum": ["metadata_only", "linked_content", "stored_content"] },
+        "attachments": { "type": "array", "items": { "$ref": "#/$defs/attachment" } },
+        "content_format": { "type": "string" },
+        "content_status": { "const": "complete" },
+        "content_character_count": { "type": "integer", "minimum": 1 },
+        "content_block_count": { "type": "integer", "minimum": 1 },
+        "content_blocks": { "type": "array", "items": { "$ref": "#/$defs/contentBlock" } },
+        "source_documents": { "type": "array", "items": { "$ref": "#/$defs/sourceDocument" } },
+        "source_pdf": {
+          "type": "object",
+          "required": ["path", "bytes", "sha256", "page_count"],
+          "properties": {
+            "path": { "type": "string" },
+            "bytes": { "type": "integer", "minimum": 1 },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "page_count": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "paper": {
+      "type": "object",
+      "required": ["id", "title", "record_type", "problem_id", "problem_code", "competition", "category", "year", "award", "distinctions", "institution", "team_id", "models", "innovation", "summary", "source_id", "source_url", "source_status", "access_scope"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "title": { "type": "string" },
+        "record_type": { "enum": ["paper", "collection"] },
+        "problem_id": { "type": ["string", "null"] },
+        "problem_code": { "type": "string" },
+        "competition": { "type": "string" },
+        "category": { "type": "string" },
+        "year": { "type": "integer" },
+        "award": { "type": "string" },
+        "distinctions": { "type": "array", "items": { "type": "string" } },
+        "institution": { "type": ["string", "null"] },
+        "team_id": { "type": ["string", "null"] },
+        "models": { "type": "array", "items": { "type": "string" } },
+        "innovation": { "type": "string" },
+        "summary": { "type": "string" },
+        "source_id": { "type": "string" },
+        "source_url": { "type": "string", "format": "uri" },
+        "full_text_url": { "type": ["string", "null"], "format": "uri" },
+        "source_file_bytes": { "type": "integer", "minimum": 1 },
+        "source_git_blob_sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "source_status": { "type": "string" },
+        "access_scope": { "enum": ["metadata_only", "linked_content", "stored_content"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

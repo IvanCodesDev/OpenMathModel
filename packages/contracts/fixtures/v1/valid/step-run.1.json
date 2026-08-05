@@ -1,0 +1,13 @@
+{
+  "id": "step_0123456789abcdef0123456789abcdef",
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "node": "PROBLEM_ANALYSIS",
+  "attempt": 1,
+  "input_hash": "a3f5b8c9d2e1f4a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0",
+  "status": "SUCCEEDED",
+  "failure_class": null,
+  "failure_message": null,
+  "created_at": "2026-08-04T08:05:02Z",
+  "started_at": "2026-08-04T08:05:02Z",
+  "ended_at": "2026-08-04T08:05:04Z"
+}

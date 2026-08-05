@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.task-run",
+  "title": "TaskRun",
+  "description": "一次可暂停、恢复、重试、分支的 Agent 运行。status 是稳定生命周期枚举；current_node 是随 workflow_version 演进的领域阶段，消费方必须容忍未知节点名。",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "#/$defs/run_id" },
+    "project_id": { "type": "string", "pattern": "^proj_[0-9a-f]{32}$" },
+    "goal": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "workflow_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "工作流定义版本。首个模拟实现为 sim-0.1，节点集合：CREATED, PROBLEM_ANALYSIS, DATA_PREPARATION, MODEL_PLANNING, EXPERIMENTING, VALIDATING, PAPER_WRITING, COMPLETED。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["QUEUED", "RUNNING", "WAITING_APPROVAL", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]
+    },
+    "current_node": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "maxLength": 100
+    },
+    "budget": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "max_wall_time_s": { "type": "integer", "minimum": 1 },
+            "max_model_calls": { "type": "integer", "minimum": 0 },
+            "cost_limit_usd": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "params": {
+      "type": ["object", "null"],
+      "description": "运行输入参数（题目引用、模拟钩子等），按 workflow_version 解释。"
+    },
+    "parent_run_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/run_id" }
+      ],
+      "description": "分支来源运行（规划文档 §7.1 的 parent_branch）。"
+    },
+    "failure": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "failure_class": { "$ref": "#/$defs/failure_class" },
+            "message": { "type": "string", "maxLength": 4000 }
+          },
+          "required": ["failure_class", "message"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" },
+    "started_at": { "$ref": "#/$defs/nullable_timestamp" },
+    "ended_at": { "$ref": "#/$defs/nullable_timestamp" }
+  },
+  "required": [
+    "id",
+    "project_id",
+    "goal",
+    "workflow_version",
+    "status",
+    "current_node",
+    "created_at",
+    "updated_at"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-f]{32}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    },
+    "nullable_timestamp": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+        }
+      ]
+    },
+    "failure_class": {
+      "type": "string",
+      "enum": [
+        "TRANSIENT",
+        "TOOL_ENV",
+        "CODE_DEFECT",
+        "METHOD_INVALID",
+        "DATA_DEFECT",
+        "EVIDENCE_GAP",
+        "POLICY_BLOCK",
+        "NON_PROGRESS"
+      ],
+      "description": "失败分类，见规划文档 §8.6。"
+    }
+  }
+}

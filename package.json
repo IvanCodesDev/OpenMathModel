@@ -1,0 +1,20 @@
+{
+  "name": "openmathmodel",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/web",
+    "packages/config",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @openmathmodel/web",
+    "check": "npm run check --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

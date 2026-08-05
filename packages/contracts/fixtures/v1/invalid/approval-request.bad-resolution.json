@@ -1,0 +1,10 @@
+{
+  "id": "appr_99887766554433221100ffeeddccbbaa",
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "decision_type": "generic",
+  "title": "resolution 缺 actor 应失败",
+  "options": [{ "id": "approve", "label": "继续" }],
+  "status": "RESOLVED",
+  "resolution": { "option_id": "approve", "resolved_at": "2026-08-04T08:10:00Z" },
+  "created_at": "2026-08-04T08:06:00Z"
+}

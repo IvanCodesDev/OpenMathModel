@@ -1,0 +1,6 @@
+{
+  "code": "VALIDATION_ERROR",
+  "message": "请求体校验失败。",
+  "request_id": "req-7f3a2b1c",
+  "details": [{ "field": "goal", "error": "字段不能为空" }]
+}

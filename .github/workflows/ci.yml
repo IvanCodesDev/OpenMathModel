@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web typecheck / lint / build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+  python:
+    name: Python syntax + contracts gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m compileall -q datasets/recipes packages/contracts
+      - name: Contracts gate (self-check + compatibility + generated models, activates once contracts land)
+        run: |
+          if [ -f packages/contracts/validate.py ]; then
+            pip install -r packages/contracts/requirements-dev.txt
+            python packages/contracts/validate.py
+            python packages/contracts/check_compat.py
+            python packages/contracts/scripts/generate_python.py --check
+            python packages/contracts/scripts/generate_python.py --verify
+          else
+            echo "contracts not present on this ref; skipped"
+          fi
+      - name: API tests (activates once services/api lands)
+        run: |
+          if [ -f services/api/pyproject.toml ]; then
+            pip install -e packages/contracts -e agents/core -e "services/api[dev]"
+            python -m pytest services/api/tests -q
+            python packages/contracts/scripts/export_openapi.py --check
+          else
+            echo "services/api not present on this ref; skipped"
+          fi
+      - name: Agent runtime tests (activates once agents/core lands)
+        run: |
+          if [ -f agents/core/pyproject.toml ]; then
+            pip install -e agents/core -e agents/tools -e agents/skills -e services/worker -e agents/evals pytest
+            for pkg in agents/core agents/tools agents/skills services/worker agents/evals; do
+              (cd "$pkg" && python -m pytest tests -q)
+            done
+          else
+            echo "agent runtime not present on this ref; skipped"
+          fi
+
+  contracts-ts:
+    name: Contracts generated TS types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generated types up to date (activates once workspaces land)
+        run: |
+          if [ -f package-lock.json ] && [ -f packages/contracts/package.json ]; then
+            npm ci
+            npm run check --workspace @openmathmodel/contracts
+          else
+            echo "contracts workspace not present on this ref; skipped"
+          fi

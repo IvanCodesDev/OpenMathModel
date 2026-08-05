@@ -1,0 +1,68 @@
+[project]
+name = "openmathmodel"
+version = "0.1.0"
+description = "OpenMathModel Python workspace root"
+requires-python = ">=3.12"
+dependencies = []
+
+# 虚拟根：只提供 workspace、依赖锁和共享工具配置，本身不构建为可安装包。
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+  "packages/contracts",
+  "agents/core",
+  "agents/skills",
+  "agents/tools",
+  "agents/evals",
+  "services/api",
+  "services/worker",
+]
+
+[tool.uv.sources]
+omm-contracts = { workspace = true }
+omm-agent-core = { workspace = true }
+omm-agent-skills = { workspace = true }
+omm-agent-tools = { workspace = true }
+omm-agent-evals = { workspace = true }
+omm-api = { workspace = true }
+omm-worker = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6.0",
+  # packages/contracts/validate.py 的契约自检依赖
+  "jsonschema>=4.18",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["datasets/raw", "datasets/interim", "datasets/processed", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = [
+  "packages/contracts/src",
+  "agents/core/src",
+  "agents/skills/src",
+  "agents/tools/src",
+  "agents/evals/src",
+  "services/api/src",
+  "services/worker/src",
+]
+
+[tool.pytest.ini_options]
+# 跨模块测试集中在 /tests；单个 member 的单测放在自己的 tests/ 下。
+testpaths = ["tests"]
+asyncio_mode = "auto"

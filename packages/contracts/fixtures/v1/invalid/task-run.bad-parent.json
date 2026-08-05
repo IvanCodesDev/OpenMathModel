@@ -1,0 +1,11 @@
+{
+  "id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "project_id": "proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "goal": "parent 前缀错误应失败",
+  "workflow_version": "sim-0.1",
+  "status": "QUEUED",
+  "current_node": "CREATED",
+  "parent_run_id": "proj_9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "created_at": "2026-08-04T08:05:00Z",
+  "updated_at": "2026-08-04T08:05:00Z"
+}

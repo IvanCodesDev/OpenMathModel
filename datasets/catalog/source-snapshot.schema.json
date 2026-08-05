@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openmathmodel.dev/schemas/source-snapshot.schema.json",
+  "title": "OpenMathModel Source Snapshot Manifest",
+  "type": "object",
+  "required": ["schema_version", "run_id", "source_id", "started_at", "finished_at", "mode", "records", "summary"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "run_id": { "type": "string" },
+    "source_id": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "mode": { "enum": ["metadata", "attachments"] },
+    "run_status": { "enum": ["running", "completed"] },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "status", "content_type", "sha256", "size_bytes", "fetched_at", "stored_path", "links"],
+        "properties": {
+          "url": { "type": "string", "format": "uri" },
+          "status": { "type": "integer" },
+          "content_type": { "type": "string" },
+          "etag": { "type": ["string", "null"] },
+          "last_modified": { "type": ["string", "null"] },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "fetched_at": { "type": "string", "format": "date-time" },
+          "stored_path": { "type": "string" },
+          "links": { "type": "array", "items": { "type": "object" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["fetched", "not_modified", "failed", "bytes", "unique_content", "discovered_links"],
+      "properties": {
+        "fetched": { "type": "integer", "minimum": 0 },
+        "not_modified": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "unique_content": { "type": "integer", "minimum": 0 },
+        "discovered_links": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "robots": {
+      "type": "object",
+      "required": ["url", "status", "checked_at"],
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "status": { "enum": ["allowed", "disallowed", "missing", "unavailable"] },
+        "checked_at": { "type": "string", "format": "date-time" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "error"],
+        "properties": { "url": { "type": "string" }, "error": { "type": "string" } },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

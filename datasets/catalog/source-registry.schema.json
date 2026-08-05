@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openmathmodel.dev/schemas/source-registry.schema.json",
+  "title": "OpenMathModel Source Registry",
+  "type": "object",
+  "required": ["schema_version", "updated_at", "sources"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "updated_at": { "type": "string", "format": "date" },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entrypoint": {
+      "type": "object",
+      "required": ["kind", "url"],
+      "properties": {
+        "kind": { "enum": ["archive", "problems", "policies", "results"] },
+        "url": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "license_record": {
+      "type": "object",
+      "required": [
+        "status", "rights_holder", "license_text_url", "allow_storage",
+        "allow_indexing", "allow_redistribution", "allow_derivatives", "reviewed_at"
+      ],
+      "properties": {
+        "status": { "enum": ["unknown", "restricted", "permission_granted", "open_license"] },
+        "rights_holder": { "type": ["string", "null"] },
+        "license_text_url": { "type": ["string", "null"], "format": "uri" },
+        "allow_storage": { "type": "boolean" },
+        "allow_indexing": { "type": "boolean" },
+        "allow_redistribution": { "type": "boolean" },
+        "allow_derivatives": { "type": "boolean" },
+        "reviewed_at": { "type": ["string", "null"], "format": "date" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "id", "name", "tier", "enabled", "official_status", "competition",
+        "domains", "entrypoints", "allowed_paths", "denied_paths", "year_range",
+        "crawl_policy", "license_record"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "tier": { "enum": ["T0", "T1", "T2", "T3", "T4", "T5"] },
+        "enabled": { "type": "boolean" },
+        "official_status": { "enum": ["pending_human_confirmation", "confirmed_official", "official_partner", "repost", "community"] },
+        "competition": { "type": "string", "minLength": 1 },
+        "domains": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+        "entrypoints": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entrypoint" } },
+        "allowed_paths": { "type": "array", "items": { "type": "string" } },
+        "denied_paths": { "type": "array", "items": { "type": "string" } },
+        "year_range": {
+          "type": "object",
+          "required": ["from", "to"],
+          "properties": { "from": { "type": "integer", "minimum": 1900 }, "to": { "type": "integer", "minimum": 1900 } },
+          "additionalProperties": false
+        },
+        "crawl_policy": {
+          "type": "object",
+          "required": ["requests_per_minute", "concurrency", "user_agent", "max_retries", "timeout_seconds"],
+          "properties": {
+            "requests_per_minute": { "type": "integer", "minimum": 1, "maximum": 120 },
+            "concurrency": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "user_agent": { "type": "string", "minLength": 8 },
+            "max_retries": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 120 }
+          },
+          "additionalProperties": false
+        },
+        "license_record": { "$ref": "#/$defs/license_record" },
+        "contact": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

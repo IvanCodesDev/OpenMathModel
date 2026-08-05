@@ -1,0 +1,61 @@
+# OpenMathModel 本地开发底座：PostgreSQL(pgvector) + Redis + MinIO
+# 启动：tools/dev-up.ps1；健康验证：tools/verify-dev-stack.ps1；停止：tools/dev-down.ps1
+# 版本冻结与供应链说明：docs/adr/0002-dev-stack-baseline.md
+name: openmathmodel-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: omm-dev-postgres
+    environment:
+      POSTGRES_USER: ${OMM_PG_USER:-openmathmodel}
+      POSTGRES_PASSWORD: ${OMM_PG_PASSWORD:-openmathmodel-dev}
+      POSTGRES_DB: ${OMM_PG_DB:-openmathmodel}
+    ports:
+      - "${OMM_PG_PORT:-5432}:5432"
+    volumes:
+      - omm-dev-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: omm-dev-redis
+    # Redis 只承载缓存/限流/Pub-Sub 提示，不保存唯一事实（规划 §5.2），本地显式关闭持久化。
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${OMM_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    # 供应链注意：minio/minio 上游仓库 2026-04 已归档，Docker Hub 社区镜像停更于本 tag。
+    # 仅限本地回环开发使用；部署/共享环境前必须按 ADR-0002 复评条件重新选型。
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: omm-dev-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${OMM_MINIO_USER:-openmathmodel}
+      MINIO_ROOT_PASSWORD: ${OMM_MINIO_PASSWORD:-openmathmodel-dev}
+    ports:
+      - "${OMM_MINIO_PORT:-9000}:9000"
+      - "${OMM_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - omm-dev-minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  omm-dev-pg:
+  omm-dev-minio:

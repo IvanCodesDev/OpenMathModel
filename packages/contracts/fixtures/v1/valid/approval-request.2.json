@@ -1,0 +1,19 @@
+{
+  "id": "appr_112233445566778899aabbccddeeff00",
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "step_id": null,
+  "decision_type": "generic",
+  "title": "确认继续实验",
+  "description": null,
+  "options": [{ "id": "approve", "label": "继续" }],
+  "evidence_snapshot_id": null,
+  "status": "RESOLVED",
+  "resolution": {
+    "option_id": "approve",
+    "actor": "local-dev",
+    "comment": "方案没问题。",
+    "resolved_at": "2026-08-04T08:10:00Z"
+  },
+  "expires_at": null,
+  "created_at": "2026-08-04T08:06:30Z"
+}

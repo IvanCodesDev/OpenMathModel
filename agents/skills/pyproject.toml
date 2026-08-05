@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omm-agent-skills"
+version = "0.1.0"
+description = "建模技能：Prompt 注册表（frontmatter 版本与 IO Schema）、结构化输出校验与修复、问题分析与方案规划节点"
+requires-python = ">=3.12"
+dependencies = ["omm-agent-core"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["omm_agent_skills*"]
+
+[tool.setuptools.package-data]
+omm_agent_skills = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

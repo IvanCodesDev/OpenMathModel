@@ -45,6 +45,19 @@ OpenMathModel/
 └─ img/                       # 当前品牌/设计素材
 ```
 
+## Workspace 根
+
+仓库根同时是两套包管理器的 workspace 根，目录树本身不因语言而重新分组（见 [ADR-0003](./docs/adr/0003-workspace-roots.md)）：
+
+| 文件 | 作用 |
+|---|---|
+| `pyproject.toml` | uv workspace 虚拟根，登记 Python member 并托管共享 ruff / mypy / pytest 配置 |
+| `.python-version` | 统一解释器版本 |
+| `package.json` | npm workspaces 根，当前仅含 `apps/web` |
+| `.npmrc` | npm 配置；member 内的 `.npmrc` 会被 npm 忽略，所以统一放在根 |
+
+Python member 使用 src 布局，发行名 `omm-*`、导入名 `omm_*`：`packages/contracts`、`agents/{core,skills,tools,evals}`、`services/{api,worker}`。`agents/prompts` 是模板资源，`datasets/recipes` 是独立脚本，二者都不是 member。
+
 ## 模块职责与依赖方向
 
 ```mermaid
@@ -72,6 +85,7 @@ flowchart TB
 5. `agents/tools` 中的高风险/高成本能力通过统一执行接口调用，不能散落在 prompt 中。
 6. `packages/contracts` 是跨语言事实来源；协议先于调用方变更。
 7. 大型数据与运行产物进入对象存储，本仓库只保存 manifest、样例和 recipe。
+8. 上图中 `agents/core` 指向 tools/skills 的箭头表示运行时调用关系。包级导入方向相反：tools 与 skills 依赖内核并实现其端口，内核不反向依赖它们（见 ADR-0003）。
 
 ## Agent 内部分层
 

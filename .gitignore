@@ -8,6 +8,7 @@ coverage/
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -23,6 +24,11 @@ apps/desktop/src-tauri/gen/
 !.env.example
 *.pem
 *.key
+
+# Local databases
+*.db
+*.sqlite3
+services/api/data/
 
 # Runtime data and artifacts
 datasets/raw/**
@@ -55,3 +61,6 @@ Thumbs.db
 /design-qa.md
 
 # Keep /docs/ tracked: it is product documentation, distinct from /doc/.
+
+# Cursor/Agent 本地配置与运行时产物（永久禁止入库）
+/.cursor/

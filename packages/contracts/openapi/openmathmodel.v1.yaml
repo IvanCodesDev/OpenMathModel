@@ -1,0 +1,375 @@
+openapi: 3.1.0
+info:
+  title: OpenMathModel API
+  version: 0.1.0
+  description: |
+    OpenMathModel 控制面 API 契约 v0.1（Phase 1 范围：项目、任务运行、动作命令、事件流、产物元数据）。
+
+    约定：
+    - 协议先于调用方变更；字段只增不破坏，删除/改名走弃用与版本并存。
+    - 所有 ID 为带前缀字符串；时间为 ISO-8601 UTC。
+    - 错误统一返回 error.schema.json 信封（code/message/request_id/details）。
+    - 异步动作返回任务当前状态，不伪装成同步成功。
+    - 事件流使用 SSE（text/event-stream），以 AgentEvent.sequence 作为事件 id，
+      支持 Last-Event-ID 头或 after 查询参数做断线补拉。
+servers:
+  - url: /api
+    description: 开发环境经 Vite 代理到 services/api；生产由网关决定前缀。
+tags:
+  - name: projects
+  - name: task-runs
+  - name: events
+  - name: artifacts
+paths:
+  /v1/projects:
+    get:
+      tags: [projects]
+      operationId: listProjects
+      summary: 项目列表
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [projects]
+      operationId: createProject
+      summary: 创建项目
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/project.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/projects/{project_id}:
+    get:
+      tags: [projects]
+      operationId: getProject
+      summary: 项目详情
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/project.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/projects/{project_id}/artifacts:
+    get:
+      tags: [artifacts]
+      operationId: listProjectArtifacts
+      summary: 项目产物元数据列表
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactList"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs:
+    get:
+      tags: [task-runs]
+      operationId: listTaskRuns
+      summary: 任务运行列表
+      parameters:
+        - name: project_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [QUEUED, RUNNING, WAITING_APPROVAL, PAUSED, COMPLETED, FAILED, CANCELLED]
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskRunList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [task-runs]
+      operationId: createTaskRun
+      summary: 创建任务运行
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRunInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/task-run.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs/{run_id}:
+    get:
+      tags: [task-runs]
+      operationId: getTaskRun
+      summary: 任务运行详情
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/task-run.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs/{run_id}/steps:
+    get:
+      tags: [task-runs]
+      operationId: listTaskRunSteps
+      summary: 步骤执行记录
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StepRunList"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs/{run_id}/approvals:
+    get:
+      tags: [task-runs]
+      operationId: listTaskRunApprovals
+      summary: 审批请求列表（含待处理与历史）
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalList"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs/{run_id}/actions:
+    post:
+      tags: [task-runs]
+      operationId: postTaskRunAction
+      summary: 任务动作（approve/pause/resume/cancel/retry）
+      description: 动作按状态机校验；非法动作返回 409 INVALID_ACTION。重复的等价动作幂等返回当前状态。
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskRunActionInput"
+      responses:
+        "200":
+          description: 动作已接受，返回任务当前状态
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/task-run.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs/{run_id}/events:
+    get:
+      tags: [events]
+      operationId: streamTaskRunEvents
+      summary: SSE 事件流（Last-Event-ID / after 断线补拉）
+      description: |
+        text/event-stream：每条 SSE 消息 id 为 AgentEvent.sequence，event 为 AgentEvent.type，
+        data 为 AgentEvent JSON。客户端重连时带 Last-Event-ID 头（或 after 查询参数），
+        服务端先补拉历史再进入实时推送；每 15 秒发送心跳注释行。
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: after
+          in: query
+          description: 只推送 sequence 大于该值的事件（等价 Last-Event-ID 头）。
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: SSE 流
+          content:
+            text/event-stream:
+              schema: { type: string }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/task-runs/{run_id}/events/history:
+    get:
+      tags: [events]
+      operationId: listTaskRunEvents
+      summary: 事件历史（JSON 拉取，用于初始加载与测试）
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: after
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentEventList"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  parameters:
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      schema: { type: string }
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+  responses:
+    Error:
+      description: 统一错误信封
+      content:
+        application/json:
+          schema:
+            $ref: "../schemas/v1/error.schema.json"
+  schemas:
+    CreateProjectInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], maxLength: 2000 }
+        mode:
+          type: string
+          enum: [learning, collaboration, auto_experiment, review, organization]
+        competition_policy: { type: [string, "null"], maxLength: 200 }
+        workspace_uri: { type: [string, "null"], maxLength: 1000 }
+    CreateTaskRunInput:
+      type: object
+      required: [project_id, goal]
+      properties:
+        project_id: { type: string }
+        goal: { type: string, minLength: 1, maxLength: 4000 }
+        workflow_version: { type: string, maxLength: 100, default: sim-0.1 }
+        budget:
+          type: [object, "null"]
+          properties:
+            max_wall_time_s: { type: integer, minimum: 1 }
+            max_model_calls: { type: integer, minimum: 0 }
+            cost_limit_usd: { type: number, minimum: 0 }
+        params:
+          type: [object, "null"]
+          description: 运行输入参数（题目引用、模拟钩子等），按 workflow_version 解释。
+        auto_start:
+          type: boolean
+          default: true
+          description: 创建后立即开始推进（MVP 由内嵌 worker 驱动）。
+    TaskRunActionInput:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [approve, pause, resume, cancel, retry]
+        approval_id: { type: [string, "null"] }
+        option_id: { type: [string, "null"], maxLength: 50 }
+        comment: { type: [string, "null"], maxLength: 2000 }
+        client_token:
+          type: [string, "null"]
+          maxLength: 64
+          description: 客户端幂等令牌；同令牌重复提交返回同一结果。
+    ProjectList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "../schemas/v1/project.schema.json"
+        total: { type: integer, minimum: 0 }
+    TaskRunList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "../schemas/v1/task-run.schema.json"
+        total: { type: integer, minimum: 0 }
+    StepRunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "../schemas/v1/step-run.schema.json"
+    ApprovalList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "../schemas/v1/approval-request.schema.json"
+    AgentEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "../schemas/v1/agent-event.schema.json"
+    ArtifactList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "../schemas/v1/artifact.schema.json"
+        total: { type: integer, minimum: 0 }

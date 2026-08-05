@@ -1,0 +1,6 @@
+# 契约包生成/校验工具链（生成物风格与 dmcg/black/isort 版本绑定：升级须重生成并一并提交）
+datamodel-code-generator==0.72.0
+black==26.5.1
+isort==8.0.1
+pydantic>=2.9
+jsonschema>=4.22

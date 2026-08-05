@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.step-run",
+  "title": "StepRun",
+  "description": "状态机中单个节点的一次执行记录。同一节点重试产生新的 attempt。",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^step_[0-9a-f]{32}$" },
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-f]{32}$" },
+    "node": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 100 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "input_hash": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ],
+      "description": "本次执行输入的内容哈希，幂等与重放依据。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "SKIPPED"]
+    },
+    "failure_class": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "enum": [
+            "TRANSIENT",
+            "TOOL_ENV",
+            "CODE_DEFECT",
+            "METHOD_INVALID",
+            "DATA_DEFECT",
+            "EVIDENCE_GAP",
+            "POLICY_BLOCK",
+            "NON_PROGRESS"
+          ]
+        }
+      ]
+    },
+    "failure_message": { "type": ["string", "null"], "maxLength": 4000 },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "started_at": { "$ref": "#/$defs/nullable_timestamp" },
+    "ended_at": { "$ref": "#/$defs/nullable_timestamp" }
+  },
+  "required": ["id", "run_id", "node", "attempt", "status", "created_at"],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    },
+    "nullable_timestamp": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+        }
+      ]
+    }
+  }
+}

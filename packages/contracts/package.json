@@ -1,0 +1,21 @@
+{
+  "name": "@openmathmodel/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenMathModel 跨语言契约：JSON Schema 事实来源 + 生成的 TypeScript 类型",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./src/ts/v1": "./src/ts/v1/index.ts",
+    "./*": "./*"
+  },
+  "scripts": {
+    "generate": "node scripts/generate-ts.mjs",
+    "check": "node scripts/generate-ts.mjs --check && tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4",
+    "typescript": "^6.0.3"
+  }
+}

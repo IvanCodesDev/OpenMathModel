@@ -1,5 +1,9 @@
 // @ts-nocheck
 import type { ScreenId } from "../types/screens";
+import type { KnowledgeLibrary } from "../types/knowledge-library";
+import { methodCategories, methodLibrary } from "../data/method-library";
+import { RECIPE_LANGUAGES, methodRecipes } from "../data/method-recipes";
+import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
@@ -18,6 +22,14 @@ import type { ScreenId } from "../types/screens";
   const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
   })[character]);
+  const formatFileSize = value => {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  };
   const normalizeTheme = theme => theme === "dark" ? "dark" : "light";
   const savedTheme = () => {
     try {
@@ -107,8 +119,11 @@ import type { ScreenId } from "../types/screens";
   }
 
   function sidebar(active = "chat") {
+    return `<aside class="sidebar" aria-label="主导航">${sidebarInner(active)}</aside>`;
+  }
+
+  function sidebarInner(active = "chat") {
     return `
-      <aside class="sidebar" aria-label="主导航">
         <div class="brand-row">
           <a class="brand" href="${routes.new}"><img src="/assets/OpenMathModel_IP_Crop.png" alt="OpenMathModel"><span>OpenMathModel</span></a>
           <button class="sidebar-collapse" type="button" data-action="toggle-sidebar" aria-expanded="${!sidebarCollapsed()}" title="${sidebarCollapsed() ? "展开侧栏" : "收起侧栏"}">${icon("sidebar-simple")}</button>
@@ -132,8 +147,7 @@ import type { ScreenId } from "../types/screens";
           <span class="avatar">I</span>
           <div><strong>Ivan</strong><small>个人工作区</small></div>
           <button class="settings" data-action="settings" style="border:0;background:transparent">${icon("gear")}<span>设置</span></button>
-        </div>
-      </aside>`;
+        </div>`;
   }
 
   function windowControls() {
@@ -570,23 +584,14 @@ import type { ScreenId } from "../types/screens";
       </section>`, "editor");
   }
 
-  const problems = [
-    ["2024国赛A题", "城市共享单车调度", "国赛", "2024", "运筹优化", "调度，需求预测，路网，供需平衡", "中（需清洗整合）"],
-    ["2024国赛B题", "交通流量预测", "国赛", "2024", "时间序列", "交通流量，时空预测，深度学习", "中（需清洗整合）"],
-    ["2023国赛C题", "智慧能源调度", "国赛", "2023", "优化调度", "能源系统，多目标，负荷预测", "高（多源异构）"],
-    ["2023国赛A题", "航班延误预测", "国赛", "2023", "分类预测", "航班延误，特征工程，分类模型", "高（多源异构）"],
-    ["2022国赛B题", "企业经营决策", "国赛", "2022", "决策分析", "成本收益，风险评估，决策优化", "中（需清洗整合）"],
-    ["2022美赛M题", "公共卫生资源配置", "美赛", "2022", "规划分配", "资源配置，公平性，仿真模拟", "高（多源异构）"],
-    ["2021国赛D题", "冷链物流路径优化", "国赛", "2021", "路径规划", "冷链配送，车辆路径，温度约束", "高（多源异构）"],
-    ["2021美赛C题", "洪灾风险评估", "美赛", "2021", "风险评估", "洪灾模拟，风险预测，空间分析", "高（多源异构）"],
-    ["2020国赛A题", "炉温曲线优化", "国赛", "2020", "工艺优化", "热传导，曲线拟合，参数优化", "中（需清洗整合）"],
-    ["2020国赛C题", "中小企业信贷决策", "国赛", "2020", "决策分析", "信用评级，违约风险，收益优化", "中（需清洗整合）"],
-    ["2019国赛B题", "同心协力策略研究", "国赛", "2019", "动力学", "多人协同，受力分析，运动控制", "中（需清洗整合）"],
-    ["2019美赛D题", "航班登机策略优化", "美赛", "2019", "排队优化", "登机效率，排队模型，仿真分析", "中（需清洗整合）"],
-    ["2018校赛A题", "校园班车调度", "校赛", "2018", "运筹优化", "班车调度，路径规划，服务水平", "低（结构化数据）"],
-    ["2018国赛B题", "高温作业专用服装设计", "国赛", "2018", "热传导", "传热模型，参数反演，数值仿真", "中（需清洗整合）"],
-    ["2017美赛B题", "城市交通网络韧性评估", "美赛", "2017", "网络评价", "交通网络，韧性指标，故障模拟", "高（多源异构）"]
-  ];
+  // 2MB 的赛题库改由 preloadKnowledgeLibrary 原地填充，使它能拆成独立 chunk 而不进主包。
+  // 保持同一个数组引用，下游的 map/find/length 调用无需改动。
+  const problems = [];
+  const papers = [];
+  const problemTabs = () => ["全部赛题", ...new Set(problems.map(problem => problem.category)), "收藏"];
+  const paperTabs = () => ["全部", ...new Set(papers.map(paper => paper.category))];
+  const problemPageCount = () => Math.max(1, Math.ceil(problems.length / 15));
+  const paperPageCount = () => Math.max(1, Math.ceil(papers.length / 15));
 
   function problemsScreen() {
     return shell(`
@@ -596,50 +601,32 @@ import type { ScreenId } from "../types/screens";
           <div class="filters">${["比赛","年份","问题类型","建模方向"].map(x=>`<button class="filter-button" data-action="filter">${x}${icon("caret-down")}</button>`).join("")}</div>
         </div>
         <div class="resource-tabs" role="tablist" aria-label="赛题分类">
-          ${["全部赛题","国赛","美赛","校赛","收藏"].map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${x}" data-resource-kind="problem">${x==="收藏"?icon("star"):""}${x}</button>`).join("")}
+          ${problemTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="problem">${x==="收藏"?icon("star"):""}${escapeHtml(x)}</button>`).join("")}
         </div>
         <div class="resource-table-wrap">
           <table class="resource-table problem-resource-table">
             <thead><tr><th>题目</th><th>比赛</th><th>年份</th><th>问题类型</th><th>关键词</th><th>数据要求</th><th>状态</th></tr></thead>
             <tbody data-problem-list>
-              ${problems.map((p,i)=>`<tr class="problem-item ${i===0?"active":""}" data-resource-index="${i}" data-resource-category="${p[2]}" data-resource-search="${p.join(" ")}" data-saved="false" tabindex="0" role="link" aria-label="查看赛题：${p[0]} ${p[1]}">
-                <td><div class="resource-title-cell"><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${p[0]}">${icon("star")}</button><strong>${p[0]}　${p[1]}</strong></div></td>
-                <td>${p[2]}</td><td>${p[3]}</td><td>${p[4]}</td><td>${p[5]}</td><td>${p[6]}</td>
-                <td><div class="resource-status-cell"><span>已发布</span></div></td>
+              ${problems.map((p,i)=>`<tr class="problem-item ${i===0?"active":""}" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-resource-search="${escapeHtml([p.code,p.title,p.competition,p.category,p.year,p.problem_type,...p.keywords,...p.modeling_directions].join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看赛题：${escapeHtml(p.code)} ${escapeHtml(p.title)}">
+                <td><div class="resource-title-cell"><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(p.code)}">${icon("star")}</button><strong>${escapeHtml(p.code)}　${escapeHtml(p.title)}</strong></div></td>
+                <td>${escapeHtml(p.category)}</td><td>${p.year}</td><td>${escapeHtml(p.problem_type)}</td><td>${escapeHtml(p.keywords.join("，"))}</td><td>${escapeHtml(p.data_requirement)}</td>
+                <td><div class="resource-status-cell"><span>${escapeHtml(p.status)}</span></div></td>
               </tr>`).join("")}
             </tbody>
           </table>
         </div>
         <div class="resource-footer">
-          <span data-resource-page-copy>共 126 题 · 第 1 页</span>
+          <span data-resource-page-copy>共 ${problems.length} 题 · 第 1 页</span>
           <div class="resource-pagination">
             <button data-resource-page="prev" aria-label="上一页">${icon("caret-left")}</button>
-            ${["1","2","3","4","5"].map((x,i)=>`<button class="${i===0?"active":""}" data-resource-page="${x}">${x}</button>`).join("")}
-            <span>…</span><button data-resource-page="21">21</button>
+            ${Array.from({length: Math.min(5, problemPageCount())}, (_, index) => String(index + 1)).map((x,i)=>`<button class="${i===0?"active":""}" data-resource-page="${x}">${x}</button>`).join("")}
+            ${problemPageCount() > 5 ? `<span>…</span><button data-resource-page="${problemPageCount()}">${problemPageCount()}</button>` : ""}
             <button data-resource-page="next" aria-label="下一页">${icon("caret-right")}</button>
           </div>
           <button class="page-size-button" data-action="page-size">15 条/页 ${icon("caret-down")}</button>
         </div>
       </section>`, "problems");
   }
-
-  const papers = [
-    ["城市共享单车需求预测与调度优化","2024国赛A题","国家一等奖","时间序列预测、整数规划、需求聚类","需求预测＋调度联动建模"],
-    ["城市交通流量短期预测与拥堵评估","2023国赛B题","国家二等奖","LSTM、图卷积网络、贝叶斯网络","多源数据融合＋不确定性量化"],
-    ["区域综合能源系统多目标调度优化","2022国赛C题","国家一等奖","多目标优化、强化学习、场景分析","低碳与经济双目标协同优化"],
-    ["冷链物流路径规划与温控优化","2021国赛D题","国家二等奖","车辆路径问题、温度预测、遗传算法","温控约束下的路径－温度联动"],
-    ["城市交通信号配时优化与仿真评估","2020国赛A题","国家二等奖","排队论、遗传算法、仿真优化","基于仿真的信号配时自适应优化"],
-    ["港口集装箱多式联运调度","2019国赛B题","国家二等奖","混合整数规划、网络流、局部搜索","运输网络与时窗联合优化"],
-    ["城市垃圾分类收运路线优化","2019国赛C题","国家一等奖","VRP、聚类、模拟退火","分类投放与动态收运协同"],
-    ["公共卫生资源应急配置模型","2018国赛A题","国家一等奖","SEIR、鲁棒优化、情景模拟","疫情演化与资源配置联动"],
-    ["复杂网络中的信息传播预测","2018国赛B题","国家二等奖","复杂网络、SIR、蒙特卡洛","传播阈值与干预策略量化"],
-    ["高速公路交通事故风险评估","2017国赛C题","国家一等奖","随机森林、贝叶斯网络、风险矩阵","多尺度事故风险融合评估"],
-    ["农产品供应链库存优化","2017国赛A题","国家二等奖","时间序列、库存模型、动态规划","预测驱动的多级库存协同"],
-    ["水质综合评价与污染溯源","2016国赛B题","国家一等奖","主成分分析、模糊评价、聚类","多指标评价与污染源定位"],
-    ["光伏发电功率预测与储能调度","2016国赛C题","国家二等奖","XGBoost、储能优化、场景分析","预测误差下的储能稳健调度"],
-    ["区域物流枢纽选址与配送优化","2015国赛A题","国家一等奖","设施选址、整数规划、遗传算法","枢纽选址与末端配送联合决策"],
-    ["城市内涝风险分区与排水优化","2015国赛B题","国家二等奖","GIS、层次分析、排水网络优化","风险分区驱动的排水能力提升"]
-  ];
 
   function papersScreen() {
     return shell(`
@@ -649,25 +636,25 @@ import type { ScreenId } from "../types/screens";
           <div class="filters">${["比赛","年份","奖项","模型方法"].map(x=>`<button class="filter-button" data-action="filter">${x}${icon("caret-down")}</button>`).join("")}</div>
         </div>
         <div class="resource-tabs paper-resource-tabs" role="tablist" aria-label="论文分类">
-          ${["全部","国家一等奖","国家二等奖","按赛题","按模型"].map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${x}" data-resource-kind="paper">${x}</button>`).join("")}
+          ${paperTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper">${escapeHtml(x)}</button>`).join("")}
         </div>
         <div class="resource-table-wrap paper-resource-wrap">
           <table class="resource-table paper-resource-table">
             <thead><tr><th></th><th>论文标题</th><th>对应赛题</th><th>奖项</th><th>使用模型</th><th>主要创新</th><th>收藏</th></tr></thead>
             <tbody data-paper-list>
-              ${papers.map((p,i)=>`<tr class="paper-item ${i===0?"active":""}" data-resource-index="${i}" data-resource-category="${p[2]}" data-resource-search="${p.join(" ")}" data-saved="false" tabindex="0" role="link" aria-label="查看论文：${p[0]}">
-                <td>${i+1}</td><td><strong>${p[0]}</strong></td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${p[4]}</td>
-                <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${p[0]}">${icon("star")}</button></td>
+              ${papers.map((p,i)=>`<tr class="paper-item ${i===0?"active":""}" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-resource-search="${escapeHtml([p.title,p.problem_code,p.competition,p.year,p.award,p.institution,...p.distinctions,...p.models].filter(Boolean).join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看论文：${escapeHtml(p.title)}">
+                <td>${i+1}</td><td><strong>${escapeHtml(p.title)}</strong></td><td>${escapeHtml(p.problem_code)}</td><td>${escapeHtml(p.award)}</td><td>${escapeHtml(p.models.length ? p.models.join("、") : "待全文解析")}</td><td>${escapeHtml(p.innovation)}</td>
+                <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(p.title)}">${icon("star")}</button></td>
               </tr>`).join("")}
             </tbody>
           </table>
         </div>
         <div class="resource-footer paper-resource-footer">
-          <span data-resource-page-copy>共 1,238 篇 · 第 1 页</span>
+          <span data-resource-page-copy>共 ${papers.length} 篇 · 第 1 页</span>
           <div class="resource-pagination">
             <button data-resource-page="prev" aria-label="上一页">${icon("caret-left")}</button>
-            ${["1","2","3","4","5"].map((x,i)=>`<button class="${i===0?"active":""}" data-resource-page="${x}">${x}</button>`).join("")}
-            <span>…</span><button data-resource-page="124">124</button>
+            ${Array.from({length: Math.min(5, paperPageCount())}, (_, index) => String(index + 1)).map((x,i)=>`<button class="${i===0?"active":""}" data-resource-page="${x}">${x}</button>`).join("")}
+            ${paperPageCount() > 5 ? `<span>…</span><button data-resource-page="${paperPageCount()}">${paperPageCount()}</button>` : ""}
             <button data-resource-page="next" aria-label="下一页">${icon("caret-right")}</button>
           </div>
           <button class="page-size-button" data-action="page-size">15 条/页 ${icon("caret-down")}</button>
@@ -681,130 +668,484 @@ import type { ScreenId } from "../types/screens";
     return { item: items[index], index };
   }
 
+  function renderProblemContentBlock(block, index) {
+    if (block.type === "heading") {
+      const level = Math.min(4, Math.max(2, Number(block.level) + 1));
+      return `<h${level} class="problem-content-heading">${escapeHtml(block.text)}</h${level}>`;
+    }
+    if (block.type === "paragraph") {
+      const lead = block.lead ? `<strong>${escapeHtml(block.lead)}</strong> ` : "";
+      return `<p class="problem-content-paragraph">${lead}${escapeHtml(block.text).replace(/\n/g, "<br>")}</p>`;
+    }
+    if (block.type === "list_item") {
+      return `<div class="problem-content-list-item"><span aria-hidden="true">•</span><p>${escapeHtml(block.text).replace(/\n/g, "<br>")}</p></div>`;
+    }
+    if (block.type === "image") {
+      return `<figure class="problem-content-figure"><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt)}" loading="lazy" data-problem-asset="${index}"></figure>`;
+    }
+    if (block.type === "table") {
+      return `<div class="problem-content-table-wrap"><table class="problem-content-table"><tbody>${block.rows.map((row, rowIndex) => `<tr>${row.map(cell => `<${rowIndex === 0 ? "th" : "td"}>${escapeHtml(cell).replace(/\n/g, "<br>")}</${rowIndex === 0 ? "th" : "td"}>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    }
+    if (block.type === "document_break") {
+      return `<div class="problem-document-break"><span>题面附录</span><h2>${escapeHtml(block.title)}</h2></div>`;
+    }
+    return "";
+  }
+
+  function completeProblemMarkup(problem) {
+    const blocks = Array.isArray(problem.content_blocks) ? problem.content_blocks : [];
+    if (!blocks.length) return "";
+    return `
+      <section class="problem-full-content" aria-label="完整赛题正文">
+        ${blocks.map(renderProblemContentBlock).join("")}
+      </section>`;
+  }
+
   function problemDetailScreen() {
     const { item: problem } = selectedResource(problems);
-    const [code, title, competition, year, type, keywords, dataRequirement] = problem;
+    const completeMarkup = completeProblemMarkup(problem);
+    const attachmentMarkup = problem.attachments.length
+      ? `<section class="problem-downloads" aria-label="题目与附件下载">
+          <h3>题目与附件</h3>
+          <div class="problem-download-list">${problem.attachments.map(item => {
+            const local = String(item.url).startsWith("/");
+            const meta = [item.kind === "problem" ? "题目" : "附件", formatFileSize(item.bytes)].filter(Boolean).join(" · ");
+            return `<a class="problem-download-item" href="${escapeHtml(item.url)}" ${local ? "download" : 'target="_blank" rel="noreferrer"'}>
+              <span class="problem-download-icon">${icon(item.kind === "problem" ? "file-pdf" : "file-zip")}</span>
+              <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(meta)}</small></span>
+              ${icon("download-simple", "problem-download-arrow")}
+            </a>`;
+          }).join("")}</div>
+        </section>`
+      : "";
     return shell(`
       <section class="resource-detail-page problem-detail-page">
         <div class="resource-detail-breadcrumb"><a href="${routes.problems}">赛题库</a><span>/</span><strong>查看赛题</strong></div>
         <article class="resource-detail-article">
           <header class="resource-detail-title">
-            <h1>${year} 年全国大学生数学建模竞赛 ${code.slice(-2)}</h1>
-            <h2>题目：${title}</h2>
+            <h1>${problem.year} · ${escapeHtml(problem.competition)} · ${escapeHtml(problem.code)}</h1>
+            <h2>题目：${escapeHtml(problem.title)}</h2>
           </header>
           <div class="resource-detail-rule"></div>
-          <section class="detail-copy-section">
-            <h3>一、问题概述</h3>
-            <p>${title}是一个典型的${type}问题，需要结合现实业务约束与可获得的数据，对系统状态进行刻画，并给出可执行、可解释的建模方案。参赛者应在明确研究边界的基础上，构建合理的指标体系与数学模型。</p>
-            <p>请建立数学模型，分析“${keywords}”之间的关系，并基于模型给出关键结论、优化策略及稳定性说明。</p>
-          </section>
-          <section class="detail-copy-section">
-            <h3>二、问题分析</h3>
-            <ol>
-              <li><strong>任务识别：</strong>梳理题目目标、决策变量和关键约束，明确需要预测、评价或优化的核心指标。</li>
-              <li><strong>模型构建：</strong>建立与${type}相匹配的数学模型，给出变量定义、参数估计方法和求解流程。</li>
-              <li><strong>数据验证：</strong>使用提供的数据对模型进行训练、检验与误差分析，说明模型的合理性和适用范围。</li>
-              <li><strong>敏感性分析：</strong>改变关键参数和边界条件，分析结论的稳健性，并讨论潜在风险。</li>
-            </ol>
-          </section>
-          <section class="detail-copy-section">
-            <h3>三、数据说明</h3>
-            <p>附件提供与赛题相关的结构化数据、时间序列和辅助说明。数据要求为“${dataRequirement}”，请仔细阅读字段定义，处理缺失值、异常值和量纲差异，并保留完整的数据清洗记录。</p>
-          </section>
-          <section class="detail-copy-section">
-            <h3>四、提交要求</h3>
-            <p>提交内容应包含问题重述、模型假设、符号说明、模型建立与求解、结果分析、模型评价与推广。图表需标注清晰，代码和数据处理过程应可复现。</p>
-          </section>
+          ${attachmentMarkup}
+          ${completeMarkup || `<section class="detail-copy-section problem-metadata-fallback">
+            <h3>题面采集记录</h3>
+            <p>${escapeHtml(problem.summary)}</p>
+            <p><strong>问题类型：</strong>${escapeHtml(problem.problem_type)}　<strong>建模方向：</strong>${escapeHtml(problem.modeling_directions.join("、"))}</p>
+            <p><strong>关键词：</strong>${escapeHtml(problem.keywords.join("、"))}</p>
+            <p><strong>数据要求：</strong>${escapeHtml(problem.data_requirement)}</p>
+          </section>`}
         </article>
-        <footer class="resource-detail-actions">
-          <div class="detail-stats"><span>浏览量　1,256</span><span>收藏　342</span></div>
+        <footer class="resource-detail-actions problem-detail-actions">
           <div class="detail-action-buttons">
             <button type="button" data-action="detail-bookmark">${icon("star")} 收藏</button>
-            <button type="button" data-action="download-problem">${icon("download-simple")} 下载题目</button>
-            <button class="primary" type="button" data-action="use-problem" data-resource-title="${title}">用于当前任务</button>
+            <button type="button" data-action="open-source" data-source-url="${escapeHtml(problem.source_url)}">${icon("arrow-square-out")} 查看来源</button>
+            <button class="primary" type="button" data-action="use-problem" data-resource-title="${escapeHtml(problem.title)}">用于当前任务</button>
           </div>
         </footer>
       </section>`, "problems");
   }
 
+  const PAPER_RECORD_COPY = { paper: "单篇论文", collection: "论文合集" };
+  const PAPER_ACCESS_COPY = {
+    stored_content: "已收录结构化全文",
+    linked_content: "提供全文外部入口",
+    metadata_only: "仅获奖与来源元数据（全文待解析）",
+  };
+  const PAPER_SOURCE_COPY = {
+    official: "官方来源",
+    pending_human_confirmation: "来源待人工核对",
+    community_repository_snapshot: "社区开源仓库快照",
+  };
+
   function paperDetailScreen() {
     const { item: paper } = selectedResource(papers);
-    const [title, problemCode, award, models, innovation] = paper;
-    const displayTitle = title === "城市共享单车需求预测与调度优化" ? `基于多源数据的${title}` : title;
+    const distinctionCopy = paper.distinctions.length ? paper.distinctions.join("、") : "无附加专项奖记录";
+    const recordCopy = PAPER_RECORD_COPY[paper.record_type] || "论文记录";
+    const accessCopy = PAPER_ACCESS_COPY[paper.access_scope] || "未标注";
+    const sourceCopy = PAPER_SOURCE_COPY[paper.source_status] || "未标注";
+    const methodCopy = paper.models.length ? paper.models.join("、") : "待全文解析后补充";
+    const hasFullText = Boolean(paper.full_text_url);
+    const isPdf = hasFullText && /\.pdf(?:$|\?)/i.test(paper.full_text_url);
+    const sizeCopy = paper.source_file_bytes ? ` · ${formatFileSize(paper.source_file_bytes)}` : "";
+    const fullTextLabel = paper.record_type === "collection"
+      ? "打开论文合集下载入口"
+      : isPdf
+        ? `查看全文 PDF${sizeCopy}`
+        : "前往官方全文页";
+    // zhanwen 685 篇是社区仓库固定版本的公开 PDF，是当前唯一“有全文”的入口，
+    // 因此要显眼；COMAP 只有获奖名单，网盘合集是整届打包，分别给不同措辞。
+    const fullTextEntry = hasFullText
+      ? `<p><a href="${escapeHtml(paper.full_text_url)}" target="_blank" rel="noreferrer">${icon(isPdf ? "file-pdf" : "arrow-square-out")} ${escapeHtml(fullTextLabel)}</a></p>`
+      : `<p>${icon("info")} 暂无可访问的全文入口，本篇当前仅收录获奖与来源元数据。</p>`;
+    const fullTextNote = paper.access_scope === "metadata_only"
+      ? "本篇来自官方获奖名单，官方结果页未随附全文，需前往来源站点查看。"
+      : paper.source_status === "community_repository_snapshot"
+        ? "全文 PDF 存于社区开源仓库的固定版本快照；分节、公式与图表的结构化解析将在后续批次补充。"
+        : paper.record_type === "collection"
+          ? "该记录为整届优秀论文合集入口，单篇结构化解析将在后续补充。"
+          : "结构化全文解析（分节、公式、图表）将在后续批次补充。";
+    const fullTextAction = hasFullText
+      ? `<button type="button" data-action="open-source" data-source-url="${escapeHtml(paper.full_text_url)}">${icon("book-open")} 打开论文入口</button>`
+      : "";
     return shell(`
       <section class="resource-detail-page paper-detail-page">
         <div class="resource-detail-breadcrumb"><a href="${routes.papers}">优秀论文</a><span>/</span><strong>查看论文</strong></div>
         <article class="resource-detail-article paper-reading-article">
           <header class="resource-detail-title paper-reading-title">
-            <h1>${displayTitle}</h1>
-            <h2>${problemCode.replace("国赛", " 年全国大学生数学建模竞赛 ")}　·　${award}</h2>
+            <h1>${escapeHtml(paper.title)}</h1>
+            <h2>${escapeHtml(paper.problem_code)}　·　${escapeHtml(paper.award)}</h2>
           </header>
           <div class="resource-detail-rule"></div>
           <section class="detail-copy-section paper-abstract">
             <h3>摘要</h3>
-            <p>本文针对${title}问题，构建了“数据预处理—特征分析—模型求解—策略优化”的完整建模框架。首先，对多源数据进行清洗、关联与统计分析；其次，采用${models}建立核心模型；最后，通过对比实验和敏感性分析验证模型的有效性与稳定性。</p>
-            <p><strong>关键词：</strong>${models.replaceAll("、", "；")}；${innovation}</p>
+            <p>${escapeHtml(paper.summary)}</p>
+            <p><strong>记录类型：</strong>${escapeHtml(recordCopy)}</p>
           </section>
           <section class="detail-copy-section">
-            <h3>1　引言</h3>
-            <p>随着城市系统规模持续扩大，数据驱动的预测与优化方法已成为提升资源配置效率的重要手段。如何准确识别影响因素、刻画系统变化规律，并形成可落地的决策方案，是该问题的核心。</p>
+            <h3>获奖元数据</h3>
+            <p><strong>比赛：</strong>${escapeHtml(paper.competition)}　<strong>年份：</strong>${paper.year}</p>
+            <p><strong>对应赛题：</strong>${escapeHtml(paper.problem_code)}</p>
+            <p><strong>团队：</strong>${escapeHtml(paper.team_id || "合集")}</p>
+            <p><strong>学校/机构：</strong>${escapeHtml(paper.institution || "多机构合集")}</p>
+            <p><strong>附加奖项：</strong>${escapeHtml(distinctionCopy)}</p>
           </section>
           <section class="detail-copy-section">
-            <h3>2　问题分析</h3>
-            <h4>2.1　问题描述</h4>
-            <p>给定历史运行数据、环境信息与任务约束，需要对未来状态进行预测，并在满足边界条件的情况下制定优化方案，使综合目标达到最优。</p>
-            <h4>2.2　建模思路</h4>
-            <p>本文首先完成异常值处理和特征构造，随后使用${models}刻画关键变量之间的关系，并围绕“${innovation}”设计求解与验证流程。</p>
-          </section>
-          <section class="detail-copy-section">
-            <h3>3　模型建立与求解</h3>
-            <p>根据问题目标定义状态变量、决策变量和约束条件，对各子问题分别建模，再通过统一的评价指标比较不同方案。模型训练采用交叉验证，优化部分结合启发式搜索与精确求解，以兼顾结果质量和计算效率。</p>
-            <div class="paper-detail-formula">min　F(x) = α · L<sub>prediction</sub> + β · C<sub>decision</sub> + γ · R<sub>risk</sub></div>
-          </section>
-          <section class="detail-copy-section">
-            <h3>4　结果与讨论</h3>
-            <p>实验结果表明，所建模型在预测精度、决策收益和稳健性方面均优于基线方案。敏感性分析进一步说明，核心结论在参数合理变化范围内保持稳定。</p>
+            <h3>全文与收录状态</h3>
+            ${fullTextEntry}
+            <p>${escapeHtml(fullTextNote)}</p>
+            <p><strong>收录范围：</strong>${escapeHtml(accessCopy)}　<strong>来源状态：</strong>${escapeHtml(sourceCopy)}</p>
+            <p><strong>方法标签：</strong>${escapeHtml(methodCopy)}</p>
+            <p><a href="${escapeHtml(paper.source_url)}" target="_blank" rel="noreferrer">查看来源记录 ${icon("arrow-square-out")}</a></p>
           </section>
         </article>
         <footer class="resource-detail-actions">
           <div class="detail-action-buttons detail-left-actions">
             <button type="button" data-action="detail-bookmark">${icon("star")} 收藏</button>
-            <button type="button" data-action="cite-detail">${icon("quotes")} 引用</button>
+            <button type="button" data-action="cite-detail" data-resource-title="${escapeHtml(paper.title)}" data-source-url="${escapeHtml(paper.source_url)}">${icon("quotes")} 引用</button>
+            ${fullTextAction}
           </div>
-          <button class="primary" type="button" data-action="use-paper" data-resource-title="${displayTitle}">${icon("git-branch")} 参考该论文</button>
+          <button class="primary" type="button" data-action="use-paper" data-resource-title="${escapeHtml(paper.title)}">${icon("git-branch")} 参考该论文</button>
         </footer>
       </section>`, "papers");
   }
 
+  const methodListMarkup = items => `<ul class="method-copy-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+
+  const METHOD_FAVORITES_KEY = "openmathmodelMethodFavorites";
+  const METHOD_COMPARE_LIMIT = 3;
+  let methodCompareIds = [];
+  // 由 bindScreen("methods") 注入，使收藏动作能同时刷新侧栏筛选结果。
+  let refreshMethodFavoriteUi = () => {};
+
+  const readMethodFavorites = () => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(METHOD_FAVORITES_KEY) || "[]");
+      return Array.isArray(raw) ? raw.filter(id => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+  const writeMethodFavorites = ids => {
+    try {
+      localStorage.setItem(METHOD_FAVORITES_KEY, JSON.stringify([...new Set(ids)]));
+    } catch {
+      // 隐私模式或存储配额耗尽时降级为仅本次会话生效，不阻断交互。
+    }
+  };
+  const isMethodFavorite = id => readMethodFavorites().includes(id);
+  const toggleMethodFavorite = id => {
+    const favorites = readMethodFavorites();
+    const next = favorites.includes(id) ? favorites.filter(item => item !== id) : [...favorites, id];
+    writeMethodFavorites(next);
+    return next.includes(id);
+  };
+
+  const METHOD_LANGUAGE_KEY = "openmathmodelMethodLanguage";
+  const readMethodLanguage = () => {
+    try {
+      const saved = localStorage.getItem(METHOD_LANGUAGE_KEY);
+      return RECIPE_LANGUAGES.some(lang => lang.id === saved) ? saved : "python";
+    } catch {
+      return "python";
+    }
+  };
+
+  /**
+   * KaTeX 体积远大于本页其余代码，因此只在真正出现公式时动态加载，
+   * 加载前 data-tex 节点保留 LaTeX 源码作为可读回退。
+   */
+  let katexLoader = null;
+  function renderFormulas(scope = document) {
+    const nodes = $$("[data-tex]", scope).filter(node => node.dataset.texDone !== "true");
+    if (!nodes.length) return;
+    katexLoader = katexLoader || Promise.all([
+      import("katex"),
+      import("katex/dist/katex.min.css"),
+    ]).then(([module]) => module.default ?? module);
+    katexLoader
+      .then(katex => {
+        nodes.forEach(node => {
+          try {
+            katex.render(node.dataset.tex, node, { throwOnError: false, displayMode: true });
+            node.dataset.texDone = "true";
+          } catch {
+            // 渲染失败时保留 LaTeX 源码文本，不让公式区变空白
+          }
+        });
+      })
+      .catch(() => {
+        // 离线或加载失败：回退文本已经在 DOM 里，无需额外处理
+      });
+  }
+
+  const codeBlockMarkup = (entryId, recipe) => {
+    const active = readMethodLanguage();
+    return `<div class="code-block" data-code-block="${escapeHtml(entryId)}">
+      <div class="code-tabs" role="tablist">
+        ${RECIPE_LANGUAGES.map(lang => `<button type="button" role="tab" data-code-lang="${lang.id}" aria-selected="${lang.id === active}" class="${lang.id === active ? "active" : ""}">${escapeHtml(lang.label)}</button>`).join("")}
+      </div>
+      ${RECIPE_LANGUAGES.map(lang => `<pre class="code-snippet" data-code-panel="${lang.id}"${lang.id === active ? "" : " hidden"}><code>${escapeHtml(recipe.code[lang.id])}</code></pre>`).join("")}
+    </div>`;
+  };
+
+  const methodPitfallMarkup = items => `<ul class="method-copy-list method-pitfall-list">${items.map(item => {
+    const [symptom, fix] = item.split("；修正：");
+    return fix
+      ? `<li><span class="pitfall-symptom">${escapeHtml(symptom)}</span><span class="pitfall-fix">${icon("wrench")}${escapeHtml(fix)}</span></li>`
+      : `<li>${escapeHtml(item)}</li>`;
+  }).join("")}</ul>`;
+
+  function methodDetailMarkup(entry) {
+    const relatedProblems = entry.relatedProblemIds
+      .map(id => ({ item: problems.find(problem => problem.id === id), index: problems.findIndex(problem => problem.id === id) }))
+      .filter(({ item, index }) => item && index >= 0);
+    const relatedPapers = relatedProblems
+      .map(({ item: problem }) => ({ item: papers.find(paper => paper.problem_id === problem.id), index: papers.findIndex(paper => paper.problem_id === problem.id) }))
+      .filter(({ item, index }, position, collection) => item && index >= 0 && collection.findIndex(candidate => candidate.index === index) === position);
+    const resourceLinks = (resources, route, label) => resources.length
+      ? `<div class="related-resource-list">${resources.map(({ item, index }) => `<a class="related-resource-link" href="${route}?index=${index}"><strong>${escapeHtml(label(item))}</strong>　${escapeHtml(item.title)}　›</a>`).join("")}</div>`
+      : `<span class="method-empty">资源采集队列中</span>`;
+
+    const favorite = isMethodFavorite(entry.id);
+    const comparing = methodCompareIds.includes(entry.id);
+    const recipe = methodRecipes[entry.id];
+
+    return `
+      <div class="method-heading">
+        <div>
+          <div class="method-category-tag">${escapeHtml(entry.category)}</div>
+          <h1 data-method-title>${escapeHtml(entry.name)}</h1>
+          <div class="method-sub">${escapeHtml(entry.subtitle)}</div>
+        </div>
+        <div class="method-actions">
+          <button data-action="method-bookmark" data-method-id="${escapeHtml(entry.id)}" class="${favorite ? "saved" : ""}" aria-pressed="${favorite}">${favorite ? '<i class="ph-fill ph-star" aria-hidden="true"></i> 已收藏' : `${icon("star")} 收藏`}</button>
+          <button data-action="method-compare-toggle" data-method-id="${escapeHtml(entry.id)}" class="${comparing ? "saved" : ""}" aria-pressed="${comparing}">${icon(comparing ? "check" : "columns")} ${comparing ? "已加入对比" : "加入对比"}</button>
+          <button class="primary" data-action="use-method" data-method-id="${escapeHtml(entry.id)}" data-method-name="${escapeHtml(entry.name)}">用于当前任务</button>
+        </div>
+      </div>
+      <table class="method-table"><tbody>
+        <tr><th>方法简介</th><td>${escapeHtml(entry.introduction)}</td></tr>
+        <tr><th>适用场景</th><td>${methodListMarkup(entry.scenarios)}</td></tr>
+        <tr class="method-row-warn"><th>${icon("warning-octagon")}何时不要用</th><td>${methodListMarkup(entry.antipatterns)}</td></tr>
+        <tr><th>标准流程</th><td><ol class="method-workflow">${entry.workflow.map(step => `<li>${escapeHtml(step)}</li>`).join("")}</ol></td></tr>
+        <tr><th>输入与输出</th><td><strong>输入：</strong>${escapeHtml(entry.input)}<br><strong>输出：</strong>${escapeHtml(entry.output)}</td></tr>
+        <tr><th>核心假设</th><td>${methodListMarkup(entry.assumptions)}</td></tr>
+        <tr><th>优点</th><td>${methodListMarkup(entry.advantages)}</td></tr>
+        <tr><th>限制</th><td>${methodListMarkup(entry.limitations)}</td></tr>
+        <tr class="method-row-pitfall"><th>${icon("first-aid-kit")}常见失败与修正</th><td>${methodPitfallMarkup(entry.pitfalls)}</td></tr>
+        <tr class="method-row-check"><th>${icon("shield-check")}稳健性检查</th><td>${methodListMarkup(entry.robustness)}</td></tr>
+        <tr><th>评价指标</th><td>${escapeHtml(entry.metrics.join("、"))}</td></tr>
+        <tr><th>核心公式</th><td><div class="formula" data-tex="${escapeHtml(recipe.formula)}">${escapeHtml(recipe.formula)}</div></td></tr>
+        <tr><th>代码示例</th><td>${codeBlockMarkup(entry.id, recipe)}</td></tr>
+        <tr><th>相关赛题</th><td>${resourceLinks(relatedProblems, routes.problemDetail, item => item.code)}</td></tr>
+        <tr><th>相关优秀论文</th><td>${resourceLinks(relatedPapers, routes.paperDetail, item => `${item.award} · ${item.team_id || item.problem_code}`)}</td></tr>
+      </tbody></table>`;
+  }
+
+  const COMPARE_ROWS = [
+    ["适用场景", entry => methodListMarkup(entry.scenarios)],
+    ["何时不要用", entry => methodListMarkup(entry.antipatterns)],
+    ["核心假设", entry => methodListMarkup(entry.assumptions)],
+    ["输入", entry => escapeHtml(entry.input)],
+    ["输出", entry => escapeHtml(entry.output)],
+    ["优点", entry => methodListMarkup(entry.advantages)],
+    ["限制", entry => methodListMarkup(entry.limitations)],
+    ["稳健性检查", entry => methodListMarkup(entry.robustness)],
+    ["评价指标", entry => escapeHtml(entry.metrics.join("、"))],
+    ["核心公式", entry => {
+      const tex = methodRecipes[entry.id]?.formula ?? "";
+      return `<div class="formula" data-tex="${escapeHtml(tex)}">${escapeHtml(tex)}</div>`;
+    }],
+  ];
+
+  function methodCompareMarkup(entries) {
+    return `
+      <div class="method-compare-head">
+        <div>
+          <h1>方法对比</h1>
+          <div class="method-sub">并排比较 ${entries.length} 个方法的适用边界与代价</div>
+        </div>
+        <button data-action="method-compare-exit">${icon("x")} 退出对比</button>
+      </div>
+      <div class="method-compare-scroll">
+        <table class="method-table method-compare-table">
+          <thead><tr><th>对比项</th>${entries.map(entry => `<th><div class="compare-name">${escapeHtml(entry.name)}</div><div class="compare-sub">${escapeHtml(entry.category)} · ${escapeHtml(entry.subtitle)}</div><button class="compare-remove" data-action="method-compare-toggle" data-method-id="${escapeHtml(entry.id)}">${icon("minus-circle")} 移出</button></th>`).join("")}</tr></thead>
+          <tbody>
+            ${COMPARE_ROWS.map(([label, render]) => `<tr><th>${escapeHtml(label)}</th>${entries.map(entry => `<td>${render(entry)}</td>`).join("")}</tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  const setMethodGroupExpanded = (group, expanded) => {
+    if (!group) return;
+    const children = $(".tree-children", group);
+    const trigger = $("[data-tree-group]", group);
+    if (children) children.hidden = !expanded;
+    trigger?.setAttribute("aria-expanded", String(expanded));
+    const groupIcon = $("i", trigger);
+    if (groupIcon) groupIcon.className = `ph ph-caret-${expanded ? "down" : "right"}`;
+  };
+
+  const methodLinkById = id => $$("[data-method]").find(link => link.dataset.method === id);
+
+  /** 语言选择是全局偏好：切一次，页面上所有代码块和后续打开的方法都跟随。 */
+  function switchMethodLanguage(language) {
+    if (!RECIPE_LANGUAGES.some(item => item.id === language)) return;
+    try {
+      localStorage.setItem(METHOD_LANGUAGE_KEY, language);
+    } catch {
+      // 存储不可用时仅本次会话生效
+    }
+    $$("[data-code-block]").forEach(block => {
+      $$("[data-code-lang]", block).forEach(tab => {
+        const active = tab.dataset.codeLang === language;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", String(active));
+      });
+      $$("[data-code-panel]", block).forEach(panel => {
+        panel.hidden = panel.dataset.codePanel !== language;
+      });
+    });
+  }
+
+  function showMethodById(id, { notify = true } = {}) {
+    const entry = methodLibrary.find(candidate => candidate.id === id);
+    const detail = $("[data-method-detail]");
+    if (!entry || !detail) return null;
+    const item = methodLinkById(id);
+    $$("[data-method]").forEach(link => {
+      const active = link.dataset.method === id;
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    });
+    if (item) setMethodGroupExpanded(item.closest("[data-method-group]"), true);
+    if (detail.dataset.selectedMethod !== entry.id || detail.dataset.mode === "compare") {
+      detail.dataset.selectedMethod = entry.id;
+      detail.dataset.mode = "detail";
+      detail.innerHTML = methodDetailMarkup(entry);
+    }
+    detail.scrollTop = 0;
+    renderFormulas(detail);
+    item?.scrollIntoView({ block: "nearest" });
+    window.history.replaceState({}, "", `${routes.methods}?method=${encodeURIComponent(entry.id)}`);
+    if (notify) toast(`已切换到 ${entry.name}`);
+    return entry;
+  }
+
+  function syncMethodCompareBar() {
+    const bar = $("[data-method-compare-bar]");
+    if (!bar) return;
+    bar.hidden = methodCompareIds.length === 0;
+    $("[data-method-detail]")?.classList.toggle("has-compare-bar", methodCompareIds.length > 0);
+    const count = $("[data-compare-count]", bar);
+    if (count) count.textContent = String(methodCompareIds.length);
+    const chips = $("[data-compare-chips]", bar);
+    if (chips) {
+      chips.innerHTML = methodCompareIds.map(id => {
+        const entry = methodLibrary.find(candidate => candidate.id === id);
+        return entry ? `<button class="compare-chip" data-action="method-compare-toggle" data-method-id="${escapeHtml(id)}">${escapeHtml(entry.name)}${icon("x")}</button>` : "";
+      }).join("");
+    }
+    $$("[data-action='method-compare-toggle'][data-method-id]").forEach(button => {
+      if (button.classList.contains("compare-chip") || button.classList.contains("compare-remove")) return;
+      const active = methodCompareIds.includes(button.dataset.methodId);
+      button.classList.toggle("saved", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.innerHTML = `${icon(active ? "check" : "columns")} ${active ? "已加入对比" : "加入对比"}`;
+    });
+  }
+
+  function openMethodCompare() {
+    const detail = $("[data-method-detail]");
+    if (!detail) return;
+    const entries = methodCompareIds
+      .map(id => methodLibrary.find(candidate => candidate.id === id))
+      .filter(Boolean);
+    if (entries.length < 2) {
+      toast("请至少选择两个方法再对比");
+      return;
+    }
+    detail.dataset.mode = "compare";
+    detail.innerHTML = methodCompareMarkup(entries);
+    detail.scrollTop = 0;
+    renderFormulas(detail);
+  }
+
+  function exitMethodCompare() {
+    const detail = $("[data-method-detail]");
+    if (!detail || detail.dataset.mode !== "compare") return;
+    const entry = methodLibrary.find(candidate => candidate.id === detail.dataset.selectedMethod) || methodLibrary[0];
+    detail.dataset.mode = "detail";
+    detail.innerHTML = methodDetailMarkup(entry);
+    detail.scrollTop = 0;
+    renderFormulas(detail);
+  }
+
+  const METHOD_TREE_COLLAPSED_KEY = "openmathmodelMethodTreeCollapsed";
+  const methodTreeCollapsed = () => {
+    try {
+      return localStorage.getItem(METHOD_TREE_COLLAPSED_KEY) === "true";
+    } catch {
+      return false;
+    }
+  };
+
   function methodsScreen() {
-    const groups = [["预测",["XGBoost","ARIMA","LSTM","Prophet"]],["优化",[]],["评价",[]],["分类",[]],["聚类",[]],["统计分析",[]],["图论",[]],["微分方程",[]],["仿真",[]]];
+    const requestedMethod = new URLSearchParams(window.location.search).get("method");
+    const selected = methodLibrary.find(entry => entry.id === requestedMethod) || methodLibrary[0];
+    const favorites = readMethodFavorites();
+    const collapsed = methodTreeCollapsed();
+    methodCompareIds = [];
     return shell(`
-      <div class="method-layout">
-        <aside class="method-tree">
-          <label class="search-box">${icon("magnifying-glass")}<input data-method-search placeholder="搜索建模方法……"></label>
-          ${groups.map((g,i)=>`<div class="tree-group"><div class="tree-group-title" data-tree-group="${g[0]}">${icon(i===0?"caret-down":"caret-right")}<span>${g[0]}</span></div>${i===0?`<div class="tree-children">${g[1].map((c,j)=>`<a class="tree-child ${j===0?"active":""}" href="#" data-method="${c}">${c}</a>`).join("")}</div>`:""}</div>`).join("")}
+      <div class="method-layout ${collapsed ? "tree-collapsed" : ""}" data-method-layout>
+        <button type="button" class="method-tree-toggle" data-action="toggle-method-tree"
+                aria-expanded="${!collapsed}" aria-controls="method-tree-panel"
+                title="${collapsed ? "展开方法列表" : "收起方法列表"}">${icon(collapsed ? "caret-right" : "caret-left")}</button>
+        <aside class="method-tree" id="method-tree-panel">
+          <label class="search-box">${icon("magnifying-glass")}<input data-method-search aria-label="搜索方法论" autocomplete="off" placeholder="搜索方法、场景或关键词……"></label>
+          <div class="method-tree-toolbar">
+            <div class="method-search-status" data-method-search-status aria-live="polite">${methodLibrary.length} 种方法</div>
+            <button type="button" class="method-favorite-filter" data-method-favorite-filter aria-pressed="false">${icon("star")}<span data-favorite-count>${favorites.length}</span></button>
+          </div>
+          <div data-method-no-results class="method-no-results" hidden>没有匹配的方法</div>
+          ${methodCategories.map(category => {
+            const children = methodLibrary.filter(entry => entry.category === category);
+            const open = children.some(entry => entry.id === selected.id);
+            return `<div class="tree-group" data-method-group="${escapeHtml(category)}"><button type="button" class="tree-group-title" data-tree-group="${escapeHtml(category)}" aria-expanded="${open}">${icon(open ? "caret-down" : "caret-right")}<span>${escapeHtml(category)}</span><span class="tree-group-count">${children.length}</span></button><div class="tree-children" ${open ? "" : "hidden"}>${children.map(entry => `<a class="tree-child ${entry.id === selected.id ? "active" : ""}" href="${routes.methods}?method=${encodeURIComponent(entry.id)}" data-method="${escapeHtml(entry.id)}" data-method-favorite="${favorites.includes(entry.id)}" data-method-search-copy="${escapeHtml([entry.name, entry.subtitle, entry.category, entry.introduction, entry.input, entry.output, ...entry.scenarios, ...entry.antipatterns, ...entry.workflow, ...entry.assumptions, ...entry.metrics].join(" "))}">${escapeHtml(entry.name)}</a>`).join("")}</div></div>`;
+          }).join("")}
         </aside>
-        <section class="method-content">
-          <h1 data-method-title>XGBoost</h1><div class="method-sub">梯度提升树模型</div>
-          <div class="method-actions"><button data-action="bookmark">${icon("star")} 收藏</button><button class="primary" data-go="new">用于当前任务</button></div>
-          <table class="method-table"><tbody>
-            <tr><th>方法简介</th><td>XGBoost（Extreme Gradient Boosting）是一种高效、可扩展的梯度提升决策树模型，通过逐步拟合残差的方式构建一组弱学习器，并结合正则化、列采样、缺失值处理等技术，显著提升了预测精度与泛化能力。</td></tr>
-            <tr><th>适用场景</th><td>适用于回归、分类与排序问题。常用于结构化数据的预测，如时间序列预测、用户行为预测、风险评分、销量预测等。</td></tr>
-            <tr><th>输入与输出</th><td>输入：特征矩阵 X ∈ Rⁿˣᵖ，目标向量 y ∈ Rⁿ<br>输出：预测值 ŷ ∈ Rⁿ（回归）或类别概率/标签（分类）</td></tr>
-            <tr><th>优点</th><td>• 预测精度高，泛化能力强<br>• 支持并行计算，训练效率高<br>• 内置正则化与防过拟合机制<br>• 可处理缺失值与大规模数据</td></tr>
-            <tr><th>限制</th><td>• 参数较多，需调参<br>• 模型可解释性相对较弱<br>• 对极其稀疏的高维数据不够友好</td></tr>
-            <tr><th>评价指标</th><td>RMSE、MAE、R²、MAPE 等。</td></tr>
-            <tr><th>核心公式</th><td>目标函数（以回归为例）：<div class="formula">Obj⁽ᵗ⁾ = ∑ l(yᵢ, ŷᵢ⁽ᵗ⁻¹⁾ + fₜ(xᵢ)) + Ω(fₜ)</div></td></tr>
-            <tr><th>代码示例</th><td><div class="code-snippet">import xgboost as xgb
-model = xgb.XGBRegressor(
-    n_estimators=300, max_depth=6, learning_rate=0.1,
-    subsample=0.8, colsample_bytree=0.8, random_state=42
-)
-model.fit(X_train, y_train)</div></td></tr>
-            <tr><th>相关赛题</th><td class="related-row">2023国赛C题：智慧能源调度　　利用历史负荷与气象数据进行短期负荷预测与调度优化　›<br>2022国赛B题：企业经营决策　　基于销售与成本数据的需求预测与利润优化　›</td></tr>
-            <tr><th>相关优秀论文</th><td class="related-row">XGBoost: A Scalable Tree Boosting System　　Tianqi Chen, Carlos Guestrin. KDD, 2016　›<br>A Survey on Gradient Boosting Decision Tree　　Ke et al. IEEE TKDE, 2017　›</td></tr>
-          </tbody></table>
+        <section class="method-content" data-method-detail data-selected-method="${escapeHtml(selected.id)}">
+          ${methodDetailMarkup(selected)}
         </section>
+      </div>
+      <div class="method-compare-bar" data-method-compare-bar hidden>
+        <span class="compare-bar-label">${icon("columns")} 已选 <strong data-compare-count>0</strong>/${METHOD_COMPARE_LIMIT}</span>
+        <div class="compare-bar-chips" data-compare-chips></div>
+        <button data-action="method-compare-clear">清空</button>
+        <button class="primary" data-action="method-compare-open">开始对比</button>
       </div>`, "methods");
   }
 
@@ -1011,22 +1352,8 @@ model.fit(X_train, y_train)</div></td></tr>
             </div>
 
             <div class="settings-pane" data-settings-pane="security">
-              <div class="settings-section account-identity">
-                <span class="account-avatar-large">I</span><div><h3>Ivan</h3><p>ivan@example.com · 个人专业版</p></div><button type="button" class="secondary-small" data-settings-action="edit-profile">编辑资料</button>
-              </div>
-              <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>登录安全</h3><p>保护你的账户和 API 凭据。</p></div></div>
-                <div class="security-item"><span class="security-icon">${icon("password")}</span><div><strong>账户密码</strong><span>上次修改于 42 天前</span></div><button type="button" data-settings-action="change-password">修改密码</button></div>
-                <div class="security-item"><span class="security-icon">${icon("device-mobile")}</span><div><strong>双重验证</strong><span class="green">已通过验证器应用启用</span></div><button type="button" data-settings-action="manage-2fa">管理</button></div>
-                <div class="security-item"><span class="security-icon">${icon("key")}</span><div><strong>恢复代码</strong><span>还剩 8 个可用恢复代码</span></div><button type="button" data-settings-action="recovery-codes">查看</button></div>
-              </div>
-              <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>登录设备</h3><p>最近 30 天访问过账户的设备。</p></div><button type="button" class="danger-text" data-settings-action="revoke-others">退出其他设备</button></div>
-                <div class="device-list">
-                  <div class="device-item"><span class="security-icon">${icon("desktop")}</span><div><strong>Windows · Codex Desktop</strong><span>上海 · 当前设备</span></div><span class="device-status">当前</span></div>
-                  <div class="device-item" data-device><span class="security-icon">${icon("browser")}</span><div><strong>Chrome on macOS</strong><span>杭州 · 2 天前</span></div><button type="button" data-settings-action="revoke-device">退出</button></div>
-                  <div class="device-item" data-device><span class="security-icon">${icon("device-mobile")}</span><div><strong>Safari on iPhone</strong><span>上海 · 6 天前</span></div><button type="button" data-settings-action="revoke-device">退出</button></div>
-                </div>
+              <div data-security-root>
+                <div class="settings-section security-loading">正在加载账户信息…</div>
               </div>
             </div>
 
@@ -1133,6 +1460,7 @@ model.fit(X_train, y_train)</div></td></tr>
         </section>
       </div>`;
     document.body.appendChild(backdrop);
+    initSecurityPane(backdrop);
 
     const closeSettings = () => {
       document.removeEventListener("keydown", onSettingsKeydown);
@@ -1329,14 +1657,6 @@ model.fit(X_train, y_train)</div></td></tr>
         $('[name="apiProfileName"]', backdrop).value = `${actionButton.dataset.provider} API`;
         $('[name="apiBaseUrl"]', backdrop).focus();
       }
-      if (action === "revoke-device") {
-        actionButton.closest("[data-device]")?.remove();
-        toast("该设备已退出登录");
-      }
-      if (action === "revoke-others") {
-        $$("[data-device]", backdrop).forEach(device => device.remove());
-        toast("其他设备已全部退出");
-      }
       if (action === "reset-defaults") {
         localStorage.removeItem("openmathmodelSettings");
         settingsSaved = true;
@@ -1349,10 +1669,6 @@ model.fit(X_train, y_train)</div></td></tr>
       if (action === "export-data") toast("数据导出申请已提交，完成后会通知你");
       if (action === "clear-cache") toast("本地缓存已清理，共释放 386 MB");
       if (action === "delete-account") toast("演示环境不会执行账户删除");
-      if (action === "change-password") toast("密码修改流程已打开");
-      if (action === "manage-2fa") toast("双重验证设置已打开");
-      if (action === "recovery-codes") toast("恢复代码已通过安全验证");
-      if (action === "edit-profile") toast("个人资料编辑已打开");
       if (action === "endpoint-menu") popupMenu(actionButton, ["设为主接口", "编辑", "复制配置", "删除"]);
       if (action === "network-diagnosis") {
         actionButton.disabled = true;
@@ -1393,8 +1709,21 @@ model.fit(X_train, y_train)</div></td></tr>
     setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
   }
 
+  /**
+   * Chart.js 只有数据页和实验页用得到，动态载入避免让其他页面为它买单。
+   * 原实现依赖 CDN 注入的 window.Chart，加载失败会静默返回、图表区直接空白；
+   * 现在改为本地依赖并显式报错。
+   */
+  let chartLoader = null;
   function initCharts(screen) {
-    if (!window.Chart) return;
+    if (screen !== "data" && screen !== "experiments") return;
+    chartLoader = chartLoader || import("chart.js/auto").then(module => module.default);
+    chartLoader
+      .then(Chart => renderCharts(Chart, screen))
+      .catch(error => console.error("图表库加载失败，数据可视化不可用", error));
+  }
+
+  function renderCharts(Chart, screen) {
     const dark = document.documentElement.dataset.theme === "dark";
     const chartInk = dark ? "#ecece8" : "#171717";
     const chartMuted = dark ? "#9f9f99" : "#8a8a86";
@@ -1558,6 +1887,8 @@ model.fit(X_train, y_train)</div></td></tr>
           $("[data-action=\"model-picker\"]", picker)?.setAttribute("aria-expanded", "false");
         });
       }
+      const codeTab = event.target.closest("[data-code-lang]");
+      if (codeTab) { switchMethodLanguage(codeTab.dataset.codeLang); return; }
       const goButton = event.target.closest("[data-go]");
       if (goButton) { go(goButton.dataset.go); return; }
       const action = event.target.closest("[data-action]")?.dataset.action;
@@ -1571,6 +1902,18 @@ model.fit(X_train, y_train)</div></td></tr>
         target.setAttribute("aria-expanded", String(!collapsed));
         target.title = collapsed ? "展开侧栏" : "收起侧栏";
         try { localStorage.setItem("openmathmodelSidebarCollapsed", String(collapsed)); } catch {}
+        return;
+      }
+      if (action === "toggle-method-tree") {
+        const layout = $("[data-method-layout]");
+        if (!layout) return;
+        const collapsed = layout.classList.toggle("tree-collapsed");
+        target.setAttribute("aria-expanded", String(!collapsed));
+        target.title = collapsed ? "展开方法列表" : "收起方法列表";
+        target.innerHTML = icon(collapsed ? "caret-right" : "caret-left");
+        try { localStorage.setItem(METHOD_TREE_COLLAPSED_KEY, String(collapsed)); } catch {
+          // 存储不可用时仅本次会话生效
+        }
         return;
       }
       if (action === "sidebar-filter") popupMenu(target, ["全部任务", "进行中", "已完成", "我创建的"]);
@@ -1705,11 +2048,67 @@ model.fit(X_train, y_train)</div></td></tr>
         target.innerHTML = saved ? '<i class="ph-fill ph-star" aria-hidden="true"></i> 已收藏' : `${icon("star")} 收藏`;
         toast(saved ? "已加入收藏" : "已取消收藏");
       }
-      if (action === "download-problem") toast("赛题文件已加入下载队列");
-      if (action === "cite-detail") modal("引用论文", '<label>引用格式</label><input value=\"GB/T 7714—2015\" readonly><label>引用文本</label><textarea readonly>城市共享单车需求预测与调度优化［J］. 数学建模优秀论文集, 2024.</textarea>', () => toast("引用文本已复制"));
+      if (action === "open-source") window.open(target.dataset.sourceUrl, "_blank", "noopener,noreferrer");
+      if (action === "cite-detail") {
+        const title = escapeHtml(target.dataset.resourceTitle || "数学建模论文");
+        const sourceUrl = escapeHtml(target.dataset.sourceUrl || "");
+        modal("引用论文", `<label>引用格式</label><input value="GB/T 7714—2015" readonly><label>引用文本</label><textarea readonly>${title}［EB/OL］. ${sourceUrl}</textarea>`, () => toast("引用文本已复制"));
+      }
       if (action === "use-problem") {
         sessionStorage.setItem("openmathmodelPrompt", `请围绕“${target.dataset.resourceTitle}”建立完整数学模型，并给出可复现的求解流程。`);
         toast("已添加赛题上下文");
+        setTimeout(() => go("new"), 320);
+      }
+      if (action === "method-bookmark") {
+        const id = target.dataset.methodId;
+        const saved = toggleMethodFavorite(id);
+        target.setAttribute("aria-pressed", String(saved));
+        target.classList.toggle("saved", saved);
+        target.innerHTML = saved ? '<i class="ph-fill ph-star" aria-hidden="true"></i> 已收藏' : `${icon("star")} 收藏`;
+        const link = methodLinkById(id);
+        if (link) link.dataset.methodFavorite = String(saved);
+        const counter = $("[data-favorite-count]");
+        if (counter) counter.textContent = String(readMethodFavorites().length);
+        refreshMethodFavoriteUi();
+        toast(saved ? "已加入收藏" : "已取消收藏");
+      }
+      if (action === "method-compare-toggle") {
+        const id = target.dataset.methodId;
+        if (methodCompareIds.includes(id)) {
+          methodCompareIds = methodCompareIds.filter(item => item !== id);
+        } else if (methodCompareIds.length >= METHOD_COMPARE_LIMIT) {
+          toast(`最多同时对比 ${METHOD_COMPARE_LIMIT} 个方法`);
+          return;
+        } else {
+          methodCompareIds = [...methodCompareIds, id];
+        }
+        const detail = $("[data-method-detail]");
+        if (detail?.dataset.mode === "compare") {
+          if (methodCompareIds.length >= 2) openMethodCompare();
+          else exitMethodCompare();
+        }
+        syncMethodCompareBar();
+      }
+      if (action === "method-compare-clear") {
+        methodCompareIds = [];
+        exitMethodCompare();
+        syncMethodCompareBar();
+      }
+      if (action === "method-compare-open") openMethodCompare();
+      if (action === "method-compare-exit") exitMethodCompare();
+      if (action === "use-method") {
+        const entry = methodLibrary.find(candidate => candidate.id === target.dataset.methodId);
+        const prompt = entry
+          ? [
+              `请使用“${entry.name}”（${entry.subtitle}）完成当前数学建模任务。`,
+              `核心假设需逐条核对：${entry.assumptions.join("；")}。`,
+              `标准流程：${entry.workflow.map((step, index) => `${index + 1}) ${step}`).join(" ")}。`,
+              `以下情况必须换方法并说明理由：${entry.antipatterns.join("；")}。`,
+              `请给出可复现代码，报告 ${entry.metrics.join("、")} 等指标，并完成稳健性检查：${entry.robustness.join("；")}。`,
+            ].join("\n")
+          : `请使用“${target.dataset.methodName}”完成当前数学建模任务，说明适用假设、完整流程、评价指标与敏感性分析，并给出可复现代码。`;
+        sessionStorage.setItem("openmathmodelPrompt", prompt);
+        toast("已添加方法论上下文");
         setTimeout(() => go("new"), 320);
       }
       if (action === "use-paper") {
@@ -1774,21 +2173,34 @@ model.fit(X_train, y_train)</div></td></tr>
       const searchSelector = kind === "problem" ? "[data-problem-search]" : "[data-paper-search]";
       const rows = $$(rowSelector);
       const tabs = $$(`[data-resource-kind="${kind}"]`);
+      const pageSize = 15;
+      let currentPage = 1;
       const applyResourceFilters = () => {
         const query = $(searchSelector)?.value.trim().toLowerCase() || "";
         const selected = tabs.find(tab => tab.classList.contains("active"))?.dataset.resourceTab || "";
+        const matches = [];
         rows.forEach(row => {
           const matchesSearch = !query || row.dataset.resourceSearch.toLowerCase().includes(query);
           const matchesCategory = selected === "全部赛题" || selected === "全部" || selected === "按赛题" || selected === "按模型"
             || (selected === "收藏" ? row.dataset.saved === "true" : row.dataset.resourceCategory === selected);
-          row.hidden = !(matchesSearch && matchesCategory);
+          if (matchesSearch && matchesCategory) matches.push(row);
+          row.hidden = true;
+        });
+        const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
+        currentPage = Math.min(currentPage, pageCount);
+        matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).forEach(row => { row.hidden = false; });
+        const copy = $("[data-resource-page-copy]");
+        if (copy) copy.textContent = `共 ${matches.length} ${kind === "problem" ? "题" : "篇"} · 第 ${currentPage}/${pageCount} 页`;
+        $$('[data-resource-page]:not([data-resource-page="prev"]):not([data-resource-page="next"])').forEach(button => {
+          button.classList.toggle("active", +button.dataset.resourcePage === currentPage);
         });
       };
 
-      $(searchSelector)?.addEventListener("input", applyResourceFilters);
+      $(searchSelector)?.addEventListener("input", () => { currentPage = 1; applyResourceFilters(); });
       tabs.forEach(tab => tab.addEventListener("click", () => {
         tabs.forEach(item => item.classList.remove("active"));
         tab.classList.add("active");
+        currentPage = 1;
         applyResourceFilters();
       }));
       const openResourceDetail = row => {
@@ -1807,17 +2219,13 @@ model.fit(X_train, y_train)</div></td></tr>
         });
       });
       $$("[data-resource-page]").forEach(button => button.addEventListener("click", () => {
-        const numericButtons = $$('[data-resource-page]:not([data-resource-page="prev"]):not([data-resource-page="next"])');
-        const active = numericButtons.find(item => item.classList.contains("active"));
-        let page = +(active?.dataset.resourcePage || 1);
-        if (button.dataset.resourcePage === "prev") page = Math.max(1, page - 1);
-        else if (button.dataset.resourcePage === "next") page += 1;
-        else page = +button.dataset.resourcePage;
-        numericButtons.forEach(item => item.classList.toggle("active", +item.dataset.resourcePage === page));
-        const copy = $("[data-resource-page-copy]");
-        if (copy) copy.textContent = `${kind === "problem" ? "共 126 题" : "共 1,238 篇"} · 第 ${page} 页`;
-        toast(`已切换到第 ${page} 页`);
+        if (button.dataset.resourcePage === "prev") currentPage = Math.max(1, currentPage - 1);
+        else if (button.dataset.resourcePage === "next") currentPage += 1;
+        else currentPage = +button.dataset.resourcePage;
+        applyResourceFilters();
+        toast(`已切换到第 ${currentPage} 页`);
       }));
+      applyResourceFilters();
     };
 
     if (screen === "projects") {
@@ -1879,15 +2287,141 @@ model.fit(X_train, y_train)</div></td></tr>
       bindResourceDirectory("paper");
     }
     if (screen === "methods") {
-      $$("[data-method]").forEach(item => item.addEventListener("click", e => {
-        e.preventDefault(); $$("[data-method]").forEach(i => i.classList.remove("active")); item.classList.add("active");
-        $("[data-method-title]").textContent = item.dataset.method; toast(`已切换到 ${item.dataset.method}`);
+      $$("[data-tree-group]").forEach(trigger => trigger.addEventListener("click", () => {
+        const group = trigger.closest("[data-method-group]");
+        setMethodGroupExpanded(group, trigger.getAttribute("aria-expanded") !== "true");
       }));
-      $("[data-method-search]")?.addEventListener("input", e => {
-        const q = e.target.value.toLowerCase(); $$("[data-method]").forEach(item => item.hidden = !item.innerText.toLowerCase().includes(q));
+      $$("[data-method]").forEach(item => item.addEventListener("click", event => {
+        event.preventDefault();
+        showMethodById(item.dataset.method);
+      }));
+
+      const searchInput = $("[data-method-search]");
+      const searchStatus = $("[data-method-search-status]");
+      const favoriteFilter = $("[data-method-favorite-filter]");
+      let searchActive = false;
+      let expansionBeforeSearch = new Map();
+      let autoOpenTimer = 0;
+
+      const applyMethodFilters = () => {
+        window.clearTimeout(autoOpenTimer);
+        const query = searchInput?.value.trim().normalize("NFKC").toLowerCase() || "";
+        const favoritesOnly = favoriteFilter?.getAttribute("aria-pressed") === "true";
+        const favorites = readMethodFavorites();
+        const narrowed = Boolean(query) || favoritesOnly;
+        if (narrowed && !searchActive) {
+          expansionBeforeSearch = new Map($$("[data-method-group]").map(group => [group.dataset.methodGroup, $("[data-tree-group]", group)?.getAttribute("aria-expanded") === "true"]));
+          searchActive = true;
+        }
+        let visibleCount = 0;
+        $$("[data-method-group]").forEach(group => {
+          let groupMatches = 0;
+          $$("[data-method]", group).forEach(item => {
+            const searchCopy = item.dataset.methodSearchCopy.normalize("NFKC").toLowerCase();
+            const matches = (!query || searchCopy.includes(query)) && (!favoritesOnly || favorites.includes(item.dataset.method));
+            item.hidden = !matches;
+            if (matches) groupMatches += 1;
+          });
+          group.hidden = narrowed && groupMatches === 0;
+          if (narrowed && groupMatches > 0) {
+            setMethodGroupExpanded(group, true);
+          } else if (!narrowed) {
+            setMethodGroupExpanded(group, expansionBeforeSearch.get(group.dataset.methodGroup) ?? $("[data-tree-group]", group)?.getAttribute("aria-expanded") === "true");
+          }
+          visibleCount += groupMatches;
+        });
+        const empty = $("[data-method-no-results]");
+        if (empty) {
+          empty.hidden = !narrowed || visibleCount > 0;
+          empty.textContent = favoritesOnly && !query ? "还没有收藏任何方法" : "没有匹配的方法";
+        }
+        if (searchStatus) {
+          if (!narrowed) searchStatus.textContent = `${methodLibrary.length} 种方法`;
+          else if (!visibleCount) searchStatus.textContent = favoritesOnly && !query ? "收藏为空" : "未找到匹配方法";
+          else searchStatus.textContent = favoritesOnly && !query ? `收藏 ${visibleCount} 种方法` : `找到 ${visibleCount} 种方法`;
+        }
+        if (query && visibleCount > 0) {
+          const visibleMatches = $$("[data-method]").filter(item => !item.hidden && !item.closest("[data-method-group]")?.hidden);
+          const exactMatch = visibleMatches.find(item => item.textContent.trim().normalize("NFKC").toLowerCase() === query);
+          const autoMatch = exactMatch || (visibleMatches.length === 1 ? visibleMatches[0] : null);
+          if (autoMatch) {
+            autoOpenTimer = window.setTimeout(() => {
+              const currentQuery = searchInput?.value.trim().normalize("NFKC").toLowerCase() || "";
+              if (currentQuery !== query || autoMatch.hidden || autoMatch.closest("[data-method-group]")?.hidden) return;
+              const entry = showMethodById(autoMatch.dataset.method, { notify: false });
+              if (entry && searchStatus) searchStatus.textContent = `找到 ${visibleCount} 种方法 · 已打开 ${entry.name}`;
+            }, 160);
+          }
+        }
+        if (!narrowed) {
+          searchActive = false;
+          expansionBeforeSearch = new Map();
+        }
+      };
+
+      searchInput?.addEventListener("input", applyMethodFilters);
+      searchInput?.addEventListener("keydown", event => {
+        if (event.key === "Escape" && searchInput.value) {
+          event.preventDefault();
+          searchInput.value = "";
+          applyMethodFilters();
+          return;
+        }
+        if (event.key !== "Enter") return;
+        const matches = $$("[data-method]").filter(item => !item.hidden && !item.closest("[data-method-group]")?.hidden);
+        if (matches.length === 1) {
+          event.preventDefault();
+          showMethodById(matches[0].dataset.method);
+        }
       });
+      favoriteFilter?.addEventListener("click", () => {
+        const next = favoriteFilter.getAttribute("aria-pressed") !== "true";
+        favoriteFilter.setAttribute("aria-pressed", String(next));
+        favoriteFilter.classList.toggle("active", next);
+        applyMethodFilters();
+      });
+      refreshMethodFavoriteUi = applyMethodFilters;
+      renderFormulas();
     }
   }
+
+/**
+ * 赛题库约 2MB，静态 import 会把它焊进主 chunk。用 `?url` 让 Vite 把它作为静态资源
+ * 输出，再运行时 fetch：JSON 不再参与 JS 打包，由浏览器原生解析并独立缓存。
+ * 只有真正用到赛题数据的页面才需要 await，其余页面完全不必下载。
+ */
+export async function preloadKnowledgeLibrary(): Promise<void> {
+  if (problems.length) return;
+  const { default: url } = await import("../data/knowledge-library.json?url");
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`知识库加载失败：HTTP ${response.status}`);
+  const library = (await response.json()) as KnowledgeLibrary;
+  problems.push(...library.problems);
+  papers.push(...library.papers);
+}
+
+/**
+ * 供 React 页面复用产品外壳：返回 <aside class="sidebar"> 的内部结构，
+ * 由调用方自己提供 aside 容器，避免 app-shell 的栅格里多出一层包装元素。
+ */
+export function renderSidebarInner(active: string): string {
+  return sidebarInner(active);
+}
+
+export function isSidebarCollapsed(): boolean {
+  return sidebarCollapsed();
+}
+
+/**
+ * 侧栏里的折叠、设置、筛选等都挂在 document 级事件委托上。React 页面不走
+ * activateScreen，需要单独挂一次；重复调用会叠加监听器，因此加锁只执行一次。
+ */
+let shellChromeBound = false;
+export function mountShellChrome(): void {
+  if (shellChromeBound) return;
+  shellChromeBound = true;
+  bindCommon("");
+}
 
 export function getScreenMarkup(screen: ScreenId): string {
   return (renderers[screen] || renderers.new)();
@@ -1899,5 +2433,6 @@ export function activateScreen(screen: ScreenId): void {
   bindScreen(screen);
   initModelingResizer();
   initCharts(screen);
+  void hydrateAccountUi();
 }
 

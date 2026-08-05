@@ -11,7 +11,10 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
   "dependencies": {
+    "@phosphor-icons/web": "^2.1.2",
+    "chart.js": "^4.5.1",
     "html-react-parser": "^5.2.6",
+    "katex": "^0.16.47",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

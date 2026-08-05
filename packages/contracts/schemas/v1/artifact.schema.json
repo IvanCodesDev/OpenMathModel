@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.artifact",
+  "title": "Artifact",
+  "description": "图表、数据、代码、日志、论文等交付物的元数据。内容本体在对象存储中内容寻址，服务端负责重新计算并核验 sha256。",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^art_[0-9a-f]{32}$" },
+    "project_id": { "type": "string", "pattern": "^proj_[0-9a-f]{32}$" },
+    "run_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^run_[0-9a-f]{32}$" }
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["dataset", "code", "figure", "table", "log", "report", "paper", "model", "other"]
+    },
+    "uri": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "sha256": { "$ref": "#/$defs/sha256" },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "media_type": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "producer_step_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^step_[0-9a-f]{32}$" }
+      ]
+    },
+    "inputs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^art_[0-9a-f]{32}$" },
+      "description": "上游 Artifact 血缘；失效传播沿此边计算。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "READY", "STALE", "DELETED"]
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "required": [
+    "id",
+    "project_id",
+    "kind",
+    "uri",
+    "sha256",
+    "size_bytes",
+    "media_type",
+    "inputs",
+    "status",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    }
+  }
+}

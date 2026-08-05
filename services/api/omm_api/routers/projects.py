@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from omm_contracts import (
+    AgentEventType,
+    Artifact,
+    ArtifactKind,
+    ArtifactStatus,
+    CreateProjectInput,
+    Project,
+    ProjectMode,
+)
+
+from ..api_models import ArtifactList, ProjectList
+from ..db import get_session
+from ..deps import AuthContext, get_auth_context
+from ..errors import ApiError, NotFoundError
+from ..events import append_event
+from ..ids import new_id
+from ..orm import ArtifactRow, ProjectRow, TaskRunRow
+from ..serialize import artifact_to_contract, project_to_contract, utcnow
+
+router = APIRouter(prefix="/v1/projects", tags=["projects"])
+
+
+def get_owned_project(
+    session: Session, ctx: AuthContext, project_id: str
+) -> ProjectRow:
+    """按归属取项目；不存在或非本人一律 404（不泄露资源存在性）。"""
+    row = session.get(ProjectRow, project_id)
+    if row is None or row.owner != ctx.user.id:
+        raise NotFoundError(f"项目不存在：{project_id}")
+    return row
+
+
+@router.post("", response_model=Project, status_code=201)
+def create_project(
+    payload: CreateProjectInput,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> Project:
+    now = utcnow()
+    row = ProjectRow(
+        id=new_id("proj"),
+        name=payload.name,
+        owner=ctx.user.id,
+        description=payload.description,
+        mode=payload.mode.value if payload.mode else ProjectMode.collaboration.value,
+        competition_policy=payload.competition_policy,
+        workspace_uri=payload.workspace_uri,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.flush()
+    return project_to_contract(row)
+
+
+@router.get("", response_model=ProjectList)
+def list_projects(
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ProjectList:
+    owned = ProjectRow.owner == ctx.user.id
+    total = session.execute(
+        select(func.count()).select_from(ProjectRow).where(owned)
+    ).scalar_one()
+    rows = session.execute(
+        select(ProjectRow)
+        .where(owned)
+        .order_by(ProjectRow.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).scalars()
+    return ProjectList(items=[project_to_contract(r) for r in rows], total=total)
+
+
+@router.get("/{project_id}", response_model=Project)
+def get_project(
+    project_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> Project:
+    return project_to_contract(get_owned_project(session, ctx, project_id))
+
+
+@router.post("/{project_id}/artifacts", response_model=Artifact, status_code=201)
+async def upload_project_artifact(
+    project_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    kind: str = Form("other"),
+    run_id: Optional[str] = Form(None),
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> Artifact:
+    """上传产物：服务端计算 sha256 并内容寻址存储（主规划 §19 对象存储/哈希校验）。"""
+    get_owned_project(session, ctx, project_id)
+
+    allowed_kinds = {k.value for k in ArtifactKind}
+    if kind not in allowed_kinds:
+        raise ApiError(422, "VALIDATION_ERROR", f"kind 不合法，允许：{sorted(allowed_kinds)}")
+    if run_id is not None:
+        run = session.get(TaskRunRow, run_id)
+        if run is None or run.project_id != project_id:
+            raise NotFoundError(f"任务运行不存在：{run_id}")
+
+    settings = request.app.state.settings
+    content = await file.read()
+    if len(content) == 0:
+        raise ApiError(422, "VALIDATION_ERROR", "空文件不允许上传")
+    if len(content) > settings.artifact_max_bytes:
+        raise ApiError(413, "PAYLOAD_TOO_LARGE", f"文件超过上限 {settings.artifact_max_bytes} 字节")
+
+    sha256, size = request.app.state.blobs.put(content)
+    name = file.filename or f"artifact-{sha256[:8]}"
+    row = ArtifactRow(
+        id=new_id("art"),
+        project_id=project_id,
+        run_id=run_id,
+        kind=kind,
+        name=name,
+        uri=f"local://{sha256}/{name}",
+        sha256=sha256,
+        size_bytes=size,
+        media_type=file.content_type or "application/octet-stream",
+        producer_step=None,
+        status=ArtifactStatus.READY.value,
+        created_at=utcnow(),
+    )
+    session.add(row)
+    if run_id is not None:
+        append_event(
+            session,
+            run_id,
+            AgentEventType.artifact_published.value,
+            {"artifact_id": row.id, "kind": kind, "name": name, "uri": row.uri},
+        )
+    session.flush()
+    return artifact_to_contract(row)
+
+
+@router.get("/{project_id}/artifacts", response_model=ArtifactList)
+def list_project_artifacts(
+    project_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ArtifactList:
+    get_owned_project(session, ctx, project_id)
+    total = session.execute(
+        select(func.count())
+        .select_from(ArtifactRow)
+        .where(ArtifactRow.project_id == project_id)
+    ).scalar_one()
+    rows = session.execute(
+        select(ArtifactRow)
+        .where(ArtifactRow.project_id == project_id)
+        .order_by(ArtifactRow.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).scalars()
+    return ArtifactList(items=[artifact_to_contract(r) for r in rows], total=total)
