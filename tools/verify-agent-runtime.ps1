@@ -16,7 +16,7 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) { Write-Output 'FAIL pytest_install'; exit 1 }
 }
 
-$packages = @('agents/core', 'agents/tools', 'agents/skills', 'services/worker', 'agents/evals')
+$packages = @('agents/core', 'agents/tools', 'agents/skills', 'backend/worker', 'agents/evals')
 # src layout per ADR-0003; until `uv sync` lands, tests import via PYTHONPATH.
 $env:PYTHONPATH = ($packages | ForEach-Object { Join-Path $root (Join-Path $_ 'src') }) -join ';'
 

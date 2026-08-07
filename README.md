@@ -43,8 +43,8 @@ flowchart LR
 
 1. 在 `packages/contracts` 定义任务、事件、产物和数据集协议。
 2. 将 `apps/web` 的模拟数据接入任务与事件协议。
-3. 实现 `services/api` 的项目/任务 API 与 SSE/WebSocket 事件流。
-4. 实现 `agents/core` 状态机，并由 `services/worker` 执行具体步骤。
+3. 实现 `backend/api` 的项目/任务 API 与 SSE/WebSocket 事件流。
+4. 实现 `agents/core` 状态机，并由 `backend/worker` 执行具体步骤。
 5. 接入对象存储和可复现实验工作区，再封装 `apps/desktop`。
 
 > 原 `demo/` 已在 React 迁移验收后移除；视觉证据与迁移前源码归档位于 `audit-current/`。

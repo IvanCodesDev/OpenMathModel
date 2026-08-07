@@ -3,7 +3,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $required = @(
     'apps/web', 'apps/desktop',
-    'services/api', 'services/worker',
+    'backend/api', 'backend/worker',
     'agents/core', 'agents/skills', 'agents/tools', 'agents/prompts', 'agents/evals',
     'packages/ui', 'packages/contracts', 'packages/domain', 'packages/config',
     'datasets/catalog', 'datasets/samples', 'datasets/recipes',

@@ -47,20 +47,20 @@ jobs:
           else
             echo "contracts not present on this ref; skipped"
           fi
-      - name: API tests (activates once services/api lands)
+      - name: API tests (activates once backend/api lands)
         run: |
-          if [ -f services/api/pyproject.toml ]; then
-            pip install -e packages/contracts -e agents/core -e "services/api[dev]"
-            python -m pytest services/api/tests -q
+          if [ -f backend/api/pyproject.toml ]; then
+            pip install -e packages/contracts -e agents/core -e "backend/api[dev]"
+            python -m pytest backend/api/tests -q
             python packages/contracts/scripts/export_openapi.py --check
           else
-            echo "services/api not present on this ref; skipped"
+            echo "backend/api not present on this ref; skipped"
           fi
       - name: Agent runtime tests (activates once agents/core lands)
         run: |
           if [ -f agents/core/pyproject.toml ]; then
-            pip install -e agents/core -e agents/tools -e agents/skills -e services/worker -e agents/evals pytest
-            for pkg in agents/core agents/tools agents/skills services/worker agents/evals; do
+            pip install -e agents/core -e agents/tools -e agents/skills -e backend/worker -e agents/evals pytest
+            for pkg in agents/core agents/tools agents/skills backend/worker agents/evals; do
               (cd "$pkg" && python -m pytest tests -q)
             done
           else

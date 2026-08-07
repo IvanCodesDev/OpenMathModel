@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize complete COMAP, APMCM and CUMCM PDF statements for the frontend.
+"""Normalize complete COMAP, APMCM, CUMCM and MathorCup PDF statements.
 
 Requires ``pypdf`` and ``pdfplumber``. Source archives and PDFs remain in
 datasets/raw. Paragraph structure, headings, lists, tables and figure placement
@@ -38,9 +38,28 @@ CUMCM_PAGE_URLS = {
     2023: "https://www.mcm.edu.cn/html_cn/node/c74d72127066f510a5723a94b5323a26.html",
     2022: "https://www.mcm.edu.cn/html_cn/node/388239ded4b057d37b7b8e51e33fe903.html",
     2021: "https://www.mcm.edu.cn/html_cn/node/90d223833c1eb50f899aa096a66c6896.html",
+    2020: "https://www.mcm.edu.cn/html_cn/node/10405905647c52abfd6377c0311632b5.html",
+    2019: "https://www.mcm.edu.cn/html_cn/node/b0ae8510b9ec0cc0deb2266d2de19ecb.html",
+    2018: "https://www.mcm.edu.cn/html_cn/node/7cec7725b9a0ea07b4dfd175e8042c33.html",
+    2017: "https://www.mcm.edu.cn/html_cn/node/460baf68ab0ed0e1e557a0c79b1c4648.html",
+    2016: "https://www.mcm.edu.cn/html_cn/node/6d026d84bd785435f92e3079b4a87a2b.html",
+    2015: "https://www.mcm.edu.cn/html_cn/node/ac8b96613522ef62c019d1cd45a125e3.html",
 }
 
+# The header line that separates a statement from its appendices. Present on all
+# 55 statements from 2015 on and on none of the appendix or format-guide PDFs, so
+# it is the discriminator -- filenames are not (2022-2025 ship bare "A题.pdf",
+# and 2025's are mojibake: "A╠Γ.pdf").
+CUMCM_MARKER = "全国大学生数学建模竞赛题目"
+# Two title layouts: "A 题 太阳影子定位" throughout, and "问题 B 智能 RGV..."
+# which 2018 B and 2019 C use instead.
+CUMCM_TITLE_PATTERNS = (
+    re.compile(r"([A-E])\s*题[:：]?\s+([^\r\n]+)"),
+    re.compile(r"问题\s*([A-E])[:：]?\s*([^\r\n]+)"),
+)
+
 APMCM_PAGE_URLS = {
+    "apmcm-2026": "https://apmcm.org/detail/2510",
     "apmcm-2024-en": "https://apmcm.org/detail/2487",
     "apmcm-2024-cn-fixed": "https://apmcm.org/detail/2478",
     "apmcm-2023": "https://apmcm.org/detail/2472",
@@ -48,9 +67,40 @@ APMCM_PAGE_URLS = {
     "apmcm-2022": "https://apmcm.org/detail/2453",
     "apmcm-2022-jan": "https://apmcm.org/detail/2463",
     "apmcm-2021": "https://apmcm.org/detail/2425",
+    "apmcm-2018": "https://apmcm.org/detail/2316",
+    "apmcm-2017": "https://apmcm.org/detail/2315",
+    "apmcm-2016": "https://apmcm.org/detail/2314",
+    "apmcm-2015": "https://apmcm.org/detail/2313",
+}
+
+# 2019, 2020 and 2025 are deliberately absent. Their detail pages publish the
+# statements only through publicqn.saikr.com, pan.baidu.com, saikr.com and
+# aic.modelers.cn -- none of them an official APMCM host -- so under the
+# official-domain-only rule there is nothing here to collect.
+APMCM_OFFSITE_YEARS = (2019, 2020, 2025)
+
+# Letters each staged group actually ran, pinned rather than inferred from what the
+# walk happens to find, so a statement that fails to match is an error instead of a
+# silent omission. 2017 and 2018 really did ship only A and B; the 2022 January
+# session is a separate group carrying D and E.
+APMCM_GROUP_LETTERS = {
+    "apmcm-2015": "ABC", "apmcm-2016": "ABC", "apmcm-2017": "AB", "apmcm-2018": "AB",
+    "apmcm-2021": "ABC", "apmcm-2022": "ABC", "apmcm-2022-jan": "DE",
+    "apmcm-2023": "ABC", "apmcm-2024-en": "ABCD",
+    "apmcm-2024-cn-fixed": "ABC", "apmcm-2026": "ABC",
 }
 
 APMCM_TITLES = {
+    (2015, "A"): "The impact of the development strategy of the Maritime Silk Road",
+    (2015, "B"): "Dynamic evaluation model of urban public transport service level",
+    (2015, "C"): "Identifying the error connections in the network",
+    (2016, "A"): "Temperature and key element content prediction based on optical information data",
+    (2016, "B"): "The Influence of Chemical Element on Properties of Deformed Steel Bar",
+    (2016, "C"): "Evaluation and Customization of Film and Television",
+    (2017, "A"): "Effects of Sleep on Human Body",
+    (2017, "B"): "Spray Trajectory Planning Issues",
+    (2018, "A"): "Real-time training model for elderly people balance ability",
+    (2018, "B"): "Talents and Urban Development",
     (2021, "A"): "Image Edge Analysis and Application",
     (2021, "B"): "Optimal Design of Thermal Emitter in Thermophotovoltaic Technology",
     (2021, "C"): "Construction of Ecological Conservation and Assessment of Its Impact on Environment",
@@ -69,9 +119,40 @@ APMCM_TITLES = {
 }
 
 APMCM_CN_TITLES = {
-    "A": "飞行器外形的优化问题",
-    "B": "洪水灾害的数据分析与预测",
-    "C": "基于量子计算的物流配送问题",
+    (2024, "A"): "飞行器外形的优化问题",
+    (2024, "B"): "洪水灾害的数据分析与预测",
+    (2024, "C"): "基于量子计算的物流配送问题",
+    (2026, "A"): "自来水厂水质预测与评估",
+    (2026, "B"): "高性能芯片热管理系统的优化问题",
+    (2026, "C"): "创业社区规划与资源配置优化问题",
+}
+
+# The Chinese-track statement is named "<letter>题 <title>.pdf". The same prefix
+# names the directory holding its appendices, which is how a statement is told
+# apart from an appendix that happens to be a PDF.
+APMCM_CN_STATEMENT_RE = re.compile(r"^([A-E])题[\s　]")
+
+MATHORCUP_PAGE_URLS = {
+    2023: "https://mathorcup.org/detail/2417",
+    2026: "https://mathorcup.org/detail/2487",
+}
+
+# 2018 remains staged because its official archive is still downloadable, but
+# its PDFs expose a broken custom-font text map.  2024 exposes headings while
+# mapping most body glyphs to punctuation.  Publishing either would violate the
+# structured-text requirement, so only the two fully decodable official groups
+# are emitted.  The gap is deliberate and documented in the source registry.
+MATHORCUP_GROUP_LETTERS = {2023: "ABCD", 2026: "ABCDE"}
+MATHORCUP_TITLES = {
+    (2023, "A"): "量子计算机在信用评分卡组合优化中的应用",
+    (2023, "B"): "城市轨道交通列车时刻表优化问题",
+    (2023, "C"): "电商物流网络包裹应急调运与结构优化问题",
+    (2023, "D"): "航空安全风险分析和飞行技术评估问题",
+    (2026, "A"): "基于量子计算的智慧物流优化建模与算法设计",
+    (2026, "B"): "机器人竞技策略的优化问题",
+    (2026, "C"): "中老年人群高血脂症的风险预警及干预方案优化",
+    (2026, "D"): "多场景、多目标货物运输装箱策略优化",
+    (2026, "E"): "罕见病药品医保谈判定价模型及用药成本优化研究",
 }
 
 
@@ -102,19 +183,57 @@ def summarize(blocks: list[dict[str, Any]], fallback: str, limit: int = 120) -> 
     return fallback
 
 
+# Container noise, and files that only look like extra data. ``.DS_Store`` rides
+# along in the APMCM 2015/2016 archives. A ``.doc`` with a ``.pdf`` sibling is
+# either the statement this record already publishes as ``problem.pdf`` (every
+# legacy year the staging converter touched leaves the pair behind) or a form that
+# shipped in both formats, so bundling it advertises a duplicate as an appendix.
+# The sheets and templates are blank competition paperwork, not problem data.
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+CONVERTED_SUFFIXES = {".doc", ".docx", ".wps"}
+BOILERPLATE_TOKENS = (
+    "control sheet", "summary sheet", "essay format and submission",
+    "参赛纪律", "承诺书", "论文模板",
+)
+
+
+def prune_related(files: list[Path]) -> list[Path]:
+    kept: list[Path] = []
+    for item in files:
+        lowered = item.name.lower()
+        if lowered in JUNK_NAMES or "__macosx" in item.as_posix().lower():
+            continue
+        if item.suffix.lower() in CONVERTED_SUFFIXES and item.with_suffix(".pdf").is_file():
+            continue
+        if any(token in lowered for token in BOILERPLATE_TOKENS):
+            continue
+        kept.append(item)
+    return kept
+
+
 def discover_related_files(problem_id: str, pdf: Path) -> list[Path]:
     if problem_id.startswith("comap-"):
         return []
     if problem_id == "apmcm-2023-wuyue":
         roots = [item for item in pdf.parent.iterdir() if item.is_dir() and item.name.lower() == "attachment"]
-        return sorted([item for root in roots for item in root.rglob("*") if item.is_file()])
+        return prune_related(sorted(item for root in roots for item in root.rglob("*") if item.is_file()))
     group_root = next((parent for parent in pdf.parents if parent.parent == EXTRACTED_ROOT), None)
     if group_root is not None and pdf.parent == group_root:
         return []
-    return sorted(item for item in pdf.parent.rglob("*") if item.is_file() and item != pdf)
+    return prune_related(sorted(item for item in pdf.parent.rglob("*") if item.is_file() and item != pdf))
 
 
-def publish_downloads(problem_id: str, pdf: Path, related_files: list[Path]) -> list[dict[str, Any]]:
+# Mirror statements and ordinary appendices; leave bulk data sets upstream. The
+# ceiling is on the raw total rather than the zipped one because the heavy members
+# are already-compressed .xlsx, so zipping barely moves the number, and measuring
+# the input keeps the decision independent of zlib's output. Five bundles exceed
+# it (2019 E at 119 MiB, 2020 E at 99 MiB, plus 2020 C, 2020 D, 2021 E); mirroring
+# those would add ~380 MiB of payload to serve files the official site hosts.
+ATTACHMENT_BUNDLE_LIMIT = 25 * 1024 * 1024
+
+
+def publish_downloads(problem_id: str, pdf: Path, related_files: list[Path],
+                      source_url: str) -> list[dict[str, Any]]:
     destination = DOWNLOAD_ROOT / problem_id
     destination.mkdir(parents=True, exist_ok=True)
     statement = destination / "problem.pdf"
@@ -126,18 +245,34 @@ def publish_downloads(problem_id: str, pdf: Path, related_files: list[Path]) -> 
         "bytes": statement.stat().st_size,
         "sha256": sha256(statement),
     }]
-    if related_files:
-        bundle = destination / "attachments.zip"
-        with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
-            for item in related_files:
-                archive.write(item, item.relative_to(pdf.parent).as_posix())
+    if not related_files:
+        return attachments
+    raw_bytes = sum(item.stat().st_size for item in related_files)
+    if raw_bytes > ATTACHMENT_BUNDLE_LIMIT:
+        # No local copy, so no bytes/sha256: those fields describe a mirrored
+        # file, and the frontend keys off the leading "/" to render this as an
+        # outbound link rather than a download.
         attachments.append({
-            "title": f"随题附件包（{len(related_files)} 个文件）",
-            "url": f"/problem-files/{problem_id}/attachments.zip",
+            "title": f"随题附件（{len(related_files)} 个文件，约 {raw_bytes / 1048576:.0f} MB，官网下载）",
+            "url": source_url,
             "kind": "data",
-            "bytes": bundle.stat().st_size,
-            "sha256": sha256(bundle),
+            "bytes": 0,
+            "sha256": "",
+            "external": True,
         })
+        print(f"LINK-ONLY {problem_id} attachments={len(related_files)} bytes={raw_bytes}")
+        return attachments
+    bundle = destination / "attachments.zip"
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
+        for item in related_files:
+            archive.write(item, item.relative_to(pdf.parent).as_posix())
+    attachments.append({
+        "title": f"随题附件包（{len(related_files)} 个文件）",
+        "url": f"/problem-files/{problem_id}/attachments.zip",
+        "kind": "data",
+        "bytes": bundle.stat().st_size,
+        "sha256": sha256(bundle),
+    })
     return attachments
 
 
@@ -157,10 +292,18 @@ def classify(title: str) -> tuple[str, list[str], list[str]]:
 
 
 def problem_record(*, problem_id: str, code: str, title: str, competition: str, category: str,
-                   year: int, source_id: str, source_url: str, pdf: Path, source_status: str = "official") -> dict[str, Any]:
+                   year: int, source_id: str, source_url: str, pdf: Path, source_status: str = "official",
+                   related_files: list[Path] | None = None) -> dict[str, Any]:
+    """Build one published problem record.
+
+    ``related_files`` overrides attachment discovery. The Chinese-track archives
+    need it: 2026 C ships loose in the wrapper directory beside the A and B
+    folders, so walking its parent would hand C every other problem's appendices.
+    """
     blocks, page_count, full_text = pdf_layout.build_blocks(pdf, problem_id, FIGURE_ROOT)
-    related_files = discover_related_files(problem_id, pdf)
-    attachments = publish_downloads(problem_id, pdf, related_files)
+    if related_files is None:
+        related_files = discover_related_files(problem_id, pdf)
+    attachments = publish_downloads(problem_id, pdf, related_files, source_url)
     problem_type, directions, keywords = classify(title)
     return {
         "id": problem_id,
@@ -209,23 +352,44 @@ def comap_problems() -> list[dict[str, Any]]:
     return output
 
 
+def cumcm_letters(year: int) -> str:
+    """Letters the competition actually ran that year.
+
+    An E problem first appears in 2019, so asserting A-E across 2015-2018 would
+    fail on a complete archive. The set is pinned per year rather than inferred
+    from what was found, so a silently missing statement is still an error.
+    """
+    return "ABCD" if year <= 2018 else "ABCDE"
+
+
 def cumcm_problems() -> list[dict[str, Any]]:
     output = []
-    for year in range(2021, 2026):
+    for year in sorted(CUMCM_PAGE_URLS, reverse=True):
         directory = EXTRACTED_ROOT / f"cumcm-{year}"
+        if not directory.is_dir():
+            raise RuntimeError(
+                f"{directory} missing. Pre-2021 years need staging first:\n"
+                f"  python datasets/recipes/stage_legacy_archives.py expand --years {year}\n"
+                f"  <venv-with-pywin32> datasets/recipes/stage_legacy_archives.py convert --years {year}"
+            )
         found: dict[str, tuple[Path, str]] = {}
-        for pdf in directory.rglob("*.pdf"):
+        for pdf in sorted(directory.rglob("*.pdf")):
             first_page = (PdfReader(str(pdf)).pages[0].extract_text() or "").replace("\u3000", " ")
-            if "全国大学生数学建模竞赛题目" not in first_page:
+            if CUMCM_MARKER not in first_page:
                 continue
-            match = re.search(r"([A-E])\s*题\s+([^\r\n]+)", first_page)
+            match = next((hit for pattern in CUMCM_TITLE_PATTERNS
+                          if (hit := pattern.search(first_page))), None)
             if not match:
                 continue
             letter, title = match.group(1), " ".join(match.group(2).split())
             found.setdefault(letter, (pdf, title))
-        if set(found) != set("ABCDE"):
-            raise RuntimeError(f"CUMCM {year} missing letters: {sorted(set('ABCDE') - set(found))}")
-        for letter in "ABCDE":
+        letters = cumcm_letters(year)
+        if set(found) != set(letters):
+            raise RuntimeError(
+                f"CUMCM {year} expected {letters}: missing "
+                f"{sorted(set(letters) - set(found))}, unexpected {sorted(set(found) - set(letters))}"
+            )
+        for letter in letters:
             pdf, title = found[letter]
             item = problem_record(
                 problem_id=f"cumcm-{year}-{letter.lower()}", code=f"{year} CUMCM {letter}", title=title,
@@ -237,37 +401,66 @@ def cumcm_problems() -> list[dict[str, Any]]:
     return output
 
 
+# The English statement is "2018 APMCM Problem A.pdf" from 2016 on, but 2015 and
+# 2017 drop the year prefix and ship a bare "Problem A.pdf", so the prefix is
+# optional. The group's own year supplies the number either way.
+APMCM_EN_STATEMENT_RE = re.compile(r"(?:20\d{2}\s+APMCM\s+)?Problem\s+([A-E])\.pdf", re.I)
+
+
 def apmcm_problems() -> list[dict[str, Any]]:
     output = []
-    regular_groups = ["apmcm-2021", "apmcm-2022", "apmcm-2022-jan", "apmcm-2023", "apmcm-2024-en"]
+    regular_groups = ["apmcm-2015", "apmcm-2016", "apmcm-2017", "apmcm-2018",
+                      "apmcm-2021", "apmcm-2022", "apmcm-2022-jan", "apmcm-2023", "apmcm-2024-en"]
     for group in regular_groups:
         year = int(re.search(r"20\d{2}", group).group())
+        found: dict[str, Path] = {}
         for pdf in sorted((EXTRACTED_ROOT / group).rglob("*.pdf")):
-            match = re.fullmatch(rf"{year} APMCM Problem ([A-E])\.pdf", pdf.name, re.I)
+            match = APMCM_EN_STATEMENT_RE.fullmatch(pdf.name)
             if not match:
                 continue
-            letter = match.group(1).upper()
-            suffix = "-jan" if group.endswith("-jan") else ""
+            found.setdefault(match.group(1).upper(), pdf)
+        letters = APMCM_GROUP_LETTERS[group]
+        if set(found) != set(letters):
+            raise RuntimeError(
+                f"{group} expected {letters}: missing {sorted(set(letters) - set(found))}, "
+                f"unexpected {sorted(set(found) - set(letters))}"
+            )
+        suffix = "-jan" if group.endswith("-jan") else ""
+        for letter in letters:
             item = problem_record(
                 problem_id=f"apmcm-{year}{suffix}-{letter.lower()}",
                 code=f"{year} APMCM {letter}" + ("（1月场）" if suffix else ""),
                 title=APMCM_TITLES[(year, letter)], competition="APMCM 亚太地区大学生数学建模竞赛",
-                category="亚太赛", year=year, source_id="apmcm_problems", source_url=APMCM_PAGE_URLS[group], pdf=pdf,
+                category="亚太赛", year=year, source_id="apmcm_problems",
+                source_url=APMCM_PAGE_URLS[group], pdf=found[letter],
             )
             output.append(item)
             print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
-    chinese_root = EXTRACTED_ROOT / "apmcm-2024-cn-fixed"
-    for letter, title in APMCM_CN_TITLES.items():
-        candidates = [pdf for pdf in chinese_root.rglob("*.pdf") if pdf.name.startswith(f"{letter}题 ") and "附件" not in pdf.as_posix()]
-        if len(candidates) != 1:
-            raise RuntimeError(f"Expected one 2024 APMCM Chinese problem {letter}, found {len(candidates)}")
-        item = problem_record(
-            problem_id=f"apmcm-2024-cn-{letter.lower()}", code=f"2024 APMCM 中文 {letter}", title=title,
-            competition="APMCM 亚太地区大学生数学建模竞赛（中文赛项）", category="亚太赛", year=2024,
-            source_id="apmcm_problems", source_url=APMCM_PAGE_URLS["apmcm-2024-cn-fixed"], pdf=candidates[0],
-        )
-        output.append(item)
-        print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    for group, year in (("apmcm-2024-cn-fixed", 2024), ("apmcm-2026", 2026)):
+        chinese_root = EXTRACTED_ROOT / group
+        for letter in APMCM_GROUP_LETTERS[group]:
+            candidates = [pdf for pdf in sorted(chinese_root.rglob("*.pdf"))
+                          if APMCM_CN_STATEMENT_RE.match(pdf.name) and "附件" not in pdf.as_posix()]
+            candidates = [pdf for pdf in candidates if pdf.name.startswith(f"{letter}题")]
+            if len(candidates) != 1:
+                raise RuntimeError(f"Expected one {year} APMCM Chinese problem {letter}, found {len(candidates)}")
+            pdf = candidates[0]
+            # 2026 C sits loose in the wrapper directory next to the A and B folders,
+            # so its parent is not its own; only sweep a parent that is named for this
+            # letter, otherwise C would collect every other problem's appendices.
+            own_directory = APMCM_CN_STATEMENT_RE.match(pdf.parent.name)
+            related = (prune_related(sorted(item for item in pdf.parent.rglob("*")
+                                            if item.is_file() and item != pdf))
+                       if own_directory and own_directory.group(1).upper() == letter else [])
+            item = problem_record(
+                problem_id=f"apmcm-{year}-cn-{letter.lower()}", code=f"{year} APMCM 中文 {letter}",
+                title=APMCM_CN_TITLES[(year, letter)],
+                competition="APMCM 亚太地区大学生数学建模竞赛（中文赛项）", category="亚太赛", year=year,
+                source_id="apmcm_problems", source_url=APMCM_PAGE_URLS[group], pdf=pdf,
+                related_files=related,
+            )
+            output.append(item)
+            print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
     wuyue = EXTRACTED_ROOT / "apmcm-2023-wuyue/2023 APMCM  Wuyue Cup Problems/2023 APMCM Wuyue Cup Problem.pdf"
     item = problem_record(
         problem_id="apmcm-2023-wuyue", code="2023 APMCM 五岳杯", title="APMCM Wuyue Cup Problem",
@@ -279,11 +472,55 @@ def apmcm_problems() -> list[dict[str, Any]]:
     return output
 
 
+def mathorcup_statement(year: int, letter: str) -> tuple[Path, list[Path]]:
+    """Locate one official statement and only the appendices belonging to it."""
+    if year == 2026 and letter == "D":
+        directory = EXTRACTED_ROOT / "mathorcup-2026-d-fixed"
+        candidates = sorted(directory.glob("*.pdf"))
+    else:
+        directory = EXTRACTED_ROOT / f"mathorcup-{year}"
+        candidates = sorted(
+            pdf for pdf in directory.rglob("*.pdf")
+            if pdf.parent.name == f"{letter}题" and "MathorCup" in pdf.name
+        )
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"MathorCup {year} {letter} expected one statement, found "
+            f"{len(candidates)} in {directory}"
+        )
+    pdf = candidates[0]
+    related = prune_related(sorted(item for item in pdf.parent.rglob("*") if item.is_file() and item != pdf))
+    return pdf, related
+
+
+def mathorcup_problems() -> list[dict[str, Any]]:
+    output = []
+    for year in sorted(MATHORCUP_GROUP_LETTERS, reverse=True):
+        for letter in MATHORCUP_GROUP_LETTERS[year]:
+            pdf, related = mathorcup_statement(year, letter)
+            item = problem_record(
+                problem_id=f"mathorcup-{year}-{letter.lower()}",
+                code=f"{year} MathorCup {letter}",
+                title=MATHORCUP_TITLES[(year, letter)],
+                competition=("MathorCup 数学应用挑战赛" if year >= 2024
+                             else "MathorCup 高校数学建模挑战赛"),
+                category="MathorCup",
+                year=year,
+                source_id="mathorcup_official",
+                source_url=MATHORCUP_PAGE_URLS[year],
+                pdf=pdf,
+                related_files=related,
+            )
+            output.append(item)
+            print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    return output
+
+
 def build() -> dict[str, Any]:
     for generated_root in (LEGACY_PAGE_ROOT, FIGURE_ROOT, DOWNLOAD_ROOT):
         if generated_root.exists():
             shutil.rmtree(generated_root)
-    problems = comap_problems() + cumcm_problems() + apmcm_problems()
+    problems = comap_problems() + cumcm_problems() + apmcm_problems() + mathorcup_problems()
     problems.sort(key=lambda item: (-item["year"], item["category"], item["code"]))
     result = {
         "schema_version": "1.0.0",
@@ -292,6 +529,7 @@ def build() -> dict[str, Any]:
             "comap_count": sum(item["source_id"] == "comap_mcm_icm" for item in problems),
             "apmcm_count": sum(item["source_id"] == "apmcm_problems" for item in problems),
             "cumcm_count": sum(item["source_id"] == "cumcm_official" for item in problems),
+            "mathorcup_count": sum(item["source_id"] == "mathorcup_official" for item in problems),
             "page_count": sum(item["source_pdf"]["page_count"] for item in problems),
             "text_block_count": sum(
                 block["type"] in {"heading", "paragraph", "list_item"}
@@ -321,7 +559,18 @@ def build() -> dict[str, Any]:
 
 def verify() -> dict[str, Any]:
     data = json.loads(OUTPUT.read_text(encoding="utf-8"))
-    expected = {"comap_count": 30, "apmcm_count": 19, "cumcm_count": 25, "problem_count": 74}
+    # CUMCM now spans 2015-2025: 4 problems for 2015-2018, 5 for 2019-2025.
+    # APMCM spans 2015-2026 minus the three offsite years, so 25 English plus 6
+    # Chinese-track plus the 2023 Wuyue Cup.
+    # COMAP adds 2015-2017 (14 statements). 2018-2020 are absent because the
+    # official year indexes for those three serve no PDFs at all.
+    expected = {
+        "comap_count": 44,
+        "apmcm_count": 32,
+        "cumcm_count": 51,
+        "mathorcup_count": 9,
+        "problem_count": 136,
+    }
     for key, value in expected.items():
         if data["stats"].get(key) != value:
             raise RuntimeError(f"Expected {key}={value}, found {data['stats'].get(key)}")
@@ -341,6 +590,13 @@ def verify() -> dict[str, Any]:
                 if not asset.exists() or asset.stat().st_size < 512:
                     raise RuntimeError(f"Missing figure asset {asset}")
         for attachment in problem["attachments"]:
+            if attachment.get("external"):
+                # Nothing was mirrored, so there is no file to hash. What must
+                # hold is that the link is absolute and points at an official
+                # host -- a relative URL here would 404 against the frontend.
+                if not attachment["url"].startswith("https://"):
+                    raise RuntimeError(f"External attachment is not absolute in {problem['id']}")
+                continue
             asset = ROOT / "apps/web/public" / attachment["url"].lstrip("/")
             if not asset.exists() or asset.stat().st_size != attachment["bytes"]:
                 raise RuntimeError(f"Missing download asset {asset}")

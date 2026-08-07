@@ -4,8 +4,8 @@ PROJECT_STRUCTURE.md
 .gitignore
 apps/web/README.md
 apps/desktop/README.md
-services/api/README.md
-services/worker/README.md
+backend/api/README.md
+backend/worker/README.md
 agents/README.md
 agents/core/README.md
 agents/skills/README.md

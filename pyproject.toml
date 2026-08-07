@@ -16,8 +16,8 @@ members = [
   "agents/skills",
   "agents/tools",
   "agents/evals",
-  "services/api",
-  "services/worker",
+  "backend/api",
+  "backend/worker",
 ]
 
 [tool.uv.sources]
@@ -58,8 +58,8 @@ files = [
   "agents/skills/src",
   "agents/tools/src",
   "agents/evals/src",
-  "services/api/src",
-  "services/worker/src",
+  "backend/api/src",
+  "backend/worker/src",
 ]
 
 [tool.pytest.ini_options]

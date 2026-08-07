@@ -30,6 +30,25 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
     return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   };
+  // 只有赛事主办方自己的域名算“来源”。社区仓库（zhanwen/MathModel 等）是我们
+  // 采集题面的中间站，不是可以引用的出处，也不该把用户送到第三方账号下，
+  // 所以这些链接一律不渲染，而不是渲染成灰色按钮。
+  const OFFICIAL_SOURCE_HOSTS = [
+    "comap.org", "mcm.edu.cn", "apmcm.org", "cmathc.org.cn", "acge.org.cn", "mathorcup.org",
+  ];
+  const isOfficialSourceUrl = value => {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    let host = "";
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+      host = parsed.hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    return OFFICIAL_SOURCE_HOSTS.some(allowed => host === allowed || host.endsWith(`.${allowed}`));
+  };
   const normalizeTheme = theme => theme === "dark" ? "dark" : "light";
   const savedTheme = () => {
     try {
@@ -421,7 +440,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           ${["全部", "进行中", "已完成", "已归档"].map((t, i) => `<button class="tab-button ${i === 0 ? "active" : ""}" data-project-tab="${t}">${t}</button>`).join("")}
         </div>
         <div class="project-card">
-          <div class="project-search-row"><label class="search-box">${icon("magnifying-glass")}<input data-table-search placeholder="搜索项目名称……"></label></div>
+          <div class="project-search-row"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="project-search" data-table-search autocomplete="off" aria-label="搜索项目" placeholder="搜索项目名称……"></label></div>
           <table class="project-table">
             <thead><tr><th>项目名称</th><th>当前阶段</th><th>最近更新　⌃</th><th>文件</th><th>实验</th><th>论文</th><th>操作</th></tr></thead>
             <tbody>
@@ -590,14 +609,15 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   const papers = [];
   const problemTabs = () => ["全部赛题", ...new Set(problems.map(problem => problem.category)), "收藏"];
   const paperTabs = () => ["全部", ...new Set(papers.map(paper => paper.category))];
-  const problemPageCount = () => Math.max(1, Math.ceil(problems.length / 15));
-  const paperPageCount = () => Math.max(1, Math.ceil(papers.length / 15));
+  // 页码按钮由 applyResourceFilters 按“筛选后”的条数现算，所以这里不再预渲染：
+  // 搜索或切换分类之后总页数会变，静态渲染出来的 1…N 只会是假的。
+  const RESOURCE_PAGE_SIZE = 15;
 
   function problemsScreen() {
     return shell(`
       <section class="library-main resource-library problems-main">
         <div class="library-heading"><h1>赛题库</h1><p>浏览历年赛题、问题类型与建模方向。</p></div>
-        <div class="library-tools resource-tools"><label class="search-box">${icon("magnifying-glass")}<input data-problem-search placeholder="搜索赛题、领域或关键词"></label>
+        <div class="library-tools resource-tools"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="problem-search" data-problem-search autocomplete="off" aria-label="搜索赛题" placeholder="搜索赛题、领域或关键词"></label>
           <div class="filters">${["比赛","年份","问题类型","建模方向"].map(x=>`<button class="filter-button" data-action="filter">${x}${icon("caret-down")}</button>`).join("")}</div>
         </div>
         <div class="resource-tabs" role="tablist" aria-label="赛题分类">
@@ -617,10 +637,9 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         </div>
         <div class="resource-footer">
           <span data-resource-page-copy>共 ${problems.length} 题 · 第 1 页</span>
-          <div class="resource-pagination">
+          <div class="resource-pagination" data-resource-pagination>
             <button data-resource-page="prev" aria-label="上一页">${icon("caret-left")}</button>
-            ${Array.from({length: Math.min(5, problemPageCount())}, (_, index) => String(index + 1)).map((x,i)=>`<button class="${i===0?"active":""}" data-resource-page="${x}">${x}</button>`).join("")}
-            ${problemPageCount() > 5 ? `<span>…</span><button data-resource-page="${problemPageCount()}">${problemPageCount()}</button>` : ""}
+            <span data-resource-page-numbers></span>
             <button data-resource-page="next" aria-label="下一页">${icon("caret-right")}</button>
           </div>
           <button class="page-size-button" data-action="page-size">15 条/页 ${icon("caret-down")}</button>
@@ -632,7 +651,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     return shell(`
       <section class="library-main resource-library papers-main">
         <div class="library-heading"><h1>优秀论文</h1><p>浏览数学建模竞赛获奖论文与建模路线。</p></div>
-        <div class="library-tools resource-tools"><label class="search-box">${icon("magnifying-glass")}<input data-paper-search placeholder="搜索论文、赛题、模型或关键词"></label>
+        <div class="library-tools resource-tools"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="paper-search" data-paper-search autocomplete="off" aria-label="搜索论文" placeholder="搜索论文、赛题、模型或关键词"></label>
           <div class="filters">${["比赛","年份","奖项","模型方法"].map(x=>`<button class="filter-button" data-action="filter">${x}${icon("caret-down")}</button>`).join("")}</div>
         </div>
         <div class="resource-tabs paper-resource-tabs" role="tablist" aria-label="论文分类">
@@ -651,10 +670,9 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         </div>
         <div class="resource-footer paper-resource-footer">
           <span data-resource-page-copy>共 ${papers.length} 篇 · 第 1 页</span>
-          <div class="resource-pagination">
+          <div class="resource-pagination" data-resource-pagination>
             <button data-resource-page="prev" aria-label="上一页">${icon("caret-left")}</button>
-            ${Array.from({length: Math.min(5, paperPageCount())}, (_, index) => String(index + 1)).map((x,i)=>`<button class="${i===0?"active":""}" data-resource-page="${x}">${x}</button>`).join("")}
-            ${paperPageCount() > 5 ? `<span>…</span><button data-resource-page="${paperPageCount()}">${paperPageCount()}</button>` : ""}
+            <span data-resource-page-numbers></span>
             <button data-resource-page="next" aria-label="下一页">${icon("caret-right")}</button>
           </div>
           <button class="page-size-button" data-action="page-size">15 条/页 ${icon("caret-down")}</button>
@@ -678,13 +696,24 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       return `<p class="problem-content-paragraph">${lead}${escapeHtml(block.text).replace(/\n/g, "<br>")}</p>`;
     }
     if (block.type === "list_item") {
-      return `<div class="problem-content-list-item"><span aria-hidden="true">•</span><p>${escapeHtml(block.text).replace(/\n/g, "<br>")}</p></div>`;
+      // 采集层把原文的序号（"1."、"a)"、"①"）单独存进 marker，正文里已经不含它。
+      // 有序号就照原样显示，序号本身有意义；只有原文用圆点时才由这里补一个。
+      const marker = String(block.marker || "").trim() || "•";
+      return `<div class="problem-content-list-item"><span class="problem-list-marker" aria-hidden="true">${escapeHtml(marker)}</span><p>${escapeHtml(block.text).replace(/\n/g, "<br>")}</p></div>`;
     }
     if (block.type === "image") {
       return `<figure class="problem-content-figure"><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt)}" loading="lazy" data-problem-asset="${index}"></figure>`;
     }
     if (block.type === "table") {
-      return `<div class="problem-content-table-wrap"><table class="problem-content-table"><tbody>${block.rows.map((row, rowIndex) => `<tr>${row.map(cell => `<${rowIndex === 0 ? "th" : "td"}>${escapeHtml(cell).replace(/\n/g, "<br>")}</${rowIndex === 0 ? "th" : "td"}>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+      // 竞赛题面常要求"将结果填入表 1"，所以原题里的答题模板本就是空表体。
+      // 空单元格标记出来，靠 CSS 保住行高，读者才不会当成渲染失败。
+      const cells = (row, rowIndex) => row.map(cell => {
+        const tag = rowIndex === 0 ? "th" : "td";
+        const text = String(cell ?? "").trim();
+        const attr = text ? "" : ' class="is-blank"';
+        return `<${tag}${attr}>${escapeHtml(text).replace(/\n/g, "<br>")}</${tag}>`;
+      }).join("");
+      return `<div class="problem-content-table-wrap"><table class="problem-content-table"><tbody>${block.rows.map((row, rowIndex) => `<tr>${cells(row, rowIndex)}</tr>`).join("")}</tbody></table></div>`;
     }
     if (block.type === "document_break") {
       return `<div class="problem-document-break"><span>题面附录</span><h2>${escapeHtml(block.title)}</h2></div>`;
@@ -704,19 +733,19 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   function problemDetailScreen() {
     const { item: problem } = selectedResource(problems);
     const completeMarkup = completeProblemMarkup(problem);
-    const attachmentMarkup = problem.attachments.length
-      ? `<section class="problem-downloads" aria-label="题目与附件下载">
-          <h3>题目与附件</h3>
-          <div class="problem-download-list">${problem.attachments.map(item => {
-            const local = String(item.url).startsWith("/");
-            const meta = [item.kind === "problem" ? "题目" : "附件", formatFileSize(item.bytes)].filter(Boolean).join(" · ");
-            return `<a class="problem-download-item" href="${escapeHtml(item.url)}" ${local ? "download" : 'target="_blank" rel="noreferrer"'}>
-              <span class="problem-download-icon">${icon(item.kind === "problem" ? "file-pdf" : "file-zip")}</span>
-              <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(meta)}</small></span>
-              ${icon("download-simple", "problem-download-arrow")}
-            </a>`;
-          }).join("")}</div>
-        </section>`
+    // 同 isOfficialSourceUrl 的理由：附件只有两种可以渲染成链接——我们自己镜像到
+    // /problem-files 下的本地副本，和主办方域名上的原件。社区仓库里的 .docx 既不是
+    // 官方发布物，也会把用户送到第三方账号下，所以整条不渲染。
+    const linkableAttachments = problem.attachments.filter(item => {
+      const url = String(item.url || "");
+      return url.startsWith("/") || isOfficialSourceUrl(url);
+    });
+    const attachmentMarkup = linkableAttachments.length
+      ? `<p class="problem-downloads">${linkableAttachments.map(item => {
+          const local = String(item.url).startsWith("/");
+          const size = formatFileSize(item.bytes);
+          return `<a class="problem-download-link" href="${escapeHtml(item.url)}" ${local ? "download" : 'target="_blank" rel="noreferrer"'}>${escapeHtml(item.title)}</a>${size ? `<span class="problem-download-size">${escapeHtml(size)}</span>` : ""}`;
+        }).join('<span class="problem-download-sep">、</span>')}</p>`
       : "";
     return shell(`
       <section class="resource-detail-page problem-detail-page">
@@ -727,7 +756,6 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             <h2>题目：${escapeHtml(problem.title)}</h2>
           </header>
           <div class="resource-detail-rule"></div>
-          ${attachmentMarkup}
           ${completeMarkup || `<section class="detail-copy-section problem-metadata-fallback">
             <h3>题面采集记录</h3>
             <p>${escapeHtml(problem.summary)}</p>
@@ -735,11 +763,14 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             <p><strong>关键词：</strong>${escapeHtml(problem.keywords.join("、"))}</p>
             <p><strong>数据要求：</strong>${escapeHtml(problem.data_requirement)}</p>
           </section>`}
+          ${attachmentMarkup}
         </article>
         <footer class="resource-detail-actions problem-detail-actions">
           <div class="detail-action-buttons">
             <button type="button" data-action="detail-bookmark">${icon("star")} 收藏</button>
-            <button type="button" data-action="open-source" data-source-url="${escapeHtml(problem.source_url)}">${icon("arrow-square-out")} 查看来源</button>
+            ${isOfficialSourceUrl(problem.source_url)
+              ? `<button type="button" data-action="open-source" data-source-url="${escapeHtml(problem.source_url)}">${icon("arrow-square-out")} 查看来源</button>`
+              : ""}
             <button class="primary" type="button" data-action="use-problem" data-resource-title="${escapeHtml(problem.title)}">用于当前任务</button>
           </div>
         </footer>
@@ -765,7 +796,9 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     const accessCopy = PAPER_ACCESS_COPY[paper.access_scope] || "未标注";
     const sourceCopy = PAPER_SOURCE_COPY[paper.source_status] || "未标注";
     const methodCopy = paper.models.length ? paper.models.join("、") : "待全文解析后补充";
-    const hasFullText = Boolean(paper.full_text_url);
+    // 社区仓库快照虽然确实存着 PDF，但把用户送到别人的 GitHub 账号下不合适，
+    // 所以只有主办方域名下的全文入口才渲染成可点的链接。
+    const hasFullText = isOfficialSourceUrl(paper.full_text_url);
     const isPdf = hasFullText && /\.pdf(?:$|\?)/i.test(paper.full_text_url);
     const sizeCopy = paper.source_file_bytes ? ` · ${formatFileSize(paper.source_file_bytes)}` : "";
     const fullTextLabel = paper.record_type === "collection"
@@ -773,15 +806,14 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       : isPdf
         ? `查看全文 PDF${sizeCopy}`
         : "前往官方全文页";
-    // zhanwen 685 篇是社区仓库固定版本的公开 PDF，是当前唯一“有全文”的入口，
-    // 因此要显眼；COMAP 只有获奖名单，网盘合集是整届打包，分别给不同措辞。
+    // COMAP 只有获奖名单，网盘合集是整届打包，社区快照不给外链，三种情况分别措辞。
     const fullTextEntry = hasFullText
       ? `<p><a href="${escapeHtml(paper.full_text_url)}" target="_blank" rel="noreferrer">${icon(isPdf ? "file-pdf" : "arrow-square-out")} ${escapeHtml(fullTextLabel)}</a></p>`
       : `<p>${icon("info")} 暂无可访问的全文入口，本篇当前仅收录获奖与来源元数据。</p>`;
     const fullTextNote = paper.access_scope === "metadata_only"
       ? "本篇来自官方获奖名单，官方结果页未随附全文，需前往来源站点查看。"
       : paper.source_status === "community_repository_snapshot"
-        ? "全文 PDF 存于社区开源仓库的固定版本快照；分节、公式与图表的结构化解析将在后续批次补充。"
+        ? "本篇的获奖与来源元数据整理自社区开源仓库的固定版本快照。仓库属第三方账号，不作为可引用出处，故不提供跳转；结构化全文将在后续批次自建。"
         : paper.record_type === "collection"
           ? "该记录为整届优秀论文合集入口，单篇结构化解析将在后续补充。"
           : "结构化全文解析（分节、公式、图表）将在后续批次补充。";
@@ -816,13 +848,15 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             <p>${escapeHtml(fullTextNote)}</p>
             <p><strong>收录范围：</strong>${escapeHtml(accessCopy)}　<strong>来源状态：</strong>${escapeHtml(sourceCopy)}</p>
             <p><strong>方法标签：</strong>${escapeHtml(methodCopy)}</p>
-            <p><a href="${escapeHtml(paper.source_url)}" target="_blank" rel="noreferrer">查看来源记录 ${icon("arrow-square-out")}</a></p>
+            ${isOfficialSourceUrl(paper.source_url)
+              ? `<p><a href="${escapeHtml(paper.source_url)}" target="_blank" rel="noreferrer">查看来源记录 ${icon("arrow-square-out")}</a></p>`
+              : ""}
           </section>
         </article>
         <footer class="resource-detail-actions">
           <div class="detail-action-buttons detail-left-actions">
             <button type="button" data-action="detail-bookmark">${icon("star")} 收藏</button>
-            <button type="button" data-action="cite-detail" data-resource-title="${escapeHtml(paper.title)}" data-source-url="${escapeHtml(paper.source_url)}">${icon("quotes")} 引用</button>
+            <button type="button" data-action="cite-detail" data-resource-title="${escapeHtml(paper.title)}" data-source-url="${isOfficialSourceUrl(paper.source_url) ? escapeHtml(paper.source_url) : ""}">${icon("quotes")} 引用</button>
             ${fullTextAction}
           </div>
           <button class="primary" type="button" data-action="use-paper" data-resource-title="${escapeHtml(paper.title)}">${icon("git-branch")} 参考该论文</button>
@@ -1125,7 +1159,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
                 aria-expanded="${!collapsed}" aria-controls="method-tree-panel"
                 title="${collapsed ? "展开方法列表" : "收起方法列表"}">${icon(collapsed ? "caret-right" : "caret-left")}</button>
         <aside class="method-tree" id="method-tree-panel">
-          <label class="search-box">${icon("magnifying-glass")}<input data-method-search aria-label="搜索方法论" autocomplete="off" placeholder="搜索方法、场景或关键词……"></label>
+          <label class="search-box">${icon("magnifying-glass")}<input type="search" name="method-search" data-method-search aria-label="搜索方法论" autocomplete="off" placeholder="搜索方法、场景或关键词……"></label>
           <div class="method-tree-toolbar">
             <div class="method-search-status" data-method-search-status aria-live="polite">${methodLibrary.length} 种方法</div>
             <button type="button" class="method-favorite-filter" data-method-favorite-filter aria-pressed="false">${icon("star")}<span data-favorite-count>${favorites.length}</span></button>
@@ -2048,11 +2082,18 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         target.innerHTML = saved ? '<i class="ph-fill ph-star" aria-hidden="true"></i> 已收藏' : `${icon("star")} 收藏`;
         toast(saved ? "已加入收藏" : "已取消收藏");
       }
-      if (action === "open-source") window.open(target.dataset.sourceUrl, "_blank", "noopener,noreferrer");
+      // 渲染层已经过滤掉非官方来源，这里再挡一次：属性可能来自缓存的旧页面。
+      if (action === "open-source") {
+        const requested = target.dataset.sourceUrl;
+        if (isOfficialSourceUrl(requested)) window.open(requested, "_blank", "noopener,noreferrer");
+        else toast("该记录没有可公开跳转的官方来源页");
+      }
       if (action === "cite-detail") {
         const title = escapeHtml(target.dataset.resourceTitle || "数学建模论文");
-        const sourceUrl = escapeHtml(target.dataset.sourceUrl || "");
-        modal("引用论文", `<label>引用格式</label><input value="GB/T 7714—2015" readonly><label>引用文本</label><textarea readonly>${title}［EB/OL］. ${sourceUrl}</textarea>`, () => toast("引用文本已复制"));
+        const raw = target.dataset.sourceUrl || "";
+        const sourceUrl = isOfficialSourceUrl(raw) ? escapeHtml(raw) : "";
+        const citation = sourceUrl ? `${title}［EB/OL］. ${sourceUrl}` : `${title}［EB/OL］.`;
+        modal("引用论文", `<label>引用格式</label><input value="GB/T 7714—2015" readonly><label>引用文本</label><textarea readonly>${citation}</textarea>`, () => toast("引用文本已复制"));
       }
       if (action === "use-problem") {
         sessionStorage.setItem("openmathmodelPrompt", `请围绕“${target.dataset.resourceTitle}”建立完整数学模型，并给出可复现的求解流程。`);
@@ -2173,8 +2214,37 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       const searchSelector = kind === "problem" ? "[data-problem-search]" : "[data-paper-search]";
       const rows = $$(rowSelector);
       const tabs = $$(`[data-resource-kind="${kind}"]`);
-      const pageSize = 15;
+      const pageSize = RESOURCE_PAGE_SIZE;
       let currentPage = 1;
+      // 页码窗口以当前页为中心，最多 5 个；两端各留首页/末页和省略号，
+      // 这样 2 页时就只出 "1 2"，20 页时也不会把按钮铺满一行。
+      const pageWindow = pageCount => {
+        if (pageCount <= 7) return Array.from({ length: pageCount }, (_, index) => index + 1);
+        const numbers = new Set([1, pageCount]);
+        for (let page = currentPage - 1; page <= currentPage + 1; page += 1) {
+          if (page > 1 && page < pageCount) numbers.add(page);
+        }
+        if (currentPage <= 3) [2, 3, 4].forEach(page => numbers.add(page));
+        if (currentPage >= pageCount - 2) [pageCount - 3, pageCount - 2, pageCount - 1].forEach(page => numbers.add(page));
+        const sorted = [...numbers].sort((a, b) => a - b);
+        const slots = [];
+        sorted.forEach((page, index) => {
+          if (index && page - sorted[index - 1] > 1) slots.push("…");
+          slots.push(page);
+        });
+        return slots;
+      };
+      const renderPagination = pageCount => {
+        const host = $("[data-resource-page-numbers]");
+        if (!host) return;
+        host.innerHTML = pageWindow(pageCount).map(slot => slot === "…"
+          ? '<span class="page-gap">…</span>'
+          : `<button class="${slot === currentPage ? "active" : ""}" data-resource-page="${slot}" aria-current="${slot === currentPage ? "page" : "false"}">${slot}</button>`).join("");
+        const prev = $('[data-resource-page="prev"]');
+        const next = $('[data-resource-page="next"]');
+        if (prev) prev.disabled = currentPage <= 1;
+        if (next) next.disabled = currentPage >= pageCount;
+      };
       const applyResourceFilters = () => {
         const query = $(searchSelector)?.value.trim().toLowerCase() || "";
         const selected = tabs.find(tab => tab.classList.contains("active"))?.dataset.resourceTab || "";
@@ -2187,13 +2257,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           row.hidden = true;
         });
         const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
-        currentPage = Math.min(currentPage, pageCount);
+        currentPage = Math.min(Math.max(1, currentPage), pageCount);
         matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).forEach(row => { row.hidden = false; });
         const copy = $("[data-resource-page-copy]");
         if (copy) copy.textContent = `共 ${matches.length} ${kind === "problem" ? "题" : "篇"} · 第 ${currentPage}/${pageCount} 页`;
-        $$('[data-resource-page]:not([data-resource-page="prev"]):not([data-resource-page="next"])').forEach(button => {
-          button.classList.toggle("active", +button.dataset.resourcePage === currentPage);
-        });
+        renderPagination(pageCount);
       };
 
       $(searchSelector)?.addEventListener("input", () => { currentPage = 1; applyResourceFilters(); });
@@ -2218,13 +2286,17 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           openResourceDetail(row);
         });
       });
-      $$("[data-resource-page]").forEach(button => button.addEventListener("click", () => {
-        if (button.dataset.resourcePage === "prev") currentPage = Math.max(1, currentPage - 1);
-        else if (button.dataset.resourcePage === "next") currentPage += 1;
-        else currentPage = +button.dataset.resourcePage;
+      // 数字按钮每次筛选后重建，所以监听挂在容器上，而不是挂在按钮本身。
+      $("[data-resource-pagination]")?.addEventListener("click", event => {
+        const button = event.target.closest("[data-resource-page]");
+        if (!button || button.disabled) return;
+        const requested = button.dataset.resourcePage;
+        if (requested === "prev") currentPage -= 1;
+        else if (requested === "next") currentPage += 1;
+        else currentPage = Number(requested);
         applyResourceFilters();
         toast(`已切换到第 ${currentPage} 页`);
-      }));
+      });
       applyResourceFilters();
     };
 

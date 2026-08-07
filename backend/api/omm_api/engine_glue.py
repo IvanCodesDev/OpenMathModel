@@ -1,0 +1,558 @@
+"""agents/core 引擎 ←→ backend/api 的胶水层（B2 换脑）。
+
+架构（主规划 §5.3 / §13 Phase 2「状态投影器」）：
+- ``run_domain_events`` 表是执行事实来源：引擎事件先落表（同事务），再驱动 v1 投影；
+- v1 行（task_runs/step_runs/artifacts/approval_requests/agent_events）是投影，
+  对外契约与事件流保持与旧模拟推进器兼容；
+- 审批行的"解决"侧（option/comment/client_token 与 v1 approval.resolved 事件）归
+  动作层 actions.py（它持有这些上下文），投影只负责审批行创建与请求/状态事件；
+- 引擎节点是同步模拟（sim-0.1）：一次 advance = 完成一个阶段步骤。T5 起由
+  agents/skills 的真实节点替换本文件的 SimStageNode。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from omm_agent_core import (
+    AgentEvent as CoreEvent,
+)
+from omm_agent_core import (
+    ArtifactRef,
+    EventType,
+    NodeContext,
+    NodeResult,
+    NodeServices,
+    TaskRunEngine,
+    TaskRunSnapshot,
+    TaskState,
+    replay_events,
+)
+from omm_contracts import (
+    AgentEventType,
+    ApprovalDecisionType,
+    ApprovalStatus,
+    ArtifactStatus,
+    StepRunStatus,
+    TaskRunStatus,
+)
+
+from .blobstore import ArtifactBlobStore, LocalContentStore
+from .config import get_settings
+from .events import append_event
+from .ids import new_id
+from .orm import ApprovalRequestRow, ArtifactRow, DomainEventRow, StepRunRow, TaskRunRow
+from .serialize import utcnow
+from .workflow import NODE_COMPLETED, STAGE_LABELS
+
+CANCELLED_ERROR = "cancelled by user"
+REJECT_OPTION_ID = "reject"
+
+_ARTIFACT_NAMES = {
+    "figure": "基线实验结果图（模拟）",
+    "report": "建模报告草稿（模拟）",
+}
+
+FAIL_EXPERIMENT_MARKER = "[fail:experiment]"
+
+
+# ── 时钟与 ID：注入 API 的约定（32 位 hex 前缀 ID 满足 v1 模式） ────────────
+
+
+class _ApiClock:
+    def now_iso(self) -> str:
+        return utcnow().isoformat()
+
+
+class _ApiIds:
+    def new_id(self, prefix: str) -> str:
+        return new_id(prefix)
+
+
+# ── Artifact 存储端口：进程级绑定（create_app 时注入；缺省按配置构建） ──────
+
+_blobstore: ArtifactBlobStore | None = None
+
+
+def set_blobstore(store: ArtifactBlobStore) -> None:
+    global _blobstore
+    _blobstore = store
+
+
+def get_blobstore() -> ArtifactBlobStore:
+    global _blobstore
+    if _blobstore is None:
+        _blobstore = LocalContentStore(get_settings().artifacts_dir)
+    return _blobstore
+
+
+class ApiArtifactStore:
+    """实现 omm_agent_core 的 ArtifactStore 端口：内容落 BlobStore，引用带 local:// URI。"""
+
+    def __init__(self, blobs: ArtifactBlobStore) -> None:
+        self._blobs = blobs
+
+    def put(
+        self,
+        run_id: str,
+        kind: str,
+        name: str,
+        content: bytes,
+        media_type: str,
+        producer_step: str,
+    ) -> ArtifactRef:
+        sha256, size = self._blobs.put(content)
+        return ArtifactRef(
+            artifact_id=new_id("art"),
+            kind=kind,
+            uri=f"local://{sha256}/{name}",
+            sha256=sha256,
+            size=size,
+            media_type=media_type,
+            producer_step=producer_step,
+        )
+
+
+# ── sim-0.1 节点：与旧模拟推进器行为等价 ──────────────────────────────────
+
+
+def _fail_config(inputs: dict[str, Any]) -> tuple[Optional[str], int]:
+    params = dict(inputs.get("params") or {})
+    fail_at = params.get("fail_at")
+    fail_attempts = int(params.get("fail_attempts") or 1)
+    if not fail_at and FAIL_EXPERIMENT_MARKER in str(inputs.get("goal") or ""):
+        fail_at, fail_attempts = "EXPERIMENTING", 1
+    return fail_at, fail_attempts
+
+
+class SimStageNode:
+    """一个工作状态一个节点；失败注入与产物行为对齐旧推进器。产物经 ArtifactStore 端口真实落盘。"""
+
+    def __init__(self, state: TaskState) -> None:
+        self._state = state
+
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        fail_at, fail_attempts = _fail_config(dict(ctx.inputs))
+        if fail_at == self._state.value and ctx.attempt <= fail_attempts:
+            return NodeResult.failed("失败注入：实验代码在本次尝试中报错（模拟）")
+
+        artifacts: tuple[ArtifactRef, ...] = ()
+        if self._state in (TaskState.EXPERIMENTING, TaskState.PAPER_WRITING):
+            if services.artifacts is None:
+                return NodeResult.failed("artifact 存储端口未装配，无法发布产物")
+            if self._state is TaskState.EXPERIMENTING:
+                kind, media, filename = "figure", "image/svg+xml", "baseline-metrics.svg"
+                content = f"<svg><!-- simulated baseline figure run={ctx.run_id} attempt={ctx.attempt} --></svg>"
+            else:
+                kind, media, filename = "report", "text/markdown", "report-draft.md"
+                content = f"# 建模报告草稿（模拟）\n\nrun: {ctx.run_id}\n"
+            artifacts = (
+                services.artifacts.put(
+                    ctx.run_id,
+                    kind,
+                    filename,
+                    content.encode("utf-8"),
+                    media,
+                    ctx.step_id,
+                ),
+            )
+
+        label = STAGE_LABELS.get(self._state.value, self._state.value)
+        if self._state is TaskState.MODEL_PLANNING:
+            return NodeResult.needs_review(
+                "确认建模方案后继续实验", outputs={"label": label}
+            )
+        return NodeResult.succeeded(outputs={"label": label}, artifacts=artifacts)
+
+
+SIM_NODES = {state: SimStageNode(state) for state in TaskState if state.name in {
+    "PROBLEM_ANALYSIS",
+    "DATA_PREPARATION",
+    "MODEL_PLANNING",
+    "EXPERIMENTING",
+    "VALIDATING",
+    "PAPER_WRITING",
+}}
+
+
+# ── 领域事件 → v1 投影 ─────────────────────────────────────────────────────
+
+
+def _dt(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _project_status(
+    session: Session, run: TaskRunRow, to_status: str, reason: str
+) -> None:
+    from_status = run.status
+    run.status = to_status
+    run.updated_at = utcnow()
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_status_changed.value,
+        {"from": from_status, "to": to_status, "reason": reason},
+    )
+
+
+def _project_node(session: Session, run: TaskRunRow, to_node: str, reason: str) -> None:
+    from_node = run.current_node
+    run.current_node = to_node
+    run.updated_at = utcnow()
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_node_changed.value,
+        {
+            "from": from_node,
+            "to": to_node,
+            "reason": reason,
+            "label": STAGE_LABELS.get(to_node, to_node),
+        },
+    )
+
+
+def _input_hash(run: TaskRunRow, node: str, attempt: int) -> str:
+    canonical = json.dumps(
+        {"run_id": run.id, "node": node, "attempt": attempt, "params": run.params or {}},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
+    """把一条领域事件翻译成 v1 行与 v1 事件（agent_events 自己维护 sequence）。"""
+    kind = event.event_type
+    payload = event.payload
+    at = _dt(event.created_at)
+
+    if kind is EventType.RUN_CREATED:
+        inputs = dict(payload.get("inputs") or {})
+        append_event(
+            session,
+            run.id,
+            AgentEventType.run_created.value,
+            {"goal": inputs.get("goal"), "auto_start": bool(inputs.get("auto_start", True))},
+        )
+        return
+
+    if kind is EventType.STATE_CHANGED:
+        to_node = str(payload["to"])
+        if run.status == TaskRunStatus.QUEUED.value:
+            run.started_at = at
+            _project_status(session, run, TaskRunStatus.RUNNING.value, "任务开始")
+        _project_node(session, run, to_node, "进入阶段")
+        return
+
+    if kind is EventType.STEP_STARTED:
+        node = str(payload["state"])
+        attempt = int(payload["attempt"])
+        if run.current_node != node:
+            _project_node(session, run, node, "阶段开始")
+        session.add(
+            StepRunRow(
+                id=str(payload["step_id"]),
+                run_id=run.id,
+                node=node,
+                attempt=attempt,
+                status=StepRunStatus.RUNNING.value,
+                input_hash=_input_hash(run, node, attempt),
+                detail=f"{STAGE_LABELS.get(node, node)}（第 {attempt} 次尝试）",
+                created_at=at,
+                started_at=at,
+            )
+        )
+        append_event(
+            session,
+            run.id,
+            AgentEventType.step_started.value,
+            {"node": node, "attempt": attempt, "label": STAGE_LABELS.get(node, node)},
+        )
+        return
+
+    if kind is EventType.STEP_SUCCEEDED:
+        step = session.get(StepRunRow, str(payload["step_id"]))
+        if step is not None:
+            step.status = StepRunStatus.SUCCEEDED.value
+            step.ended_at = at
+            append_event(
+                session,
+                run.id,
+                AgentEventType.step_succeeded.value,
+                {"node": step.node, "attempt": step.attempt},
+            )
+        return
+
+    if kind is EventType.STEP_FAILED:
+        step = session.get(StepRunRow, str(payload["step_id"]))
+        if step is not None:
+            step.status = StepRunStatus.FAILED.value
+            step.failure_class = "CODE_DEFECT"
+            step.detail = str(payload.get("error") or "step failed")
+            step.ended_at = at
+            append_event(
+                session,
+                run.id,
+                AgentEventType.step_failed.value,
+                {"node": step.node, "attempt": step.attempt, "failure_class": "CODE_DEFECT"},
+            )
+        return
+
+    if kind is EventType.ARTIFACT_PRODUCED:
+        ref = dict(payload["artifact"])
+        name = _ARTIFACT_NAMES.get(str(ref.get("kind")), str(ref.get("kind")))
+        session.add(
+            ArtifactRow(
+                id=str(ref["artifact_id"]),
+                project_id=run.project_id,
+                run_id=run.id,
+                kind=str(ref["kind"]),
+                name=name,
+                uri=str(ref["uri"]),
+                sha256=str(ref["sha256"]),
+                size_bytes=int(ref["size"]),
+                media_type=str(ref["media_type"]),
+                producer_step=str(ref["producer_step"]),
+                status=ArtifactStatus.READY.value,
+                created_at=at,
+            )
+        )
+        append_event(
+            session,
+            run.id,
+            AgentEventType.artifact_published.value,
+            {
+                "artifact_id": ref["artifact_id"],
+                "kind": ref["kind"],
+                "name": name,
+                "uri": ref["uri"],
+            },
+        )
+        return
+
+    if kind is EventType.REVIEW_REQUESTED:
+        approval = ApprovalRequestRow(
+            id=new_id("appr"),
+            run_id=run.id,
+            decision_type=ApprovalDecisionType.confirm_plan.value,
+            title=str(payload.get("reason") or "确认建模方案后继续实验"),
+            options=[
+                {"id": "approve", "label": "采用当前方案", "description": "确认方案并进入实验阶段"},
+                {"id": "reject", "label": "退回重做方案", "description": "重新执行建模方案阶段并再次确认"},
+            ],
+            evidence={"note": "模拟工作流生成的方案确认请求（sim-0.1）"},
+            status=ApprovalStatus.PENDING.value,
+            requested_at=at,
+        )
+        session.add(approval)
+        append_event(
+            session,
+            run.id,
+            AgentEventType.approval_requested.value,
+            {
+                "approval_id": approval.id,
+                "decision_type": approval.decision_type,
+                "title": approval.title,
+            },
+        )
+        _project_status(session, run, TaskRunStatus.WAITING_APPROVAL.value, "等待方案确认")
+        return
+
+    if kind is EventType.REVIEW_RESOLVED:
+        # 审批行更新与 v1 approval.resolved 事件由动作层完成（它持有 option/comment）
+        if payload.get("approved"):
+            _project_status(session, run, TaskRunStatus.RUNNING.value, "方案已确认")
+        return
+
+    if kind is EventType.RUN_RETRIED:
+        run.failure_class = None
+        run.failure_message = None
+        if run.status == TaskRunStatus.WAITING_APPROVAL.value:
+            _project_status(session, run, TaskRunStatus.RUNNING.value, "方案退回重做")
+        elif run.status != TaskRunStatus.RUNNING.value:
+            _project_status(session, run, TaskRunStatus.RUNNING.value, "重试失败阶段")
+        return
+
+    if kind is EventType.RUN_PAUSED:
+        run.paused_from_status = run.status
+        _project_status(session, run, TaskRunStatus.PAUSED.value, "用户暂停")
+        return
+
+    if kind is EventType.RUN_RESUMED:
+        run.paused_from_status = None
+        _project_status(session, run, TaskRunStatus.RUNNING.value, "用户恢复")
+        return
+
+    if kind is EventType.RUN_CANCELLED:
+        return  # 只是意图标志；终态由随后的 advance 落定
+
+    if kind is EventType.RUN_COMPLETED:
+        run.ended_at = at
+        _project_node(session, run, NODE_COMPLETED, "全部阶段完成")
+        _project_status(session, run, TaskRunStatus.COMPLETED.value, "全部阶段完成")
+        return
+
+    if kind is EventType.RUN_FAILED:
+        error = str(payload.get("error") or "unknown failure")
+        if error == CANCELLED_ERROR:
+            now = utcnow()
+            running_steps = session.execute(
+                select(StepRunRow).where(
+                    StepRunRow.run_id == run.id,
+                    StepRunRow.status == StepRunStatus.RUNNING.value,
+                )
+            ).scalars()
+            for step in running_steps:
+                step.status = StepRunStatus.CANCELLED.value
+                step.ended_at = now
+            pending = session.execute(
+                select(ApprovalRequestRow).where(
+                    ApprovalRequestRow.run_id == run.id,
+                    ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+                )
+            ).scalars()
+            for approval in pending:
+                approval.status = ApprovalStatus.CANCELLED.value
+            run.paused_from_status = None
+            run.ended_at = now
+            _project_status(session, run, TaskRunStatus.CANCELLED.value, "用户取消")
+            return
+        run.failure_class = "CODE_DEFECT"
+        run.failure_message = error
+        _project_status(session, run, TaskRunStatus.FAILED.value, "实验步骤失败")
+        return
+
+    if kind is EventType.TOOL_CALLED:
+        append_event(session, run.id, AgentEventType.run_log.value, dict(payload))
+        return
+
+
+class _ProjectingSink:
+    """引擎事件汇：先落 run_domain_events（执行真相），再做 v1 投影。同一事务提交。"""
+
+    def __init__(self, session: Session, run: TaskRunRow) -> None:
+        self._session = session
+        self._run = run
+
+    def emit(self, event: CoreEvent) -> None:
+        self._session.add(
+            DomainEventRow(
+                run_id=event.run_id,
+                seq=event.seq,
+                event_type=event.event_type.value,
+                payload=event.payload,
+                created_at=event.created_at,
+            )
+        )
+        _project(self._session, self._run, event)
+
+
+# ── 适配器：runner / actions / router 的统一入口 ──────────────────────────
+
+
+def _load_core_events(session: Session, run_id: str) -> list[CoreEvent]:
+    rows = session.execute(
+        select(DomainEventRow)
+        .where(DomainEventRow.run_id == run_id)
+        .order_by(DomainEventRow.seq.asc())
+    ).scalars()
+    return [
+        CoreEvent(
+            run_id=row.run_id,
+            seq=row.seq,
+            event_type=EventType(row.event_type),
+            payload=dict(row.payload or {}),
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+def _build_engine(session: Session, run: TaskRunRow) -> TaskRunEngine:
+    return TaskRunEngine(
+        sink=_ProjectingSink(session, run),
+        clock=_ApiClock(),
+        ids=_ApiIds(),
+        nodes=SIM_NODES,
+        services=NodeServices(
+            clock=_ApiClock(),
+            ids=_ApiIds(),
+            artifacts=ApiArtifactStore(get_blobstore()),
+        ),
+    )
+
+
+def open_engine(
+    session: Session, run: TaskRunRow
+) -> tuple[TaskRunEngine, TaskRunSnapshot]:
+    engine = _build_engine(session, run)
+    events = _load_core_events(session, run.id)
+    snapshot = replay_events(run.id, run.project_id, events)
+    return engine, snapshot
+
+
+def create_run_events(session: Session, run: TaskRunRow, goal: str, auto_start: bool) -> None:
+    """为新建的 v1 运行行播种领域日志（RUN_CREATED → v1 run.created 投影）。"""
+    engine = _build_engine(session, run)
+    engine.create_run(
+        project_id=run.project_id,
+        inputs={"goal": goal, "params": run.params or {}, "auto_start": auto_start},
+        run_id=run.id,
+    )
+
+
+def advance_run(session: Session, run: TaskRunRow) -> None:
+    """一次 tick：终态/等待态直接返回，否则引擎推进一步（含取消落定）。"""
+    idle = {
+        TaskRunStatus.PAUSED.value,
+        TaskRunStatus.WAITING_APPROVAL.value,
+        TaskRunStatus.FAILED.value,
+        TaskRunStatus.COMPLETED.value,
+        TaskRunStatus.CANCELLED.value,
+    }
+    if run.status in idle:
+        return
+    engine, snapshot = open_engine(session, run)
+    engine.advance(snapshot)
+
+
+def pause_run(session: Session, run: TaskRunRow) -> None:
+    engine, snapshot = open_engine(session, run)
+    engine.request_pause(snapshot)
+
+
+def resume_run(session: Session, run: TaskRunRow) -> None:
+    engine, snapshot = open_engine(session, run)
+    engine.resume(snapshot)
+
+
+def cancel_run(session: Session, run: TaskRunRow) -> None:
+    engine, snapshot = open_engine(session, run)
+    engine.request_cancel(snapshot)
+    engine.advance(snapshot)  # 立即落定 CANCELLED（同步等价于 worker 的 finalize enqueue）
+
+
+def retry_run(session: Session, run: TaskRunRow) -> None:
+    engine, snapshot = open_engine(session, run)
+    engine.retry(snapshot)
+
+
+def resolve_approval(session: Session, run: TaskRunRow, option_id: str) -> None:
+    """approve 动作的引擎侧：批准=继续下一阶段；拒绝=重做 MODEL_PLANNING 并再次请求确认。"""
+    engine, snapshot = open_engine(session, run)
+    if option_id == REJECT_OPTION_ID:
+        engine.resolve_review(snapshot, approved=False, reason="方案退回重做")
+        engine.retry(snapshot)
+        engine.advance(snapshot)  # 重跑 MODEL_PLANNING（attempt+1）并再次进入审批
+        return
+    engine.resolve_review(snapshot, approved=True, reason=option_id)
+    engine.advance(snapshot)  # 启动下一阶段（EXPERIMENTING）

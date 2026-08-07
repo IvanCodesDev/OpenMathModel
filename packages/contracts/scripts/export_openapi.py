@@ -1,6 +1,6 @@
-"""从 services/api 真实应用导出 OpenAPI 基线（确定性 JSON），支持漂移门禁。
+"""从 backend/api 真实应用导出 OpenAPI 基线（确定性 JSON），支持漂移门禁。
 
-用法（任何装有 services/api 及其依赖的 Python 环境）:
+用法（任何装有 backend/api 及其依赖的 Python 环境）:
     python packages/contracts/scripts/export_openapi.py            # 导出/刷新基线
     python packages/contracts/scripts/export_openapi.py --check    # 比对不落盘，漂移退出码 1（CI）
 
@@ -33,7 +33,7 @@ def _render_spec() -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Export/check the OpenAPI baseline of services/api.")
+    parser = argparse.ArgumentParser(description="Export/check the OpenAPI baseline of backend/api.")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 

@@ -28,7 +28,7 @@ apps/desktop/src-tauri/gen/
 # Local databases
 *.db
 *.sqlite3
-services/api/data/
+backend/api/data/
 
 # Runtime data and artifacts
 datasets/raw/**

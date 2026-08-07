@@ -6,7 +6,7 @@ state the log cannot reproduce, and a crash between emit and apply is healed
 by replaying the log.
 
 Concurrency contract: one run is advanced by at most one caller at a time.
-That mutual exclusion is owned by the worker's lease (services/worker), not
+That mutual exclusion is owned by the worker's lease (backend/worker), not
 by this engine.
 """
 

@@ -280,6 +280,16 @@ i[class^="ph"], i[class*=" ph"] { font-size: 19px; line-height: 1; }
   border: 0;
   outline: 0;
   background: transparent;
+  /* 搜索框统一用 type="search"：语义正确，且 Chrome 不再把它当账号字段弹密码自动填充。
+     代价是 WebKit 会加原生外观和清除按钮，这里抹掉以保持与其他输入框一致。 */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-box input::-webkit-search-cancel-button,
+.search-box input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .seg-tabs {
@@ -2565,6 +2575,24 @@ html[data-theme="dark"] .usage-chart {
   color: #fff;
 }
 
+/* 页码是按筛选结果现算的，只有一页时上一页/下一页会同时禁用。 */
+.resource-pagination button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.resource-pagination [data-resource-page-numbers] {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.resource-pagination .page-gap {
+  width: 20px;
+  text-align: center;
+  color: #7f7f7a;
+}
+
 .page-size-button {
   min-width: 104px;
   height: 36px;
@@ -3864,68 +3892,45 @@ html[data-theme="dark"] .usage-chart {
   color: #30302d;
 }
 
+/* 附件下载：正文最末一行的加粗黑字链接，不用卡片、图标或背景块，
+   与题面正文同一栏宽和字号，读完文章顺势就能点。 */
 .problem-downloads {
   width: min(980px, 100%);
-  margin: 0 auto 38px;
-  padding: 22px;
-  border: 1px solid #deded9;
-  border-radius: 12px;
-  background: #fafaf7;
+  margin: 34px auto 0;
+  font-size: 17px;
+  line-height: 2;
 }
 
-.problem-downloads h3 {
-  margin: 0 0 16px;
-  color: #292927;
-  font-size: 18px;
+.problem-download-link {
+  color: #1f1f1d;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
-.problem-download-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
+.problem-download-link:hover { color: #376c43; }
+
+/* 文件大小与分隔符是正文附注，不参与链接的下划线和加粗 */
+.problem-download-size {
+  color: #777772;
+  font-size: 14px;
+  font-weight: 400;
 }
 
-.problem-download-item {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 20px;
-  gap: 11px;
-  align-items: center;
-  min-width: 0;
-  padding: 13px 14px;
-  border: 1px solid #e1e1dc;
-  border-radius: 9px;
-  color: #30302d;
-  background: #fff;
-  text-decoration: none;
+.problem-download-size::before { content: "（"; }
+.problem-download-size::after { content: "）"; }
+
+.problem-download-sep {
+  color: #777772;
+  font-weight: 400;
 }
 
-.problem-download-item:hover {
-  border-color: #99b69f;
-  background: #f6faf6;
-}
-
-.problem-download-icon {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 8px;
-  color: #376c43;
-  background: #edf5ee;
-  font-size: 20px;
-}
-
-.problem-download-item strong,
-.problem-download-item small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.problem-download-item strong { font-size: 15px; }
-.problem-download-item small { margin-top: 4px; color: #777772; font-size: 12px; }
-.problem-download-arrow { color: #507b59; font-size: 18px; }
+/* 深色主题：#1f1f1d 在深底上等于看不见 */
+html[data-theme="dark"] .problem-download-link { color: #f4f4f1; }
+html[data-theme="dark"] .problem-download-link:hover { color: #9ccba6; }
+html[data-theme="dark"] .problem-download-size,
+html[data-theme="dark"] .problem-download-sep { color: #9c9b96; }
 
 .problem-content-heading {
   margin: 34px 0 17px;
@@ -3946,9 +3951,10 @@ html[data-theme="dark"] .usage-chart {
   white-space: normal;
 }
 
+/* 序号来自原文，可能是"•"也可能是"10."或"（1）"，所以列宽给下限而不是定值。 */
 .problem-content-list-item {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: minmax(18px, auto) minmax(0, 1fr);
   gap: 7px;
   align-items: start;
 }
@@ -3956,6 +3962,8 @@ html[data-theme="dark"] .usage-chart {
 .problem-content-list-item > span {
   padding-top: 9px;
   color: #72726d;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .problem-content-figure {
@@ -3997,6 +4005,15 @@ html[data-theme="dark"] .usage-chart {
 .problem-content-table th { background: #f6f6f3; font-weight: 650; }
 .problem-content-table tr:last-child > * { border-bottom: 0; }
 .problem-content-table tr > *:last-child { border-right: 0; }
+
+/* 原题里的答题模板本来就是空表体（"请将结果填入表 1"）。
+   给空格子一个正文行高和一道浅底纹，空着是题目的原意，不是渲染坏了。 */
+.problem-content-table td.is-blank { background: rgba(127, 127, 122, 0.05); }
+.problem-content-table td.is-blank::after {
+  content: "";
+  display: block;
+  min-height: 1.65em;
+}
 
 .problem-document-break {
   margin: 54px 0 34px;

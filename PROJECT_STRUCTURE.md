@@ -7,7 +7,7 @@ OpenMathModel/
 ├─ apps/                       # 用户直接使用的客户端
 │  ├─ web/                    # React Web 产品
 │  └─ desktop/                # Tauri 桌面壳与本地能力
-├─ services/                  # 可独立部署的后端进程
+├─ backend/                    # 可独立部署的后端进程
 │  ├─ api/                    # HTTP/事件流控制面
 │  └─ worker/                 # 数据、实验、导出等长任务执行器
 ├─ agents/                    # 数学建模 Agent 领域实现
@@ -56,7 +56,7 @@ OpenMathModel/
 | `package.json` | npm workspaces 根，当前仅含 `apps/web` |
 | `.npmrc` | npm 配置；member 内的 `.npmrc` 会被 npm 忽略，所以统一放在根 |
 
-Python member 使用 src 布局，发行名 `omm-*`、导入名 `omm_*`：`packages/contracts`、`agents/{core,skills,tools,evals}`、`services/{api,worker}`。`agents/prompts` 是模板资源，`datasets/recipes` 是独立脚本，二者都不是 member。
+Python member 使用 src 布局，发行名 `omm-*`、导入名 `omm_*`：`packages/contracts`、`agents/{core,skills,tools,evals}`、`backend/{api,worker}`。`agents/prompts` 是模板资源，`datasets/recipes` 是独立脚本，二者都不是 member。
 
 ## 模块职责与依赖方向
 
@@ -67,9 +67,9 @@ flowchart TB
     DESKTOP["apps/desktop"] --> WEB
     WEB --> CONTRACTS["packages/contracts"]
     DESKTOP --> CONTRACTS
-    API["services/api"] --> CONTRACTS
+    API["backend/api"] --> CONTRACTS
     API --> AGENT["agents/core"]
-    WORKER["services/worker"] --> AGENT
+    WORKER["backend/worker"] --> AGENT
     AGENT --> TOOLS["agents/tools"]
     AGENT --> SKILLS["agents/skills"]
     API --> DB["PostgreSQL / Redis / Object Storage"]
@@ -79,8 +79,8 @@ flowchart TB
 依赖规则：
 
 1. `apps/*` 只通过协议调用服务，不导入后端内部模块。
-2. `services/api` 负责控制面与权限，不直接执行耗时建模代码。
-3. `services/worker` 负责执行面；每次运行都写入事件、日志、指标和产物清单。
+2. `backend/api` 负责控制面与权限，不直接执行耗时建模代码。
+3. `backend/worker` 负责执行面；每次运行都写入事件、日志、指标和产物清单。
 4. `agents/core` 不依赖 FastAPI、Tauri 或具体 UI，便于测试和嵌入。
 5. `agents/tools` 中的高风险/高成本能力通过统一执行接口调用，不能散落在 prompt 中。
 6. `packages/contracts` 是跨语言事实来源；协议先于调用方变更。

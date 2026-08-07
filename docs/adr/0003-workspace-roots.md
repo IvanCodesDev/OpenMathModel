@@ -1,8 +1,14 @@
 # ADR-0003：以 workspace 根统一依赖，不新增 `backend/` 目录
 
-- 状态：Accepted
+- 状态：Accepted；**标题结论与 §1 目录名部分已由 ADR-0005 取代**（2026-08-05 `services/` 更名为 `backend/`）
 - 日期：2026-08-04
-- 关联：ADR-0001（Monorepo 边界）、ADR-0002（本地开发底座与工具链版本基线）
+- 关联：ADR-0001（Monorepo 边界）、ADR-0002（本地开发底座与工具链版本基线）、ADR-0005（取代本 ADR 的目录名结论）
+
+> 以下正文保留 2026-08-04 的原始决策记录，不改写。本 ADR 关于 workspace 根、src 布局、`omm-*`
+> 命名与端口倒置依赖方向的决策**全部继续有效**；仅"不新增 `backend/`"这一条已被 ADR-0005 取代。
+> ADR-0005 的更名是把 `services/` 重命名，`agents/*`、`packages/contracts`、`datasets/recipes`
+> 仍按本 ADR §1 的三条理由原地保留。正文中的 `services/api`、`services/worker` 现读作
+> `backend/api`、`backend/worker`。
 
 ## 背景
 

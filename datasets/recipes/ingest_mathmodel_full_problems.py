@@ -26,6 +26,8 @@ from xml.etree import ElementTree as ET
 from PIL import Image
 from io import BytesIO
 
+from image_guard import looks_like_qr_code
+
 
 ROOT = Path(__file__).resolve().parents[2]
 TREE_PATH = ROOT / "datasets/raw/sources/github/zhanwen-MathModel-tree.json"
@@ -89,6 +91,23 @@ def selected_documents(tree: dict[str, Any]) -> list[dict[str, Any]]:
     if found != expected:
         raise RuntimeError(f"Expected 12 primary statements, found {sorted(found)}")
     return selected
+
+
+# The published "查看来源" link must land on the organiser, not on the community
+# repository we happened to extract the text from. CPMCM is run by 中国学位与研究生
+# 教育学会 / 中国科协青少年科技中心 on cpipc.acge.org.cn, and each edition's 开赛公告
+# is the citable landing page for that year's problem set.
+#
+# The statements themselves are NOT downloadable from any official host: 2020-2022
+# were published only as pan.baidu.com links with an extraction code plus an archive
+# password, and from 2023 on the platform serves them exclusively to a logged-in team
+# leader under 个人中心 -> 我的赛事 -> 下载试题. The only public files on the official
+# domain (sysFile/downFile.do) are the operations manual and the paper templates. So
+# the year notice is the strongest official provenance available for these records.
+CPMCM_OFFICIAL_NOTICES = {
+    2023: "https://cpipc.acge.org.cn/cw/contestNews/detail/4/2c90800c8a895b7a018a96d636512bc2",
+    2024: "https://cpipc.acge.org.cn/cw/contestNews/detail/4/2c90801791c6c0a80191f9a6b0366533",
+}
 
 
 def raw_url(path: str) -> str:
@@ -232,6 +251,13 @@ def extract_docx(record: dict[str, Any], problem_id: str, asset_index: int) -> t
                     asset_path = ASSET_ROOT / problem_id / filename
                     asset_path.parent.mkdir(parents=True, exist_ok=True)
                     asset_path.write_bytes(payload)
+                    # Uploader contact QRs ride along in the community scans. They
+                    # are not part of the problem and point at third-party accounts,
+                    # so they are dropped rather than republished. asset_index still
+                    # advances, keeping filenames tied to document order.
+                    if looks_like_qr_code(asset_path):
+                        asset_path.unlink()
+                        continue
                     web_path = f"/problem-assets/{problem_id}/{filename}"
                     alt = text[:80] if text else f"{record['year']} {record['letter']} 题插图 {asset_index}"
                     blocks.append({"type": "image", "src": web_path, "alt": alt})
@@ -371,10 +397,16 @@ def extract_problems() -> dict[str, Any]:
             "status": "完整题面",
             "summary": next((block["text"] for block in blocks if block["type"] == "paragraph" and len(block.get("text", "")) >= 35), title),
             "source_id": "github_zhanwen_mathmodel",
-            "source_url": primary["source_url"],
+            "source_url": CPMCM_OFFICIAL_NOTICES[year],
             "source_status": "community_repository_snapshot",
             "access_scope": "stored_content",
-            "attachments": [{"title": item["title"], "url": item["url"], "kind": "problem"} for item in source_documents],
+            # No published attachments. The mirrored .docx originals live in
+            # source_documents for provenance, but they are community-repository
+            # copies rather than official publications, so offering them as
+            # downloads would both misstate their origin and send the reader to a
+            # third-party account. The statement text and figures are rendered
+            # inline from content_blocks instead.
+            "attachments": [],
             "content_format": "ordered_docx_blocks",
             "content_status": "complete",
             "content_character_count": len(text),
@@ -421,6 +453,13 @@ def verify() -> dict[str, Any]:
     for problem in result["problems"]:
         if problem["content_status"] != "complete" or problem["content_character_count"] < 400 or problem["content_block_count"] < 5:
             raise RuntimeError(f"Incomplete extracted content: {problem['id']}")
+        # Published provenance must point at the organiser, and nothing rendered may
+        # send the reader into the community repository the text was extracted from.
+        host = urllib.parse.urlparse(problem["source_url"]).hostname or ""
+        if host.lower() not in {"cpipc.acge.org.cn"}:
+            raise RuntimeError(f"Problem source_url is not on the official host: {problem['id']} -> {problem['source_url']}")
+        if problem["attachments"]:
+            raise RuntimeError(f"CPMCM problems must publish no attachments: {problem['id']}")
     if result["stats"].get("paper_inventory_count") != 685 or len(result.get("papers", [])) != 685:
         raise RuntimeError("Expected 685 repository paper PDF records")
     for asset in result["assets"]:

@@ -14,7 +14,7 @@ info:
       支持 Last-Event-ID 头或 after 查询参数做断线补拉。
 servers:
   - url: /api
-    description: 开发环境经 Vite 代理到 services/api；生产由网关决定前缀。
+    description: 开发环境经 Vite 代理到 backend/api；生产由网关决定前缀。
 tags:
   - name: projects
   - name: task-runs

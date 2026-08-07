@@ -8,7 +8,7 @@ OpenMathModel 跨语言契约包，是 Web、Desktop、API、Worker、Agent 之�
 schemas/v1/          JSON Schema（draft 2020-12），字段与语义的权威定义
 fixtures/v1/         正/反两路契约回归夹具（validate.py 消费）
 baseline/            兼容性基线（check_compat.py 消费，破坏性变更须显式重冻结）
-openapi/v1/          openapi.api.json：从 services/api 真实应用导出的接口基线（禁止手改）
+openapi/v1/          openapi.api.json：从 backend/api 真实应用导出的接口基线（禁止手改）
 src/ts/v1/           生成的 TypeScript 类型（generate-ts.mjs，禁止手改）
 src/omm_contracts/   Python 包：v1/ 生成的 Pydantic 模型（禁止手改）+ enums/inputs 稳定表面
 scripts/             generate-ts.mjs / generate_python.py / export_openapi.py
@@ -50,7 +50,7 @@ npm run check --workspace @openmathmodel/contracts
 # Pydantic 模型（工具链锁版见 requirements-dev.txt；--check / --verify 供 CI）
 packages/contracts/.venv/Scripts/python scripts/generate_python.py
 
-# OpenAPI 基线（从 services/api 导出；--check 供 CI 防漂移）
+# OpenAPI 基线（从 backend/api 导出；--check 供 CI 防漂移）
 python packages/contracts/scripts/export_openapi.py
 ```
 

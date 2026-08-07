@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-04",
+  "updated_at": "2026-08-06",
   "sources": [
     {
       "id": "comap_mcm_icm",
@@ -28,7 +28,7 @@
         "/undergraduate/contests/mcm/forgot.php"
       ],
       "year_range": {
-        "from": 2021,
+        "from": 2015,
         "to": 2025
       },
       "crawl_policy": {
@@ -50,7 +50,7 @@
         "notes": "Internal immutable snapshots only until a human rights review is recorded."
       },
       "contact": "info@comap.org",
-      "notes": "Initial five-year Wave A source. Product publication remains gated on human confirmation."
+      "notes": "2015–2025 official MCM/ICM statements. 2018–2020 are absent because those years' official index pages serve no PDFs; only official domains are collected, so the gap is left open rather than filled from a mirror. Product publication remains gated on human confirmation."
     },
     {
       "id": "cmathc_cpmcm",
@@ -138,8 +138,8 @@
         "/member/"
       ],
       "year_range": {
-        "from": 2021,
-        "to": 2025
+        "from": 2015,
+        "to": 2026
       },
       "crawl_policy": {
         "requests_per_minute": 10,
@@ -160,15 +160,15 @@
         "notes": "Collect metadata and internal snapshots; do not publish full text before review."
       },
       "contact": "apmcm@mathor.com",
-      "notes": "Initial five-year Wave A source."
+      "notes": "2015–2026 official APMCM statements. 2019, 2020 and 2025 are absent because those editions publish only through saikr.com / publicqn.saikr.com / pan.baidu.com / aic.modelers.cn rather than an official domain; 2017 ships only A and B officially."
     },
     {
       "id": "github_zhanwen_mathmodel",
-      "name": "zhanwen/MathModel ??????",
+      "name": "zhanwen/MathModel 社区仓库快照",
       "tier": "T5",
       "enabled": true,
       "official_status": "community",
-      "competition": "???????????",
+      "competition": "中国研究生数学建模竞赛",
       "domains": [
         "github.com",
         "raw.githubusercontent.com",
@@ -207,15 +207,15 @@
         "notes": "Pinned Git commit snapshot; each extracted problem retains source file hashes and blob links."
       },
       "contact": "https://github.com/zhanwen/MathModel/issues",
-      "notes": "User-designated community source for complete 2023?2024 CPMCM problem statements and supporting documents."
+      "notes": "User-designated community source for complete 2023–2024 CPMCM problem statements and supporting documents. Published provenance for the extracted statements points at the organiser's per-year notice on cpipc.acge.org.cn, never at this repository."
     },
     {
       "id": "cumcm_official",
-      "name": "???????????",
+      "name": "全国大学生数学建模竞赛",
       "tier": "T1",
       "enabled": true,
       "official_status": "official",
-      "competition": "???????????????",
+      "competition": "高教社杯全国大学生数学建模竞赛",
       "domains": [
         "www.mcm.edu.cn",
         "mcm.edu.cn"
@@ -233,7 +233,7 @@
       ],
       "denied_paths": [],
       "year_range": {
-        "from": 2021,
+        "from": 2015,
         "to": 2025
       },
       "crawl_policy": {
@@ -245,7 +245,7 @@
       },
       "license_record": {
         "status": "unknown",
-        "rights_holder": "??????????????",
+        "rights_holder": "全国大学生数学建模竞赛组委会",
         "license_text_url": null,
         "allow_storage": true,
         "allow_indexing": true,
@@ -255,7 +255,56 @@
         "notes": "Official annual problem archive pages and immutable local snapshots."
       },
       "contact": "https://www.mcm.edu.cn/",
-      "notes": "2021?2025 A?E complete official problem statements rendered from archived PDFs."
+      "notes": "2015–2025 complete official problem statements rendered from archived PDFs (A–D through 2018, A–E from 2019 on)."
+    },
+    {
+      "id": "mathorcup_official",
+      "name": "MathorCup 数学应用挑战赛",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "official",
+      "competition": "MathorCup 数学应用挑战赛（原 MathorCup 高校数学建模挑战赛）",
+      "domains": [
+        "mathorcup.org",
+        "www.mathorcup.org",
+        "files.mathorcup.org"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "https://mathorcup.org/prize"
+        }
+      ],
+      "allowed_paths": [
+        "/prize",
+        "/detail/",
+        "/uploads/files/"
+      ],
+      "denied_paths": [],
+      "year_range": {
+        "from": 2018,
+        "to": 2026
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 240
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "中国优选法统筹法与经济数学研究会与 MathorCup 组委会",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Official annual statement notices and checksum-pinned archives."
+      },
+      "contact": "mathorcup@mathor.com",
+      "notes": "Official archives remain downloadable for 2018, 2023, 2024 and 2026. Complete structured text is published for 2023 and 2026 only: the 2018 and 2024 PDFs have unusable custom-font text maps, while the 2015 links now return HTTP 404 and the other years point to offsite hosts. The corrected 2026 D archive supersedes the original D statement and data."
     }
   ]
 }
