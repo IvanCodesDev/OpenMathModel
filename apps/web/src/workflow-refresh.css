@@ -1,4 +1,4 @@
-﻿/* 2026-08 data-modeling workflow reconstruction from the supplied UI references. */
+/* 2026-08 data-modeling workflow reconstruction from the supplied UI references. */
 .modeling-shell {
   --detail-drawer-width: clamp(470px, 33vw, 590px);
   position: relative;
@@ -1133,3 +1133,2031 @@
 }
 
 
+
+
+/* 2026-08-09 — shared reference-faithful workbench for data/model/experiment. */
+.modeling-clone-shell {
+  min-width: 1100px;
+  height: 100vh;
+  overflow: hidden;
+  color: #1b1b19;
+  background: #fafafa;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.focused-modeling-topbar {
+  height: 68px;
+  padding: 0 25px 0 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e7e7e4;
+  background: rgba(255,255,255,.97);
+}
+
+.focused-topbar-context,
+.focused-topbar-actions { display: flex; align-items: center; }
+.focused-topbar-context { min-width: 0; gap: 18px; white-space: nowrap; }
+.focused-back { width: 30px; height: 38px; margin-right: 1px; display: inline-flex; align-items: center; justify-content: center; color: #171715; font-size: 23px; }
+.focused-wordmark { color: #11110f; font-size: 28px; font-weight: 760; letter-spacing: -1.2px; }
+.focused-brand-divider { width: 1px; height: 30px; margin-left: 2px; background: #e2e2df; }
+.focused-task-name { overflow: hidden; color: #1b1b18; font-size: 20px; font-weight: 650; text-overflow: ellipsis; }
+.focused-task-meta { color: #60605c; font-size: 16px; }
+.focused-run-status { padding: 7px 15px; border-radius: 999px; color: #555551; background: #f1f1ef; font-size: 15px; line-height: 1; }
+.focused-topbar-actions { gap: 21px; }
+
+.focused-topbar-actions button,
+.focused-document-heading button { width: 34px; height: 38px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; color: #1f1f1d; background: transparent; font-size: 22px; }
+
+.focused-modeling-split { height: calc(100vh - 68px); padding: 8px 14px 14px; display: grid; grid-template-columns: clamp(455px, 29.55vw, 530px) minmax(0, 1fr); gap: 12px; min-height: 0; }
+.focused-agent-pane,
+.focused-stage-pane { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid #e8e8e5; border-radius: 14px; background: #fff; }
+.focused-agent-chat { height: 100%; min-height: 0; display: flex; flex-direction: column; background: #fff; }
+.focused-agent-head { height: 84px; flex: 0 0 84px; padding: 0 29px; display: flex; align-items: center; }
+.focused-agent-head .assistant-id { display: flex; align-items: center; gap: 12px; color: #383835; font-size: 26px; font-weight: 680; }
+.focused-agent-head .assistant-logo { width: 29px; height: 29px; }
+.focused-agent-scroll { min-height: 0; padding: 5px 28px 13px; flex: 1 1 auto; overflow: auto; scrollbar-width: thin; }
+.focused-agent-scroll { scrollbar-width: none; }
+.focused-agent-scroll::-webkit-scrollbar { display: none; }
+.focused-agent-scroll .activity-summary { width: auto; margin: 0 0 11px; padding: 5px 0; border: 0; color: #555551; background: transparent; font-size: 16px; font-weight: 500; }
+.focused-agent-scroll .activity-summary > i:first-child { margin-right: 8px; font-size: 20px; }
+.focused-agent-scroll .activity-summary > i:last-child { margin-left: 6px; font-size: 14px; }
+.focused-activity-list { position: relative; margin-bottom: 18px; }
+.focused-activity-list.collapsed { display: none; }
+.focused-activity-list::before { content: ""; position: absolute; top: 23px; bottom: 23px; left: 12px; width: 1px; background: #e1e6e2; }
+.focused-step { position: relative; min-height: 54px; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto 20px; align-items: center; gap: 11px; color: #5c5c58; font-size: 15px; }
+.focused-step.current { color: #2c2c29; font-weight: 520; }
+.focused-step time,
+.focused-loading { color: #747470; font-size: 13px; font-weight: 400; }
+.focused-loading { letter-spacing: 4px; }
+.focused-step .chev { color: #696965; font-size: 13px !important; }
+.focused-step-dot { position: relative; z-index: 1; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid #3fbd7e; border-radius: 50%; color: #34b978; background: #fff; font-size: 13px; }
+.focused-agent-copy { margin: 0 0 18px; color: #4c4c48; font-size: 15px; line-height: 1.75; }
+.focused-agent-copy strong { color: #343431; font-weight: 650; }
+.focused-attachments { margin: 3px 0 14px; }
+.focused-attachments h3 { margin: 0 0 8px; font-size: 15px; }
+.focused-attachment { width: 100%; height: 64px; margin-bottom: 8px; padding: 0 13px; display: grid; grid-template-columns: 38px minmax(0, 1fr) 28px; align-items: center; gap: 12px; border: 1px solid #e6e6e3; border-radius: 9px; color: #353532; background: #fff; text-align: left; }
+.focused-attachment > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.focused-attachment strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.focused-attachment small { color: #777773; font-size: 12px; }
+.focused-attachment > i { font-size: 20px; }
+.attachment-file-icon { width: 34px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; color: #fff; background: #afb3a9; font-size: 12px; font-weight: 700; }
+.attachment-file-icon.csv { font-size: 10px; }
+.focused-stage-cta { width: 100%; min-height: 49px; padding: 0 18px; border: 0; border-radius: 8px; color: #fff; background: linear-gradient(90deg, #0e0e0d, #151515); font-size: 16px; font-weight: 600; }
+.focused-stage-cta i { margin-right: 8px; font-size: 20px; vertical-align: -2px; }
+
+.focused-agent-chat > .chat-composer { position: static; inset: auto; width: auto; min-height: 154px; margin: 0 16px 13px; padding: 17px 15px 13px; flex: 0 0 154px; transform: none; border: 1px solid #e6e6e3; border-radius: 14px; box-shadow: none; }
+.focused-agent-chat > .chat-composer textarea { min-height: 63px; padding: 0; color: #333; font-size: 14px; line-height: 1.55; }
+.focused-agent-chat > .chat-composer textarea::placeholder { color: #b2b2ae; }
+.focused-agent-chat .composer-tools { min-height: 49px; }
+.focused-agent-chat .composer-tool-group { gap: 5px; }
+.focused-agent-chat .tool-button { width: 38px; height: 38px; padding: 0; justify-content: center; border-radius: 50%; color: #444440; background: #f7f7f5; font-size: 20px; }
+.focused-agent-chat .tool-button[data-action="mode"] { max-width: 38px; flex: 0 0 38px; }
+.focused-agent-chat .tool-label,
+.focused-agent-chat .tool-button > .ph-caret-down { display: none; }
+.focused-agent-chat .composer-model { color: #4d4d49; font-size: 14px; }
+.focused-agent-chat .send-button { width: 48px; height: 48px; border-radius: 50%; background: #11110f; font-size: 23px; }
+
+.focused-stage-pane { display: flex; }
+.focused-workspace { width: 100%; min-height: 0; display: flex; flex-direction: column; background: #fff; }
+.focused-workspace-tabs { height: 70px; padding: 20px 18px 0; display: flex; align-items: flex-end; gap: 6px; flex: 0 0 70px; border-bottom: 1px solid #e8e8e5; }
+.focused-workspace-tabs button { height: 49px; min-width: 166px; padding: 0 25px; display: inline-flex; align-items: center; justify-content: center; gap: 12px; border: 1px solid #e8e8e5; border-bottom: 0; border-radius: 10px 10px 0 0; color: #696965; background: #fff; font-size: 16px; }
+.focused-workspace-tabs button i { font-size: 21px; }
+.focused-workspace-tabs button.active { border-color: #11110f; color: #fff; background: #11110f; box-shadow: inset 0 0 0 1px #11110f; }
+.focused-workspace-panel { min-height: 0; display: none; flex: 1 1 auto; overflow: auto; }
+.focused-workspace-panel.active { display: block; }
+.data-report-workspace .focused-workspace-panel.active { padding: 29px 31px 21px; }
+.focused-document-heading { min-height: 72px; display: flex; align-items: flex-start; justify-content: space-between; }
+.focused-document-heading h1 { margin: 0 0 7px; font-size: 23px; line-height: 1.2; }
+.focused-document-heading p { margin: 0; color: #777773; font-size: 14px; }
+.focused-document-heading > div:last-child { display: flex; gap: 13px; }
+
+.focused-conclusion-strip,
+.focused-report-conclusion { min-height: 60px; padding: 0 20px; display: flex; align-items: center; border: 1px solid #e6e6e3; border-radius: 10px; color: #3d3d39; background: #fff; font-size: 16px; }
+.focused-conclusion-strip > i,
+.focused-report-conclusion > i { margin-right: 13px; font-size: 25px; }
+.focused-conclusion-strip strong,
+.focused-report-conclusion strong { margin-right: 5px; }
+
+.focused-metrics { min-height: 91px; display: grid; }
+.focused-metrics.three { grid-template-columns: repeat(3, 1fr); }
+.focused-metrics article { position: relative; padding: 22px 30px 15px 2px; display: flex; flex-direction: column; gap: 4px; }
+.focused-metrics article:not(:last-child)::after { content: ""; position: absolute; top: 24px; right: 0; bottom: 13px; width: 1px; background: #e7e7e4; }
+.focused-metrics article:not(:first-child) { padding-left: 30px; }
+.focused-metrics span,
+.focused-metrics small { color: #777773; font-size: 13px; }
+.focused-metrics strong { font-size: 24px; font-weight: 650; line-height: 1.2; }
+
+.focused-section h2,
+.focused-chart-heading h2,
+.focused-experiment-notes h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.focused-section h2 { margin-bottom: 12px; }
+.focused-section h2 span { color: #777773; font-size: 14px; font-weight: 400; }
+.focused-table-wrap { overflow: hidden; border: 1px solid #e5e5e2; border-radius: 9px; }
+.focused-table { width: 100%; border-collapse: collapse; color: #50504c; table-layout: fixed; font-size: 13px; }
+.focused-table th,
+.focused-table td { height: 38px; padding: 0 14px; overflow: hidden; border-bottom: 1px solid #ecece9; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.focused-table th { color: #5f5f5b; font-weight: 600; }
+.focused-table tbody tr:last-child td { border-bottom: 0; }
+.issue-table th:first-child,
+.issue-table td:first-child { width: 34px; padding-right: 0; color: #777773; text-align: center; }
+.issue-table th:nth-child(2) { width: 37%; }
+.issue-table th:nth-child(3) { width: auto; }
+.issue-table th:last-child,
+.issue-table td:last-child { width: 70px; text-align: center; }
+.focused-toggle { width: 38px; height: 22px; padding: 2px; border: 0; border-radius: 99px; background: #d7d7d3; }
+.focused-toggle span { width: 18px; height: 18px; display: block; border-radius: 50%; background: #fff; transition: transform .16s ease; }
+.focused-toggle.is-on { background: #11110f; }
+.focused-toggle.is-on span { transform: translateX(16px); }
+.raw-preview-section { margin-top: 22px; }
+.preview-data-table th:nth-child(1) { width: 18%; }
+.preview-data-table th:nth-child(2) { width: 17%; }
+.preview-data-table th:nth-child(3) { width: 16%; }
+.preview-data-table th:nth-child(4) { width: 16%; }
+.preview-data-table th:nth-child(5) { width: 25%; }
+.preview-data-table th:last-child { width: 55px; }
+.focused-table-footer { min-height: 58px; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; color: #777773; font-size: 13px; }
+.focused-table-footer nav { display: flex; align-items: center; gap: 7px; }
+.focused-table-footer button { min-width: 36px; height: 36px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; color: #676763; background: #fff; }
+.focused-table-footer button.active { border-color: #e6e6e3; color: #22221f; font-weight: 600; }
+.focused-table-footer button:disabled { border-color: #eeeeeb; color: #bbb; }
+
+.model-plan-workspace .focused-workspace-panel.active { padding: 28px 26px 26px; }
+.focused-conclusion-strip.model-recommendation { width: fit-content; min-width: 67%; margin-bottom: 27px; }
+.focused-plan-list { display: flex; flex-direction: column; gap: 12px; }
+.focused-plan-row { width: 100%; min-height: 62px; padding: 0 18px; display: grid; grid-template-columns: 24px 205px 1.55fr .86fr 1.15fr 22px; align-items: center; gap: 14px; border: 1px solid #e4e4e1; border-radius: 9px; color: #4c4c48; background: #fff; text-align: left; font-size: 13px; }
+.focused-plan-row strong { color: #30302d; font-size: 15px; }
+.focused-plan-row small { color: #777773; font-size: 12px; font-weight: 400; }
+.plan-radio { width: 20px; height: 20px; padding: 5px; border: 2px solid #aaa; border-radius: 50%; background: #fff; }
+.focused-plan-row.selected .plan-radio { border-color: #11110f; box-shadow: inset 0 0 0 5px #11110f; }
+.focused-plan-row > i { color: #252522; font-size: 18px; }
+.focused-plan-detail { margin-top: 17px; padding: 4px 26px; border: 1px solid #e4e4e1; border-radius: 9px; }
+.focused-plan-detail > div { min-height: 103px; padding: 20px 0; display: grid; grid-template-columns: 170px minmax(0, 1fr); align-items: start; border-bottom: 1px solid #e8e8e5; }
+.focused-plan-detail > div:last-child { border-bottom: 0; }
+.focused-plan-detail h2 { margin: 0; font-size: 17px; }
+.focused-plan-detail p,
+.focused-plan-detail ul { margin: 0; color: #454541; font-size: 14px; line-height: 1.75; }
+.focused-plan-detail ul { padding-left: 20px; }
+
+.experiment-report-workspace .focused-workspace-panel.active { padding: 19px 25px; }
+.focused-report-card { min-height: 100%; padding: 19px 25px 0; border: 1px solid #e6e6e3; border-radius: 9px; }
+.focused-report-card > h1 { margin: 0 0 18px; font-size: 19px; }
+.focused-report-conclusion { min-height: 53px; padding: 0; border-width: 0 0 1px; border-radius: 0; }
+.experiment-metrics { min-height: 116px; border-bottom: 1px solid #e7e7e4; }
+.experiment-metrics article { padding-top: 22px; }
+.focused-experiment-chart { padding: 19px 0 10px; border-bottom: 1px solid #e7e7e4; }
+.focused-chart-heading { display: flex; justify-content: space-between; align-items: center; }
+.focused-chart-heading > div { display: flex; flex-direction: column; gap: 9px; color: #555551; font-size: 12px; }
+.focused-chart-heading span { display: flex; align-items: center; gap: 9px; }
+.legend-dot { width: 20px; height: 11px; border-radius: 2px; background: #11110f; }
+.legend-dot.baseline { background: #c5c6c8; }
+.focused-experiment-chart .cost-chart-wrap { height: 266px; margin-top: 5px; }
+.focused-experiment-notes { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #e7e7e4; }
+.focused-experiment-notes article { min-height: 137px; padding: 19px 26px 12px 0; }
+.focused-experiment-notes article + article { padding-left: 40px; border-left: 1px solid #e7e7e4; }
+.focused-experiment-notes ul { margin: 10px 0 0; padding: 0; list-style: none; }
+.focused-experiment-notes li,
+.focused-experiment-notes p { margin: 7px 0; color: #4c4c48; font-size: 13px; line-height: 1.5; }
+.focused-experiment-notes li i { margin-right: 6px; font-size: 17px; vertical-align: -2px; }
+.focused-run-meta { min-height: 47px; display: flex; align-items: center; color: #777773; font-size: 12px; }
+
+.focused-empty-document { height: 100%; min-height: 520px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: #777773; }
+.focused-empty-document > i { font-size: 37px; }
+.focused-empty-document h2,
+.focused-empty-document p { margin: 0; }
+.focused-empty-document h2 { color: #30302d; font-size: 20px; }
+
+@media (max-height: 860px) {
+  .focused-agent-head { height: 68px; flex-basis: 68px; }
+  .focused-step { min-height: 45px; }
+  .focused-agent-chat > .chat-composer { min-height: 132px; flex-basis: 132px; }
+  .focused-agent-chat > .chat-composer textarea { min-height: 43px; }
+  .focused-workspace-tabs { height: 61px; flex-basis: 61px; padding-top: 12px; }
+  .focused-experiment-chart .cost-chart-wrap { height: 215px; }
+  .focused-experiment-notes article { min-height: 112px; padding-top: 12px; }
+  .focused-plan-detail > div { min-height: 86px; padding: 14px 0; }
+}
+
+@media (max-width: 1350px) {
+  .focused-modeling-split { grid-template-columns: 430px minmax(0, 1fr); }
+  .focused-workspace-tabs button { min-width: 135px; padding: 0 15px; }
+  .focused-plan-row { grid-template-columns: 24px 165px 1.3fr .75fr 1fr 22px; gap: 9px; }
+  .focused-task-meta { display: none; }
+}
+
+/* 2026-08-09 revision 2 — compact product shell, transparent tabs, resizable panes. */
+.modeling-clone-shell {
+  min-width: 0;
+  background: #f7f7f5;
+}
+
+.focused-modeling-topbar {
+  height: 56px;
+  padding: 0 14px;
+  border-bottom-color: #e5e5e2;
+  background: transparent;
+}
+
+.focused-topbar-context { gap: 10px; }
+.focused-back { width: 28px; height: 34px; margin-right: 0; font-size: 19px; border-radius: 7px; }
+.focused-back:hover { background: rgba(0,0,0,.045); }
+.focused-wordmark { font-size: 20px; font-weight: 720; letter-spacing: -.7px; }
+.focused-brand-divider { height: 24px; margin: 0 2px; }
+.focused-task-name { font-size: 16px; font-weight: 620; }
+.focused-task-meta { font-size: 13px; }
+.focused-run-status { padding: 0; color: #666661; background: transparent; font-size: 13px; }
+.focused-topbar-actions { gap: 9px; }
+.focused-topbar-actions button { width: 31px; height: 34px; border-radius: 7px; font-size: 18px; }
+.focused-topbar-actions button:hover { background: rgba(0,0,0,.045); }
+
+.focused-modeling-split {
+  --agent-pane-width: 25%;
+  height: calc(100vh - 56px);
+  padding: 6px 10px 10px;
+  grid-template-columns: minmax(270px, var(--agent-pane-width)) 10px minmax(390px, 1fr);
+  gap: 0;
+}
+
+.focused-agent-pane,
+.focused-stage-pane {
+  border-color: #e2e2df;
+  border-radius: 10px;
+}
+
+.focused-modeling-resizer {
+  position: relative;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.focused-modeling-resizer::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 4px;
+  width: 1px;
+  border-radius: 2px;
+  background: #d8d8d4;
+  transition: width .15s ease, left .15s ease, background .15s ease;
+}
+
+.focused-modeling-resizer:hover::before,
+.focused-modeling-resizer:focus-visible::before,
+body.is-resizing-modeling .focused-modeling-resizer::before {
+  left: 3px;
+  width: 3px;
+  background: #8a8a84;
+}
+
+.focused-agent-head { height: 62px; flex-basis: 62px; padding: 0 20px; }
+.focused-agent-head .assistant-id { gap: 9px; font-size: 20px; }
+.focused-agent-head .assistant-logo { width: 24px; height: 24px; }
+.focused-agent-scroll { padding: 3px 20px 10px; }
+.focused-agent-scroll .activity-summary { margin-bottom: 7px; font-size: 14px; }
+.focused-agent-scroll .activity-summary > i:first-child { font-size: 18px; }
+.focused-step { min-height: 44px; grid-template-columns: 22px minmax(0,1fr) auto 17px; gap: 8px; font-size: 14px; }
+.focused-step-dot { width: 20px; height: 20px; border-width: 1.5px; font-size: 11px; }
+.focused-activity-list::before { top: 20px; bottom: 20px; left: 10px; }
+.focused-step time,
+.focused-loading { font-size: 12px; }
+.focused-agent-copy { margin-bottom: 13px; font-size: 14px; line-height: 1.65; }
+.focused-attachments { margin-bottom: 10px; }
+.focused-attachments h3 { margin-bottom: 6px; font-size: 14px; }
+.focused-attachment { height: 54px; margin-bottom: 6px; grid-template-columns: 32px minmax(0,1fr) 24px; gap: 9px; }
+.attachment-file-icon { width: 30px; height: 34px; }
+.focused-stage-cta { min-height: 42px; font-size: 14px; }
+
+.focused-agent-chat > .chat-composer {
+  min-height: 150px;
+  margin: 0 12px 12px;
+  padding: 16px 15px 12px;
+  flex-basis: 150px;
+  border-color: #dededa;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 10px 34px rgba(25,25,22,.045);
+}
+.focused-agent-chat > .chat-composer textarea { min-height: 68px; font-size: 14px; }
+.focused-agent-chat .composer-tools { min-height: 42px; }
+.focused-agent-chat .tool-button { width: 36px; height: 36px; font-size: 18px; }
+.focused-agent-chat .tool-button[data-action="mode"] { max-width: 36px; flex-basis: 36px; }
+.focused-agent-chat .send-button { width: 44px; height: 44px; font-size: 21px; }
+
+.focused-workspace-tabs {
+  height: 52px;
+  padding: 7px 14px 0;
+  align-items: stretch;
+  gap: 2px;
+  flex-basis: 52px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: transparent;
+  scrollbar-width: none;
+}
+.focused-workspace-tabs::-webkit-scrollbar { display: none; }
+.focused-workspace-tabs button {
+  position: relative;
+  height: 44px;
+  min-width: 122px;
+  padding: 0 16px;
+  flex: 0 0 auto;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  color: #777772;
+  background: transparent;
+  font-size: 14px;
+}
+.focused-workspace-tabs button i { font-size: 18px; }
+.focused-workspace-tabs button:hover { color: #22221f; background: rgba(0,0,0,.025); }
+.focused-workspace-tabs button.active {
+  border: 0;
+  color: #171715;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 #171715;
+  font-weight: 620;
+}
+
+.data-report-workspace .focused-workspace-panel.active { padding: 18px 24px 14px; }
+.focused-document-heading { min-height: 58px; }
+.focused-document-heading h1 { margin-bottom: 5px; font-size: 19px; }
+.focused-document-heading p { font-size: 12px; }
+.focused-document-heading button { width: 30px; height: 32px; font-size: 18px; }
+.focused-conclusion-strip,
+.focused-report-conclusion { min-height: 50px; padding: 0 16px; font-size: 14px; }
+.focused-conclusion-strip > i,
+.focused-report-conclusion > i { margin-right: 10px; font-size: 21px; }
+.focused-metrics { min-height: 76px; }
+.focused-metrics article { padding-top: 16px; }
+.focused-metrics strong { font-size: 21px; }
+.focused-section h2,
+.focused-chart-heading h2,
+.focused-experiment-notes h2 { font-size: 14px; }
+.focused-section h2 { margin-bottom: 9px; }
+.focused-table { font-size: 12px; }
+.focused-table th,
+.focused-table td { height: 34px; padding: 0 11px; }
+.raw-preview-section { margin-top: 15px; }
+.focused-table-footer { min-height: 46px; padding-top: 8px; }
+.focused-table-footer button { min-width: 32px; height: 32px; }
+
+.model-plan-workspace .focused-workspace-panel.active { padding: 18px 22px; }
+.focused-conclusion-strip.model-recommendation { margin-bottom: 15px; }
+.focused-plan-list { gap: 8px; }
+.focused-plan-row { min-height: 52px; padding: 0 14px; grid-template-columns: 20px 170px 1.45fr .78fr 1.05fr 18px; gap: 9px; font-size: 12px; }
+.focused-plan-row strong { font-size: 14px; }
+.plan-radio { width: 17px; height: 17px; }
+.focused-plan-detail { margin-top: 12px; padding: 2px 20px; }
+.focused-plan-detail > div { min-height: 82px; padding: 13px 0; grid-template-columns: 145px minmax(0,1fr); }
+.focused-plan-detail h2 { font-size: 15px; }
+.focused-plan-detail p,
+.focused-plan-detail ul { font-size: 12px; line-height: 1.65; }
+
+.experiment-report-workspace .focused-workspace-panel.active { padding: 13px 20px; }
+.focused-report-card { padding: 15px 20px 0; }
+.focused-report-card > h1 { margin-bottom: 12px; font-size: 17px; }
+.experiment-metrics { min-height: 94px; }
+.focused-experiment-chart { padding-top: 14px; }
+.focused-experiment-chart .cost-chart-wrap { height: 235px; }
+.focused-experiment-notes article { min-height: 116px; padding-top: 13px; }
+.focused-experiment-notes article + article { padding-left: 28px; }
+.focused-experiment-notes li,
+.focused-experiment-notes p { margin: 5px 0; font-size: 12px; }
+.focused-run-meta { min-height: 39px; }
+
+@media (max-height: 760px) {
+  .focused-agent-chat > .chat-composer { min-height: 142px; flex-basis: 142px; }
+  .focused-agent-chat > .chat-composer textarea { min-height: 60px; }
+  .focused-experiment-chart .cost-chart-wrap { height: 185px; }
+  .focused-experiment-notes article { min-height: 98px; }
+}
+
+@media (max-width: 1180px) {
+  .focused-modeling-split { grid-template-columns: minmax(270px, var(--agent-pane-width)) 10px minmax(390px,1fr); }
+  .focused-brand-divider,
+  .focused-wordmark { display: none; }
+  .focused-plan-row { grid-template-columns: 20px 145px 1.2fr .7fr 1fr 18px; }
+}
+
+@media (max-width: 820px) {
+  .modeling-clone-shell { min-width: 700px; }
+  .focused-task-meta,
+  .focused-run-status { display: none; }
+}
+
+/* 2026-08-09 revision 3 — calmer frame spacing and compact Agent activity. */
+.focused-modeling-topbar {
+  padding-inline: 18px;
+  border-bottom: 0;
+}
+
+.focused-topbar-context { gap: 11px; }
+.focused-task-name { font-size: 16px; }
+
+.focused-modeling-split {
+  --agent-pane-width: 27%;
+  padding: 14px 18px 18px;
+}
+
+.focused-agent-pane,
+.focused-stage-pane {
+  border-radius: 11px;
+}
+
+.focused-agent-head {
+  height: 60px;
+  padding: 0 24px 2px;
+  flex-basis: 60px;
+  align-items: flex-end;
+}
+
+.focused-agent-head .assistant-id {
+  gap: 8px;
+  font-size: 19px;
+}
+
+.focused-agent-head .assistant-logo {
+  width: 22px;
+  height: 22px;
+}
+
+.focused-agent-scroll {
+  padding: 4px 24px 14px;
+}
+
+.focused-agent-scroll .activity-summary {
+  margin-bottom: 6px;
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.focused-agent-scroll .activity-summary > i:first-child {
+  margin-right: 7px;
+  font-size: 16px;
+}
+
+.focused-agent-scroll .activity-summary > i:last-child {
+  margin-left: 5px;
+  font-size: 12px;
+}
+
+.focused-activity-list { margin-bottom: 14px; }
+
+.focused-step {
+  min-height: 38px;
+  grid-template-columns: 18px minmax(0, 1fr) auto 14px;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.focused-step-dot {
+  width: 16px;
+  height: 16px;
+  border-width: 1.25px;
+  font-size: 9px;
+}
+
+.focused-activity-list::before {
+  top: 18px;
+  bottom: 18px;
+  left: 7.5px;
+}
+
+.focused-step time,
+.focused-loading { font-size: 11.5px; }
+.focused-loading { letter-spacing: 3px; }
+.focused-step .chev { font-size: 11px !important; }
+
+.focused-agent-copy {
+  margin-bottom: 14px;
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.focused-agent-chat > .chat-composer {
+  min-height: 146px;
+  margin: 0 16px 16px;
+  flex-basis: 146px;
+}
+
+.focused-workspace-tabs { border-bottom: 0; }
+
+.modeling-clone-shell .focused-stage-cta,
+.modeling-clone-shell .focused-stage-cta:hover,
+.modeling-clone-shell .focused-stage-cta:focus,
+.modeling-clone-shell .focused-stage-cta:focus-visible,
+.modeling-clone-shell .focused-stage-cta:active {
+  color: #fff;
+  background: #11110f;
+  box-shadow: none;
+  filter: none;
+  transform: none;
+}
+
+@media (max-width: 1180px) {
+  .focused-modeling-split {
+    grid-template-columns: minmax(270px, var(--agent-pane-width)) 10px minmax(390px, 1fr);
+    padding-inline: 14px;
+  }
+}
+
+@media (max-height: 760px) {
+  .focused-modeling-split { padding-block: 16px; }
+  .focused-agent-chat > .chat-composer {
+    min-height: 138px;
+    margin-bottom: 14px;
+    flex-basis: 138px;
+  }
+  .focused-agent-chat > .chat-composer textarea { min-height: 56px; }
+}
+
+/* 2026-08-09 revision 4 — optical header alignment and document-style tabs. */
+.focused-modeling-topbar > .focused-topbar-context,
+.focused-modeling-topbar > .focused-topbar-actions {
+  transform: translateY(3px);
+}
+
+.focused-agent-chat .composer-tools {
+  grid-template-columns: minmax(0, 1fr) max-content 44px;
+  gap: 8px;
+}
+
+.focused-agent-chat .composer-model-picker {
+  width: max-content;
+  min-width: 0;
+  max-width: 112px;
+  justify-self: end;
+}
+
+.focused-agent-chat .composer-model {
+  width: auto;
+  min-width: 92px;
+  height: 36px;
+  padding: 0 10px;
+  justify-content: center;
+  border-radius: 10px;
+  background: #f0f0ed;
+}
+
+.focused-agent-chat .composer-model:hover,
+.focused-agent-chat .composer-model-picker.open .composer-model {
+  background: #e9e9e6;
+}
+
+.focused-step-dot.done {
+  border: 0;
+  border-radius: 4px;
+  color: #2eb879;
+  background: #fff;
+}
+
+.focused-step-dot.done i { font-size: 16px; }
+
+.focused-workspace-tabs {
+  height: 54px;
+  padding: 9px 12px;
+  flex-basis: 54px;
+  align-items: center;
+  gap: 6px;
+}
+
+.focused-workspace-tabs button {
+  height: 36px;
+  min-width: 126px;
+  padding: 0 14px;
+  justify-content: flex-start;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  color: #747470;
+  background: transparent;
+  box-shadow: none;
+}
+
+.focused-workspace-tabs button i {
+  color: #858aab;
+  font-size: 17px;
+}
+
+.focused-workspace-tabs button:hover {
+  color: #252522;
+  background: #f2f2ef;
+}
+
+.focused-workspace-tabs button.active,
+.focused-workspace-tabs button.active:hover {
+  color: #191917;
+  background: #ececea;
+  box-shadow: none;
+  font-weight: 620;
+}
+
+.focused-workspace-tabs button.active i { color: #73799d; }
+
+/* 2026-08-09 revision 5 — detached document tabs and overflow-safe model picker. */
+.focused-step-dot.done {
+  border: 0;
+  border-radius: 50%;
+  color: #2eb879;
+  background: #fff;
+}
+
+.focused-step-dot.done i { font-size: 17px; }
+
+.focused-stage-pane {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.focused-workspace {
+  gap: 8px;
+  background: transparent;
+}
+
+.focused-workspace-tabs {
+  height: 44px;
+  padding: 0 6px;
+  flex-basis: 44px;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.focused-workspace-tabs button {
+  height: 36px;
+  min-width: 126px;
+  border-radius: 10px;
+}
+
+.focused-workspace-tabs button i { color: #777773; }
+.focused-workspace-tabs button.active i { color: #242422; }
+
+.focused-workspace-panel.active {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #e2e2df;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.experiment-report-workspace .focused-workspace-panel.active { padding: 0; }
+
+.experiment-report-workspace .focused-report-card {
+  border: 0;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.focused-agent-chat .composer-tools {
+  grid-template-columns: minmax(36px, 1fr) minmax(0, 140px) 44px;
+  gap: 8px;
+}
+
+.focused-agent-chat .composer-model-picker {
+  width: 100%;
+  min-width: 0;
+  max-width: 140px;
+  justify-self: stretch;
+}
+
+.focused-agent-chat .composer-model,
+.focused-agent-chat .composer-model:hover,
+.focused-agent-chat .composer-model-picker.open .composer-model {
+  width: 100%;
+  min-width: 0;
+  padding: 0 6px;
+  justify-content: flex-start;
+  background: transparent;
+}
+
+.focused-agent-chat .composer-model-icon,
+.focused-agent-chat .composer-model > .ph-caret-down {
+  flex: 0 0 auto;
+}
+
+.focused-agent-chat .composer-model [data-model-picker-label] {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 280px) {
+  .focused-agent-chat .composer-tools {
+    grid-template-columns: 36px minmax(0, 1fr) 40px;
+    gap: 6px;
+  }
+
+  .focused-agent-chat .composer-model-icon { display: none; }
+  .focused-agent-chat .send-button { width: 40px; height: 40px; }
+}
+
+/* 2026-08-10 revision 6 — full-height document surface and right-anchored model picker. */
+.focused-modeling-resizer,
+.focused-modeling-resizer::before,
+.focused-modeling-resizer:hover::before,
+.focused-modeling-resizer:focus-visible::before,
+body.is-resizing-modeling .focused-modeling-resizer::before {
+  background: transparent;
+}
+
+.focused-workspace {
+  position: relative;
+  height: 100%;
+  gap: 0;
+}
+
+.focused-workspace-tabs {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  right: 0;
+  left: 0;
+  height: 40px;
+  padding: 0 6px;
+  flex-basis: auto;
+  align-items: center;
+  background: transparent;
+}
+
+.focused-workspace-panel.active {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 100%;
+}
+
+.data-report-workspace .focused-workspace-panel.active {
+  padding: 60px 24px 18px;
+}
+
+.model-plan-workspace .focused-workspace-panel.active {
+  padding: 60px 22px 24px;
+}
+
+.experiment-report-workspace .focused-workspace-panel.active {
+  padding: 44px 0 0;
+}
+
+.focused-document-heading { min-height: 64px; }
+.focused-conclusion-strip,
+.focused-report-conclusion { min-height: 54px; }
+.focused-metrics { min-height: 84px; }
+.focused-metrics article { padding-top: 18px; padding-bottom: 17px; }
+.focused-section h2 { margin-bottom: 11px; }
+.focused-table th,
+.focused-table td { height: 36px; }
+.raw-preview-section { margin-top: 18px; }
+
+.focused-conclusion-strip.model-recommendation { margin-bottom: 18px; }
+.focused-plan-list { gap: 10px; }
+.focused-plan-row { min-height: 56px; }
+.focused-plan-detail { margin-top: 14px; }
+.focused-plan-detail > div { min-height: 88px; padding-block: 15px; }
+
+.experiment-report-workspace .focused-report-card { padding-top: 18px; }
+.experiment-metrics { min-height: 100px; }
+.focused-experiment-chart { padding-top: 17px; }
+.focused-experiment-notes article { padding-top: 16px; }
+
+.focused-agent-chat .composer-tools {
+  grid-template-columns: minmax(36px, 1fr) minmax(0, max-content) 44px;
+}
+
+.focused-agent-chat .composer-model-picker {
+  width: fit-content;
+  min-width: 0;
+  max-width: 140px;
+  justify-self: end;
+}
+
+.focused-agent-chat .composer-model,
+.focused-agent-chat .composer-model:hover,
+.focused-agent-chat .composer-model-picker.open .composer-model {
+  width: fit-content;
+  min-width: 0;
+  max-width: 140px;
+  justify-content: flex-end;
+}
+
+.focused-agent-chat .composer-model [data-model-picker-label] {
+  max-width: 88px;
+  flex: 0 1 auto;
+}
+
+@container (max-width: 280px) {
+  .focused-agent-chat .composer-model-picker,
+  .focused-agent-chat .composer-model {
+    width: fit-content;
+    max-width: 100%;
+    justify-self: end;
+    justify-content: flex-end;
+  }
+
+  .focused-agent-chat .composer-model [data-model-picker-label] { max-width: 64px; }
+}
+
+/* 2026-08-10 revision 7 — tabs sit outside the document card. */
+.focused-workspace {
+  position: relative;
+  height: 100%;
+  gap: 6px;
+  background: transparent;
+}
+
+.focused-workspace-tabs {
+  position: relative;
+  z-index: 1;
+  top: auto;
+  right: auto;
+  left: auto;
+  height: 40px;
+  padding: 0 6px;
+  flex: 0 0 40px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+}
+
+.focused-workspace-tabs button,
+.focused-workspace-tabs button:hover {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.focused-workspace-tabs button.active,
+.focused-workspace-tabs button.active:hover {
+  border: 0;
+  background: #ececea;
+  box-shadow: none;
+}
+
+.focused-workspace-panel.active {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.data-report-workspace .focused-workspace-panel.active {
+  padding: 22px 24px 18px;
+}
+
+.model-plan-workspace .focused-workspace-panel.active {
+  padding: 22px 22px 24px;
+}
+
+.experiment-report-workspace .focused-workspace-panel.active {
+  padding: 0;
+}
+
+.experiment-report-workspace .focused-report-card {
+  padding-top: 18px;
+}
+
+/* 2026-08-10 revision 8 — modeling tabs share the project topbar. */
+.focused-modeling-topbar {
+  gap: 14px;
+}
+
+.focused-topbar-context,
+.focused-topbar-actions {
+  flex: 0 0 auto;
+}
+
+.focused-topbar-workspace-tabs {
+  min-width: 0;
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.focused-topbar-workspace-tabs .focused-workspace-tabs {
+  position: static;
+  width: max-content;
+  max-width: 100%;
+  height: 44px;
+  padding: 4px 0;
+  flex: 0 1 auto;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.focused-topbar-workspace-tabs .focused-workspace-tabs button {
+  height: 36px;
+  min-width: 112px;
+  padding: 0 13px;
+}
+
+.focused-stage-pane .focused-workspace {
+  height: 100%;
+  gap: 0;
+}
+
+.focused-stage-pane .focused-workspace-panel.active {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 100%;
+}
+
+@media (max-width: 860px) {
+  .focused-modeling-topbar { gap: 8px; }
+  .focused-topbar-workspace-tabs { justify-content: flex-start; }
+  .focused-topbar-workspace-tabs .focused-workspace-tabs button {
+    min-width: 100px;
+    padding-inline: 10px;
+  }
+}
+
+/* 2026-08-10 revision 9 — browser-like project row and frameless agent pane. */
+.focused-modeling-topbar {
+  gap: 8px;
+}
+
+.focused-topbar-context {
+  min-width: 0;
+  gap: 8px;
+}
+
+.focused-task-name {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.focused-task-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focused-task-name > i {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.focused-topbar-leading-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.focused-topbar-leading-actions button,
+.focused-topbar-actions button {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  color: #30302d;
+  background: transparent;
+  font-size: 18px;
+}
+
+.focused-topbar-leading-actions button:hover,
+.focused-topbar-actions button:hover {
+  background: rgba(0, 0, 0, .045);
+}
+
+.focused-topbar-workspace-tabs {
+  justify-content: flex-start;
+}
+
+.focused-topbar-actions {
+  margin-left: auto;
+}
+
+.focused-agent-pane {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.focused-agent-chat {
+  background: transparent;
+}
+
+@media (max-width: 980px) {
+  .focused-task-name { max-width: 180px; }
+  .focused-topbar-workspace-tabs .focused-workspace-tabs button {
+    min-width: 96px;
+    padding-inline: 9px;
+  }
+}
+
+/* 2026-08-10 revision 10 — tabs align with the document column. */
+.modeling-clone-shell {
+  --agent-pane-width: 27%;
+}
+
+.focused-modeling-topbar {
+  position: relative;
+}
+
+.focused-topbar-leading-actions {
+  display: none;
+}
+
+.focused-topbar-workspace-tabs {
+  position: absolute;
+  top: 0;
+  right: 98px;
+  bottom: 0;
+  left: var(--workspace-tabs-left, calc(12px + var(--agent-pane-width)));
+  width: auto;
+  justify-content: flex-start;
+}
+
+.focused-topbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+@media (max-width: 980px) {
+  .focused-topbar-workspace-tabs {
+    right: 90px;
+    left: var(--workspace-tabs-left, calc(12px + var(--agent-pane-width)));
+  }
+}
+
+/* 2026-08-10 revisions 11–13 — lower the workspace tabs to the icon baseline. */
+.focused-topbar-workspace-tabs .focused-workspace-tabs {
+  transform: translateY(12px);
+}
+
+/* 2026-08-10 revision 15 — return modeling tabs to the document surface. */
+.focused-stage-pane {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.focused-stage-pane .focused-workspace {
+  position: relative;
+  height: 100%;
+  gap: 0;
+  background: transparent;
+}
+
+.focused-stage-pane .focused-workspace-tabs {
+  position: absolute;
+  z-index: 3;
+  top: 1px;
+  right: 1px;
+  left: 1px;
+  width: auto;
+  max-width: none;
+  height: 48px;
+  padding: 0 17px;
+  display: flex;
+  align-items: stretch;
+  gap: 22px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid #ecece9;
+  border-radius: 10px 10px 0 0;
+  background: #fff;
+  scrollbar-width: none;
+}
+
+.focused-stage-pane .focused-workspace-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.focused-stage-pane .focused-workspace-tabs button,
+.focused-stage-pane .focused-workspace-tabs button:hover,
+.focused-stage-pane .focused-workspace-tabs button.active,
+.focused-stage-pane .focused-workspace-tabs button.active:hover {
+  position: relative;
+  width: auto;
+  min-width: max-content;
+  height: 48px;
+  padding: 0 2px;
+  flex: 0 0 auto;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  color: #777772;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 450;
+}
+
+.focused-stage-pane .focused-workspace-tabs button:hover {
+  color: #333330;
+}
+
+.focused-stage-pane .focused-workspace-tabs button.active,
+.focused-stage-pane .focused-workspace-tabs button.active:hover {
+  color: #171715;
+  box-shadow: inset 0 -2px 0 #171715;
+  font-weight: 620;
+}
+
+.focused-stage-pane .focused-workspace-tabs button i {
+  color: currentColor;
+  font-size: 17px;
+}
+
+.focused-stage-pane .focused-workspace-panel.active {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: block;
+  overflow: auto;
+  border: 1px solid #e2e2df;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.data-report-workspace .focused-workspace-panel.active {
+  padding: 68px 24px 18px;
+}
+
+.model-plan-workspace .focused-workspace-panel.active {
+  padding: 68px 22px 24px;
+}
+
+.experiment-report-workspace .focused-workspace-panel.active {
+  padding: 48px 0 0;
+}
+
+.experiment-report-workspace .focused-report-card {
+  padding-top: 18px;
+  border: 0;
+  border-radius: 0 0 11px 11px;
+}
+
+@media (max-width: 860px) {
+  .focused-stage-pane .focused-workspace-tabs {
+    gap: 17px;
+    padding-inline: 14px;
+  }
+}
+
+/* 2026-08-10 revision 16 — dedicate the upper-right area to the document. */
+.modeling-clone-shell {
+  position: relative;
+  min-height: 100vh;
+}
+
+.modeling-clone-shell .focused-modeling-topbar {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 50px;
+  padding-inline: 18px;
+  pointer-events: none;
+}
+
+.modeling-clone-shell .focused-topbar-context {
+  pointer-events: auto;
+}
+
+.modeling-clone-shell .focused-modeling-split {
+  height: 100vh;
+  padding: 6px 18px 18px;
+}
+
+.modeling-clone-shell .focused-agent-pane {
+  margin-top: 50px;
+}
+
+.modeling-clone-shell .focused-modeling-resizer {
+  height: auto;
+  margin-top: 50px;
+  align-self: stretch;
+}
+
+/* 2026-08-10 revision 17 — fuller vertical rhythm and reusable subpage templates. */
+.focused-stage-pane {
+  container-type: inline-size;
+}
+
+.data-report-workspace [data-workspace-panel="data-report"].active,
+.model-plan-workspace [data-workspace-panel="model-plan"].active {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 28px;
+}
+
+.data-report-workspace [data-workspace-panel="data-report"] .focused-document-heading {
+  min-height: 52px;
+}
+
+.data-report-workspace [data-workspace-panel="data-report"] .focused-metrics,
+.data-report-workspace [data-workspace-panel="data-report"] .focused-section,
+.data-report-workspace [data-workspace-panel="data-report"] .raw-preview-section,
+.model-plan-workspace [data-workspace-panel="model-plan"] .focused-conclusion-strip,
+.model-plan-workspace [data-workspace-panel="model-plan"] .focused-plan-detail {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.data-report-workspace [data-workspace-panel="data-report"] .focused-metrics {
+  min-height: 94px;
+}
+
+.data-report-workspace [data-workspace-panel="data-report"] .focused-section h2 {
+  margin-bottom: 14px;
+}
+
+.data-report-workspace [data-workspace-panel="data-report"] .focused-table th,
+.data-report-workspace [data-workspace-panel="data-report"] .focused-table td {
+  height: 40px;
+}
+
+.model-plan-workspace [data-workspace-panel="model-plan"] .focused-plan-list {
+  gap: 14px;
+}
+
+.model-plan-workspace [data-workspace-panel="model-plan"] .focused-plan-detail {
+  margin-top: 2px;
+}
+
+.experiment-report-workspace [data-workspace-panel="experiment-report"].active .focused-report-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 18px;
+}
+
+.experiment-report-workspace [data-workspace-panel="experiment-report"] .focused-report-card > h1,
+.experiment-report-workspace [data-workspace-panel="experiment-report"] .focused-experiment-chart,
+.experiment-report-workspace [data-workspace-panel="experiment-report"] .focused-run-meta {
+  margin: 0;
+}
+
+.experiment-report-workspace [data-workspace-panel="experiment-report"] .focused-experiment-chart {
+  flex: 1 0 250px;
+}
+
+.focused-template {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  color: #3f3f3b;
+}
+
+.experiment-report-workspace .focused-template {
+  padding: 22px 24px 26px;
+}
+
+.focused-template-heading {
+  min-height: 52px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.focused-template-heading h1 {
+  margin: 0 0 6px;
+  color: #20201e;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.focused-template-heading p {
+  margin: 0;
+  color: #81817c;
+  font-size: 13px;
+}
+
+.focused-template-heading button,
+.focused-template-status {
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  border: 1px solid #e3e3df;
+  border-radius: 8px;
+  color: #343431;
+  background: #fff;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.focused-template-status {
+  color: #276d4b;
+  border-color: #d9ebe1;
+  background: #f5faf7;
+}
+
+.focused-template-status.neutral {
+  color: #5f5f5a;
+  border-color: #e6e6e2;
+  background: #f7f7f5;
+}
+
+.focused-template-notice {
+  min-height: 56px;
+  padding-inline: 18px;
+  font-size: 14px;
+}
+
+.focused-template-metrics {
+  min-height: 102px;
+  border-block: 1px solid #ecece8;
+}
+
+.focused-template-metrics article {
+  justify-content: center;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+.focused-template-metrics strong {
+  font-size: 22px;
+}
+
+.focused-template-section {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.focused-template-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.focused-template-section-title h2,
+.focused-template-card h2,
+.focused-code-layout aside h2 {
+  margin: 0;
+  color: #292927;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.focused-template-section-title span {
+  color: #8b8b86;
+  font-size: 12px;
+}
+
+.focused-template .focused-table-wrap {
+  overflow: auto;
+}
+
+.focused-template-table {
+  min-width: 660px;
+}
+
+.focused-template-table th,
+.focused-template-table td {
+  height: 43px;
+}
+
+.focused-template-table strong {
+  color: #30302d;
+  font-weight: 620;
+}
+
+.focused-template-footer {
+  min-height: 34px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  color: #888883;
+  font-size: 12px;
+}
+
+.focused-rule-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.focused-rule-list article,
+.focused-template-steps article {
+  min-height: 78px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e8e8e4;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.focused-rule-list b,
+.focused-template-steps b {
+  color: #aaa9a4;
+  font-size: 12px;
+}
+
+.focused-rule-list article div,
+.focused-template-steps article div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.focused-rule-list strong,
+.focused-template-steps strong {
+  color: #343431;
+  font-size: 13px;
+}
+
+.focused-rule-list span,
+.focused-template-steps span {
+  overflow: hidden;
+  color: #868681;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focused-rule-list em,
+.focused-template-steps em {
+  grid-column: 2;
+  color: #27704d;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.focused-template-callout {
+  min-height: 54px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #e7e7e3;
+  border-radius: 9px;
+  background: #fafaf8;
+  font-size: 13px;
+}
+
+.focused-template-callout strong {
+  flex: 0 0 auto;
+}
+
+.focused-template-callout span {
+  color: #6f6f6a;
+  line-height: 1.55;
+}
+
+.focused-template-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.focused-template-steps article {
+  min-height: 104px;
+}
+
+.focused-template-grid,
+.focused-template-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.focused-template-grid.compact {
+  margin-top: auto;
+}
+
+.focused-template-card {
+  min-height: 130px;
+  padding: 17px 18px;
+  border: 1px solid #e7e7e3;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.focused-template-card dl {
+  margin: 14px 0 0;
+}
+
+.focused-template-card dl div {
+  min-height: 30px;
+  display: flex;
+  justify-content: space-between;
+  color: #73736e;
+  font-size: 12px;
+}
+
+.focused-template-card dd {
+  margin: 0;
+  color: #383835;
+}
+
+.focused-template-card ul {
+  margin: 13px 0 0;
+  padding-left: 18px;
+  color: #5f5f5b;
+  font-size: 12px;
+  line-height: 2;
+}
+
+.focused-template-card p {
+  margin: 8px 0 0;
+  color: #7c7c77;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.focused-template-chart-grid {
+  flex: 1 1 auto;
+}
+
+.focused-template-card.chart-card {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.focused-template-card.chart-card > div {
+  min-height: 230px;
+  margin-top: 10px;
+  flex: 1 1 auto;
+}
+
+.focused-log-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.focused-log-summary span {
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 8px;
+  color: #666661;
+  background: #f3f3f0;
+  font-size: 12px;
+}
+
+.focused-template-code {
+  margin: 0;
+  padding: 20px;
+  overflow: auto;
+  border: 1px solid #e5e5e1;
+  border-radius: 9px;
+  color: #343431;
+  background: #fafaf8;
+  font: 12px/1.85 "SFMono-Regular", Consolas, monospace;
+  tab-size: 2;
+}
+
+.focused-template-code span {
+  color: #9a9a95;
+}
+
+.focused-run-log {
+  min-height: 330px;
+  flex: 1 1 auto;
+}
+
+.focused-code-layout {
+  min-height: 390px;
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  border: 1px solid #e5e5e1;
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.focused-code-layout aside {
+  padding: 18px 12px;
+  border-right: 1px solid #e7e7e3;
+  background: #fafaf8;
+}
+
+.focused-code-layout aside h2 {
+  margin: 0 8px 12px;
+}
+
+.focused-code-layout aside button {
+  width: 100%;
+  height: 36px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  color: #696964;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+}
+
+.focused-code-layout aside button.active {
+  color: #242421;
+  background: #ececea;
+  font-weight: 620;
+}
+
+.focused-code-layout > .focused-template-code {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+}
+
+@container (max-width: 700px) {
+  .focused-template {
+    gap: 18px;
+  }
+
+  .focused-rule-list,
+  .focused-template-steps,
+  .focused-template-grid,
+  .focused-template-chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .focused-template-steps article {
+    min-height: 82px;
+  }
+
+  .focused-code-layout {
+    grid-template-columns: 118px minmax(420px, 1fr);
+    overflow: auto;
+  }
+
+  .focused-template-card.chart-card {
+    min-height: 300px;
+  }
+}
+
+/* 2026-08-10 revision 19 — make all four result-detail pages reuse the final-delivery document template. */
+.experiment-report-workspace .focused-workspace-panel.active > .result-detail-document {
+  min-height: 100%;
+  padding: 28px clamp(34px, 5vw, 72px) 20px;
+  overflow: visible;
+}
+
+.result-detail-document > h1 {
+  margin-bottom: 20px;
+}
+
+.result-detail-document .complete-kicker {
+  margin-bottom: 22px;
+}
+
+.result-detail-document .complete-project-name {
+  margin-bottom: 12px;
+}
+
+.result-detail-document .result-summary .summary-row {
+  grid-template-columns: 142px minmax(0, 1fr);
+}
+
+.result-detail-document .result-summary .summary-row > span:first-child {
+  font-weight: 650;
+}
+
+.result-detail-document .result-detail-deliverables {
+  margin-top: 16px;
+}
+
+.result-detail-document .deliverable-head,
+.result-detail-document .deliverable {
+  grid-template-columns: minmax(280px, 1.7fr) .5fr .42fr 54px;
+}
+
+.result-detail-document .result-detail-actions {
+  margin-top: 18px;
+}
+
+@container (max-width: 700px) {
+  .experiment-report-workspace .focused-workspace-panel.active > .result-detail-document {
+    padding-inline: 24px;
+  }
+
+  .result-detail-document .result-summary .summary-row {
+    grid-template-columns: 116px minmax(0, 1fr);
+  }
+
+  .result-detail-document .deliverable-head,
+  .result-detail-document .deliverable {
+    grid-template-columns: minmax(240px, 1.7fr) 90px 80px 48px;
+    min-width: 560px;
+  }
+
+  .result-detail-document .deliverables {
+    overflow-x: auto;
+  }
+}
+
+/* 2026-08-10 revision 20 — bring paper editing and final delivery into the same focused document workspace. */
+.paper-editor-workspace .focused-workspace-panel.active,
+.final-delivery-workspace .focused-workspace-panel.active {
+  padding: 48px 0 0;
+}
+
+.paper-editor-workspace .focused-workspace-panel.active > .result-detail-document,
+.final-delivery-workspace .focused-workspace-panel.active > .result-detail-document {
+  min-height: 100%;
+  padding: 28px clamp(34px, 5vw, 72px) 20px;
+  overflow: visible;
+}
+
+.paper-editor-document > h1,
+.final-delivery-document > h1 {
+  margin-bottom: 20px;
+}
+
+.paper-editor-document .complete-kicker,
+.final-delivery-document .complete-kicker {
+  margin-bottom: 22px;
+}
+
+.paper-editor-document .complete-project-name,
+.final-delivery-document .complete-project-name {
+  margin-bottom: 12px;
+}
+
+.paper-editor-document .result-summary .summary-row,
+.final-delivery-document .result-summary .summary-row {
+  grid-template-columns: 142px minmax(0, 1fr);
+}
+
+.paper-editor-document .result-summary .summary-row > span:first-child,
+.final-delivery-document .result-summary .summary-row > span:first-child {
+  font-weight: 650;
+}
+
+.paper-editing-section {
+  margin-top: 16px;
+}
+
+.paper-editor-document .paper-template-editor {
+  height: clamp(430px, 58vh, 590px);
+  min-height: 430px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #e3e3df;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.paper-editor-document .paper-template-editor .editor-layout {
+  height: 100%;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 0;
+}
+
+.paper-editor-document .paper-template-editor .outline {
+  min-width: 0;
+  padding: 16px 12px;
+  overflow: auto;
+  border: 0;
+  border-right: 1px solid #e3e3df;
+  border-radius: 0;
+  background: #fafaf8;
+}
+
+.paper-editor-document .paper-template-editor .outline-heading {
+  margin-bottom: 8px;
+}
+
+.paper-editor-document .paper-template-editor .outline a {
+  min-height: 44px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.paper-editor-document .paper-template-editor .paper-editor {
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.paper-editor-document .paper-template-editor .editor-toolbar {
+  height: 54px;
+  padding: 0 16px;
+  flex: 0 0 54px;
+  gap: 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid #e3e3df;
+}
+
+.paper-editor-document .paper-template-editor .editor-toolbar button {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 6px;
+}
+
+.paper-editor-document .paper-template-editor .editor-page {
+  min-width: 0;
+  padding: 30px clamp(34px, 5vw, 62px) 72px;
+}
+
+.paper-editor-document .paper-template-editor .editor-page h1 {
+  margin-bottom: 34px;
+  font-size: 25px;
+}
+
+.paper-editor-document .paper-template-editor .editor-page h2 {
+  margin-bottom: 20px;
+  font-size: 19px;
+}
+
+.paper-editor-document .paper-template-editor .editor-page h3 {
+  margin-bottom: 10px;
+  font-size: 16px;
+}
+
+.paper-editor-document .paper-template-editor .editor-page p {
+  margin-bottom: 18px;
+  font-size: 15px;
+  line-height: 1.9;
+}
+
+.paper-editor-actions,
+.final-delivery-document .result-detail-actions {
+  margin-top: 18px;
+}
+
+@container (max-width: 700px) {
+  .paper-editor-workspace .focused-workspace-panel.active > .result-detail-document,
+  .final-delivery-workspace .focused-workspace-panel.active > .result-detail-document {
+    padding-inline: 24px;
+  }
+
+  .paper-editor-document .result-summary .summary-row,
+  .final-delivery-document .result-summary .summary-row {
+    grid-template-columns: 116px minmax(0, 1fr);
+  }
+
+  .paper-editor-document .paper-template-editor .editor-layout {
+    grid-template-columns: 150px minmax(520px, 1fr);
+    overflow: auto;
+  }
+
+  .paper-editor-document .deliverable-head,
+  .paper-editor-document .deliverable,
+  .final-delivery-document .deliverable-head,
+  .final-delivery-document .deliverable {
+    grid-template-columns: minmax(240px, 1.7fr) 90px 80px 48px;
+    min-width: 560px;
+  }
+
+  .paper-editor-document .deliverables,
+  .final-delivery-document .deliverables {
+    overflow-x: auto;
+  }
+}
+
+/* revision 21 — keep only the paper editor in the right-side document area. */
+.paper-only-workspace .focused-workspace-panel.active {
+  padding: 0;
+  overflow: hidden;
+}
+
+.paper-only-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.paper-only-editor .editor-layout {
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 0;
+}
+
+.paper-only-editor .outline {
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 12px;
+  overflow: auto;
+  border: 0;
+  border-right: 1px solid #e3e3df;
+  border-radius: 0;
+  background: #fafaf8;
+}
+
+.paper-only-editor .outline a {
+  min-height: 48px;
+  padding: 0 7px;
+  font-size: 13px;
+}
+
+.paper-only-editor .paper-editor {
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.paper-only-editor .editor-toolbar {
+  height: 58px;
+  padding: 0 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 58px;
+  overflow: visible;
+  border-bottom: 1px solid #e3e3df;
+}
+
+.paper-only-editor .editor-format-tools {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.paper-only-editor .editor-format-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.paper-only-editor .editor-format-tools button {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+}
+
+.paper-editor-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 12px;
+  border-left: 1px solid #e3e3df;
+}
+
+.paper-only-editor .paper-editor-inline-actions button {
+  height: 34px;
+  min-width: auto;
+  padding: 0 12px;
+  border: 1px solid #dfdfdb;
+  border-radius: 7px;
+  background: #fff;
+  color: #292926;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.paper-only-editor .paper-editor-inline-actions button.primary {
+  color: #fff;
+  background: #20201e;
+  border-color: #20201e;
+}
+
+.paper-only-editor .editor-page {
+  min-width: 0;
+  padding: 38px clamp(44px, 6vw, 82px) 90px;
+}
+
+@container (max-width: 700px) {
+  .paper-only-editor .editor-layout {
+    grid-template-columns: 160px minmax(520px, 1fr);
+    overflow: auto;
+  }
+
+  .paper-only-editor .paper-editor-inline-actions button {
+    padding-inline: 9px;
+  }
+}

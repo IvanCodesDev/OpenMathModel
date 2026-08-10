@@ -34,7 +34,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   // 采集题面的中间站，不是可以引用的出处，也不该把用户送到第三方账号下，
   // 所以这些链接一律不渲染，而不是渲染成灰色按钮。
   const OFFICIAL_SOURCE_HOSTS = [
-    "comap.org", "mcm.edu.cn", "apmcm.org", "cmathc.org.cn", "acge.org.cn", "mathorcup.org",
+    "comap.org", "mcm.edu.cn", "apmcm.org", "cmathc.org.cn", "acge.org.cn", "mathorcup.org", "saikr.com",
   ];
   const isOfficialSourceUrl = value => {
     const raw = String(value || "").trim();
@@ -81,7 +81,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     const customModel = settings.apiModel || "gpt-4.1";
     const customProfile = settings.apiProfileName || "OpenAI 兼容中转站";
     return [
-      { id: "auto", label: "Agent", detail: "智能路由 · 自动选择", provider: "agent" },
+      { id: "auto", label: "Auto", detail: "智能路由 · 自动选择", provider: "agent" },
       { id: "qwen-max", label: "Qwen3.7-Max", detail: "通义千问 · 官方服务", provider: "qwen" },
       { id: "deepseek-v3", label: "DeepSeek V3", detail: "DeepSeek · 官方服务", provider: "deepseek" },
       { id: "gpt-4.1", label: "GPT-4.1", detail: "OpenAI · 官方服务", provider: "openai" },
@@ -343,7 +343,106 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     </section>`;
   }
 
+  const focusedStages = new Set(["data", "model", "experiments", "editor", "complete"]);
+
+  function focusedModelingHeader(active) {
+    const backRoute = {
+      data: routes.running,
+      model: routes.data,
+      experiments: routes.model,
+      editor: routes.experiments,
+      complete: routes.editor
+    }[active] || routes.running;
+    const backLabel = {
+      data: "返回任务执行",
+      model: "返回数据准备",
+      experiments: "返回模型方案",
+      editor: "返回实验结果",
+      complete: "返回论文编辑"
+    }[active] || "返回任务执行";
+    return `<header class="focused-modeling-topbar">
+      <div class="focused-topbar-context">
+        <a class="focused-back" href="${backRoute}" aria-label="${backLabel}" title="${backLabel}">${icon("arrow-left")}</a>
+        <a class="focused-task-name" href="${routes.running}"><span>城市共享单车调度优化</span>${icon("caret-down")}</a>
+      </div>
+    </header>`;
+  }
+
+  function focusedAgentPane(active) {
+    const stage = {
+      data: {
+        copy: "数据准备已完成初步检查，存在以下问题：时间粒度不一致、可用车辆数存在缺失、平均等待时间单位不明确。建议按右侧清洗方案处理后进入建模阶段。",
+        button: "确认清洗方案",
+        next: "model",
+        current: "正在准备建模数据"
+      },
+      model: {
+        copy: "已完成候选路线比较，推荐采用方案 A 作为主方案，因为其综合收益更高且风险可控。<br><br>当前已选择结果：方案 A（推荐主方案）。<br><br>如需了解更多细节，您可以继续提问方案假设、数据敏感性或潜在风险。",
+        button: "采用方案 A",
+        next: "experiments",
+        current: "正在优化模型方案"
+      },
+      experiments: {
+        copy: "已完成候选路线比较，正在输出优化后的模型方案，实验结果显示模型效果稳定，已有显著改进。<br><br><strong>风险与建议</strong><br>• 关注早晚高峰时段的区域供需错配风险。<br>• 若节假日或异常天气，模型需进行参数自适应调整。<br>• 建议结合实时数据，进一步缩短响应延迟。",
+        button: `${icon("check-circle")} 采用该结果`,
+        next: "editor",
+        current: "正在评估实验结果"
+      },
+      editor: {
+        copy: "论文正文已与实验结果同步，正在检查章节结构、公式编号、图表引用和结论一致性。<br><br><strong>当前进度</strong><br>• 第 3 章正在编辑，其余章节已生成内容骨架。",
+        button: `${icon("check-circle")} 完成并交付`,
+        next: "complete",
+        current: "正在协助论文写作"
+      },
+      complete: {
+        copy: "论文、图表、数据、代码与复现记录已经整理完成，所有交付文件均可在右侧查看。<br><br><strong>交付状态</strong><br>• 文件完整、关键数字一致，代码可复现。",
+        button: "继续优化论文",
+        next: "editor",
+        current: "全部成果已交付"
+      }
+    }[active];
+    const steps = [
+      ["已读取题目与附件", "00:03"],
+      ["已完成问题拆解", "00:06"],
+      ["已完成数据结构分析", "00:12"],
+      ["已完成候选模型比较", "00:18"]
+    ];
+    const attachments = active === "data" ? `<section class="focused-attachments">
+      <h3>附件</h3>
+      <button type="button" class="focused-attachment" data-action="download-data"><span class="attachment-file-icon xls">X.</span><span><strong>历史供需数据_2024Q4.xlsx</strong><small>24.7 MB</small></span>${icon("download-simple")}</button>
+      <button type="button" class="focused-attachment" data-action="download-data"><span class="attachment-file-icon csv">csv</span><span><strong>字段说明草稿.csv</strong><small>8.3 KB</small></span>${icon("download-simple")}</button>
+    </section>` : "";
+    return `<section class="chat-pane focused-agent-chat">
+      <div class="focused-agent-head"><div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div></div>
+      <div class="focused-agent-scroll">
+        <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
+        <div class="focused-activity-list" id="focused-activity-list-${active}">
+          ${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
+          <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>
+        </div>
+        <div class="focused-agent-copy">${stage.copy}</div>
+        ${attachments}
+        <button class="focused-stage-cta" type="button" data-go="${stage.next}">${stage.button}</button>
+      </div>
+      ${composer("继续描述任务，快速调用，@ 添加上下文", true)}
+    </section>`;
+  }
+
+  function workspaceTabs(tabs, activeTab) {
+    return `<div class="focused-workspace-tabs" role="tablist">${tabs.map(([key, label, iconName]) => `<button type="button" class="${key === activeTab ? "active" : ""}" data-workspace-tab="${key}" role="tab" aria-selected="${key === activeTab}">${icon(iconName)}<span>${label}</span></button>`).join("")}</div>`;
+  }
+
   function modelingShell(content, active, auxiliary = "") {
+    if (focusedStages.has(active)) {
+      return `<div class="modeling-shell modeling-clone-shell" data-modeling-shell data-focused-stage="${active}">
+        ${focusedModelingHeader(active)}
+        <div class="focused-modeling-split" data-modeling-split>
+          <aside class="focused-agent-pane">${focusedAgentPane(active)}</aside>
+          <div class="modeling-resizer focused-modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 与建模内容的宽度" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="58" aria-valuenow="27" tabindex="0"></div>
+          <main class="focused-stage-pane">${content}</main>
+        </div>
+      </div>`;
+    }
     return `<div class="modeling-shell" data-modeling-shell>
       ${modelingHeader(active)}
       <div class="modeling-split" data-modeling-split>
@@ -494,55 +593,82 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
   function dataScreen() {
     return modelingShell(`
-      <section class="workflow-screen data-workflow-screen">
-        <header class="workflow-screen-header">
-          <div><h1>数据准备</h1><p class="workflow-kicker">${icon("check-circle")} 第 2 轮 · 输入检查完成　　输入 v2</p></div>
-          <div class="workflow-header-actions"><button class="plain-link" data-action="open-details">查看详情</button><button class="primary" data-go="model">确认并继续</button></div>
-        </header>
-        <button class="understanding-strip" type="button" data-action="understanding-details"><strong>题目理解</strong><span>已识别 3 个子问题　·　当前输入类型：表格 / 参数 / 文件　·　存在 1 项待确认</span>${icon("caret-down")}</button>
-        <div class="data-body-grid">
-          <section class="data-input-card">
-            <div class="data-card-tabs" role="tablist">${["表格","参数","文件","图片","公式"].map((tab,index)=>`<button class="${index===0?"active":""}" data-data-tab="${tab}">${tab}</button>`).join("")}</div>
-            <div class="data-card-content">
-              <h3>需求表（预览）</h3>
-              <div class="preview-table-wrap"><table class="preview-table"><thead><tr><th>时间</th><th>区域</th><th>投放点数</th><th>可用车辆数</th><th>平均等待时间(分钟)</th></tr></thead><tbody>
-                <tr><td>2025-01-01 08:00</td><td>A区</td><td>32</td><td>48</td><td>6.2</td></tr><tr><td>2025-01-01 08:15</td><td>A区</td><td>32</td><td>47</td><td>6.8</td></tr><tr><td>2025-01-01 08:30</td><td>A区</td><td>33</td><td>49</td><td>5.9</td></tr><tr><td>2025-01-01 08:45</td><td>B区</td><td>28</td><td>41</td><td>7.1</td></tr>
-              </tbody></table><div class="table-count">共 200 行</div></div>
-              <div class="data-lower-grid">
-                <article class="data-mini-card"><h3>参数（预览）</h3><p><b>车辆最大载客量（人）</b> = 2</p><p><b>车辆运营成本（元/公里）</b> = 1.8</p><p><b>用户价值系数（元/分钟）</b> = 0.9</p><footer>共 12 个参数</footer></article>
-                <article class="data-mini-card upload-preview"><h3>上传文件（1）</h3><div>${icon("file-xls")}<span><b>历史供需数据_2024Q4.xlsx</b><small>1.24 MB</small></span><button data-action="download-data" aria-label="下载文件">${icon("download-simple")}</button></div><footer>共 1 个文件</footer></article>
-              </div>
-            </div>
-          </section>
-          <aside class="data-recommendations"><h2>处理建议</h2>${[
-            ["clock","统一时间粒度","将时间粒度统一为 15 分钟，便于对齐分析。"],
-            ["table","补全缺失字段","对缺失的可用车辆数进行前向填充处理。"],
-            ["tag","校正单位标注","统一平均等待时间单位为分钟。"],
-            ["waveform","检查异常值","检测并标记异常等待时间记录。"]
-          ].map(([ico,title,copy])=>`<div class="recommendation-row">${icon(ico)}<div><h3>${title}</h3><p>${copy}</p></div><button class="recommend-toggle is-on" data-action="suggestion-toggle" aria-pressed="true"><span></span></button></div>`).join("")}</aside>
+      <section class="focused-workspace data-report-workspace">
+        ${workspaceTabs([["data-report","数据报告","file-text"],["raw-data","原始数据","table"],["clean-data","清洗数据","sliders-horizontal"],["field-guide","字段说明","files"]], "data-report")}
+        <div class="focused-workspace-panel active" data-workspace-panel="data-report">
+          <header class="focused-document-heading"><div><h1>数据报告</h1><p>数据质量检查与处理建议</p></div><div><button type="button" data-action="refresh-report" aria-label="刷新报告">${icon("arrow-clockwise")}</button><button type="button" data-action="download-data" aria-label="下载报告">${icon("download-simple")}</button></div></header>
+          <div class="focused-conclusion-strip">${icon("check-circle")}<strong>核心结论：</strong><span>完成以下 3 项清洗后，数据可进入建模阶段。</span></div>
+          <section class="focused-metrics three"><article><span>记录数</span><strong>12,480</strong></article><article><span>字段数</span><strong>18</strong></article><article><span>缺失比例</span><strong>2.7%</strong></article></section>
+          <section class="focused-section compact"><h2>数据问题与处理建议</h2><div class="focused-table-wrap"><table class="focused-table issue-table"><thead><tr><th></th><th>问题描述</th><th>处理方法</th><th>应用</th></tr></thead><tbody>
+            <tr><td>1</td><td>时间粒度不一致（5min / 15min / 30min 混杂）</td><td>统一重采样为 15 分钟粒度，采用均值/求和汇总</td><td><button class="focused-toggle is-on" data-action="suggestion-toggle" aria-pressed="true"><span></span></button></td></tr>
+            <tr><td>2</td><td>可用车辆数存在缺失</td><td>按区域 × 时间填充前向填充，并标记缺失来源</td><td><button class="focused-toggle is-on" data-action="suggestion-toggle" aria-pressed="true"><span></span></button></td></tr>
+            <tr><td>3</td><td>平均等待时间单位不明确</td><td>统一转换为“分钟”，并在字段说明中注明单位</td><td><button class="focused-toggle is-on" data-action="suggestion-toggle" aria-pressed="true"><span></span></button></td></tr>
+          </tbody></table></div></section>
+          <section class="focused-section compact raw-preview-section"><h2>原始数据预览 <span>（前 5 行）</span></h2><div class="focused-table-wrap"><table class="focused-table preview-data-table"><thead><tr><th>时间</th><th>区域</th><th>投放点数</th><th>可用车辆数</th><th>平均等待时间（单位待定）</th><th>···</th></tr></thead><tbody>
+            <tr><td>2024-10-01 00:00</td><td>中心城区</td><td>128</td><td>356</td><td>7.2</td><td>···</td></tr>
+            <tr><td>2024-10-01 00:05</td><td>中心城区</td><td>128</td><td>–</td><td>6.8</td><td>···</td></tr>
+            <tr><td>2024-10-01 00:15</td><td>中心城区</td><td>128</td><td>312</td><td>–</td><td>···</td></tr>
+            <tr><td>2024-10-01 00:30</td><td>中心城区</td><td>128</td><td>298</td><td>8.1</td><td>···</td></tr>
+            <tr><td>2024-10-01 00:45</td><td>中心城区</td><td>128</td><td>410</td><td>7.5</td><td>···</td></tr>
+          </tbody></table></div><footer class="focused-table-footer"><span>显示前 5 行，共 12,480 条记录</span><nav aria-label="数据分页"><button disabled>${icon("caret-left")}</button><button class="active">1</button><button>2</button><button>3</button><span>···</span><button>104</button><button>${icon("caret-right")}</button></nav></footer></section>
         </div>
-        <div class="workflow-status-strip">${icon("check-circle")}<span>已检查 6 项输入，发现 2 项问题，处理后可以进入模型设计。</span></div>
-      </section>`, "data", taskDetailsDrawer());
+        <div class="focused-workspace-panel" data-workspace-panel="raw-data"><section class="focused-template">
+          <header class="focused-template-heading"><div><h1>原始数据</h1><p>历史供需数据 · 只读预览</p></div><button type="button" data-action="download-data">${icon("download-simple")} 导出</button></header>
+          <section class="focused-metrics three focused-template-metrics"><article><span>记录数</span><strong>12,480</strong><small>2024 Q4</small></article><article><span>数据表</span><strong>2</strong><small>订单 / 站点</small></article><article><span>更新时间</span><strong>10:32</strong><small>今天</small></article></section>
+          <section class="focused-template-section"><div class="focused-template-section-title"><h2>历史供需数据</h2><span>前 8 行</span></div><div class="focused-table-wrap"><table class="focused-table focused-template-table"><thead><tr><th>时间</th><th>区域</th><th>投放点数</th><th>可用车辆</th><th>平均等待</th><th>订单量</th></tr></thead><tbody>
+            <tr><td>2024-10-01 00:00</td><td>中心城区</td><td>128</td><td>356</td><td>7.2 min</td><td>442</td></tr><tr><td>2024-10-01 00:05</td><td>中心城区</td><td>128</td><td>—</td><td>6.8 min</td><td>419</td></tr><tr><td>2024-10-01 00:15</td><td>中心城区</td><td>128</td><td>312</td><td>—</td><td>461</td></tr><tr><td>2024-10-01 00:30</td><td>中心城区</td><td>128</td><td>298</td><td>8.1 min</td><td>506</td></tr><tr><td>2024-10-01 00:45</td><td>中心城区</td><td>128</td><td>410</td><td>7.5 min</td><td>473</td></tr><tr><td>2024-10-01 01:00</td><td>滨江新区</td><td>96</td><td>274</td><td>6.4 min</td><td>388</td></tr><tr><td>2024-10-01 01:15</td><td>滨江新区</td><td>96</td><td>266</td><td>6.7 min</td><td>401</td></tr><tr><td>2024-10-01 01:30</td><td>大学城</td><td>84</td><td>221</td><td>5.9 min</td><td>357</td></tr>
+          </tbody></table></div><footer class="focused-template-footer"><span>共 12,480 条记录</span><span>数据版本 v1</span></footer></section>
+        </section></div>
+        <div class="focused-workspace-panel" data-workspace-panel="clean-data"><section class="focused-template">
+          <header class="focused-template-heading"><div><h1>清洗数据</h1><p>规则执行结果与清洗后预览</p></div><span class="focused-template-status">${icon("check-circle")} 已完成</span></header>
+          <section class="focused-metrics three focused-template-metrics"><article><span>保留记录</span><strong>12,436</strong><small>99.65%</small></article><article><span>缺失比例</span><strong>0.4%</strong><small>清洗前 2.7%</small></article><article><span>处理规则</span><strong>3</strong><small>全部通过</small></article></section>
+          <section class="focused-template-section"><div class="focused-template-section-title"><h2>处理规则</h2><span>按顺序执行</span></div><div class="focused-rule-list">
+            <article><b>01</b><div><strong>统一时间粒度</strong><span>重采样为 15 分钟</span></div><em>已应用</em></article><article><b>02</b><div><strong>补全车辆缺失</strong><span>区域内前向填充</span></div><em>已应用</em></article><article><b>03</b><div><strong>校正等待单位</strong><span>统一转换为分钟</span></div><em>已应用</em></article>
+          </div></section>
+          <section class="focused-template-section"><div class="focused-template-section-title"><h2>清洗后预览</h2><span>数据版本 v2</span></div><div class="focused-table-wrap"><table class="focused-table focused-template-table"><thead><tr><th>时间</th><th>区域</th><th>可用车辆</th><th>平均等待</th><th>质量标记</th></tr></thead><tbody><tr><td>2024-10-01 00:00</td><td>中心城区</td><td>356</td><td>7.2 min</td><td>原始</td></tr><tr><td>2024-10-01 00:15</td><td>中心城区</td><td>312</td><td>6.9 min</td><td>汇总</td></tr><tr><td>2024-10-01 00:30</td><td>中心城区</td><td>298</td><td>8.1 min</td><td>原始</td></tr><tr><td>2024-10-01 00:45</td><td>中心城区</td><td>410</td><td>7.5 min</td><td>原始</td></tr></tbody></table></div></section>
+        </section></div>
+        <div class="focused-workspace-panel" data-workspace-panel="field-guide"><section class="focused-template">
+          <header class="focused-template-heading"><div><h1>字段说明</h1><p>字段、类型、单位与质量状态</p></div><span class="focused-template-status neutral">18 个字段</span></header>
+          <div class="focused-conclusion-strip focused-template-notice">${icon("check-circle")}<span>核心建模字段已完成类型和单位校验。</span></div>
+          <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table field-table"><thead><tr><th>字段</th><th>含义</th><th>类型</th><th>单位</th><th>来源</th><th>状态</th></tr></thead><tbody><tr><td><strong>timestamp</strong></td><td>统计时刻</td><td>datetime</td><td>—</td><td>订单表</td><td>已校验</td></tr><tr><td><strong>region_id</strong></td><td>运营区域</td><td>string</td><td>—</td><td>站点表</td><td>已校验</td></tr><tr><td><strong>dock_count</strong></td><td>投放点数</td><td>integer</td><td>个</td><td>站点表</td><td>已校验</td></tr><tr><td><strong>available_bikes</strong></td><td>可用车辆数</td><td>integer</td><td>辆</td><td>状态表</td><td>已清洗</td></tr><tr><td><strong>avg_wait</strong></td><td>平均等待时间</td><td>float</td><td>分钟</td><td>订单表</td><td>已校正</td></tr><tr><td><strong>order_count</strong></td><td>订单数量</td><td>integer</td><td>单</td><td>订单表</td><td>已校验</td></tr><tr><td><strong>temperature</strong></td><td>气温</td><td>float</td><td>℃</td><td>天气表</td><td>已校验</td></tr><tr><td><strong>is_holiday</strong></td><td>节假日标记</td><td>boolean</td><td>—</td><td>日历表</td><td>已校验</td></tr></tbody></table></div><footer class="focused-template-footer"><span>显示核心字段 8 / 18</span><span>最后校验 10:36</span></footer></section>
+        </section></div>
+      </section>`, "data");
   }
 
   function modelScreen() {
     return modelingShell(`
-      <section class="workflow-screen model-workflow-screen">
-        <header class="workflow-screen-header"><div><h1>模型方案</h1><p class="workflow-kicker">${icon("check-circle")} 第 2 轮 · 候选路线比较完成　　　方案 v2</p></div><div class="workflow-header-actions"><button class="plain-link" data-action="model-details">查看详情</button><button class="primary" data-go="experiments">确认方案</button></div></header>
-        <div class="plan-options">
-          ${[
-            ["方案 A","先需求预测，再进行混合整数优化调度","需求预测与调度优化一体化","精度高，能较好平衡效率与效果","计算规模较大，对参数敏感"],
-            ["方案 B","基于 K-means 分区后分别调度","大规模区域分区调度","计算高效，易于扩展","分区边界效应可能影响结果"],
-            ["方案 C","分层聚类 + 线性规划求解","多层级资源配置问题","结构清晰，便于解释","线性假设较强，精度受限"]
-          ].map((plan,index)=>`<button class="plan-option-card ${index===0?"selected":""}" data-plan-option="${index}" type="button"><span class="plan-check">${icon("check")}</span><h2>${plan[0]}</h2><p><b>核心思路</b>${plan[1]}</p><p><b>适合解决</b>${plan[2]}</p><p><b>主要优势</b>${plan[3]}</p><p><b>关键风险</b>${plan[4]}</p></button>`).join("")}
+      <section class="focused-workspace model-plan-workspace">
+        ${workspaceTabs([["model-plan","模型方案","file-text"],["assumptions","模型假设","table"],["symbols","符号表","list-dashes"],["implementation","实现计划","chart-line"]], "model-plan")}
+        <div class="focused-workspace-panel active" data-workspace-panel="model-plan">
+          <div class="focused-conclusion-strip model-recommendation">${icon("check-circle")}<span>建议采用方案 A 作为主方案，方案 B 作为可运行基线，方案 C 作为条件备用方案。</span></div>
+          <div class="focused-plan-list">
+            <button class="focused-plan-row selected" data-plan-option="0" type="button"><span class="plan-radio"></span><strong>方案 A <small>（推荐主方案）</small></strong><span>核心方法：需求预测 + 混合整数优化</span><span>计划角色：主方案</span><span>主要风险：需求预测不确定性</span>${icon("caret-up")}</button>
+            <button class="focused-plan-row" data-plan-option="1" type="button"><span class="plan-radio"></span><strong>方案 B <small>（可运行基线）</small></strong><span>核心方法：分区聚类 + 分阶段调度</span><span>计划角色：基线</span><span>主要风险：边界效应可能影响结果</span>${icon("caret-down")}</button>
+            <button class="focused-plan-row" data-plan-option="2" type="button"><span class="plan-radio"></span><strong>方案 C <small>（条件备用方案）</small></strong><span>核心方法：分层聚合 + 线性规划</span><span>计划角色：备用</span><span>主要风险：线性假设较强</span>${icon("caret-down")}</button>
+          </div>
+          <section class="focused-plan-detail selected-plan-overview">
+            <div><h2>建模思路</h2><p>先基于历史数据进行需求预测，得到各区域在各时间段的净需求；<br>再构建以调度成本最小化为目标的混合整数优化模型，决定车辆的跨区调度与分时投放计划。</p></div>
+            <div><h2>主要输入</h2><ul><li>共享单车历史订单数据、站点分布与容量信息</li><li>时间区间、车辆总量与调度成本参数</li><li>运营约束：车辆调拨、站点容量、调度策略规则等</li></ul></div>
+            <div><h2>预期输出</h2><ul><li>各时间段各区域车辆投放与回收数量</li><li>跨区域调度路径与车辆流转计划</li><li>目标函数值（总调度成本）与关键指标（满足率、平衡度等）</li></ul></div>
+            <div><h2>验证方式</h2><ul><li>在历史数据上进行回测，比较方案指标（满足率、成本、平衡度）</li><li>与基线方案对比分析提升幅度</li><li>鲁棒性测试：参数扰动与需求波动下的稳定性评估</li></ul></div>
+          </section>
         </div>
-        <section class="selected-plan-overview"><h3>所选方案 A 概览</h3><div class="overview-grid">
-          <article>${icon("lightbulb")}<h3>建模思路</h3><p>先预测分时段需求，再构建混合整数规划模型进行车辆调度优化。</p></article>
-          <article>${icon("notepad")}<h3>主要输入</h3><p>历史骑行数据、站点与区域信息、车辆状态、时间分段设置等。</p></article>
-          <article>${icon("chart-line-up")}<h3>预期输出</h3><p>各时段各区域的调度方案、车辆调拨量与成本指标等。</p></article>
-          <article>${icon("shield-check")}<h3>验证方式</h3><p>与历史数据回测对比，评估成本与服务水平改进幅度。</p></article>
-        </div></section>
-        <div class="workflow-status-strip model-advice-strip">${icon("seal-question")}<span>建议采用方案 A 作为主方案，方案 B 作为基线进行验证。</span></div>
+        <div class="focused-workspace-panel" data-workspace-panel="assumptions"><section class="focused-template">
+          <header class="focused-template-heading"><div><h1>模型假设</h1><p>全局假设与方案 A 特定假设</p></div><span class="focused-template-status neutral">6 项</span></header>
+          <div class="focused-conclusion-strip focused-template-notice">${icon("check-circle")}<span>当前假设均可由数据或运营规则支撑。</span></div>
+          <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table assumption-table"><thead><tr><th>#</th><th>假设</th><th>适用范围</th><th>依据</th><th>影响</th><th>状态</th></tr></thead><tbody><tr><td>A1</td><td>15 分钟内需求保持平稳</td><td>全局</td><td>时间粒度</td><td>低</td><td>已确认</td></tr><tr><td>A2</td><td>站点容量短期内固定</td><td>全局</td><td>运营规则</td><td>中</td><td>已确认</td></tr><tr><td>A3</td><td>调度车辆速度近似恒定</td><td>全局</td><td>历史均值</td><td>中</td><td>待检验</td></tr><tr><td>A4</td><td>天气信息可提前获得</td><td>全局</td><td>数据接口</td><td>低</td><td>已确认</td></tr><tr><td>M1</td><td>区域需求可独立预测</td><td>方案 A</td><td>分区结果</td><td>中</td><td>待检验</td></tr><tr><td>M2</td><td>调度成本近似线性</td><td>方案 A</td><td>成本规则</td><td>高</td><td>重点验证</td></tr></tbody></table></div></section>
+          <footer class="focused-template-callout"><strong>验证重点</strong><span>围绕 A3、M1、M2 进行敏感性和鲁棒性测试。</span></footer>
+        </section></div>
+        <div class="focused-workspace-panel" data-workspace-panel="symbols"><section class="focused-template">
+          <header class="focused-template-heading"><div><h1>符号表</h1><p>集合、参数与决策变量</p></div><span class="focused-template-status neutral">统一单位</span></header>
+          <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table symbol-table"><thead><tr><th>符号</th><th>类型</th><th>定义</th><th>单位</th><th>范围</th></tr></thead><tbody><tr><td><strong>i ∈ I</strong></td><td>集合</td><td>运营区域索引</td><td>—</td><td>1…R</td></tr><tr><td><strong>t ∈ T</strong></td><td>集合</td><td>15 分钟时间段</td><td>—</td><td>1…96</td></tr><tr><td><strong>dᵢₜ</strong></td><td>参数</td><td>区域 i 在时段 t 的预测需求</td><td>单</td><td>≥ 0</td></tr><tr><td><strong>cᵢⱼ</strong></td><td>参数</td><td>区域 i 到 j 的单位调度成本</td><td>元/辆</td><td>≥ 0</td></tr><tr><td><strong>Kᵢ</strong></td><td>参数</td><td>区域 i 的容量上限</td><td>辆</td><td>正整数</td></tr><tr><td><strong>xᵢⱼₜ</strong></td><td>变量</td><td>时段 t 从 i 调往 j 的车辆数</td><td>辆</td><td>非负整数</td></tr><tr><td><strong>sᵢₜ</strong></td><td>变量</td><td>时段 t 区域 i 的可用车辆</td><td>辆</td><td>0…Kᵢ</td></tr><tr><td><strong>z</strong></td><td>目标</td><td>总调度成本</td><td>元</td><td>最小化</td></tr></tbody></table></div><footer class="focused-template-footer"><span>8 个核心符号</span><span>符号版本 v1</span></footer></section>
+        </section></div>
+        <div class="focused-workspace-panel" data-workspace-panel="implementation"><section class="focused-template">
+          <header class="focused-template-heading"><div><h1>实现计划</h1><p>数据、算法、求解与验证</p></div><span class="focused-template-status">准备就绪</span></header>
+          <section class="focused-template-steps"><article><b>01</b><div><strong>特征构建</strong><span>时间、空间、天气</span></div><em>输入 v2</em></article><article><b>02</b><div><strong>需求预测</strong><span>滚动窗口回测</span></div><em>Python</em></article><article><b>03</b><div><strong>调度求解</strong><span>混合整数规划</span></div><em>求解器</em></article><article><b>04</b><div><strong>结果验证</strong><span>基线与鲁棒性</span></div><em>5 组实验</em></article></section>
+          <section class="focused-template-grid"><article class="focused-template-card"><h2>运行环境</h2><dl><div><dt>语言</dt><dd>Python 3.11</dd></div><div><dt>求解器</dt><dd>HiGHS 1.7</dd></div><div><dt>随机种子</dt><dd>42</dd></div></dl></article><article class="focused-template-card"><h2>输出产物</h2><ul><li>需求预测结果</li><li>调度决策表</li><li>实验对比报告</li></ul></article></section>
+          <footer class="focused-template-callout"><strong>预计耗时</strong><span>约 12–18 分钟，可在沙盒中复现。</span></footer>
+        </section></div>
       </section>`, "model");
   }
 
@@ -555,50 +681,158 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     ["#7 数据预处理", "失败", ""]
   ];
 
+  const experimentResultPages = {
+    charts: {
+      title: "结果图表",
+      kicker: "图表成果已生成",
+      project: "城市共享单车模型效果可视化",
+      summary: [
+        ["图表范围", "核心指标对比 / 随机种子稳定性 / 分时段表现"],
+        ["关键指标", "总行程时间下降 9.38% / 需求满足率提升 6.4pp / 区域平衡度提升 8.32%"],
+        ["主要结论", "<ul><li>当前方案在成本、满足率与区域平衡度上均优于基线。</li><li>五组随机种子下目标值波动较小，最大标准差为 1.52%。</li><li>高峰期与平峰期的指标方向一致，未出现效果反转。</li></ul>"],
+        ["使用说明", "<ul><li>核心指标对比图可直接用于论文结果章节。</li><li>稳定性图建议放入附录，并保留随机种子与数据版本。</li></ul>"]
+      ],
+      section: "图表文件",
+      files: [
+        ["file-image", "核心指标对比图.png", "PNG", "1.21 MB"],
+        ["file-image", "随机种子稳定性图.png", "PNG", "846 KB"],
+        ["file-pdf", "图表说明与统计口径.pdf", "PDF", "328 KB"]
+      ]
+    },
+    "results-table": {
+      title: "结果表",
+      kicker: "指标成果已汇总",
+      project: "模型关键指标验收汇总",
+      summary: [
+        ["数据版本", "清洗数据 v2 / Run #04 / seed 42"],
+        ["验收结果", "6 项指标全部通过 / 通过率 100% / 指标单位已统一"],
+        ["关键变化", "<ul><li>总行程时间由 2,033,414 秒下降至 1,842,596 秒。</li><li>需求满足率由 86.4% 提升至 92.8%。</li><li>平均等待时间由 7.46 分钟下降至 6.71 分钟。</li></ul>"],
+        ["口径说明", "<ul><li>所有指标使用相同数据切分、约束条件与运行环境。</li><li>阈值来自模型方案阶段确认的成功标准。</li></ul>"]
+      ],
+      section: "结果文件",
+      files: [
+        ["file-xls", "模型关键指标汇总.xlsx", "Excel", "512 KB"],
+        ["file-text", "验收阈值与结论.csv", "CSV", "86 KB"],
+        ["file-code", "run_04_metrics.json", "JSON", "42 KB"]
+      ]
+    },
+    "run-log": {
+      title: "运行日志",
+      kicker: "模型运行已完成",
+      project: "run_20261001_104233",
+      summary: [
+        ["运行状态", "退出状态 0 / 总耗时 15 分 28 秒 / 未发现阻断错误"],
+        ["运行环境", "Python 3.11 / HiGHS 1.7 / 清洗数据 v2 / seed 42"],
+        ["关键节点", "<ul><li>10:27 完成数据加载与 32 个时空特征构建。</li><li>10:39 求解器达到 0.18% 最优间隙。</li><li>10:42 完成稳定性测试、结果表与实验报告生成。</li></ul>"],
+        ["复现结论", "<ul><li>数据版本、求解参数、随机种子和输出路径均已记录。</li><li>可使用当前运行 ID 定位全部产物与中间结果。</li></ul>"]
+      ],
+      section: "日志文件",
+      files: [
+        ["file-text", "run_20261001_104233.log", "LOG", "184 KB"],
+        ["file-code", "solver_trace.json", "JSON", "296 KB"],
+        ["file-text", "runtime_environment.txt", "TXT", "12 KB"]
+      ]
+    },
+    "model-code": {
+      title: "模型代码",
+      kicker: "复现材料已整理",
+      project: "需求预测与调度优化代码包",
+      summary: [
+        ["采用技术", "Python 3.11 / XGBoost / K-means / HiGHS 1.7"],
+        ["复现命令", "python solve.py --seed 42 --data data_v2"],
+        ["代码组成", "<ul><li>demand.py 负责需求预测与回测。</li><li>solve.py 负责调度模型构建、求解与结果保存。</li><li>validate.py 负责基线、阈值和稳定性检查。</li></ul>"],
+        ["复现说明", "<ul><li>依赖版本已锁定，输入与输出目录采用相对路径。</li><li>固定随机种子后，关键指标允许误差不超过 0.5%。</li></ul>"]
+      ],
+      section: "代码文件",
+      files: [
+        ["file-py", "solve.py", "Python", "18 KB"],
+        ["file-py", "demand.py", "Python", "24 KB"],
+        ["file-py", "validate.py", "Python", "11 KB"],
+        ["file-text", "requirements.txt", "TXT", "3 KB"],
+        ["file-zip", "模型代码与复现数据.zip", "ZIP", "18.63 MB"]
+      ]
+    }
+  };
+
+  const defaultResultActions = [
+    ["继续优化", 'data-go="editor"', false],
+    ["复制为新任务", 'data-action="copy-task"', false],
+    ["下载全部", 'data-action="download-all"', true]
+  ];
+
+  function resultDocument(page, key, extraClass = "") {
+    const actions = page.actions || defaultResultActions;
+    return `<section class="stage-document complete-wrap result-detail-document ${extraClass}" data-result-document="${key}">
+      <h1>${page.title}</h1>
+      <div class="complete-kicker">${icon("check-circle")} ${page.kicker}</div>
+      <h2 class="complete-project-name">${page.project}</h2>
+      <div class="result-summary">
+        ${page.summary.map(([label, content]) => `<div class="summary-row"><span>${label}</span>${content.startsWith("<") ? content : `<span>${content}</span>`}</div>`).join("")}
+      </div>
+      <section class="deliverable-section result-detail-deliverables"><h2>${page.section}</h2>
+        <div class="deliverables"><div class="deliverable-head"><span>文件名称</span><span>类型</span><span>大小</span><span>操作</span></div>
+          ${page.files.map(item => `<div class="deliverable"><span class="deliverable-name">${icon(item[0])}${item[1]}</span><span>${item[2]}</span><span>${item[3]}</span><button class="open-file" data-file="${item[1]}" aria-label="下载 ${item[1]}">${icon("download-simple")}</button></div>`).join("")}
+        </div>
+      </section>
+      <div class="stage-actions complete-actions result-detail-actions">${actions.map(([label, attributes, primary]) => `<button ${primary ? 'class="primary"' : ""} ${attributes}>${label}</button>`).join("")}</div>
+    </section>`;
+  }
+
+  function experimentResultDocument(key) {
+    return resultDocument(experimentResultPages[key], key);
+  }
+
   function experimentsScreen() {
     return modelingShell(`
-      <section class="workflow-screen experiment-result-screen">
-        <header class="workflow-screen-header"><div><h1>实验结果</h1><p class="workflow-kicker">${icon("check-circle")} Run #04　·　第 3 轮 · 验证完成</p></div><div class="workflow-header-actions"><button class="plain-link" data-action="experiment-details">查看详情</button><button class="primary" data-go="editor">采用该结果</button></div></header>
-        <div class="result-metrics">
-          <article><h3>优化目标（越小越好）</h3><span>总调度成本</span><strong>1,842,596</strong></article>
-          <article><h3>较基线提升</h3><span>百分比</span><strong class="positive">-9.38% ↓</strong></article>
-          <article><h3>运行时间</h3><span>秒</span><strong>87.6</strong></article>
-          <article><h3>验证状态</h3><span>结果</span><strong>通过 ${icon("check-circle")}</strong></article>
+      <section class="focused-workspace experiment-report-workspace">
+        ${workspaceTabs([["experiment-report","实验报告","file-text"],["charts","结果图表","chart-bar"],["results-table","结果表","clipboard-text"],["run-log","运行日志","terminal-window"],["model-code","模型代码","code"]], "experiment-report")}
+        <div class="focused-workspace-panel active" data-workspace-panel="experiment-report">
+          <section class="focused-report-card">
+            <h1>实验结论</h1>
+            <div class="focused-report-conclusion">${icon("check-circle")}<strong>结果通过：</strong><span>模型在关键指标上较基线有所提升，满足题目要求。</span></div>
+            <section class="focused-metrics three experiment-metrics"><article><span>当前结果</span><strong>1,842,596</strong><small>总行程时间（秒）</small></article><article><span>基线结果</span><strong>2,033,414</strong><small>总行程时间（秒）</small></article><article><span>改进幅度</span><strong>-9.38%</strong><small>越低越好</small></article></section>
+            <section class="focused-experiment-chart"><div class="focused-chart-heading"><h2>核心对比：总行程时间（秒）</h2><div><span><b class="legend-dot baseline"></b>基线结果</span><span><b class="legend-dot current"></b>当前结果</span></div></div><div class="cost-chart-wrap"><canvas id="costChart" aria-label="基线结果与当前结果总行程时间对比柱状图"></canvas></div></section>
+            <section class="focused-experiment-notes"><article><h2>稳健性与风险结论</h2><ul><li>${icon("check-circle")} 在 5 个不同随机种子下波动较小，最大标准差 1.52%。</li><li>${icon("check-circle")} 跨时段与区域验证均优于基线，整体性能稳定。</li><li>${icon("check-circle")} 高峰极端工况下模型仍具有良好鲁棒性，建议上线试运行观察。</li></ul></article><article><h2>Agent 最终采用建议</h2><p>建议采用该模型作为当前候选方案，进入提交准备阶段。</p><p>后续可在业务场景验证基础上，持续监控并优化。</p></article></section>
+            <footer class="focused-run-meta">运行 ID: run_20261001_104233　|　完成时间：2026-10-01 10:42:33　|　耗时：15 分 28 秒</footer>
+          </section>
         </div>
-        <div class="result-tabs" role="tablist">${["核心结果","图表","结果表"].map((tab,index)=>`<button class="${index===0?"active":""}" data-experiment-tab="${tab}">${tab}</button>`).join("")}</div>
-        <section class="cost-chart-card"><div class="chart-card-heading"><h2>成本对比（越小越好）</h2><div><span><b class="legend-dot baseline"></b>基线（Run #00）</span><span><b class="legend-dot current"></b>当前结果（Run #04）</span></div></div><div class="cost-chart-wrap"><canvas id="costChart" aria-label="基线与当前总调度成本对比柱状图"></canvas></div></section>
-        <section class="experiment-conclusion-grid">
-          <article><h3>是否通过验证</h3><p>${icon("check-circle")} 通过</p></article>
-          <article><h3>与基线相比的结果</h3><strong class="positive">↓ -9.38%</strong><p>总调度成本降低</p></article>
-          <article><h3>是否存在明显风险</h3><p>${icon("check-circle")} 无明显风险</p></article>
-          <article><h3>Agent 结论</h3><p>当前结果通过了全部主检验，较基线在总调度成本上取得了 9.38% 的降低，建议采用该结果。</p></article>
-        </section>
+        <div class="focused-workspace-panel" data-workspace-panel="charts">${experimentResultDocument("charts")}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="results-table">${experimentResultDocument("results-table")}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="run-log">${experimentResultDocument("run-log")}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="model-code">${experimentResultDocument("model-code")}</div>
       </section>`, "experiments");
   }
 
   function editorScreen() {
     return modelingShell(`
-      <section class="editor-main workflow-editor">
-        <div class="editor-layout">
-          <aside class="outline"><div class="outline-heading"><h3>论文大纲</h3>${icon("dots-three-vertical")}</div>${["摘要","1 引言","2 相关工作","3 需求预测模型构建","4 实证分析","5 结果与讨论","6 结论与展望"].map((x,i)=>`<a href="#section-${i}" class="${i===3?"active":""}"><span class="outline-status ${i<3?"done":""}">${i<3?icon("check"):""}</span>${x}</a>`).join("")}</aside>
-          <article class="paper-editor">
-            <div class="editor-toolbar">
-              <button data-command="undo" aria-label="撤销">${icon("arrow-u-up-left")}</button><button data-command="redo" aria-label="重做">${icon("arrow-u-up-right")}</button><span class="toolbar-divider"></span>
-              <button>正文 ${icon("caret-down")}</button><button>宋体 ${icon("caret-down")}</button><button>五号 ${icon("caret-down")}</button><span class="toolbar-divider"></span>
-              <button data-command="bold" aria-label="加粗"><strong>B</strong></button><button data-command="italic" aria-label="斜体"><i>I</i></button><button data-command="underline" aria-label="下划线"><u>U</u></button><button>${icon("text-t")}${icon("caret-down")}</button><span class="toolbar-divider"></span>
-              <button>${icon("text-align-left")}${icon("caret-down")}</button><button>${icon("table")}</button><button data-action="image">${icon("image")}</button><button data-action="formula">ƒx</button><button data-action="cite">${icon("link")}</button><span class="toolbar-divider"></span><button data-action="cite">${icon("quotes")} 引用</button>
+      <section class="focused-workspace paper-editor-workspace paper-only-workspace">
+        <div class="focused-workspace-panel active paper-only-panel">
+          <section class="editor-main workflow-editor paper-only-editor">
+            <div class="editor-layout">
+              <aside class="outline"><div class="outline-heading"><h3>论文大纲</h3>${icon("dots-three-vertical")}</div>${["摘要","1 引言","2 相关工作","3 需求预测模型构建","4 实证分析","5 结果与讨论","6 结论与展望"].map((x,i)=>`<a href="#section-${i}" class="${i===3?"active":""}"><span class="outline-status ${i<3?"done":""}">${i<3?icon("check"):""}</span>${x}</a>`).join("")}</aside>
+              <article class="paper-editor">
+                <div class="editor-toolbar">
+                  <div class="editor-format-tools">
+                    <button data-command="undo" aria-label="撤销">${icon("arrow-u-up-left")}</button><button data-command="redo" aria-label="重做">${icon("arrow-u-up-right")}</button><span class="toolbar-divider"></span>
+                    <button>正文 ${icon("caret-down")}</button><button>宋体 ${icon("caret-down")}</button><button>五号 ${icon("caret-down")}</button><span class="toolbar-divider"></span>
+                    <button data-command="bold" aria-label="加粗"><strong>B</strong></button><button data-command="italic" aria-label="斜体"><i>I</i></button><button data-command="underline" aria-label="下划线"><u>U</u></button><button>${icon("text-t")}${icon("caret-down")}</button><span class="toolbar-divider"></span>
+                    <button>${icon("text-align-left")}${icon("caret-down")}</button><button>${icon("table")}</button><button data-action="image">${icon("image")}</button><button data-action="formula">ƒx</button><button data-action="cite">${icon("link")}</button><span class="toolbar-divider"></span><button data-action="cite">${icon("quotes")} 引用</button>
+                  </div>
+                  <div class="paper-editor-inline-actions"><button data-action="editor-check">检查</button><button data-action="export-paper">导出</button><button class="primary" data-action="continue-paper">完成交付</button></div>
+                </div>
+                <div class="editor-page" contenteditable="true" spellcheck="false">
+                  <h1>城市共享单车需求预测与调度优化研究</h1>
+                  <h2 id="section-3">3 需求预测模型构建</h2>
+                  <h3>3.1 问题定义</h3><p>在给定研究区域与时间范围内，基于历史数据与相关影响因素，预测各区域在未来时段的共享单车需求，并制定车辆调度方案，使得调度总成本最小，同时满足各区域的需求平衡约束。</p>
+                  <h3>3.2 特征设计</h3><p>本文从时间、空间、天气和社会活动四个维度构建特征体系。时间维度包括小时、星期、节假日等；<mark>空间维度包括区域类型、POI 密度、周边地铁站距离等；</mark>天气维度包括温度、降水、风速等；社会活动维度包括大型活动、演出、赛事等。</p>
+                  <button class="source-chip" contenteditable="false" data-action="source-detail">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
+                  <h3>3.3 模型设定</h3><p>采用基于图卷积网络（GCN）的时空预测模型，结合区域间拓扑关系与动态特征，捕捉需求的时空相关性。</p><p>模型目标函数如下：</p>
+                  <div class="editor-formula"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
+                  <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>
+                </div>
+              </article>
             </div>
-            <div class="editor-page" contenteditable="true" spellcheck="false">
-              <h1>城市共享单车需求预测与调度优化研究</h1>
-              <h2 id="section-3">3 需求预测模型构建</h2>
-              <h3>3.1 问题定义</h3><p>在给定研究区域与时间范围内，基于历史数据与相关影响因素，预测各区域在未来时段的共享单车需求，并制定车辆调度方案，使得调度总成本最小，同时满足各区域的需求平衡约束。</p>
-              <h3>3.2 特征设计</h3><p>本文从时间、空间、天气和社会活动四个维度构建特征体系。时间维度包括小时、星期、节假日等；<mark>空间维度包括区域类型、POI 密度、周边地铁站距离等；</mark>天气维度包括温度、降水、风速等；社会活动维度包括大型活动、演出、赛事等。</p>
-              <button class="source-chip" contenteditable="false" data-action="source-detail">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
-              <h3>3.3 模型设定</h3><p>采用基于图卷积网络（GCN）的时空预测模型，结合区域间拓扑关系与动态特征，捕捉需求的时空相关性。</p><p>模型目标函数如下：</p>
-              <div class="editor-formula"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
-              <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>
-            </div>
-          </article>
+          </section>
         </div>
       </section>`, "editor");
   }
@@ -1239,24 +1473,77 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     ["file-zip", "全部代码与数据包.zip", "ZIP", "18.63 MB"]
   ];
 
+  const completeWorkspacePages = {
+    "final-summary": {
+      title: "最终成果",
+      kicker: "建模任务已完成",
+      project: "城市共享单车需求预测与调度优化",
+      summary: [
+        ["采用模型", "XGBoost + K-means + 混合整数规划"],
+        ["关键指标", "R² 0.913 / 缺车率下降 18.7% / 平均调度距离下降 11.4%"],
+        ["主要结论", "<ul><li>需求预测模型具备较高精度，能够有效捕捉时空需求波动规律。</li><li>基于聚类的分区调度策略显著降低缺车率并提升资源利用效率。</li><li>混合整数规划优化了车辆调度路径与数量配置，减少总体调度成本。</li></ul>"],
+        ["模型限制", "<ul><li>数据来源与时间范围有限，可能影响模型泛化能力。</li><li>极端天气与突发事件尚未充分建模，需结合实时机制增强鲁棒性。</li><li>实际运营中仍需考虑更多约束与成本项。</li></ul>"]
+      ],
+      section: "交付文件",
+      files: deliverables
+    },
+    "paper-package": {
+      title: "论文文件",
+      kicker: "论文交付包已生成",
+      project: "城市共享单车需求预测与调度优化研究",
+      summary: [
+        ["正文版本", "v4 / 7 个章节 / 18,642 字"],
+        ["检查结果", "结构、公式、图表、引用与核心数字全部通过"],
+        ["包含内容", "<ul><li>摘要、问题重述与模型假设。</li><li>需求预测、区域划分和调度优化方法。</li><li>实验结果、稳健性分析与模型限制。</li></ul>"],
+        ["导出说明", "<ul><li>PDF 用于最终提交。</li><li>Word 保留可编辑正文。</li><li>PPT 用于答辩展示。</li></ul>"]
+      ],
+      section: "论文交付文件",
+      files: [deliverables[0], deliverables[3], deliverables[4]]
+    },
+    "data-code-package": {
+      title: "数据与代码",
+      kicker: "复现材料已归档",
+      project: "数据、代码与运行环境交付包",
+      summary: [
+        ["数据版本", "清洗数据 v2 / Run #04 / seed 42"],
+        ["运行环境", "Python 3.11 / XGBoost / HiGHS 1.7"],
+        ["复现命令", "python solve.py --seed 42 --data data_v2"],
+        ["归档说明", "<ul><li>输入、输出和中间结果目录使用相对路径。</li><li>依赖版本、随机种子与求解参数均已锁定。</li></ul>"]
+      ],
+      section: "数据与代码文件",
+      files: [
+        deliverables[1],
+        ["file-text", "requirements.txt", "TXT", "3 KB"],
+        deliverables[5]
+      ]
+    },
+    "delivery-record": {
+      title: "交付记录",
+      kicker: "交付检查已通过",
+      project: "最终成果完整性与一致性记录",
+      summary: [
+        ["交付状态", "6 个正式文件全部生成 / 0 个缺失"],
+        ["一致性", "论文、结果表、图表与最终摘要中的关键数字一致"],
+        ["验证记录", "<ul><li>生产构建、静态检查和浏览器交互均通过。</li><li>代码、数据版本和运行 ID 可追溯。</li></ul>"],
+        ["后续使用", "<ul><li>可继续返回论文页优化正文。</li><li>可复制为新任务并保留当前成果。</li></ul>"]
+      ],
+      section: "交付记录文件",
+      files: [
+        ["file-pdf", "最终交付检查报告.pdf", "PDF", "438 KB"],
+        ["file-text", "成果文件清单.txt", "TXT", "12 KB"],
+        ["file-code", "run_20261001_104233.json", "JSON", "42 KB"]
+      ]
+    }
+  };
+
   function completeScreen() {
     return modelingShell(`
-      <section class="stage-document complete-wrap">
-        <h1>最终成果</h1>
-        <div class="complete-kicker">${icon("check-circle")} 建模任务已完成</div>
-        <h2 class="complete-project-name">城市共享单车需求预测与调度优化</h2>
-        <div class="result-summary">
-          <div class="summary-row"><span>采用模型</span><span>XGBoost + K-means + 混合整数规划</span></div>
-          <div class="summary-row"><span>关键指标</span><span>R² 0.913 / 缺车率下降 18.7% / 平均调度距离下降 11.4%</span></div>
-          <div class="summary-row"><span>主要结论</span><ul><li>需求预测模型具备较高精度，能够有效捕捉时空需求波动规律。</li><li>基于聚类的分区调度策略显著降低缺车率并提升资源利用效率。</li><li>混合整数规划优化了车辆调度路径与数量配置，减少总体调度成本。</li></ul></div>
-          <div class="summary-row"><span>模型限制</span><ul><li>数据来源与时间范围有限，可能影响模型泛化能力。</li><li>极端天气与突发事件尚未充分建模，需结合实时机制增强鲁棒性。</li><li>实际运营中仍需考虑更多约束与成本项。</li></ul></div>
-        </div>
-        <section class="deliverable-section"><h2>交付文件</h2>
-          <div class="deliverables"><div class="deliverable-head"><span>文件名称</span><span>类型</span><span>大小</span><span>操作</span></div>
-            ${deliverables.map(item => `<div class="deliverable"><span class="deliverable-name">${icon(item[0])}${item[1]}</span><span>${item[2]}</span><span>${item[3]}</span><button class="open-file" data-file="${item[1]}" aria-label="下载 ${item[1]}">${icon("download-simple")}</button></div>`).join("")}
-          </div>
-        </section>
-        <div class="stage-actions complete-actions"><button data-go="editor">继续优化</button><button data-action="copy-task">复制为新任务</button><button class="primary" data-action="download-all">下载全部</button></div>
+      <section class="focused-workspace final-delivery-workspace">
+        ${workspaceTabs([["final-summary","最终成果","check-circle"],["paper-package","论文文件","file-text"],["data-code-package","数据与代码","code"],["delivery-record","交付记录","clipboard-text"]], "final-summary")}
+        <div class="focused-workspace-panel active" data-workspace-panel="final-summary">${resultDocument(completeWorkspacePages["final-summary"], "final-summary", "final-delivery-document")}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="paper-package">${resultDocument(completeWorkspacePages["paper-package"], "paper-package", "final-delivery-document")}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="data-code-package">${resultDocument(completeWorkspacePages["data-code-package"], "data-code-package", "final-delivery-document")}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="delivery-record">${resultDocument(completeWorkspacePages["delivery-record"], "delivery-record", "final-delivery-document")}</div>
       </section>`, "complete");
   }
 
@@ -1832,17 +2119,16 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     }
     if (screen === "experiments") {
       const costCanvas = $("#costChart");
-      if (!costCanvas) return;
-      new Chart(costCanvas, {
+      if (costCanvas) new Chart(costCanvas, {
         type: "bar",
         data: {
-          labels: ["基线（Run #00）", "当前结果（Run #04）"],
+          labels: ["基线结果", "当前结果"],
           datasets: [{
             data: [2033414, 1842596],
             backgroundColor: [dark ? "#6d6d69" : "#c7c7c7", dark ? "#ecece8" : "#171717"],
             borderRadius: 1,
-            barPercentage: .58,
-            categoryPercentage: .78
+            barThickness: 132,
+            maxBarThickness: 132
           }]
         },
         plugins: [{
@@ -1854,11 +2140,6 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             ctx.font = '500 13px Inter, "Microsoft YaHei", sans-serif';
             ctx.fillStyle = chartInk;
             chart.getDatasetMeta(0).data.forEach((bar, index) => ctx.fillText(["2,033,414", "1,842,596"][index], bar.x, bar.y - 10));
-            const first = chart.getDatasetMeta(0).data[0];
-            const second = chart.getDatasetMeta(0).data[1];
-            ctx.fillStyle = "#20ad63";
-            ctx.font = '600 14px Inter, "Microsoft YaHei", sans-serif';
-            ctx.fillText("↓ -9.38%", (first.x + second.x) / 2, second.y + 12);
             ctx.restore();
           }
         }],
@@ -1869,9 +2150,27 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           plugins: { legend: { display: false }, tooltip: { enabled: true } },
           scales: {
             x: { grid: { display: false }, ticks: { font: { size: 12 } } },
-            y: { min: 0, max: 2500000, title: { display: true, text: "总调度成本" }, ticks: { stepSize: 500000, callback: value => value === 0 ? "0" : `${value / 1000000}M` } }
+            y: { min: 0, max: 3000000, ticks: { stepSize: 500000, callback: value => value === 0 ? "0" : `${value / 1000}k` } }
           }
         }
+      });
+      const resultMetricCanvas = $("#resultMetricChart");
+      if (resultMetricCanvas) new Chart(resultMetricCanvas, {
+        type: "bar",
+        data: {
+          labels: ["总行程时间", "满足率", "平衡度"],
+          datasets: [
+            { label: "基线", data: [100, 86.4, 78.1], backgroundColor: dark ? "#62625e" : "#d0d0cc", borderRadius: 3 },
+            { label: "当前", data: [90.62, 92.8, 84.6], backgroundColor: chartInk, borderRadius: 3 }
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10 } } }, scales: { x: { grid: { display: false } }, y: { min: 0, max: 110, ticks: { callback: value => `${value}%` } } } }
+      });
+      const stabilityCanvas = $("#stabilityChart");
+      if (stabilityCanvas) new Chart(stabilityCanvas, {
+        type: "line",
+        data: { labels: ["7", "21", "42", "73", "99"], datasets: [{ data: [1854208, 1839675, 1842596, 1861034, 1838147], borderColor: chartInk, backgroundColor: chartSurface, borderWidth: 1.8, pointRadius: 3, pointBackgroundColor: chartSurface, pointBorderColor: chartInk, tension: .25 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, title: { display: true, text: "随机种子" } }, y: { min: 1800000, max: 1900000, ticks: { callback: value => `${Math.round(value / 1000)}k` } } } }
       });
     }
   }
@@ -1900,20 +2199,29 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     const handle = $("[data-modeling-resizer]");
     if (!split || !handle) return;
 
-    const paneStorageKey = "openmathmodelAgentPanePercentV2";
+    const focusedWorkbench = split.classList.contains("focused-modeling-split");
+    const paneStorageKey = focusedWorkbench ? "openmathmodelFocusedAgentPanePercentV2" : "openmathmodelAgentPanePercentV2";
     const defaultPercent = 27;
     const storedPercent = Number(localStorage.getItem(paneStorageKey));
     const clampPercent = value => {
       const rect = split.getBoundingClientRect();
-      const minLeft = rect.width < 980 ? 280 : 320;
-      const minRight = rect.width < 980 ? 420 : 560;
+      const minLeft = focusedWorkbench ? (rect.width < 980 ? 270 : 330) : (rect.width < 980 ? 280 : 320);
+      const minRight = focusedWorkbench ? (rect.width < 980 ? 390 : 560) : (rect.width < 980 ? 420 : 560);
       const min = minLeft / rect.width * 100;
       const max = (rect.width - minRight - handle.offsetWidth) / rect.width * 100;
       return Math.min(Math.max(value, min), Math.max(min, max));
     };
     const applyPercent = (value, persist = false) => {
       const next = clampPercent(value);
+      const modelingShell = split.closest("[data-modeling-shell]");
       split.style.setProperty("--agent-pane-width", `${next}%`);
+      modelingShell?.style.setProperty("--agent-pane-width", `${next}%`);
+      const stagePane = $(".focused-stage-pane", split);
+      if (modelingShell && stagePane) {
+        const shellRect = modelingShell.getBoundingClientRect();
+        const stageRect = stagePane.getBoundingClientRect();
+        modelingShell.style.setProperty("--workspace-tabs-left", `${stageRect.left - shellRect.left}px`);
+      }
       handle.setAttribute("aria-valuenow", String(Math.round(next)));
       if (persist) localStorage.setItem(paneStorageKey, String(next));
       return next;
@@ -2001,6 +2309,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       if (action === "settings") openSettingsCenter();
       if (action === "history") modal("任务历史", "<p>当前任务共保存 18 个关键节点，可随时回看题目分析、清洗方案、实验与论文版本。</p>");
       if (action === "task-doc") modal("任务文档", "<p>题目、附件、模型方案、实验记录和论文成果均已汇总到当前项目。</p>");
+      if (action === "fullscreen") {
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        else document.documentElement.requestFullscreen?.();
+      }
+      if (action === "refresh-report") toast("数据报告已刷新");
       if (action === "open-details") {
         const shell = $("[data-modeling-shell]");
         shell?.classList.add("drawer-open");
@@ -2079,9 +2392,12 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       if (action === "files") modal("附件", '<div class="attachment-chip">2026国赛A题题目.pdf</div><div class="attachment-chip">共享单车数据集.csv</div><div class="attachment-chip">城市区域划分示意图.png</div>');
       if (action === "more" || action === "row-menu") popupMenu(target, ["重命名", "复制", "归档"]);
       if (action === "toggle-activity") {
-        const list = $(".activity-list");
+        const activityHost = target.closest(".focused-agent-chat, .assistant-block");
+        const list = activityHost?.querySelector(".focused-activity-list, .activity-list") || $(".focused-activity-list") || $(".activity-list");
         list?.classList.toggle("collapsed");
-        target.innerHTML = list?.classList.contains("collapsed")
+        const collapsed = list?.classList.contains("collapsed") ?? false;
+        target.setAttribute("aria-expanded", String(!collapsed));
+        target.innerHTML = collapsed
           ? `${icon("eye")} 查看 4 个执行步骤 ${icon("caret-down")}`
           : `${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}`;
       }
@@ -2256,6 +2572,19 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   }
 
   function bindScreen(screen) {
+    $$('[data-workspace-tab]').forEach(button => button.addEventListener("click", () => {
+      const modelingShell = button.closest("[data-modeling-shell]");
+      const workspace = button.closest(".focused-workspace") || $(".focused-workspace", modelingShell);
+      const tab = button.dataset.workspaceTab;
+      if (!workspace || !tab) return;
+      $$('[data-workspace-tab]', modelingShell || workspace).forEach(item => {
+        item.classList.toggle("active", item === button);
+        item.setAttribute("aria-selected", String(item === button));
+      });
+      $$('[data-workspace-panel]', workspace).forEach(panel => panel.classList.toggle("active", panel.dataset.workspacePanel === tab));
+      requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    }));
+
     const bindResourceDirectory = kind => {
       const rowSelector = kind === "problem" ? ".problem-item" : ".paper-item";
       const searchSelector = kind === "problem" ? "[data-problem-search]" : "[data-paper-search]";
@@ -2407,9 +2736,9 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       $$("[data-plan-option]").forEach(button => button.addEventListener("click", () => {
         $$("[data-plan-option]").forEach(item => item.classList.remove("selected"));
         button.classList.add("selected");
-        const title = $("h2", button)?.textContent || "方案";
-        const overviewTitle = $(".selected-plan-overview > h3");
-        if (overviewTitle) overviewTitle.textContent = `所选 ${title} 概览`;
+        $$("[data-plan-option] > i").forEach(item => item.className = "ph ph-caret-down");
+        const caret = $("i", button);
+        if (caret) caret.className = "ph ph-caret-up";
       }));
     }
     if (screen === "experiments") {
