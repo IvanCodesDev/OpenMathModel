@@ -608,7 +608,82 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   const problems = [];
   const papers = [];
   const problemTabs = () => ["全部赛题", ...new Set(problems.map(problem => problem.category)), "收藏"];
-  const paperTabs = () => ["全部", ...new Set(papers.map(paper => paper.category))];
+  const remotePaperPdfUrl = paper => {
+    const source = String(paper?.full_text_url || "").trim();
+    if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
+    if (source.startsWith("/")) return source;
+    try {
+      const url = new URL(source);
+      if (url.hostname.toLowerCase() !== "github.com") return source;
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length < 6 || parts[2] !== "blob") return "";
+      const [owner, repository, , revision, ...pathParts] = parts;
+      return `https://raw.githubusercontent.com/${owner}/${repository}/${revision}/${pathParts.join("/")}`;
+    } catch {
+      return "";
+    }
+  };
+  const localPaperPdfUrl = paper => {
+    const source = String(paper?.full_text_url || "").trim();
+    if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
+    try {
+      const url = new URL(source, window.location.origin);
+      const decodedPath = decodeURIComponent(url.pathname);
+      const segments = decodedPath.split("/").filter(Boolean);
+      const yearIndex = segments.findIndex(segment => /^\d{4}年优秀论文$/.test(segment));
+      const year = yearIndex >= 0 ? segments[yearIndex].slice(0, 4) : "";
+      const filename = segments.at(-1) || "";
+      const sourceDirectory = segments[yearIndex + 1] || "";
+      const problemGroup = /^[A-F]$/i.test(sourceDirectory)
+        ? sourceDirectory.toUpperCase()
+        : (/^[A-F]/i.exec(filename)?.[0].toUpperCase() || "");
+      if (!year || !problemGroup || !/\.pdf$/i.test(filename)) return "";
+      return `/paper-files/${year}/${problemGroup}/${encodeURIComponent(filename)}`;
+    } catch {
+      return "";
+    }
+  };
+  const paperPdfSources = paper => [...new Set([
+    localPaperPdfUrl(paper),
+    remotePaperPdfUrl(paper),
+  ].filter(Boolean))];
+  const paperPdfUrl = paper => paperPdfSources(paper)[0] || "";
+  const archivedPaperTopics = {
+    "2021-A": "相关矩阵组的低复杂度计算和存储",
+    "2021-B": "空气质量二次预报",
+    "2021-C": "帕金森病的脑深部电刺激治疗",
+    "2021-D": "抗乳腺癌候选药物优化",
+    "2021-E": "信号干扰下的 UWB 精确定位",
+    "2021-F": "航空公司机组优化排班",
+    "2022-A": "移动场景超分辨定位",
+    "2022-B": "方形件排样优化与订单组批",
+    "2022-C": "汽车制造涂装-总装缓存区调度",
+    "2022-D": "PISA 架构芯片资源排布",
+    "2022-E": "草原放牧策略",
+    "2022-F": "疫情期间生活物资科学管理",
+  };
+  const paperIdentifier = paper => String(paper.team_id || paper.title || "论文编号待补充");
+  const paperGroup = paper => {
+    const codeMatch = /(?:^|\s)([A-F])$/i.exec(String(paper.problem_code || ""));
+    return (codeMatch?.[1] || /^[A-F]/i.exec(paperIdentifier(paper))?.[0] || "—").toUpperCase();
+  };
+  const paperProblem = paper => problems.find(problem => problem.id === paper.problem_id);
+  const paperDisplayTitle = paper => {
+    const rawTitle = String(paper.title || "").trim();
+    const looksLikeIdentifier = !rawTitle || rawTitle === paperIdentifier(paper) || /^[A-F]?\d{8,}$/i.test(rawTitle);
+    const archivedTopic = archivedPaperTopics[`${paper.year}-${paperGroup(paper)}`];
+    return looksLikeIdentifier ? (paperProblem(paper)?.title || archivedTopic || `${paper.year} 年 ${paperGroup(paper)} 题获奖论文`) : rawTitle;
+  };
+  const paperEntries = () => papers
+    .map((paper, index) => ({
+      paper,
+      index,
+      problem: paperProblem(paper),
+      displayTitle: paperDisplayTitle(paper),
+      group: paperGroup(paper),
+    }))
+    .filter(({ paper }) => paper.record_type === "paper" && paper.access_scope === "linked_content" && paperPdfUrl(paper));
+  const paperTabs = () => ["全部", ...new Set(paperEntries().map(({ paper }) => paper.category))];
   // 页码按钮由 applyResourceFilters 按“筛选后”的条数现算，所以这里不再预渲染：
   // 搜索或切换分类之后总页数会变，静态渲染出来的 1…N 只会是假的。
   const RESOURCE_PAGE_SIZE = 15;
@@ -648,34 +723,47 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   }
 
   function papersScreen() {
+    const entries = paperEntries();
+    const years = [...new Set(entries.map(({ paper }) => paper.year))].sort((a, b) => b - a);
+    const groups = [...new Set(entries.map(({ group }) => group).filter(group => group !== "—"))].sort();
     return shell(`
       <section class="library-main resource-library papers-main">
-        <div class="library-heading"><h1>优秀论文</h1><p>浏览数学建模竞赛获奖论文与建模路线。</p></div>
-        <div class="library-tools resource-tools"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="paper-search" data-paper-search autocomplete="off" aria-label="搜索论文" placeholder="搜索论文、赛题、模型或关键词"></label>
-          <div class="filters">${["比赛","年份","奖项","模型方法"].map(x=>`<button class="filter-button" data-action="filter">${x}${icon("caret-down")}</button>`).join("")}</div>
+        <div class="library-heading paper-library-heading"><div><h1>优秀论文</h1><p>按研究主题、年份与题组浏览获奖论文，点击即可阅读完整正文。</p></div><span class="paper-library-total"><strong>${entries.length}</strong> 篇完整论文</span></div>
+        <div class="paper-library-controls"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="paper-search" data-paper-search autocomplete="off" aria-label="搜索论文" placeholder="搜索研究主题、论文编号或关键词"></label>
+          <label class="paper-year-filter"><span>年份</span><select data-paper-year-filter aria-label="按年份筛选论文"><option value="">全部年份</option>${years.map(year=>`<option value="${year}">${year} 年</option>`).join("")}</select>${icon("caret-down")}</label>
+          <button class="paper-filter-reset" type="button" data-paper-filter-reset>${icon("arrow-counter-clockwise")} 重置</button>
         </div>
-        <div class="resource-tabs paper-resource-tabs" role="tablist" aria-label="论文分类">
-          ${paperTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper">${escapeHtml(x)}</button>`).join("")}
+        <div class="paper-classification-panel" aria-label="论文分类筛选">
+          <div class="paper-classification-row"><span class="paper-classification-label">奖项</span><div class="resource-tabs paper-resource-tabs" role="tablist" aria-label="按奖项分类">
+            ${paperTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper">${escapeHtml(x)}</button>`).join("")}
+          </div></div>
+          <div class="paper-classification-row"><span class="paper-classification-label">题组</span><div class="paper-group-tabs" role="group" aria-label="按题组筛选">
+            <button class="active" type="button" data-paper-group-filter="">全部题组</button>${groups.map(group=>`<button type="button" data-paper-group-filter="${escapeHtml(group)}">${escapeHtml(group)} 题</button>`).join("")}
+          </div><span class="paper-result-count" data-paper-result-copy>${entries.length} 篇</span></div>
         </div>
         <div class="resource-table-wrap paper-resource-wrap">
           <table class="resource-table paper-resource-table">
-            <thead><tr><th></th><th>论文标题</th><th>对应赛题</th><th>奖项</th><th>使用模型</th><th>主要创新</th><th>收藏</th></tr></thead>
+            <thead><tr><th>研究主题与论文编号</th><th>题目分类</th><th>奖项</th><th>正文</th><th>收藏</th></tr></thead>
             <tbody data-paper-list>
-              ${papers.map((p,i)=>`<tr class="paper-item ${i===0?"active":""}" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-resource-search="${escapeHtml([p.title,p.problem_code,p.competition,p.year,p.award,p.institution,...p.distinctions,...p.models].filter(Boolean).join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看论文：${escapeHtml(p.title)}">
-                <td>${i+1}</td><td><strong>${escapeHtml(p.title)}</strong></td><td>${escapeHtml(p.problem_code)}</td><td>${escapeHtml(p.award)}</td><td>${escapeHtml(p.models.length ? p.models.join("、") : "待全文解析")}</td><td>${escapeHtml(p.innovation)}</td>
-                <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(p.title)}">${icon("star")}</button></td>
+              ${entries.map(({ paper: p, index: sourceIndex, problem, displayTitle, group })=>`<tr class="paper-item" data-resource-index="${sourceIndex}" data-resource-category="${escapeHtml(p.category)}" data-paper-year="${p.year}" data-paper-group="${escapeHtml(group)}" data-resource-search="${escapeHtml([displayTitle,p.title,p.team_id,p.problem_code,p.competition,p.year,p.award,p.institution,problem?.problem_type,...(problem?.keywords || []),...p.distinctions,...p.models].filter(Boolean).join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="阅读论文：${escapeHtml(displayTitle)}，编号 ${escapeHtml(paperIdentifier(p))}">
+                <td><div class="paper-primary-cell"><strong>${escapeHtml(displayTitle)}</strong><span>论文编号 ${escapeHtml(paperIdentifier(p))}　·　${escapeHtml(p.problem_code)}</span></div></td>
+                <td><div class="paper-topic-cell"><span class="paper-group-badge">${escapeHtml(group)} 题</span><span>${escapeHtml(problem?.problem_type || "数学建模研究")}</span></div></td>
+                <td><span class="paper-award-badge">${escapeHtml(p.award)}</span></td>
+                <td><div class="paper-access-cell">${icon("file-pdf")}<span><strong>完整 PDF</strong><small>${escapeHtml(formatFileSize(p.source_file_bytes) || "在线阅读")}</small></span></div></td>
+                <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(displayTitle)}">${icon("star")}</button></td>
               </tr>`).join("")}
+              <tr class="paper-empty-row" data-paper-empty hidden><td colspan="5">${icon("magnifying-glass")}<strong>没有符合条件的论文</strong><span>调整年份、题组或搜索词后再试。</span></td></tr>
             </tbody>
           </table>
         </div>
         <div class="resource-footer paper-resource-footer">
-          <span data-resource-page-copy>共 ${papers.length} 篇 · 第 1 页</span>
+          <span data-resource-page-copy>共 ${entries.length} 篇 · 第 1 页</span>
           <div class="resource-pagination" data-resource-pagination>
             <button data-resource-page="prev" aria-label="上一页">${icon("caret-left")}</button>
             <span data-resource-page-numbers></span>
             <button data-resource-page="next" aria-label="下一页">${icon("caret-right")}</button>
           </div>
-          <button class="page-size-button" data-action="page-size">15 条/页 ${icon("caret-down")}</button>
+          <span class="paper-sort-note">按年份从新到旧排列</span>
         </div>
       </section>`, "papers");
   }
@@ -777,89 +865,48 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       </section>`, "problems");
   }
 
-  const PAPER_RECORD_COPY = { paper: "单篇论文", collection: "论文合集" };
-  const PAPER_ACCESS_COPY = {
-    stored_content: "已收录结构化全文",
-    linked_content: "提供全文外部入口",
-    metadata_only: "仅获奖与来源元数据（全文待解析）",
-  };
-  const PAPER_SOURCE_COPY = {
-    official: "官方来源",
-    pending_human_confirmation: "来源待人工核对",
-    community_repository_snapshot: "社区开源仓库快照",
-  };
+  function selectedPaperResource() {
+    const requested = Number(new URLSearchParams(window.location.search).get("index"));
+    if (Number.isInteger(requested) && requested >= 0 && requested < papers.length && paperPdfUrl(papers[requested])) {
+      return { item: papers[requested], index: requested };
+    }
+    const fallback = paperEntries()[0];
+    return fallback ? { item: fallback.paper, index: fallback.index } : selectedResource(papers);
+  }
 
   function paperDetailScreen() {
-    const { item: paper } = selectedResource(papers);
-    const distinctionCopy = paper.distinctions.length ? paper.distinctions.join("、") : "无附加专项奖记录";
-    const recordCopy = PAPER_RECORD_COPY[paper.record_type] || "论文记录";
-    const accessCopy = PAPER_ACCESS_COPY[paper.access_scope] || "未标注";
-    const sourceCopy = PAPER_SOURCE_COPY[paper.source_status] || "未标注";
-    const methodCopy = paper.models.length ? paper.models.join("、") : "待全文解析后补充";
-    // 社区仓库快照虽然确实存着 PDF，但把用户送到别人的 GitHub 账号下不合适，
-    // 所以只有主办方域名下的全文入口才渲染成可点的链接。
-    const hasFullText = isOfficialSourceUrl(paper.full_text_url);
-    const isPdf = hasFullText && /\.pdf(?:$|\?)/i.test(paper.full_text_url);
+    const { item: paper } = selectedPaperResource();
+    const pdfSources = paperPdfSources(paper);
+    const pdfUrl = pdfSources[0] || "";
+    const displayTitle = paperDisplayTitle(paper);
     const sizeCopy = paper.source_file_bytes ? ` · ${formatFileSize(paper.source_file_bytes)}` : "";
-    const fullTextLabel = paper.record_type === "collection"
-      ? "打开论文合集下载入口"
-      : isPdf
-        ? `查看全文 PDF${sizeCopy}`
-        : "前往官方全文页";
-    // COMAP 只有获奖名单，网盘合集是整届打包，社区快照不给外链，三种情况分别措辞。
-    const fullTextEntry = hasFullText
-      ? `<p><a href="${escapeHtml(paper.full_text_url)}" target="_blank" rel="noreferrer">${icon(isPdf ? "file-pdf" : "arrow-square-out")} ${escapeHtml(fullTextLabel)}</a></p>`
-      : `<p>${icon("info")} 暂无可访问的全文入口，本篇当前仅收录获奖与来源元数据。</p>`;
-    const fullTextNote = paper.access_scope === "metadata_only"
-      ? "本篇来自官方获奖名单，官方结果页未随附全文，需前往来源站点查看。"
-      : paper.source_status === "community_repository_snapshot"
-        ? "本篇的获奖与来源元数据整理自社区开源仓库的固定版本快照。仓库属第三方账号，不作为可引用出处，故不提供跳转；结构化全文将在后续批次自建。"
-        : paper.record_type === "collection"
-          ? "该记录为整届优秀论文合集入口，单篇结构化解析将在后续补充。"
-          : "结构化全文解析（分节、公式、图表）将在后续批次补充。";
-    const fullTextAction = hasFullText
-      ? `<button type="button" data-action="open-source" data-source-url="${escapeHtml(paper.full_text_url)}">${icon("book-open")} 打开论文入口</button>`
-      : "";
     return shell(`
       <section class="resource-detail-page paper-detail-page">
         <div class="resource-detail-breadcrumb"><a href="${routes.papers}">优秀论文</a><span>/</span><strong>查看论文</strong></div>
         <article class="resource-detail-article paper-reading-article">
           <header class="resource-detail-title paper-reading-title">
-            <h1>${escapeHtml(paper.title)}</h1>
-            <h2>${escapeHtml(paper.problem_code)}　·　${escapeHtml(paper.award)}</h2>
+            <h1>${escapeHtml(displayTitle)}</h1>
+            <h2>论文编号 ${escapeHtml(paperIdentifier(paper))}　·　${escapeHtml(paper.problem_code)}　·　${escapeHtml(paper.award)}${paper.institution ? `　·　${escapeHtml(paper.institution)}` : ""}</h2>
           </header>
           <div class="resource-detail-rule"></div>
-          <section class="detail-copy-section paper-abstract">
-            <h3>摘要</h3>
-            <p>${escapeHtml(paper.summary)}</p>
-            <p><strong>记录类型：</strong>${escapeHtml(recordCopy)}</p>
-          </section>
-          <section class="detail-copy-section">
-            <h3>获奖元数据</h3>
-            <p><strong>比赛：</strong>${escapeHtml(paper.competition)}　<strong>年份：</strong>${paper.year}</p>
-            <p><strong>对应赛题：</strong>${escapeHtml(paper.problem_code)}</p>
-            <p><strong>团队：</strong>${escapeHtml(paper.team_id || "合集")}</p>
-            <p><strong>学校/机构：</strong>${escapeHtml(paper.institution || "多机构合集")}</p>
-            <p><strong>附加奖项：</strong>${escapeHtml(distinctionCopy)}</p>
-          </section>
-          <section class="detail-copy-section">
-            <h3>全文与收录状态</h3>
-            ${fullTextEntry}
-            <p>${escapeHtml(fullTextNote)}</p>
-            <p><strong>收录范围：</strong>${escapeHtml(accessCopy)}　<strong>来源状态：</strong>${escapeHtml(sourceCopy)}</p>
-            <p><strong>方法标签：</strong>${escapeHtml(methodCopy)}</p>
-            ${isOfficialSourceUrl(paper.source_url)
-              ? `<p><a href="${escapeHtml(paper.source_url)}" target="_blank" rel="noreferrer">查看来源记录 ${icon("arrow-square-out")}</a></p>`
-              : ""}
+          <section class="paper-fulltext-section" aria-label="完整论文正文">
+            <div class="paper-fulltext-toolbar">
+              <div><strong>${icon("file-pdf")} 完整论文正文</strong><span data-paper-page-copy>${paper.page_count ? `${paper.page_count} 页` : "正在读取页数"}${escapeHtml(sizeCopy)}</span></div>
+              <a href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">在新窗口打开 ${icon("arrow-square-out")}</a>
+            </div>
+            <div class="paper-pdf-reader" data-paper-pdf-reader data-paper-pdf-sources="${escapeHtml(JSON.stringify(pdfSources))}" aria-live="polite" aria-busy="true">
+              <div class="paper-pdf-loading"><span></span><strong>正在加载完整论文正文</strong><small>读取 PDF 页面与图表…</small></div>
+            </div>
+            <p class="paper-pdf-fallback">若浏览器未显示内嵌正文，可<a href="${escapeHtml(pdfUrl)}" target="_blank" rel="noreferrer">直接打开完整 PDF</a>。</p>
           </section>
         </article>
         <footer class="resource-detail-actions">
           <div class="detail-action-buttons detail-left-actions">
             <button type="button" data-action="detail-bookmark">${icon("star")} 收藏</button>
             <button type="button" data-action="cite-detail" data-resource-title="${escapeHtml(paper.title)}" data-source-url="${isOfficialSourceUrl(paper.source_url) ? escapeHtml(paper.source_url) : ""}">${icon("quotes")} 引用</button>
-            ${fullTextAction}
+            <button type="button" data-action="open-source" data-source-url="${escapeHtml(pdfUrl)}">${icon("book-open")} 打开完整 PDF</button>
           </div>
-          <button class="primary" type="button" data-action="use-paper" data-resource-title="${escapeHtml(paper.title)}">${icon("git-branch")} 参考该论文</button>
+            <button class="primary" type="button" data-action="use-paper" data-resource-title="${escapeHtml(displayTitle)}">${icon("git-branch")} 参考该论文</button>
         </footer>
       </section>`, "papers");
   }
@@ -2214,7 +2261,10 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       const searchSelector = kind === "problem" ? "[data-problem-search]" : "[data-paper-search]";
       const rows = $$(rowSelector);
       const tabs = $$(`[data-resource-kind="${kind}"]`);
-      const pageSize = RESOURCE_PAGE_SIZE;
+      const pageSize = kind === "paper" ? 10 : RESOURCE_PAGE_SIZE;
+      const paperYearFilter = kind === "paper" ? $("[data-paper-year-filter]") : null;
+      const paperGroupFilters = kind === "paper" ? $$('[data-paper-group-filter]') : [];
+      const paperReset = kind === "paper" ? $("[data-paper-filter-reset]") : null;
       let currentPage = 1;
       // 页码窗口以当前页为中心，最多 5 个；两端各留首页/末页和省略号，
       // 这样 2 页时就只出 "1 2"，20 页时也不会把按钮铺满一行。
@@ -2248,12 +2298,16 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       const applyResourceFilters = () => {
         const query = $(searchSelector)?.value.trim().toLowerCase() || "";
         const selected = tabs.find(tab => tab.classList.contains("active"))?.dataset.resourceTab || "";
+        const selectedYear = paperYearFilter?.value || "";
+        const selectedGroup = paperGroupFilters.find(button => button.classList.contains("active"))?.dataset.paperGroupFilter || "";
         const matches = [];
         rows.forEach(row => {
           const matchesSearch = !query || row.dataset.resourceSearch.toLowerCase().includes(query);
           const matchesCategory = selected === "全部赛题" || selected === "全部" || selected === "按赛题" || selected === "按模型"
             || (selected === "收藏" ? row.dataset.saved === "true" : row.dataset.resourceCategory === selected);
-          if (matchesSearch && matchesCategory) matches.push(row);
+          const matchesYear = kind !== "paper" || !selectedYear || row.dataset.paperYear === selectedYear;
+          const matchesGroup = kind !== "paper" || !selectedGroup || row.dataset.paperGroup === selectedGroup;
+          if (matchesSearch && matchesCategory && matchesYear && matchesGroup) matches.push(row);
           row.hidden = true;
         });
         const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
@@ -2261,6 +2315,10 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).forEach(row => { row.hidden = false; });
         const copy = $("[data-resource-page-copy]");
         if (copy) copy.textContent = `共 ${matches.length} ${kind === "problem" ? "题" : "篇"} · 第 ${currentPage}/${pageCount} 页`;
+        const resultCopy = kind === "paper" ? $("[data-paper-result-copy]") : null;
+        if (resultCopy) resultCopy.textContent = `${matches.length} 篇`;
+        const emptyRow = kind === "paper" ? $("[data-paper-empty]") : null;
+        if (emptyRow) emptyRow.hidden = matches.length > 0;
         renderPagination(pageCount);
       };
 
@@ -2271,6 +2329,21 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         currentPage = 1;
         applyResourceFilters();
       }));
+      paperYearFilter?.addEventListener("change", () => { currentPage = 1; applyResourceFilters(); });
+      paperGroupFilters.forEach(button => button.addEventListener("click", () => {
+        paperGroupFilters.forEach(item => item.classList.toggle("active", item === button));
+        currentPage = 1;
+        applyResourceFilters();
+      }));
+      paperReset?.addEventListener("click", () => {
+        const search = $(searchSelector);
+        if (search) search.value = "";
+        if (paperYearFilter) paperYearFilter.value = "";
+        tabs.forEach((tab, index) => tab.classList.toggle("active", index === 0));
+        paperGroupFilters.forEach((button, index) => button.classList.toggle("active", index === 0));
+        currentPage = 1;
+        applyResourceFilters();
+      });
       const openResourceDetail = row => {
         const route = kind === "problem" ? routes.problemDetail : routes.paperDetail;
         window.location.href = `${route}?index=${row.dataset.resourceIndex || 0}`;
@@ -2472,6 +2545,108 @@ export async function preloadKnowledgeLibrary(): Promise<void> {
   papers.push(...library.papers);
 }
 
+async function initPaperPdfReader(): Promise<void> {
+  const reader = document.querySelector("[data-paper-pdf-reader]");
+  if (!(reader instanceof HTMLElement) || reader.dataset.initialized === "true") return;
+  reader.dataset.initialized = "true";
+  let pdfSources: string[] = [];
+  try {
+    const parsed = JSON.parse(reader.dataset.paperPdfSources || "[]");
+    if (Array.isArray(parsed)) pdfSources = parsed.filter(source => typeof source === "string" && source);
+  } catch {
+    pdfSources = [];
+  }
+  const pageCopy = document.querySelector("[data-paper-page-copy]");
+  try {
+    const [{ getDocument, GlobalWorkerOptions }, { default: workerUrl }] = await Promise.all([
+      import("pdfjs-dist"),
+      import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+    ]);
+    GlobalWorkerOptions.workerSrc = workerUrl;
+    let pdf = null;
+    let lastError: unknown;
+    for (const source of pdfSources) {
+      try {
+        pdf = await getDocument({ url: source }).promise;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!pdf) throw lastError ?? new Error("论文 PDF 地址为空");
+    if (pageCopy) {
+      const sizeSuffix = pageCopy.textContent?.includes(" · ") ? ` · ${pageCopy.textContent.split(" · ").slice(1).join(" · ")}` : "";
+      pageCopy.textContent = `${pdf.numPages} 页${sizeSuffix}`;
+    }
+
+    const displayWidth = Math.min(980, Math.max(320, reader.clientWidth - 44));
+    const firstPage = await pdf.getPage(1);
+    const naturalViewport = firstPage.getViewport({ scale: 1 });
+    const estimatedHeight = Math.round(displayWidth * naturalViewport.height / naturalViewport.width);
+    const pageHosts = Array.from({ length: pdf.numPages }, (_, index) => {
+      const host = document.createElement("section");
+      host.className = "paper-pdf-page";
+      host.dataset.paperPage = String(index + 1);
+      host.dataset.state = "pending";
+      host.style.minHeight = `${estimatedHeight}px`;
+      host.setAttribute("aria-label", `论文第 ${index + 1} 页，共 ${pdf.numPages} 页`);
+      host.setAttribute("aria-busy", "true");
+      host.innerHTML = `<span class="paper-page-number">${index + 1} / ${pdf.numPages}</span><div class="paper-page-placeholder"><span></span>正在渲染第 ${index + 1} 页</div>`;
+      return host;
+    });
+    reader.replaceChildren(...pageHosts);
+    reader.setAttribute("aria-busy", "false");
+
+    const renderPage = async (pageNumber: number) => {
+      const host = pageHosts[pageNumber - 1];
+      if (!host || host.dataset.state !== "pending") return;
+      host.dataset.state = "loading";
+      try {
+        const page = pageNumber === 1 ? firstPage : await pdf.getPage(pageNumber);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: displayWidth / baseViewport.width });
+        const outputScale = Math.min(window.devicePixelRatio || 1, 1.75);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width * outputScale);
+        canvas.height = Math.floor(viewport.height * outputScale);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        const canvasContext = canvas.getContext("2d", { alpha: false });
+        if (!canvasContext) throw new Error("Canvas 2D context unavailable");
+        await page.render({
+          canvasContext,
+          viewport,
+          transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
+        }).promise;
+        host.style.minHeight = "0";
+        host.replaceChildren(canvas);
+        host.dataset.state = "rendered";
+        host.setAttribute("aria-busy", "false");
+      } catch (error) {
+        host.dataset.state = "error";
+        host.setAttribute("aria-busy", "false");
+        host.innerHTML = `<div class="paper-page-error">第 ${pageNumber} 页渲染失败，请使用下方完整 PDF 入口查看。</div>`;
+        console.error(`论文第 ${pageNumber} 页渲染失败`, error);
+      }
+    };
+
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        const pageNumber = Number((entry.target as HTMLElement).dataset.paperPage);
+        observer.unobserve(entry.target);
+        void renderPage(pageNumber);
+      });
+    }, { rootMargin: "1200px 0px" });
+    pageHosts.forEach(host => observer.observe(host));
+    await renderPage(1);
+  } catch (error) {
+    reader.setAttribute("aria-busy", "false");
+    reader.innerHTML = `<div class="paper-pdf-error">${icon("warning-circle")}<strong>论文正文加载失败</strong><span>请使用下方完整 PDF 入口查看原文。</span></div>`;
+    console.error("完整论文 PDF 加载失败", error);
+  }
+}
+
 /**
  * 供 React 页面复用产品外壳：返回 <aside class="sidebar"> 的内部结构，
  * 由调用方自己提供 aside 容器，避免 app-shell 的栅格里多出一层包装元素。
@@ -2505,6 +2680,7 @@ export function activateScreen(screen: ScreenId): void {
   bindScreen(screen);
   initModelingResizer();
   initCharts(screen);
+  if (screen === "paperDetail") void initPaperPdfReader();
   void hydrateAccountUi();
 }
 
