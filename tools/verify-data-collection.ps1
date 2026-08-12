@@ -16,6 +16,8 @@ $required = @(
     'datasets/recipes/ingest_mathmodel_full_problems.py',
     'datasets/recipes/ingest_full_problem_archives.py',
     'datasets/recipes/stage_mathorcup_archives.py',
+    'datasets/recipes/discover_electric_cup.py',
+    'datasets/recipes/stage_huashu_cup_archive.py',
     'datasets/recipes/image_guard.py',
     'apps/web/src/data/knowledge-library.json',
     'apps/web/src/legacy/openmathmodel-ui.ts',
@@ -37,6 +39,10 @@ python -m py_compile datasets/recipes/ingest_full_problem_archives.py
 if ($LASTEXITCODE -ne 0) { throw 'Full archive problem ingester compilation failed' }
 python -m py_compile datasets/recipes/stage_mathorcup_archives.py
 if ($LASTEXITCODE -ne 0) { throw 'MathorCup staging recipe compilation failed' }
+python -m py_compile datasets/recipes/discover_electric_cup.py
+if ($LASTEXITCODE -ne 0) { throw 'Electric Cup discovery recipe compilation failed' }
+python -m py_compile datasets/recipes/stage_huashu_cup_archive.py
+if ($LASTEXITCODE -ne 0) { throw 'Huashu Cup staging recipe compilation failed' }
 python -m py_compile datasets/recipes/image_guard.py
 if ($LASTEXITCODE -ne 0) { throw 'Image guard compilation failed' }
 python datasets/recipes/collect_official_problems.py validate
@@ -46,7 +52,7 @@ Get-Content -LiteralPath 'datasets/catalog/source-registry.schema.json' -Raw -En
 Get-Content -LiteralPath 'datasets/catalog/source-snapshot.schema.json' -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 Get-Content -LiteralPath 'datasets/catalog/knowledge-library.schema.json' -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 $registry = Get-Content -LiteralPath 'datasets/catalog/source-registry.json' -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($registry.sources.Count -ne 6) { throw "Expected 6 registered sources, found $($registry.sources.Count)" }
+if ($registry.sources.Count -ne 8) { throw "Expected 8 registered sources, found $($registry.sources.Count)" }
 if (($registry.sources.id | Sort-Object -Unique).Count -ne $registry.sources.Count) { throw 'Duplicate source id' }
 foreach ($source in $registry.sources) {
     if ($source.license_record.PSObject.Properties.Name.Count -lt 8) { throw "Incomplete LicenseRecord: $($source.id)" }
@@ -55,19 +61,19 @@ foreach ($source in $registry.sources) {
 $library = Get-Content -LiteralPath 'apps/web/src/data/knowledge-library.json' -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($library.stats.problem_count -ne $library.problems.Count) { throw 'Problem count does not match frontend data' }
 if ($library.stats.paper_count -ne $library.papers.Count) { throw 'Paper count does not match frontend data' }
-if ($library.problems.Count -ne 148) { throw "Expected 148 complete problems, found $($library.problems.Count)" }
+if ($library.problems.Count -ne 169) { throw "Expected 169 complete problems, found $($library.problems.Count)" }
 if ($library.papers.Count -lt 906) { throw "Expected at least 906 structured paper records, found $($library.papers.Count)" }
 if (($library.problems.id | Sort-Object -Unique).Count -ne $library.problems.Count) { throw 'Duplicate problem id' }
 if (($library.papers.id | Sort-Object -Unique).Count -ne $library.papers.Count) { throw 'Duplicate paper id' }
 $repositoryPapers = @($library.papers | Where-Object { $_.source_id -eq 'github_zhanwen_mathmodel' })
 if ($repositoryPapers.Count -ne 685) { throw "Expected 685 repository paper records, found $($repositoryPapers.Count)" }
 $fullProblems = @($library.problems | Where-Object { $_.content_status -eq 'complete' })
-if ($fullProblems.Count -ne 148) { throw "Expected every frontend problem to be complete, found $($fullProblems.Count)" }
+if ($fullProblems.Count -ne 169) { throw "Expected every frontend problem to be complete, found $($fullProblems.Count)" }
 # Layout-aware extraction excludes page numbers, running heads and footer boilerplate,
 # so the published character total sits below the raw text-layer length.
 if (($fullProblems | Measure-Object content_character_count -Sum).Sum -lt 555000) { throw 'Complete problem text is unexpectedly short' }
 if (($fullProblems | Measure-Object content_block_count -Sum).Sum -lt 4350) { throw 'Complete problem block count is unexpectedly low' }
-foreach ($expected in @(@('comap_mcm_icm',44), @('apmcm_problems',32), @('cumcm_official',51), @('mathorcup_official',9), @('github_zhanwen_mathmodel',12))) {
+foreach ($expected in @(@('comap_mcm_icm',44), @('apmcm_problems',32), @('cumcm_official',51), @('mathorcup_official',9), @('huashu_cup_official',21), @('github_zhanwen_mathmodel',12))) {
     $actual = @($fullProblems | Where-Object { $_.source_id -eq $expected[0] }).Count
     if ($actual -ne $expected[1]) { throw "Expected $($expected[1]) complete problems for $($expected[0]), found $actual" }
 }
@@ -76,7 +82,7 @@ foreach ($year in 2023, 2024) {
         if (-not ($fullProblems.id -contains "cpmcm-$year-$letter")) { throw "Missing complete problem cpmcm-$year-$letter" }
     }
 }
-$archiveProblems = @($fullProblems | Where-Object { $_.source_id -in @('comap_mcm_icm', 'apmcm_problems', 'cumcm_official', 'mathorcup_official') })
+$archiveProblems = @($fullProblems | Where-Object { $_.source_id -in @('comap_mcm_icm', 'apmcm_problems', 'cumcm_official', 'mathorcup_official', 'huashu_cup_official') })
 if (@($archiveProblems | Where-Object { $_.content_format -ne 'structured_text' }).Count -ne 0) { throw 'PDF problems are not published as structured text' }
 if (@($archiveProblems | Where-Object { @($_.content_blocks | Where-Object { $_.type -eq 'page' }).Count -gt 0 }).Count -ne 0) { throw 'PDF page screenshot blocks remain' }
 # Paragraphs alone are not a stable measure of structure: text legitimately moves
@@ -158,7 +164,7 @@ foreach ($id in $comapExpected) {
 # hold is that the link is absolute and on an official host -- the frontend keys
 # off the leading "/" to decide download vs. outbound link, so a relative URL here
 # would render as a download and 404.
-$officialHosts = @('comap.org', 'mcm.edu.cn', 'apmcm.org', 'cmathc.org.cn', 'acge.org.cn', 'mathorcup.org')
+$officialHosts = @('comap.org', 'mcm.edu.cn', 'apmcm.org', 'cmathc.org.cn', 'acge.org.cn', 'mathorcup.org', 'saikr.com')
 foreach ($problem in $archiveProblems) {
     foreach ($attachment in $problem.attachments) {
         if ($attachment.external) {
@@ -210,7 +216,7 @@ if ($frontendSource -notmatch 'problem-download-link' -or $frontendSource -notma
 # mirror under /problem-files or an organiser-domain original may become a link. Without
 # this filter a community-repository .docx would render as a live download.
 if ($frontendSource -notmatch 'linkableAttachments') { throw 'Frontend attachment renderer is not filtered by host' }
-if ($frontendSource -notmatch 'OFFICIAL_SOURCE_HOSTS' -or $frontendSource -notmatch '"acge\.org\.cn"' -or $frontendSource -notmatch '"mathorcup\.org"') { throw 'Frontend allowlist does not cover all organiser domains' }
+if ($frontendSource -notmatch 'OFFICIAL_SOURCE_HOSTS' -or $frontendSource -notmatch '"acge\.org\.cn"' -or $frontendSource -notmatch '"mathorcup\.org"' -or $frontendSource -notmatch '"saikr\.com"') { throw 'Frontend allowlist does not cover all organiser domains' }
 if ($frontendSource -match 'OFFICIAL_SOURCE_HOSTS\s*=\s*\[[^\]]*github') { throw 'Frontend allowlist admits a community repository host' }
 # Both ingesters open images (Pillow), and the archive one also parses PDFs, so
 # both need the bundled interpreter -- the ambient `python` on this workspace has
@@ -222,6 +228,10 @@ if (-not (Test-Path -LiteralPath $bundledPython -PathType Leaf)) { throw "Bundle
 if ($LASTEXITCODE -ne 0) { throw 'Complete MathModel problem verification failed' }
 & $bundledPython datasets/recipes/stage_mathorcup_archives.py verify
 if ($LASTEXITCODE -ne 0) { throw 'MathorCup archive staging verification failed' }
+& $bundledPython datasets/recipes/discover_electric_cup.py verify
+if ($LASTEXITCODE -ne 0) { throw 'Electric Cup discovery verification failed' }
+& $bundledPython datasets/recipes/stage_huashu_cup_archive.py verify
+if ($LASTEXITCODE -ne 0) { throw 'Huashu Cup archive staging verification failed' }
 & $bundledPython datasets/recipes/ingest_full_problem_archives.py verify
 if ($LASTEXITCODE -ne 0) { throw 'Complete COMAP/APMCM/CUMCM/MathorCup problem verification failed' }
 $verificationOutput = 'artifacts/data-collection-wave-a/verification-library.json'
@@ -258,12 +268,16 @@ if ($RequireRuntimeData) {
     $runtimeSummary.full_problem_bytes = [long]$repositoryManifest.summary.bytes
     $archiveProblems = Get-Content -LiteralPath 'datasets/interim/full_problem_sources/problems.json' -Raw -Encoding UTF8 | ConvertFrom-Json
     $sourceIds['cumcm_official'] = $true
+    $sourceIds['electric_cup_official'] = $true
+    $sourceIds['huashu_cup_official'] = $true
+    $runtimeSummary.manifests++
+    $runtimeSummary.manifests++
     $runtimeSummary.full_problem_pages = [int]$archiveProblems.stats.page_count
     $runtimeSummary.full_problem_text_blocks = [int]$archiveProblems.stats.text_block_count
     $runtimeSummary.full_problem_figures = [int]$archiveProblems.stats.figure_count
     $runtimeSummary.full_problem_downloads = [int]$archiveProblems.stats.attachment_count
     $runtimeSummary.full_problem_download_bytes = [long]$archiveProblems.stats.download_bytes
-    foreach ($source in $registry.sources | Where-Object { $_.id -ne 'mathorcup_official' }) {
+    foreach ($source in $registry.sources | Where-Object { $_.id -notin @('mathorcup_official', 'electric_cup_official', 'huashu_cup_official') }) {
         if (-not $sourceIds.ContainsKey($source.id)) { throw "No runtime manifest for source: $($source.id)" }
     }
     $objects = @(Get-ChildItem -LiteralPath 'datasets/raw/objects' -Recurse -File)

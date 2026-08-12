@@ -305,7 +305,7 @@ def build() -> dict[str, Any]:
     version = hashlib.sha256(fingerprint_input).hexdigest()[:12]
     return {
         "schema_version": "1.0.0", "dataset_version": f"wave-a-{version}", "generated_at": latest_time,
-        "stats": {"problem_count": len(problems), "paper_count": len(papers), "source_count": 6},
+        "stats": {"problem_count": len(problems), "paper_count": len(papers), "source_count": 8},
         "problems": problems, "papers": papers,
     }
 

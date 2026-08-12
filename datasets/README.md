@@ -50,11 +50,17 @@ python datasets/recipes/collect_official_problems.py collect `
 #    按原文顺序提取段落、标题、列表、表格、公式文本和图片
 python datasets/recipes/ingest_mathmodel_full_problems.py all
 
-# 5. 将官方站点快照与完整题面规范化为前端赛题库/优秀论文数据
+# 5. 暂存主办方发布的赛题归档（校验和固定后再解压）。
+#    华数杯按场次发布：historical 覆盖 2020–2025，此后每届单独一个包，
+#    赛事结束后才收录；省略 --edition 表示处理全部场次。
+python datasets/recipes/stage_huashu_cup_archive.py all
+python datasets/recipes/stage_mathorcup_archives.py all
+
+# 6. 将官方站点快照与完整题面规范化为前端赛题库/优秀论文数据
 & "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   datasets/recipes/ingest_full_problem_archives.py all
 
-# 6. 合并所有完整题面和论文索引
+# 7. 合并所有完整题面和论文索引
 python datasets/recipes/build_knowledge_library.py
 ```
 

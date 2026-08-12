@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "dataset_version": "wave-a-4e714218c6d2",
+  "dataset_version": "wave-a-2d51293ffa70",
   "generated_at": "2026-08-04T02:29:43+00:00",
   "stats": {
-    "problem_count": 148,
+    "problem_count": 169,
     "paper_count": 906,
-    "source_count": 6
+    "source_count": 8
   },
   "problems": [
     {
@@ -1533,7 +1533,8 @@
         "决策分析"
       ],
       "keywords": [
-        "优化"
+        "优化",
+        "规划"
       ],
       "data_requirement": "含本地原题 PDF",
       "status": "完整题面",
@@ -1720,6 +1721,1071 @@
         "bytes": 1200375,
         "sha256": "20deded9659feb663c8687c9b9de6c01eadcc0a34c98b2f480f928a5ee3dfd17",
         "page_count": 3
+      }
+    },
+    {
+      "id": "huashu-cup-2026-a",
+      "code": "2026 华数杯 A",
+      "title": "微构体中填充导电介质的仿真优化",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2026,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 1 个随题附件",
+      "status": "完整题面",
+      "summary": "一种导电体系由多种填充介质组成，研究其导电性能与填充介质之间的关系，对新能源、新材料及半导体领域的研究具有重要意义。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/46038",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2026-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 1246236,
+          "sha256": "6d31c44022b08840b5e791dd11b431cbcdc187e0f2ff33f613d45728646d0c0a"
+        },
+        {
+          "title": "随题附件包（1 个文件）",
+          "url": "/problem-files/huashu-cup-2026-a/attachments.zip",
+          "kind": "data",
+          "bytes": 55735,
+          "sha256": "8ae9b99a93d7ad15e14e58da2e9b2cd929db30e48d4c126ceac9ad84156b1ba3"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1956,
+      "content_block_count": 24,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2026年第七届“华数杯”大学生数学建模竞赛"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "A题微构体中填充导电介质的仿真优化"
+        },
+        {
+          "type": "paragraph",
+          "text": "一种导电体系由多种填充介质组成，研究其导电性能与填充介质之间的关系，对新能源、新材料及半导体领域的研究具有重要意义。为便于研究此种导电体系的导通问题，研究人员将研究对象理想化成一个边长10000nm（nm：纳米）正方体的微型结构，以下简称为“微构体”，如图1所示。研究微构体的导通情况即可反映该导电体系的导电性能。微构体内部默认充满绝缘溶剂和若干导电介质。在微构体中，所有导电介质可以悬浮于微构体内部的任意位置，任意方向。不考虑导电介质的重力作用，即导电介质所受的合力为0。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2026-a/p001-01.jpg",
+          "alt": "huashu-cup-2026-a 第 1 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1填充介质A的微构体情况示意图（微构体和介质A的比例已进行适当缩放）。图中所有黄色的介质A在两个带电表面之间构成通路（两个相邻黄色介质A导通，并且有黄色介质"
+        },
+        {
+          "type": "paragraph",
+          "text": "A和两个带电表面也导通），此时整个微构体视为导通。"
+        },
+        {
+          "type": "paragraph",
+          "text": "现有的导电介质存在两种形状。第一种导电介质为直圆柱体，直圆柱体高为5000nm，底面半径为30nm，以下简称介质A；第二种导电介质为半径200nm的正球体，以下简称介质B。所有导电介质均位于微构体范围内，不允许任何部分超出微构体边界。在计算机仿真中，导电介质超出微构体边界的部分默认统一采用边界截断规则（具体规则见相关说明）进行处理。"
+        },
+        {
+          "type": "paragraph",
+          "text": "选择微构体两个相对的面作为带电表面，默认这两个面的所有位置均带电，剩余四个面则默认不带电且绝缘，也不导电。同时，在计算机仿真中，微构体中的导电介质位置一旦固定，就不会移动，介质之间不存在碰撞关系，允许介质因随机生成而产生相互贯穿、重叠等情况。一个导电介质是否能带电取决于该导电介质与带电表面或者其余已经带电的导电介质之间的最短距离。当最短距离小于等于1.8nm时，导电介质和带电表面之间或者两个导电介质之间视为导通；大于1.8 nm时，视为不导通。假设导电介质m开始时不带电，若现在周围存在已经带电的导电介质n且m与n之间的最短距离小于等于1.8nm，则m由于极化作用也全部带电，m与n视为导通。若微构体两个相对的带电表面之间存在至少一条由导电介质构成的完整通路，则判定该微构体导通。"
+        },
+        {
+          "type": "paragraph",
+          "text": "需要额外注意的是，微构体的导通性仅在两个带电表面之间进行判定。在本研究中，为方便计算，微构体的中心点为坐标轴原点，且长宽高分别平行于XYZ轴，并选取垂直于X轴的两个表面为带电表面，即微构体的带电表面仅为正方体的左面和右面。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型解决以下问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题1：若微构体中的导电介质只有介质A。附件1给出了三个微构体中所有介质A的坐标，试分析三个微构体是否导通，分别给出三个微构体的导通情况。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题2：若向微构体中仅添加介质A，添加介质A的体积分数（名词解释见相关说明）为0.50%，计算在当前条件下微构体的导通概率。若将介质A的体积分数依次调整为0.60%、0.70%和1.00%，请分别计算对应的微构体导通概率。如果体积分数对应的介质A的数量不是整数，四舍五入即可。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题3：若微构体中的导电介质只包含介质A。试计算在微构体导通的概率不低于90%的前提下，介质A的最低填充量（结果使用体积分数表示，并精确到百分号下小数点后两位）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题4：若在微构体中同时填充介质A和介质B。介质A成本为1.05元/"
+        },
+        {
+          "type": "paragraph",
+          "text": "（：微米），介质B的成本为0.05元/。试计算在微构体导通的概率不μm3低于90%的前提下，两种介质的填充量为多少时，使得微构体填充导电介质的总μm μm3成本最低。"
+        },
+        {
+          "type": "paragraph",
+          "text": "相关说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）体积分数：导电介质的总体积占微构体总体积的百分比。"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）边界截断规则：当导电介质的任一部分超出微构体边界时，首先，将超出部分沿某一越界方向的反方向平移一个微构体边长，使其由相对侧边界重新进入微构体。若平移后仍在其他方向超出边界，则重复上述操作，直至所有超出部分均回到微构体范围内。如图2所示，假设介质A两端顶点坐标分别为（）和（），其部分区域X1沿X轴方向超出边界，X1两端顶点坐标分别为（3500,y1,z1 6000,y2,z2）和（）。将X1对应的X坐标减去微构体在该方向上的边长，平移后的5000,y3,z3 X1 6000,y两端顶点坐标分别为（2,z2）和（）。−5000,y3,z3"
+        },
+        {
+          "type": "paragraph",
+          "text": "−4000,y若平移后的X1仍在Y轴或Z轴方向超出边界，则重复上述操作即可。2,z2"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2026-a/p003-01.jpg",
+          "alt": "huashu-cup-2026-a 第 3 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2边界截断规则图例。经边界截断规则处理之后，介质A为蓝色实线部分和红色虚线部"
+        },
+        {
+          "type": "paragraph",
+          "text": "分，此时介质A所有部分均在微构体内部。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件：一共三个分表（组1，组2，组3），每一个分表表示一个微构体中包含的所有介质A。其中，每一行表示一个介质A，前三列表示一个顶点（顶点指介质A的轴与介质A底面的交点）的三维坐标，后三列表示另外一个顶点的三维坐标。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-2026/2026年第七届华数杯数学建模竞赛赛题/A题 微构体中填充导电介质的仿真优化/A题 微构体中填充导电介质的仿真优化.pdf",
+        "bytes": 1246236,
+        "sha256": "6d31c44022b08840b5e791dd11b431cbcdc187e0f2ff33f613d45728646d0c0a",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "huashu-cup-2026-b",
+      "code": "2026 华数杯 B",
+      "title": "VLSI 布图规划设计",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2026,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "规划"
+      ],
+      "data_requirement": "含本地原题 PDF及 10 个随题附件",
+      "status": "完整题面",
+      "summary": "超大规模集成电路(VLSI，Very Large Scale Integration)将大量电路单元集成于单一芯片。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/46038",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2026-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 1385562,
+          "sha256": "f5e74a5d3997efc2252bc2ef204e5a20ba66bba442ae05ad2e4f473261b32566"
+        },
+        {
+          "title": "随题附件包（10 个文件）",
+          "url": "/problem-files/huashu-cup-2026-b/attachments.zip",
+          "kind": "data",
+          "bytes": 735793,
+          "sha256": "194076f7678a27c9e63809c217ee0682ff57eb8351c5ce2da02abebbc4f51059"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2519,
+      "content_block_count": 54,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2026年第七届“华数杯”大学生数学建模竞赛"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "B题VLSI布图规划设计"
+        },
+        {
+          "type": "paragraph",
+          "text": "超大规模集成电路(VLSI，Very Large Scale Integration)将大量电路单元集成于单一芯片。随着设计复杂度增加，如今开展VLSI设计已离不开电子设计自动化(EDA，Electronic Design Automation)工具的支持。EDA作为算法密集型产业，需要对数千种情境进行快速设计探索，是国家关键技术领域。其中，布图规划(Floorplanning)是EDA研究的核心问题之一。"
+        },
+        {
+          "type": "paragraph",
+          "text": "布图规划旨在给定的芯片轮廓内确定各功能模块的位置和方向，为后续的布局和布线奠定基础。芯片轮廓通常为正方形，其尺寸由所有模块的总面积（total_block_area）和预设的死区比例（dead_space_ratio）共同确定，死区比例反映了布线和其他开销所需的额外空间。芯片轮廓的尺寸计算如公式(1)所示，则芯片的左下角坐标和右上角坐标分别为()和(ℎ)。"
+        },
+        {
+          "type": "paragraph",
+          "text": "0,0,"
+        },
+        {
+          "type": "paragraph",
+          "text": "=ℎ = _ _ ∗ 1+ _ _ 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "通常情况下，布图规划的目标是功能模块间的总连线长度最小，同时满足模块之间不重叠、不超出芯片轮廓等约束条件。每个模块都为矩形，允许进行90度旋转以获得更好的布局效果。模块间的连接关系通过连线网络描述，每个网络连接若干个模块的引脚，网络的连线长度采用半周长线长（Half Perimeter Wirelength, HPWL）[1]进行估算，即连接所有引脚的最小包围矩形的周长的一半。为简化问题，假设所有模块的引脚均位于模块的几何中心位置。图(1)描述了VLSI布图规划设计中的相关概念，附件给出了模块和连线网络(包含.blocks，.nets，.pl三个文件)的具体信息。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2026-b/p002-01.png",
+          "alt": "huashu-cup-2026-b 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1. VLSI布图规划设计相关概念"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型解决以下问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "假设芯片轮廓不固定，模块之间也没有连接关系。请问如何摆放模块，使得芯片轮廓面积最小；在轮廓的面积相同的情况下，其长宽比越接近1则结果越好。图2示意了3个模块及其对应的2种布图规划结果。请根据所建立的模型和.blocks文件信息，对附件中的三组芯片（n100、n200、n300）分别完成模块摆放（即确定.blocks文件中类型为block的模块位置，每组芯片独立布图），分别给出三组芯片轮廓的面积、长宽比、模块摆放的可视化结果。",
+          "lead": "问题1"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2026-b/p002-02.png",
+          "alt": "huashu-cup-2026-b 第 2 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2.问题1相关指标计算示意图。模块允许旋转，不允许重叠"
+        },
+        {
+          "type": "paragraph",
+          "text": "实际场景中，芯片轮廓通常为正方形，其尺寸由公式(1)确定，模块之间也会有连接关系。请问如何摆放模块，使得模块之间总HPWL最小，同时满足模块之间不重叠、不超出芯片轮廓的约束条件。假设死区比例为0.15，请根据所建立的模型和附件信息，对附件中的三组芯片完成模块摆放，分别给出三组芯片的总连线长度、模块摆放的可视化结果。",
+          "lead": "问题2"
+        },
+        {
+          "type": "paragraph",
+          "text": "在问题2的基础上，为满足模块之间不重叠、不超出芯片轮廓的约束条件，死区比例最小可以是多少（见公式1，随着死区比例减小，芯片轮廓尺寸逐渐减小，布图越难以满足约束条件。即求解使得存在一个可行布局方案的最小死区比例）？请分别给出附件中三组芯片的死区比例最小值，并基于问题2所建立的模型和死区比例最小值，更新问题2的总HPWL以及模块摆放的可视化结果。",
+          "lead": "问题3"
+        },
+        {
+          "type": "paragraph",
+          "text": "假设模块不再全是规则的矩形，而可能是L型和T型，且所有模块均可以进行90°、180°和270°旋转。请讨论问题1所建立的模型如何修正？求解算法可在问题1算法基础上适当修改，不要求重新设计新的优化算法。为验证修正后的模型的有效性，现给出如图3所示的4个待摆放模块，请基于您修正后的模型，求解如何摆放这4个模块使得包围他们的芯片轮廓面积最小，给出最优摆放的示意图及此时的最小面积。",
+          "lead": "问题4"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2026-b/p003-01.png",
+          "alt": "huashu-cup-2026-b 第 3 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图3.四个模块的尺寸信息，分别有1个T型、1个L型、2个矩形模块"
+        },
+        {
+          "type": "paragraph",
+          "text": "参考文献"
+        },
+        {
+          "type": "paragraph",
+          "text": "[1]半周长线长HPWL."
+        },
+        {
+          "type": "paragraph",
+          "text": "https://www.bohrium.com/sciencepedia/feynman/keyword/half_perimet er_wirelength"
+        },
+        {
+          "type": "paragraph",
+          "text": "[2]Modern Floorplanning Based on B ∗ -Tree and Fast Simulated Annealing."
+        },
+        {
+          "type": "paragraph",
+          "text": "https://cc.ee.ntu.edu.tw/~ywchang/Papers/tcad06mfloorplanning.pdf"
+        },
+        {
+          "type": "paragraph",
+          "text": "[3]黄志鹏,李兴权,朱文兴. \"超大规模集成电路布局的优化模型与算法.\"运筹学学报25, no. 3 (2021): 15-36."
+        },
+        {
+          "type": "paragraph",
+          "text": "附件说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件包含3组芯片设计文件，分别为n100，n200，n300。每组芯片设计包含文件如下："
+        },
+        {
+          "type": "paragraph",
+          "text": ".blocks文件"
+        },
+        {
+          "type": "paragraph",
+          "text": "该文件描述了功能模块的基本信息。功能模块分为两类：1) HardBlock，需要确定其摆放位置和方向；2) Terminal，位置和方向都已固定的模块。功能模块的名称、类型、尺寸均在该文件中给出。Terminal尺寸对解题并无帮助，因此略去其尺寸信息。Terminal仅作为固定引脚参与HPWL计算，不参与面积约束和重叠约束。文件格式示例如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "NumHardBlocks：5"
+        },
+        {
+          "type": "paragraph",
+          "text": "//待确定位置和方向的blocks总个数"
+        },
+        {
+          "type": "paragraph",
+          "text": "NumTerminals：32"
+        },
+        {
+          "type": "paragraph",
+          "text": "//固定位置的terminals的总个数"
+        },
+        {
+          "type": "paragraph",
+          "text": "b0block4(0,0)(0,82)(199,82)(199,0)"
+        },
+        {
+          "type": "paragraph",
+          "text": "//模块名称类型边角个数节点1坐标节点2坐标节点3坐标节点4坐标"
+        },
+        {
+          "type": "paragraph",
+          "text": "…"
+        },
+        {
+          "type": "paragraph",
+          "text": "p1terminal"
+        },
+        {
+          "type": "paragraph",
+          "text": "//模块名称类型"
+        },
+        {
+          "type": "paragraph",
+          "text": "…"
+        },
+        {
+          "type": "paragraph",
+          "text": ".nets文件"
+        },
+        {
+          "type": "paragraph",
+          "text": "该文件描述了连线网络（亦可简称为“线网”）的基本信息。在优化线网的HPWL指标时，仅需要关注线网的所有引脚坐标组成的外接矩形的半周长，而不用考虑引脚内部具体如何连线。文件格式示例如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "NumNets：10"
+        },
+        {
+          "type": "paragraph",
+          "text": "//线网的总个数"
+        },
+        {
+          "type": "paragraph",
+          "text": "NumPins：20"
+        },
+        {
+          "type": "paragraph",
+          "text": "//引脚的总个数"
+        },
+        {
+          "type": "paragraph",
+          "text": "//NetDegree：2"
+        },
+        {
+          "type": "paragraph",
+          "text": "//每个线网有多少个引脚p1"
+        },
+        {
+          "type": "paragraph",
+          "text": "b0"
+        },
+        {
+          "type": "paragraph",
+          "text": "//节点名称"
+        },
+        {
+          "type": "paragraph",
+          "text": "…"
+        },
+        {
+          "type": "paragraph",
+          "text": ".pl文件"
+        },
+        {
+          "type": "paragraph",
+          "text": "该文件描述了Terminal的基本信息，包括名称、X坐标和Y坐标。文件格式示例如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "p100"
+        },
+        {
+          "type": "paragraph",
+          "text": "//模块名称X坐标Y坐标"
+        },
+        {
+          "type": "paragraph",
+          "text": "…"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-2026/2026年第七届华数杯数学建模竞赛赛题/B题 VLSI布图规划设计/B题 VLSI布图规划设计.pdf",
+        "bytes": 1385562,
+        "sha256": "f5e74a5d3997efc2252bc2ef204e5a20ba66bba442ae05ad2e4f473261b32566",
+        "page_count": 5
+      }
+    },
+    {
+      "id": "huashu-cup-2026-c",
+      "code": "2026 华数杯 C",
+      "title": "面向算电协同的多目标调度优化研究",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2026,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化",
+        "调度"
+      ],
+      "data_requirement": "含本地原题 PDF及 7 个随题附件",
+      "status": "完整题面",
+      "summary": "随着人工智能算力规模的持续扩张，数据中心对电力系统的影响不断增强，电力成本已逐渐成为数据中心运营成本的核心组成部分。在此背景下，“算电协同”逐渐从政策倡导演变为产业发展的现实需求。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/46038",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2026-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 185276,
+          "sha256": "0adc971ab421a7de5e3dd1c19c8540479b16977893edf4af13486e88410622c9"
+        },
+        {
+          "title": "随题附件包（7 个文件）",
+          "url": "/problem-files/huashu-cup-2026-c/attachments.zip",
+          "kind": "data",
+          "bytes": 5846424,
+          "sha256": "bffa0a3a759f2a6faf6405d0c53929025c934a027bb6e86d62494a26c947d3c2"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2233,
+      "content_block_count": 17,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2026年第七届“华数杯”大学生数学建模竞赛"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "C题面向算电协同的多目标调度优化研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "随着人工智能算力规模的持续扩张，数据中心对电力系统的影响不断增强，电力成本已逐渐成为数据中心运营成本的核心组成部分。在此背景下，“算电协同”逐渐从政策倡导演变为产业发展的现实需求。2026年政府工作报告首次将“算电协同”纳入国家级新基建工程，明确提出“实施超大规模智算集群、算电协同等新基建工程，加强全国一体化算力监测调度，支持公共云发展”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "算电协同更加关注算力负荷与能源系统之间的实时耦合关系，西部地区具有丰富的风能、太阳能和水电资源，电价相对较低，具备建设绿色低碳数据中心的天然优势，而东部地区则更加接近用户侧，具有更低的网络时延与更高的实时业务需求。然而，在实际运行过程中，算力跨区域迁移涉及计算任务、电力系统、新能源、储能系统和通信网络之间复杂耦合关系的多目标协同优化问题。例如，将AI任务迁移至新能源资源丰富地区虽然可以降低电费成本和碳排放，但可能导致网络时延增加；实时推理任务对时延极为敏感，而训练任务则更关注能源成本与算力规模；新能源出力具有波动性，需要储能系统进行协调。因此，如何实现AI工作负载、能源系统与通信网络的联合优化，成为当前面向算电协同的重要研究问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "本研究设定存在六个典型区域，RegionA、RegionB与RegionC代表东部高负荷区域；RegionD代表西部算力中心；RegionE、RegionF分别为光伏和风电资源富集区域。任务到达主时域为第0–2399小时，粒度为1小时。第2400–2405小时用于结清末端任务；第2406小时不产生新任务，也不安排未完成任务，仅用于电力与储能终端状态结算。任务包括实时推理、批量推理和AI训练三类；实时推理任务到达即开工；批量推理和AI训练任务允许延后，但均须在时点2406完成，即不得占用第2406小时。任务不可抢占、不可拆分或中途迁移。请参赛者根据附件数据回答以下问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "基于附件中的AI工作负载数据，对不同区域、不同类型任务的GPU需求进行统计分析，并构建短期预测模型。请建立基础算力调度模型，并给出第2376–2399小时实际到达任务的调度方案；跨越第2399小时的任务须在收尾时域内结清，并展示最后24小时的调度甘特图和区域GPU利用率。",
+          "lead": "问题1："
+        },
+        {
+          "type": "paragraph",
+          "text": "以第0–2399小时实际到达任务及对应逐时电力参数为输入，考虑区域电价、碳强度和可用新能源出力，以任务迁移与开工时段为决策变量（迁移后的设施负荷按统一功率映射与区域PUE计算），以运行成本、碳排放、网络时延和新能源利用率为目标或评价指标，建立碳感知任务调度模型，并给出调度策略。",
+          "lead": "问题2："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题3：在给定任务调度和逐时负荷的基础上，建立储能协同优化模型，设计储能充放电策略，分析储能系统对运行成本、碳排放、区域峰值净购电功率和负荷波动程度的影响。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题4：在前三问基础上，建立多区域算—储—电协同优化模型，统一考虑任务迁移、电价、碳排放、可用新能源、储能、区域购售电边界、网络时延及任务异构性。请在系统运行成本、碳排放、网络时延、服务质量、新能源利用率和区域峰值净购电之间进行权衡，并比较不同碳约束、电价机制和新能源波动场景下的策略变化。"
+        },
+        {
+          "type": "paragraph",
+          "text": "说明："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、附件1.docx展示了详细的数据说明和名词解释。没有物理单位的标签类或状态类字段，已在相应工作簿的“字段说明”工作表中注明为“无”或“无量纲”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、工作负载到达数据覆盖第0–2399小时；region_time_data.xlsx覆盖第0–2406小时。第2376–2399小时的预测精度仅用于预测评价。问题一中，最后24小时任务的基础调度统一以实际到达任务为输入；问题二至问题四均按实际到达任务、实际逐时电力参数和统一功率映射重新计算。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、问题二至问题四中的碳排放量与新能源利用率应按照附件1给出的统一计算口径重新计算。涉及任务调度的问题一、问题二和问题四，调度结果须满足GPU容量、IT功率、设施功率、网络时延和任务完成时限约束；任务形成的AI IT功率应按power_mapping.xlsx计算。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4、问题三以region_time_data.xlsx中的Baseline_AI_IT_Load_MW与NonAI_IT_Load_MW作为给定IT负荷，其中设施负荷按“给定IT负荷×区域PUE”计算。参赛队仅优化储能充放电、购售电及新能源分配策略，不重新优化任务迁移与任务开工时段。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5、问题三中，储能初始状态取storage_information.xlsx中的InitialSOC_MWh；region_time_data.xlsx中的SOC_MWh为该小时运行后的时段末基准状态。储能优化结果应满足SOC上下限、充放电功率及效率约束，且SOC(2406)，即第2406小时的SOC不低于InitialSOC_MWh。问题一的预测模型建议使用第0–2351小时数据训练、第2352–2375小时数据调参验证；模型确定后，以第0–2375小时数据重新训练，并对第2376–2399小时进行最终测试。"
+        },
+        {
+          "type": "paragraph",
+          "text": "6、问题二至问题四以第0–2399小时为主运行时域。第2400–2405小时不产生新任务，仅用于结清末端弹性任务，并计入相应的能源、成本和碳排放结算；第2406小时不安排未完成任务，仅用于电力与储能终端状态结算。"
+        },
+        {
+          "type": "paragraph",
+          "text": "7、问题四中不要求建立线路潮流、网络带宽、迁移数据量、传输能耗或传输费用模型。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-2026/2026年第七届华数杯数学建模竞赛赛题/C题 面向算电协同的多目标调度优化研究/C题 面向算电协同的多目标调度优化研究.pdf",
+        "bytes": 185276,
+        "sha256": "0adc971ab421a7de5e3dd1c19c8540479b16977893edf4af13486e88410622c9",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2025-a",
+      "code": "2025 华数杯 A",
+      "title": "多孔膜光反射性能的优化与控制",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2025,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 6 个随题附件",
+      "status": "完整题面",
+      "summary": "近年来，随着全球气候变暖问题日益严峻，辐射降温技术受到广泛关注。本题的研究对象是通过溶剂模板辅助的蒸发诱导相分离法（EIPS）制备的醋酸纤维素多孔膜，该材料具有良好的太阳光反射性能，是一种极具应用前景的辐射降温材料。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2025-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 169443,
+          "sha256": "28e21da299e1ac6d570edc16f92e0ff04e1616e6f0a0e144923a1e9b389c4c9b"
+        },
+        {
+          "title": "随题附件包（6 个文件）",
+          "url": "/problem-files/huashu-cup-2025-a/attachments.zip",
+          "kind": "data",
+          "bytes": 15635588,
+          "sha256": "d6c0bc887d9bd39467ee216d33b87289251cfa09a88b778026c5341af75bc467"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1013,
+      "content_block_count": 11,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2025年华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "(请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”)"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "A题多孔膜光反射性能的优化与控制"
+        },
+        {
+          "type": "paragraph",
+          "text": "近年来，随着全球气候变暖问题日益严峻，辐射降温技术受到广泛关注。本题的研究对象是通过溶剂模板辅助的蒸发诱导相分离法（EIPS）制备的醋酸纤维素多孔膜，该材料具有良好的太阳光反射性能，是一种极具应用前景的辐射降温材料。然而，当前该类多孔膜存在微观结构调控不精确、其与光学性能及制备条件的关联机制不明等问题，这亟待我们深入研究。"
+        },
+        {
+          "type": "paragraph",
+          "text": "多孔膜的光反射性能由平均反射率表示，而反射率与孔面积占比高度相关，孔面积占比即SEM图像（电子扫描显微镜（SEM）拍摄样品图像）中孔的总面积与图像涵盖的总面积之比。因此孔面积占比是研究多孔膜光反射性能的关键变量，通过调控孔面积占比可实现对多孔膜光反射性能的优化。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件1详细描述了该多孔膜的制备过程，涉及温度、湿度、固含量三个制备条件，具体包括五个核心环节：DMF的蒸发速度调控、环丁砜与纤维素因溶解度变化产生的析出、环丁砜小液滴的布朗运动、小液滴碰撞形成大液滴，以及大液滴通过吸收小液滴进一步增大。这五个环节分别对应五类数学模型：蒸发速度环节采用动力学模型，环丁砜与纤维素的析出环节采用质量平衡数学模型，环丁砜小液滴的布朗运动环节采用粒子扩散动力学模型，环丁砜大液滴的形成及增大环节均采用粒子碰撞动力学模型。对于模型参数，例如环丁砜和醋酸纤维素的析出模型中，参数有环丁砜在DMF中的溶解度、醋酸纤维素在DMF中的溶解度等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请你查阅相关文献，建立数学模型，回答下列问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题一：附件1中给出了多孔膜的制备过程。请结合多孔膜的制备过程，从制备材料的蒸发、环丁砜与醋酸纤维素的析出、环丁砜小液滴的布朗运动、大液滴的形成及增大这五个步骤出发，通过机理分析推导描述多孔膜孔面积占比的理论模型。明确模型中各参数的物理意义，并说明建模过程中对复杂物理现象的简化假设及其合理性。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题二：结合附件2数据，求解问题一建立的理论模型的未知参数，构建出完整的应用模型，并检验模型的合理性。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题三：在问题二应用模型的基础上，想要获得最优多孔膜的孔面积占比，应当如何制定实验室的制备条件？"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题四：在实际科研中，建立机理模型之前，需要进行影响因素分析。请根据附件2中的数据，对多孔膜的孔面积占比做影响因素分析，如果模型有变化，重新建立机理模型，重做问题三，并将结果与问题三进行比较。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第六届/A题/2025年A题 多孔膜光反射性能的优化与控制.pdf",
+        "bytes": 169443,
+        "sha256": "28e21da299e1ac6d570edc16f92e0ff04e1616e6f0a0e144923a1e9b389c4c9b",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2025-b",
+      "code": "2025 华数杯 B",
+      "title": "网络切片无线资源管理方案设计",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2025,
+      "problem_type": "系统建模",
+      "modeling_directions": [
+        "网络模型",
+        "系统分析"
+      ],
+      "keywords": [
+        "网络"
+      ],
+      "data_requirement": "含本地原题 PDF及 16 个随题附件",
+      "status": "完整题面",
+      "summary": "随着物联网设备的指数级增长，移动通信需求呈现爆发式增长，推动了网络架构的不断演进。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2025-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 1292639,
+          "sha256": "1f82ab4a6c5fa8f73b3ee0d1991b1140436b5e3b7d4263672e6a34b67df5f5db"
+        },
+        {
+          "title": "随题附件包（16 个文件）",
+          "url": "/problem-files/huashu-cup-2025-b/attachments.zip",
+          "kind": "data",
+          "bytes": 18846485,
+          "sha256": "f4a390602bf1ab7d5881f88eacef727c7a84e39df7726b109e4bab0c060292c5"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2219,
+      "content_block_count": 17,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2025年华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "(请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”)"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "B题网络切片无线资源管理方案设计"
+        },
+        {
+          "type": "paragraph",
+          "text": "随着物联网设备的指数级增长，移动通信需求呈现爆发式增长，推动了网络架构的不断演进。为应对不同场景下的数据密度与服务需求，移动通信网络逐步采用宏基站与小基站混合部署的异构蜂窝网络结构，其中宏基站负责大范围的覆盖，微基站用于在高密度区域提供高效的无线接入。两层的异构网络可以提升网络容量、覆盖范围和用户体验，尤其是在5G及未来网络中，以支持大规模的设备接入和高数据传输速率。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2025-b/p001-01.png",
+          "alt": "huashu-cup-2025-b 第 1 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1.蜂窝异构网络资源管理两步决策"
+        },
+        {
+          "type": "paragraph",
+          "text": "如图1所示，在部署一个宏基站和四个微基站的网络场景中，多个用户在任务到达后申请下行传输，系统将用户分配给基站，基站根据用户需求分配资源块，接着进行数据传输，传输速率的计算方式见附录（1.信号传输模型）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "在此基础上，5G引入网络切片技术，通过网络功能虚拟化手段将物理网络划分为多个逻辑独立的切片，例如高可靠低时延切片（Ultra-Reliable and Low-Latency Communications, URLLC）、增强移动宽带切片（Enhanced Mobile Broadband, eMBB）和大规模机器通信切片(Massive Machine Type Communications, mMTC)，使同一基础设施能够灵活适配工业控制、超高清视频、大规模感知等多样化业务需求。具体的，通过正交频分多址接入技术将基站的总频谱从时域和频域划分为多个资源块，并将这些资源块灵活分配给所有的切片。假设资源块在频域上的跨度为360kHZ，在时域上的跨度为10ms，具体技术原理见附录（2.正交频分多址接入技术）。面对多切片并存、异构网络协同的复杂场景，如何实现无线资源的高效分配，成为保障网络性能与服务质量的关键问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了能更好的优化无线网络对用户的服务质量，需要根据不同用户的特异化服务质量偏好去评估系统资源分配模型的性能表现，针对每个用户任务的服务质量评估模型见附录（3.用户服务质量定义）的说明。在长时间的通信服务过程中，用户的下行传输任务总是以一定的概率到达，同时用户还存在一定的移动性，因此用户的接入模式通常也会变化，因此为了更灵活的服务基站范围内的用户，假设系统每100 ms决策一次系统的资源配置方案。"
+        },
+        {
+          "type": "paragraph",
+          "text": "根据以上研究背景，请参赛队伍解决以下问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题一：现存在一个微基站向其覆盖范围内的用户提供服务，该基站拥有50个资源块用于分配。假设当下用户只到达了一个任务，将所有的资源块分配给三类切片，用于响应用户的下行传输需求，详细数据见附件1。用户任务在基站中的处理过程见附录（4.用户任务服务流程）请给出具体的资源块分配方案，使用户服务质量达到最大。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题二：现实情况中，用户通常会在一段时间内以概率进行多次传输请求，且用户会进行移动，导致信道发生变化，因此系统在每隔一段时间对资源重新进行分配，分配时不仅要考虑即将到达的任务，还需要考虑积压在排队队列中的用户任务。附件2中给出了所有用户在1000 ms内的任务到达情况和用户与基站之间的信道信息，中间需要对资源进行10次决策，请给出每次决策的三类切片的资源块最佳分配方案，使得整体的用户服务质量达到最大。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题三：针对多个微基站的情况，为了提升频谱利用率，不同基站通常采用相同的频谱资源进行下行传输，因此不同的传输链路之间可能存在干扰，基站之间的干扰模式在附录中（5.信号干扰模型）进行了说明。为了对干扰进行控制，提升用户体验，基站在对资源块进行分配的同时，还需要对每个基站的发射功率进行控制，以降低系统整体的干扰程度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "在附件3中给出了所有用户的任务到达情况，以及所有用户在每一时刻与各个基站之间的信道情况。功率决策决定了每个切片内所有资源块统一的功率，基站功率的取值范围为dBm。请给出各个基站每次决策的资源块分配方案和功率控制方案，使系统的用户服务质量达到最大。p ∈ 10,30"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题四：为了进一步提升系统的容量，通常设置一个宏基站用于全局的覆盖，且有着更充裕的频谱资源，同时设置多个微基站负责对边缘地区增强覆盖。其中宏基站和微基站的频谱不重叠，因此两类基站之间不存在干扰，仅微基站之间存在干扰。尽管宏基站有更好的服务性能，但无法同时满足所有用户的需求，因此在异构网络中，需要确定用户的接入模式，即每个用户是由最近的微基站服务还是由宏基站服务。"
+        },
+        {
+          "type": "paragraph",
+          "text": "假定宏基站持有100个资源块，功率范围为dBm，和周围多个拥有50个资源块的微基站共同服务周边的用户，附件∈ 4 10,40给出了1000 ms内所有用户的任务到达概率以及用户与基站之间的信道信息。针对所有用户的任务需求，请给出每个用户的接入决策，每个基站的切片划分决策以及基站的发射功率分配，以达到最大用户服务质量。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题五：运营商能耗控制是经济与环保双重考量的核心：基站电费占据网络运营成本的核心，功率优化可降低能耗，直接减少电费与设备维护支出。通过平衡服务质量与能效，运营商既可缓解成本压力、延长设备寿命，又能履行绿色社会责任，构建技术驱动型可持续发展网络。在第四问的模型中，针对用户的任务情况以最大用户服务质量进行了资源调度，在本问中，能耗计算模型见附录（6.能耗模型），请基于第四问的数据给出合理的资源分配策略，使得能耗最低的同时能够达到最大的用户服务质量。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第六届/B题/2025年B题 网络切片无线资源管理方案设计.pdf",
+        "bytes": 1292639,
+        "sha256": "1f82ab4a6c5fa8f73b3ee0d1991b1140436b5e3b7d4263672e6a34b67df5f5db",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "huashu-cup-2025-c",
+      "code": "2025 华数杯 C",
+      "title": "可调控生物节律的 LED 光源研究",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2025,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 8 个随题附件",
+      "status": "完整题面",
+      "summary": "发光二极管（Light Emitting Diode, LED）作为一种高效、节能、环保的新型光源，近年来在多个领域得到了广泛应用。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2025-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 267704,
+          "sha256": "a6ab2be14eef48c45591b0875c44fbff14c12c22587e5f3ee36407dda62d8945"
+        },
+        {
+          "title": "随题附件（8 个文件，约 125 MB，官网下载）",
+          "url": "https://m.saikr.com/contest/notice_detail/44136",
+          "kind": "data",
+          "bytes": 0,
+          "sha256": "",
+          "external": true
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 4042,
+      "content_block_count": 51,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2025年华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "(请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”)"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "C题可调控生物节律的LED光源研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "发光二极管（Light Emitting Diode, LED）作为一种高效、节能、环保的新型光源，近年来在多个领域得到了广泛应用。在照明领域，白光LED的效率已远超传统的白炽灯和荧光灯，成为目前最主要的照明光源，能够通过调节色温和光谱特性，适应不同的照明需求。"
+        },
+        {
+          "type": "paragraph",
+          "text": "科学研究表明，光照不仅为我们提供视觉照明，还会通过视网膜深远地影响人体的生理节律系统。例如，特定波长的光照会影响褪黑激素的分泌，进而调节我们的睡眠质量、认知功能与情绪状态。适当的光照调节可以提高工作效率，而失当的光照则可能干扰正常的昼夜节律。因此，如何在满足照明需求的同时，优化LED光源的光谱特性以实现有益的生理节律调节效应，成为一个亟待解决的重要问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型，解决以下问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题1：光源的光谱功率分布（Spectral Power Distribution, SPD）是描述其物理特性的最基础数据，记录了光源在各个波长上的能量分布，如同光源的“指纹”。所有用于评估光源性能的关键参数，本质上都是基于SPD通过一系列标准化的数学模型和算法计算得出的。"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了综合评估LED光源在颜色质量与健康节律效应方面的性能，行业内定义了关键参数。请基于给定的SPD数据，建立计算模型，求解以下三类共五个核心参数，计算方法均在参考文献中给出："
+        },
+        {
+          "type": "paragraph",
+          "text": "λ颜色特性参数"
+        },
+        {
+          "type": "paragraph",
+          "text": "相关色温(CCT)[1]和距离普朗克轨迹的距离(Duv)[5]：这两个参数共同描述了光源的“颜色外观”（偏黄、偏白还是偏蓝）。它们的计算需要将SPD数据首先转换到标准的CIE XYZ色彩空间，然后通过算法寻找其在普朗克轨迹（黑体辐射轨迹）上最近的点来确定。"
+        },
+        {
+          "type": "paragraph",
+          "text": "λ颜色还原参数"
+        },
+        {
+          "type": "paragraph",
+          "text": "保真度指数(Rf)[2]和色域指数(Rg)[2]：这些参数评估的是光源与标准光源相比，还原物体真实色彩的能力。其计算模型较为复杂，通常需要模拟待测光源和标准光源分别照射在一系列标准化的“测试色样”上，再通过复杂的色差公式比较两者在色样上引起的颜色差异。"
+        },
+        {
+          "type": "paragraph",
+          "text": "λ生理节律效应参数"
+        },
+        {
+          "type": "paragraph",
+          "text": "褪黑素日光照度比(mel-DER)[3]：用于量化光照对人体生理节律（抑制褪黑素分泌）的影响强度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "现给定一组LED光源的SPD数据（详见附录数据文件“Problem 1”），每组数据为波长(nm)与对应的光谱功率(W/nm)。请研究上述五个参数的标准化计算方法和数学模型。计算出SPD数据对应的五个特征参数值。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题2：多通道光源是指通过多个独立的发光通道（LED芯片）组合，从而灵活地合成多种光谱功率分布（SPD）。通过精确调节各通道的驱动权重，可以对合成光谱的形状、色温（CCT）、显色性（Rg/Rf）及生理节律效应（melDER）等关键特性进行动态控制。多通道光源的总光谱是各个通道光谱的加权线性叠加[6,7]。"
+        },
+        {
+          "type": "paragraph",
+          "text": "本问题提供了五个独立LED通道的SPD数据（详见附录数据文件“Problem 2_LED_SPD”），作为设计光源的“积木”。它们分别是：三个单色光通道深红光、绿光、蓝光，两个白光转换型通道暖白光(Warm White, WW)，其色温较低（约3000K），能营造舒适、放松的氛围。以及冷白光(Cool White, CW)，其色温较高（约6500K），光谱中短波（蓝光）成分更多，类似于日间自然光。"
+        },
+        {
+          "type": "paragraph",
+          "text": "每个通道的SPD数据格式均为波长(nm)与对应的相对光谱功率。现需要利用这五个通道，通过寻找最佳的权重组合来合成满足特定需求的光谱。"
+        },
+        {
+          "type": "paragraph",
+          "text": "场景一：日间照明模式"
+        },
+        {
+          "type": "paragraph",
+          "text": "在模拟正午日光（CCT = 6500 K）的条件下，使得合成光谱的保真度指数(Rf)尽可能高（接近100）。合成光谱的CCT在正午日光范围，6000±500K以内。色域指数Rg在95~105之间，Rf > 88时可以保证颜色自然。计算并报告此模式下的视黑素日光效率比(mel-DER)。"
+        },
+        {
+          "type": "paragraph",
+          "text": "场景二：夜间助眠模式"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了实现最小化对人体生理节律的干扰，在营造温馨的低色温环境（合成光谱的CCT = 3000 ±500 K）下，需要使合成光谱的视黑素日光效率比(melDER)尽可能低。同时，即使在助眠模式下，也应保证基本的颜色分辨能力，要求一般保真度指数(Rf)不低于80。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请针对以上两个场景，分别求出最优的通道权重组合，并展示合成光谱的关键参数（CCT,Duv, Rf, Rg,mel-DER）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题3：人类的生理和心理健康与一天中自然光的变化息息相关。日出时光线柔和；正午时色温高、光照强烈；日落时又回归低色温。附录数据文件“Problem 3SUN_SPD”表格给出一个时间序列数据集，包含从早晨（8:30）到日落（傍晚19:30）的太阳光谱。结合问题二中给出的五通道LED，设计一个控制策略，使其合成的光谱能够在全天范围模拟给定的太阳光谱数据，使其具有相似的节律效果。并选取三个代表性时间点（早晨、正午、傍晚），绘制合成光谱与目标太阳光谱的对比图，进行案例分析。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题4：在前序问题中，我们已经基于理论模型，设计并优化出了特定模式的光谱。然而，理论设计需要通过人体实验来验证。本问题将提供一组临床睡眠实验数据，要求运用统计分析方法，评估我们设计的“优化光照”是否真正对改善人类睡眠质量有显著效果。这是一项包含11位健康被试的交叉实验。每位被试在不同日期分别体验了以下三种睡前光照环境，每种环境持续一晚："
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "环境A",
+              "被试在睡前 2小时暴露于问题二中设计的“夜间助 眠模式”的光谱下。"
+            ],
+            [
+              "环境B",
+              "被试在睡前 2小时暴露于一种普通的市售 LED灯 光下。"
+            ],
+            [
+              "环境C",
+              "被试在睡前2小时处于严格的黑暗环境中。"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "现提供这11位被试在三种环境下（共11×3=33条有效记录）的整夜睡眠数据，数据详见附录数据文件“Problem 4”。数据由便携式睡眠监测仪采集，每30秒记录一次。数据中的睡眠阶段编码遵循美国睡眠医学会（AASM）的标准："
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "4",
+              "清醒(Wake)"
+            ],
+            [
+              "5",
+              "REM睡眠(Rapid Eye Movement)"
+            ],
+            [
+              "2",
+              "N2 期睡眠 (Stage N2)+ N1 期睡眠 (Stage"
+            ]
+          ]
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "",
+              "N1)"
+            ],
+            [
+              "3",
+              "N3期睡眠(Stage N3,即深睡眠/慢波睡眠)"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "通常，N1期和N2期被合称为“浅睡眠”（Light Sleep）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "根据睡眠医学的常用标准，我们为每个被试的每次实验计算以下关键指标：总睡眠时间(Total Sleep记录中所有非清醒阶段（N1, N2, N3, REM）的总时Time,TST)长。"
+        },
+        {
+          "type": "paragraph",
+          "text": "睡眠效率SE =(TST/总卧床时间)× 100%。总卧床时间指从关(Sleep Efficiency,SE)灯入睡到最终醒来的总时长。SE是衡量睡眠连续性"
+        },
+        {
+          "type": "paragraph",
+          "text": "的重要指标。"
+        },
+        {
+          "type": "paragraph",
+          "text": "入睡潜伏期(Sleep Onset从关灯到首次进入任何睡眠阶段（N1, N2, N3或Latency,SOL) REM）所需的时间。"
+        },
+        {
+          "type": "paragraph",
+          "text": "深睡眠比例(N3%) N3% = (N3期总时长/TST) × 100%。深睡眠对于身"
+        },
+        {
+          "type": "paragraph",
+          "text": "体恢复至关重要。"
+        },
+        {
+          "type": "paragraph",
+          "text": "REM睡眠比例(REM%) REM% = (REM期总时长/TST) × 100%。REM睡眠"
+        },
+        {
+          "type": "paragraph",
+          "text": "与学习、记忆和情绪调节有关。"
+        },
+        {
+          "type": "paragraph",
+          "text": "夜间醒来次数(Number睡眠开始后，清醒总次数。"
+        },
+        {
+          "type": "paragraph",
+          "text": "ofAwakenings)"
+        },
+        {
+          "type": "paragraph",
+          "text": "现在需要根据原始数据，为每一次睡眠记录计算出一系列公认的客观睡眠质量评估指标。运用恰当的统计检验方法，分析三种光照环境对各项睡眠指标的影响是否存在显著性差异。基于您的统计结果，得出结论：我们设计的“优化光照”相比于“普通光照”和“黑暗环境”，是否对睡眠质量产生了有益的改善？"
+        },
+        {
+          "type": "paragraph",
+          "text": "参考文献"
+        },
+        {
+          "type": "paragraph",
+          "text": "[1]张浩,徐海松.光源相关色温算法的比较研究[J].光学仪器,2006,(01):54-58."
+        },
+        {
+          "type": "paragraph",
+          "text": "[2] Royer, Michael P. \"Tutorial: Background and guidance for using the ANSI/IES TM-30 method for evaluating light source color rendition.\" Leukos 18.2 (2022): 191- 231."
+        },
+        {
+          "type": "paragraph",
+          "text": "[3] Schlangen, Luc JM, et al. \"Report on the Workshop Use and Application of the new CIE s 026/e: 2018, Metrology for ipRGC-influenced responses to light “specifying light for its eye-mediated non-visual effects in humans”.\" Proceedings of the29th Sessionof theCIE. CIE,2019.114-118."
+        },
+        {
+          "type": "paragraph",
+          "text": "[4]常雪松.可调色温高显色pc-LED光源设计[D].大连工业大学,2023."
+        },
+        {
+          "type": "paragraph",
+          "text": "[5]李月.光源相关色温及色偏差计算方法研究[D].辽宁科技大学,2023."
+        },
+        {
+          "type": "paragraph",
+          "text": "[6]李宁.LED混光的光视效能及显色性评估研究[D].北京大学,2014."
+        },
+        {
+          "type": "paragraph",
+          "text": "[7] Zhang, Jingjing, et al. \"Blue light hazard optimization for white light-emitting diode sources with high luminous efficacy of radiation and high color rendering index.\"Optics & LaserTechnology 94(2017): 193-198."
+        },
+        {
+          "type": "paragraph",
+          "text": "其他参数参考《IESTM-30-20》《CIE S026/E》等国际标准。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请注意，本题所用数据为随机生成，不得用于其他用途。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第六届/C题/2025年C题 可调控生物节律的LED光源研究.pdf",
+        "bytes": 267704,
+        "sha256": "a6ab2be14eef48c45591b0875c44fbff14c12c22587e5f3ee36407dda62d8945",
+        "page_count": 5
       }
     },
     {
@@ -5651,6 +6717,668 @@
         "bytes": 1177091,
         "sha256": "ea58e04da7f50ebcc36f728b479353027c92a810ef5b954574cc139e0166aee9",
         "page_count": 4
+      }
+    },
+    {
+      "id": "huashu-cup-2024-a",
+      "code": "2024 华数杯 A",
+      "title": "机器臂关节角路径的优化设计",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2024,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 1 个随题附件",
+      "status": "完整题面",
+      "summary": "机器臂是一种由多个连杆和关节组成的自动化装置，广泛应用于工业生产、精密操作、危险环境作业和物流等领域。其主要作用包括提高生产效率、执行精密操作、适应恶劣环境以及优化物流流程。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2024-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 1157372,
+          "sha256": "56b3d87efa9a23383b070aa0338a0c04ffc78ef509fbb6e88290b4fbdd224256"
+        },
+        {
+          "title": "随题附件包（1 个文件）",
+          "url": "/problem-files/huashu-cup-2024-a/attachments.zip",
+          "kind": "data",
+          "bytes": 11621,
+          "sha256": "b191b3a2489d31ce91769d461ed4aa03a474e57a440d651a40bda36f0bf54871"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1837,
+      "content_block_count": 18,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2024年华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题机器臂关节角路径的优化设计"
+        },
+        {
+          "type": "paragraph",
+          "text": "机器臂是一种由多个连杆和关节组成的自动化装置，广泛应用于工业生产、精密操作、危险环境作业和物流等领域。其主要作用包括提高生产效率、执行精密操作、适应恶劣环境以及优化物流流程。当前有关机器臂的研究重点包括运动学与动力学建模、关节角路径的优化设计以及路径规划等。这些研究旨在提升机器臂的性能和应用范围，确保其在各种复杂任务中的高效性和精确性。其中，关节角路径的优化设计尤为重要，它直接影响着机器臂的精度和能效。"
+        },
+        {
+          "type": "paragraph",
+          "text": "关节角路径的优化设计涉及到多个相互冲突和影响的目标。最小化输出误差（即机器人实际动作与预期动作之间的偏差）是优化任务的首要目标，特别关注末端误差这一关键部分。末端误差描述的是一次任务中机器臂末端部位与目标位置之间的位置偏差。例如，在使用机器臂拾取货物时，通常更关注末端是否准确到达货物的位置，而不太关注各关节的具体位置。"
+        },
+        {
+          "type": "paragraph",
+          "text": "在执行一次任务的过程中，由于各个关节之间的杠杆长度不变，机器臂通常通过调整关节角度来完成任务。而在调整关节角度的过程中会由于关节转动、机器臂克服重力势能做功等产生各种能耗，如何在末端误差允许的范围内使得能耗最小化，是另一个研究重点。例如，在机器臂拾取货物的过程中，末端不一定要精准地到达目标位置的正中心，如果对于关节角路径的优化能减少能耗，微小的误差是被允许的。"
+        },
+        {
+          "type": "paragraph",
+          "text": "在工业、服务业等各个领域，机器臂通常需要执行多次任务。比如，在工业生产线上，机器臂需要对在不同位置的货物依次完成抓取；为了更好地完成任务，需要考虑末端误差和能耗，同时对底座移动路径和关节角路径进行优化设计。"
+        },
+        {
+          "type": "paragraph",
+          "text": "六自由度机器臂在工业应用中因其极高的灵活性和多功能性而被广泛使用，能够处理各种复杂的任务。本文中所有任务均依赖于六自由度机器臂的执行，需解决的问题如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "为方便后续建模，请先绘制出零位状态（=0、= 90、=0、",
+          "lead": "问题1"
+        },
+        {
+          "type": "paragraph",
+          "text": "1 °2 − °3 °"
+        },
+        {
+          "type": "paragraph",
+          "text": "=180、= 90、=0）的六自由度机器臂简图，机器臂初始参数（包括关节的初始位置，角度等）如表4 °5 − °6 ° 1所示。假设机器臂收到一次抓取货物的任务，目标点相对于机器臂的位置为（1500mm，1200mm，200mm），请建立机器臂运动的数学模型，并以最小化末端误差为目标，对机器臂的关节角路径进行优化。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1机器臂初始Denavit-Hartenberg（D-H）参数"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "关节i",
+              "/(mm)",
+              "/( )",
+              "/(mm)",
+              "关节变化范围/( )"
+            ],
+            [
+              "1",
+              "(cid:486)1 0",
+              "0 (cid:486)1 °",
+              "600",
+              "-160~160 °"
+            ],
+            [
+              "2",
+              "300",
+              "-90",
+              "0",
+              "-150~15"
+            ],
+            [
+              "3",
+              "1200",
+              "0",
+              "0",
+              "-200~80"
+            ],
+            [
+              "4",
+              "300",
+              "-90",
+              "1200",
+              "-180~180"
+            ],
+            [
+              "5",
+              "0",
+              "-90",
+              "0",
+              "-120~120"
+            ],
+            [
+              "6",
+              "0",
+              "-90",
+              "0",
+              "-180~180"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "在第一问的基础上，已知机器臂质量和末端载重之和为5kg，各个关节的转动惯量和平均角速度如表2所示。假设末端误差（末端误差指目标点坐标与机器臂端部坐标之间的欧式距离）允许的范围为±200mm，请以最小化末端误差和能耗为目标，对机器臂的关节角路径进行优化。",
+          "lead": "问题2"
+        },
+        {
+          "type": "paragraph",
+          "text": "表2关节转动能耗参数"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "关节i",
+              "转动惯量",
+              "平均角速度(rad/s)"
+            ],
+            [
+              "1",
+              "0.(5kg∙m²)",
+              "2.0"
+            ],
+            [
+              "2",
+              "0.3",
+              "1.5"
+            ],
+            [
+              "3",
+              "0.4",
+              "1.0"
+            ],
+            [
+              "4",
+              "0.6",
+              "2.5"
+            ],
+            [
+              "5",
+              "0.2",
+              "3.0"
+            ],
+            [
+              "6",
+              "0.4",
+              "2.0"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "在问题二的基础上，假设机器臂收到一次货物抓取任务，需要绕过障碍物抓取一个货物，收到指令后，机器臂底座（移动过程中视为质点，为了简化问题，假设移动的能耗不考虑，只考虑机器臂抓取过程中的能耗）先移动到目标点附近，然后再进行抓取动作。机器臂底座栅格图中默认无法沿斜线移动，机器臂底座需要回到起点。机器臂出发时的状态与问题一中的零位状态一致。机器臂的所有关节均无法从障碍上方越过进行物体抓取。请以最小化末端误差和能耗为目标，设计出最优底座移动路径和最优关节角路径，并将底座移动路径用栅格图可视化。货物和障碍物的位置见“附件.xlsx”中的Sheet1。",
+          "lead": "问题3"
+        },
+        {
+          "type": "paragraph",
+          "text": "假设机器臂收到一次完整的货物抓取任务，需要绕过障碍物抓取多个货物，请以最小化末端误差和能耗为目标，设计出最优底座移动路径和关节角路径，并将底座移动路径用栅格图可视化。货物和障碍物的位置见“附件.xlsx”中的Sheet2。请在结果中明确给出总末端误差和总能耗。",
+          "lead": "问题4"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第五届/A题/2024年A题  机械臂关节角路径的优化设计(1).pdf",
+        "bytes": 1157372,
+        "sha256": "56b3d87efa9a23383b070aa0338a0c04ffc78ef509fbb6e88290b4fbdd224256",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "huashu-cup-2024-b",
+      "code": "2024 华数杯 B",
+      "title": "VLSI 电路单元的自动布局",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2024,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 2 个随题附件",
+      "status": "完整题面",
+      "summary": "超大规模集成电路（VLSI，Very Large Scale Integration）将大量电路单元集成于单一芯片。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2024-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 386136,
+          "sha256": "4c37a9d9a03b3f4fb10fcda5f7f15c79932afc5905c287c411fb934f98f7e6bf"
+        },
+        {
+          "title": "随题附件包（2 个文件）",
+          "url": "/problem-files/huashu-cup-2024-b/attachments.zip",
+          "kind": "data",
+          "bytes": 12271,
+          "sha256": "8027c0122bf3451961d8955d724a1bdba6415e392498493cabf052953e28d2ef"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 3458,
+      "content_block_count": 62,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2024年华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题VLSI电路单元的自动布局"
+        },
+        {
+          "type": "paragraph",
+          "text": "超大规模集成电路（VLSI，Very Large Scale Integration）将大量电路单元集成于单一芯片。随着设计复杂度增加，如今开展VLSI设计已离不开电子设计自动化（EDA，Electronic DesignAutomation）工具的支持。EDA作为算法密集型产业，需要对数千种情境进行快速设计探索，是国家关键技术领域。其中，电路单元的自动布局是EDA研究的核心问题之一。"
+        },
+        {
+          "type": "paragraph",
+          "text": "电路单元的自动布局旨在矩形布局区域内确定所有电路单元位置，以最小化单元之间总连接线长并避免单元重叠。由于这是一个NP难问题，通常分为全局布局和详细布局两个步骤。全局布局大致确定单元位置，允许单元重叠；详细布局则消除重叠并进一步优化。本问题聚焦于全局布局，将电路单元视为不同大小的矩形，矩形内分散有若干个连线接口，电路单元之间通过连线接口形成若干组连接关系。全局布局的目标是最小化总连接线长，同时满足单元密度约束。总连接线长等于每组有连接关系的电路单元的线长之和。由于布局阶段尚未实际布线，每组线长通常可通过半周长线长（HPWL，Half-PerimeterWirelength）或直线型斯坦纳最小树（RSMT，RectilinearSteiner MinimalTree）估计，要求连线水平或竖直。HPWL为连线接口外接矩形周长的一半，RSMT为通过插入斯坦纳点构建的线段长度之和。单元密度约束通过将矩形布局区域网格化后计算。每个网格的单元密度等于与网格重叠的电路单元面积和网格面积的比值，限制不超过特定阈值。附件1提供全局布局的中间状态，包括每组有连接关系的电路单元及其连线接口名称、连线接口坐标和对应的HPWL和RSMT线长。附件2给出布局区域尺寸、网格划分粒度和密度阈值、电路单元的尺寸、坐标及其连线接口的基本信息。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2024-b/p002-01.png",
+          "alt": "huashu-cup-2024-b 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1. VLSI电路单元自动布局示意图。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型解决以下问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "图2展示了3组具有不同连线接口数的HPWL和RSMT线长估计示意图。RSMT是布局阶段理想的线长表征，但是构建斯坦纳树是NP难问题。HPWL简单有效，但对多连线接口情形估计偏小。根据附件1提供的信息，请设计一个与电路单元连线接口坐标相关的线长评估模型。该模型应满足：（1）每组估计线长与对应RSMT的差值尽可能小；（2）能应用于评估附件1中的总连接线长。",
+          "lead": "问题1"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2024-b/p002-02.png",
+          "alt": "huashu-cup-2024-b 第 2 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2.具有不同连线接口数目的HPWL和RSMT线长估计示意图。若布局仅包含这3组电路单元连接关系，HPWL和RSMT评估的总连接线长分别为30和32。"
+        },
+        {
+          "type": "paragraph",
+          "text": "图3展示了单元密度计算示意图，请以此设计一个与电路单元坐标相关的网格密度评估模型。应用问题1构建的线长评估模型，整合密度计算，建立一个数学模型，目标为：（1）最小化总连接线长；（2）满足单元密度约束。根据附件1和附件2提供的信息，应用此模型完成全局布局，输出总连接线长（HPWL），并可视化结果（电路单元的位置）。",
+          "lead": "问题2"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2024-b/p003-01.png",
+          "alt": "huashu-cup-2024-b 第 3 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图3：单元密度计算示意图"
+        },
+        {
+          "type": "paragraph",
+          "text": "除了连接线长和单元密度，布线密度也是衡量布局质量的重要指标之一。分析图4所示的网格布线密度计算模型，找出其存在的问题。针对发现的问题，提出改进方案。应用改进后的布线密度模型，计算问题2中更新后的全局布局结果的布线密度，并对结果（网格布线密度）进行可视化。",
+          "lead": "问题3"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2024-b/p003-02.png",
+          "alt": "huashu-cup-2024-b 第 3 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图4：一种计算网格布线密度的模型。为计算红色网格的布线密度，首先计算蓝色和绿色这两组单元的布线密度；随后计算这两组单元组成的外接矩形与红色网格的重叠面积，重叠面积用蓝色和绿色填充；将这两组单元的布线密度分别与对应重叠面积相乘，两组乘积之和即等于红色网格的布线密度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "除了最小化总连接线长和满足单元密度约束外，希望网格布线密度的最大值越小越好。请在问题3的基础上，修正问题2所建立的数学模型。根据附件1和附件2提供的信息，应用修正后的模型完成全局布局，输出总连接线长（HPWL），并可视化结果（电路单元的位置和网格布线密度）。",
+          "lead": "问题4"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "文件格式说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件1.txt："
+        },
+        {
+          "type": "paragraph",
+          "text": "组名称，（电路单元名称：连线接口名称），（对应连线接口坐标），HPWL，RSMT Group1,(Cell94:ZN,Cell11:A2,Cell7:A1),((22704,21807),(25499,24186),(25633,2409 5)),5308,5308"
+        },
+        {
+          "type": "paragraph",
+          "text": "Group2,(Cell89:Z,Cell8:I,Cell5:A1),((31596,22332),(29577,24007),(28894,24037)),4 407,4407"
+        },
+        {
+          "type": "paragraph",
+          "text": "Group3,(Cell5:ZN,Cell97:A2,Cell96:A1,Cell11:A1,Cell7:A2),((28994,23885),(26971, 24240),(26971,24321),(25809,24078),(25878,24474)),3774,4017"
+        },
+        {
+          "type": "paragraph",
+          "text": "……"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件1.txt解释："
+        },
+        {
+          "type": "paragraph",
+          "text": "有五列，分别是：组名称，（电路单元名称：连线接口名称），（对应连线接口"
+        },
+        {
+          "type": "paragraph",
+          "text": "坐标），HPWL，RSMT。"
+        },
+        {
+          "type": "paragraph",
+          "text": "组名称：表示具有连接关系的电路单元组，有多少个组编号表示有多少组具"
+        },
+        {
+          "type": "paragraph",
+          "text": "有连接关系的电路单元。每组可以通过线长评估模型算出线长值。总连接线"
+        },
+        {
+          "type": "paragraph",
+          "text": "长等于所有组的线长值总和。"
+        },
+        {
+          "type": "paragraph",
+          "text": "-（电路单元名称：连线接口名称）：表示由哪些单元的连线接口构成该组连接。"
+        },
+        {
+          "type": "paragraph",
+          "text": "例如(Cell94:ZN,Cell11:A2,Cell7:A1)表示电路单元名称为Cell94上有名为"
+        },
+        {
+          "type": "paragraph",
+          "text": "ZN的连线接口，同理Cell11上有名为A2的连线接口，Cell7上有名为A1"
+        },
+        {
+          "type": "paragraph",
+          "text": "的连线接口，三者会形成一组连接关系，连线方向只能水平或者竖直。"
+        },
+        {
+          "type": "paragraph",
+          "text": "-（对应连线接口坐标）：与第二列一一对应，表示对应电路单元连线接口的位"
+        },
+        {
+          "type": "paragraph",
+          "text": "置坐标（x，y）。例如Cell94:ZN对应的坐标是(22704,21807)，Cell11:A2对应"
+        },
+        {
+          "type": "paragraph",
+          "text": "的坐标是(25499,24186)，Cell7:A1对应的坐标是(25633,24095)。"
+        },
+        {
+          "type": "paragraph",
+          "text": "HPWL：表示用HPWL线长模型算得的该组电路单元连线长度。以Group1"
+        },
+        {
+          "type": "paragraph",
+          "text": "为例，连线接口形成的外接矩形宽度为25633-22704=2929，高度为"
+        },
+        {
+          "type": "paragraph",
+          "text": "24186-21807=2379，因此HPWL=2929+2379=5308。"
+        },
+        {
+          "type": "paragraph",
+          "text": "RSMT：表示用RSMT线长模型算得的该组电路单元连线长度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件2.txt"
+        },
+        {
+          "type": "paragraph",
+          "text": "布局区域宽度,布局区域高度,水平方向网格数,竖直方向网格数,密度阈值"
+        },
+        {
+          "type": "paragraph",
+          "text": "38080,37800,64,60,0.9"
+        },
+        {
+          "type": "paragraph",
+          "text": "电路单元名称,(左下角X,Y坐标),宽度,高度,(连线接口名称),(对应连线接口相对单元左下角的偏置坐标)"
+        },
+        {
+          "type": "paragraph",
+          "text": "Cell1,(28431,23878),1120,1800,(A2,B,A1),((630,1051),(910,870),(385,672))"
+        },
+        {
+          "type": "paragraph",
+          "text": "Cell2,(29042,24255),560,1800,(I),((205,860))"
+        },
+        {
+          "type": "paragraph",
+          "text": "Cell3,(28483,24118),840,1800,(A1,A2),((505,1002),(195,880))"
+        },
+        {
+          "type": "paragraph",
+          "text": "……"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件2.txt解释："
+        },
+        {
+          "type": "paragraph",
+          "text": "分为两个部分"
+        },
+        {
+          "type": "paragraph",
+          "text": "布局区域信息：表示布局区域的水平方向取值范围为[0,38080]，竖直方向取"
+        },
+        {
+          "type": "paragraph",
+          "text": "值范围为[0，37800]；整个布局区域划分为64*60个网格，每个网格的宽度"
+        },
+        {
+          "type": "paragraph",
+          "text": "为38080/64=595，高度为37800/60=630；每个网格的单元密度不超过0.9。电路单元信息："
+        },
+        {
+          "type": "paragraph",
+          "text": "以Cell1,(28431,23878),1120,1800,(A2,B,A1),((630,1051),(910,870),(385,672))"
+        },
+        {
+          "type": "paragraph",
+          "text": "为例，解释含义。电路单元Cell1，左下角坐标为(28431,23878)，宽高分别为"
+        },
+        {
+          "type": "paragraph",
+          "text": "1120和1800，有三个连线接口名为A2,B,A1，这三个连线接口的坐标与Cell1"
+        },
+        {
+          "type": "paragraph",
+          "text": "左下角坐标的偏移量是(630,1051),(910,870),(385,672)，据此可以分别算出这"
+        },
+        {
+          "type": "paragraph",
+          "text": "三个连线接口的绝对坐标，例如Cell1:A2的绝对坐标是"
+        },
+        {
+          "type": "paragraph",
+          "text": "(28431+630=29061,23878+1051=24929)。注意，所有连线接口在电路单元中"
+        },
+        {
+          "type": "paragraph",
+          "text": "的偏移量是固定值，不会随电路单元的位置变化而变化；因此，若知道电路"
+        },
+        {
+          "type": "paragraph",
+          "text": "单元的位置，就可以根据连线接口的偏移量算出其绝对坐标，进而计算线长。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第五届/B题/2024年B题  VLSI电路单元的自动布局.pdf",
+        "bytes": 386136,
+        "sha256": "4c37a9d9a03b3f4fb10fcda5f7f15c79932afc5905c287c411fb934f98f7e6bf",
+        "page_count": 5
+      }
+    },
+    {
+      "id": "huashu-cup-2024-c",
+      "code": "2024 华数杯 C",
+      "title": "老外游中国",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2024,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 353 个随题附件",
+      "status": "完整题面",
+      "summary": "最近，“city不city”这一网络流行语在外国网红的推动下备受关注。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2024-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 138662,
+          "sha256": "062b67e3901ed28bbc5637171fb112cce6be5c8d90f1ecd134ddc0ebd14f92ea"
+        },
+        {
+          "title": "随题附件包（353 个文件）",
+          "url": "/problem-files/huashu-cup-2024-c/attachments.zip",
+          "kind": "data",
+          "bytes": 9432754,
+          "sha256": "dca9c66a602306b8f60f6637a801528798a3d95180bf91ae5e0c0364e4dbab9e"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1121,
+      "content_block_count": 18,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2024年华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题老外游中国"
+        },
+        {
+          "type": "paragraph",
+          "text": "最近，“city不city”这一网络流行语在外国网红的推动下备受关注。随着我国过境免签政策的落实，越来越多外国游客来到中国，通过网络平台展示他们在华旅行的见闻，这不仅推动了中国旅游业的发展，更是在国际舞台上展现了一个真实而生动的中国，一举多得。"
+        },
+        {
+          "type": "paragraph",
+          "text": "假设外国游客入境后能在中国境内逗留144小时，且能从任一城市附近的机场出境。由于每个城市景点较多，为了便于外国游客能够游览到更多的城市，现假定“每个城市只选择一个评分最高的景点游玩”，称之为“城市最佳景点游览原则”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "现有一个包含中国（不含港澳台）352个城市的旅游景点的数据集，每个城市的csv文件中有100个景点，每个景点的信息包含有景点名称、网址、地址、景点介绍、开放时间、图片网址、景点评分、建议游玩时长、建议游玩季节、门票信息、小贴士等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型，回答下列问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "请问352个城市中所有35200个景点评分的最高分（Best Score，简称BS）是多少？全国有多少个景点获评了这个最高评分（BS）？获评了这个最高评分（BS）景点最多的城市有哪些？依据拥有最高评分（BS）景点数量的多少排序，列出前10个城市。",
+          "lead": "问题1"
+        },
+        {
+          "type": "paragraph",
+          "text": "假如外国游客遵循“城市最佳景点游览原则”，结合城市规模、环境环保、人文底蕴、交通便利，以及气候、美食等因素，请你对352个城市进行综合评价，选出“最令外国游客向往的50个城市”。",
+          "lead": "问题2"
+        },
+        {
+          "type": "paragraph",
+          "text": "现有一名外国游客从广州入境，他想在144小时以内游玩尽可能多的城市，同时要求综合游玩体验最好，请你规划他的游玩路线。需要结合游客的要求给出具体的游玩路线，包括总花费时间，门票和交通的总费用以及可以游玩的景点数量。他的要求有：",
+          "lead": "问题3"
+        },
+        {
+          "type": "list_item",
+          "text": "遵循城市最佳景点游览原则；",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "城市之间的交通方式只选择高铁；",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "只在“最令外国游客向往的50个城市”中选择要游玩的城市。",
+          "marker": "③"
+        },
+        {
+          "type": "paragraph",
+          "text": "如果将问题3的游览目标改为：既要尽可能的游览更多的城市，又需要使门票和交通的总费用尽可能的少。请重新规划游玩路线，并给出门票和交通的总费用，总花费时间以及可以游玩的城市数量。",
+          "lead": "问题4"
+        },
+        {
+          "type": "paragraph",
+          "text": "现有一名外国游客只想游览中国的山景，他乘飞机入境中国的城市不限。请你为他选择入境的机场和城市，并个性化定制他的144小时旅游路线，既要尽可能的游览更多的山，又需要使门票和交通的总费用尽可能的少。需要结合游客的要求给出具体的游玩路线，包括总花费时间，门票和交通的总费用以及可以游玩的景点数量。他的要求有：",
+          "lead": "问题5"
+        },
+        {
+          "type": "list_item",
+          "text": "每个城市只游玩一座评分最高的山；",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "城市之间的交通方式只选择高铁；",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "旅游城市不局限于“最令外国游客向往的50个城市”，游览范围拓展到352个城市。",
+          "marker": "③"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第五届/C题/2024年C题  老外游中国.pdf",
+        "bytes": 138662,
+        "sha256": "062b67e3901ed28bbc5637171fb112cce6be5c8d90f1ecd134ddc0ebd14f92ea",
+        "page_count": 2
       }
     },
     {
@@ -13512,6 +15240,489 @@
       }
     },
     {
+      "id": "huashu-cup-2023-a",
+      "code": "2023 华数杯 A",
+      "title": "隔热材料的结构优化控制研究",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2023,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 2 个随题附件",
+      "status": "完整题面",
+      "summary": "新型隔热材料A具有优良的隔热特性，在航天、军工、石化、建筑、交通等高科技领域中有着广泛的应用。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2023-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 1299682,
+          "sha256": "a0595c54b6c3d7f261389e198e33e1ed4df5aa230e5ece9f8f3b5a2d6701a48a"
+        },
+        {
+          "title": "随题附件包（2 个文件）",
+          "url": "/problem-files/huashu-cup-2023-a/attachments.zip",
+          "kind": "data",
+          "bytes": 18257,
+          "sha256": "6ab34b391b17de3edfcddb0e55410788b70696450479b286e3e40b004900a265"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1205,
+      "content_block_count": 16,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2023华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题隔热材料的结构优化控制研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "新型隔热材料A具有优良的隔热特性，在航天、军工、石化、建筑、交通等高科技领域中有着广泛的应用。"
+        },
+        {
+          "type": "paragraph",
+          "text": "目前，由单根隔热材料A纤维编织成的织物，其热导率可以直接测出；但是单根隔热材料A纤维的热导率（本题实验环境下可假定其为定值），因其直径过小，长径比（长度与直径的比值）较大，无法直接测量。单根纤维导热性能是织物导热性能的基础，也是建立基于纤维的各种织物导热模型的基础。建立一个单根隔热材料A纤维的热导率与织物整体热导率的传热机理模型成为研究重点。该模型不仅能得到单根隔热材料A纤维的热导率，解决当前单根A纤维热导率无法测量的技术难题；而且在建立的单根隔热材料A纤维热导率与织物热导率的关系模型的基础上，调控织物的编织结构，进行优化设计，能制作出更好的满足在航天、军工、石化、建筑、交通等高科技领域需求的优异隔热性能织物。"
+        },
+        {
+          "type": "paragraph",
+          "text": "织物是由大量单根纤维堆叠交织在一起形成的网状结构，本题只研究平纹织物，如图1和图2所示。不同直径纤维制成的织物，其基础结构参数不同，即纤维弯曲角度、织物厚度、经密、纬密等不同，从而影响织物的导热性能。本题，假设任意单根A纤维的垂直切面为圆形，织物中每根纤维始终为一个有弯曲的圆柱。经纱、纬纱弯曲角度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "热导率是纤维和织物物理性质中最重要的指标之一。织物的纤维之间存在空10° < ≤ 26.565°隙，空隙里空气为静态空气，静态空气热导率0.0296W/(mK)。计算织物热导率时既考虑纤维之间的传热，也不能忽略空隙中空气的传热。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2023-a/p001-01.png",
+          "alt": "huashu-cup-2023-a 第 1 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1.平纹织物截面示意图"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2023-a/p002-01.png",
+          "alt": "huashu-cup-2023-a 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2.平纹织物三维图"
+        },
+        {
+          "type": "paragraph",
+          "text": "我们在℃实验室环境下，用Hotdisk装置对织物进行加热和测量，Hotdisk恒定功率为25 1mW，作用时间1s，在0.1s时热流恰好传递到织物另一侧。实验测得0~0.1s之间织物位于热源一侧的温度随时间变化的数据见附件1。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型，回答下列问题:"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题1：假设附件1的温度为热源侧织物的表面温度，只考虑纤维传热和空隙间的气体传热，建立平纹织物整体热导率与单根纤维热导率之间关系的数学模型。在附件2的实验样品参数条件下，测得如图2所示的平纹织物的整体热导率为0.033W/(mK)，请根据建立的数学模型计算出单根A纤维的热导率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题2：假设：1）制成织物的任意单根A纤维的直径在。2）织物位于热源一侧表面温度随时间的变化的数据依旧参考附件0.3 1。~0.6 3）由于温度和织物结构造成的织物整体密度和比热的变化可以忽略。请问如何选用单根A纤维的直径及调整织物的经密、纬密、弯曲角度，使得织物的整体热导率最低。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题3：如果附件1的温度实际是热源侧织物表面空气的温度，此时该侧就会发生对流换热，假定织物表面的对流换热系数为，请重新解答问题一和问题二。50W/(m2 K)"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第四届/2023年“华数杯”全国大学生数学建模竞赛A题/华数杯2023年A题.pdf",
+        "bytes": 1299682,
+        "sha256": "a0595c54b6c3d7f261389e198e33e1ed4df5aa230e5ece9f8f3b5a2d6701a48a",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2023-b",
+      "code": "2023 华数杯 B",
+      "title": "不透明制品最优配色方案设计",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2023,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 4 个随题附件",
+      "status": "完整题面",
+      "summary": "日常生活中五彩缤纷的不透明有色制品是由着色剂染色而成。因此，不透明制品的配色对其外观美观度和市场竞争力起着重要作用。然而，传统的人工配色存在一定的局限性，如主观性强、效率低下等。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2023-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 251323,
+          "sha256": "635bcb58f9ee50f5a1242633a5093e33d0229ca7bd0e6b3a9d317b28435612d6"
+        },
+        {
+          "title": "随题附件包（4 个文件）",
+          "url": "/problem-files/huashu-cup-2023-b/attachments.zip",
+          "kind": "data",
+          "bytes": 40379,
+          "sha256": "1c250e9f6f3f4f2126cde63da3634a19526fc028f379dbe9c156a9638cca1c29"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1746,
+      "content_block_count": 26,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2023华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题不透明制品最优配色方案设计"
+        },
+        {
+          "type": "paragraph",
+          "text": "日常生活中五彩缤纷的不透明有色制品是由着色剂染色而成。因此，不透明制品的配色对其外观美观度和市场竞争力起着重要作用。然而，传统的人工配色存在一定的局限性，如主观性强、效率低下等。因此，研究如何通过计算机方法来实现不透明制品的配色具有重要意义。"
+        },
+        {
+          "type": "paragraph",
+          "text": "光通过物体传播有吸收、反射和透射三种方式。对于不透明制品来说，大部分光线会被其表面吸收或反射。吸收和反射的光线在经过透明度等校正后按波长分解成不同的颜色成分，形成光谱图。该光谱图通常由400--700nm波段的各色光组成。为简化计算，最终配色后的颜色的反射率以20nm为间隔的光谱数据来表示。对于不透明材料而言，吸收系数K/散射系数S的比值与反射率R之间存在一定关系，具体请参考文献【1】《计算机配色理论及算法的研究》中的K-M光学模型。"
+        },
+        {
+          "type": "paragraph",
+          "text": "基于光学模型得到的颜色参数，可应用于色差的计算。通常，使用色差（不超过1）来作为配色效果好坏的标准。色差计算方法参考文献【2】《基于CIELAB均匀颜色空间和聚类算法的混纺测色研究》中的CIELAB色彩空间的总色差计算方法。其中颜色参数L* (明度)、a* (红绿色度)和b*（黄蓝色度）计算中出现的三刺激值XYZ的计算方法如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "X  k ∫ S  λ  x  λ  R  λ  d  λ "
+        },
+        {
+          "type": "paragraph",
+          "text": "Y  k ∫ S  λ  y  λ  R  λ  d  λ "
+        },
+        {
+          "type": "paragraph",
+          "text": "Z  k ∫ S  λ  z  λ  R  λ  d  λ "
+        },
+        {
+          "type": "paragraph",
+          "text": "其中，S λ 为光谱能量分布，x  λ , y  λ , z  λ 为观察者光谱三刺激值，S  λ 分别与/x  λ , y  λ , z  λ 相乘为固定值见附件。R  λ 为光谱反射率，值约为不透明制品配色问题，就是基于光学模型，设计不透明制品的配色模型。相，d  λ 为测量物体反射率波长间隔，本题1 d  λ 。k"
+        },
+        {
+          "type": "paragraph",
+          "text": "较于人工配色，节省大量人力、物力和财力，对减少能耗具有重要意义。0.1 =20nm"
+        },
+        {
+          "type": "paragraph",
+          "text": "针对某一不透明制品，已知红、黄、蓝3种着色剂在不同浓度不同波长的K/S值以及基底材料在不同波长下的K/S值，见附件2。其中，浓度=着色剂克重/基材重量。每个着色剂的吸收系数K/散射系数S的比值具有加和性，详见文献【1】《计算机配色理论及算法的研究》中的K-M单常数理论。现有10个目标样(二到三种着色剂混合制成)的R值，见附件3。结果展示请保留4位小数。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请建立数学模型解决如下几个问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题1：请分别计算附件2中三种着色剂在不同波长下K/S与浓度的关系，并将关系式与拟合系数填写在表格中。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1问题1相关结果数据"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "波长",
+              "红",
+              "",
+              "黄",
+              "",
+              "蓝",
+              ""
+            ],
+            [
+              "",
+              "函数关系式",
+              "拟合系数",
+              "函数关系式",
+              "拟合系数",
+              "函数关系式",
+              "拟合系数"
+            ],
+            [
+              "400nm",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "420nm",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "440nm",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "……",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "700nm",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "问题2：请建立不透明制品配色的优化模型。在已知目标样的R值（附件3）的前提下，基于光谱三刺激值加权表（附件1）与着色剂K/S基础数据库（附件2），运用优化模型配出与目标样的色差最为接近的10个不同配方，要求色差小于1。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题3：在问题2的基础上，考虑成本控制和批量配色，改进配色模型。对2kg的基底材料进行配色，求出与目标样（附件3）之间色差最为接近的10个不同配方，要求色差小于1。色母粒单位克重价格见附件4。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题4：在实际生产中，配色所需要的着色剂越少越好，基于此，在问题3的基础上，寻找附件3中前5个样本的最优的配色方案，要求每个样本配出5个不同的配方且色差小于1。"
+        },
+        {
+          "type": "paragraph",
+          "text": "提供的数据和资料："
+        },
+        {
+          "type": "paragraph",
+          "text": "1.附件1（光谱三刺激值加权表）"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.附件2（不同浓度不同波长的K/S值）"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.附件3（10个样品的R值）"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.附件4（染料价格）"
+        },
+        {
+          "type": "paragraph",
+          "text": "5.参考文献【1】姜鹏飞.计算机配色理论及算法的研究[D/OL].中原工学院, 2016"
+        },
+        {
+          "type": "paragraph",
+          "text": "6.参考文献【2】王林吉.基于CIELAB均匀颜色空间和聚类算法的混纺测色研究[D].浙江理工大学,2011."
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第四届/2023年“华数杯”全国大学生数学建模竞赛B题/华数杯2023年B题.pdf",
+        "bytes": 251323,
+        "sha256": "635bcb58f9ee50f5a1242633a5093e33d0229ca7bd0e6b3a9d317b28435612d6",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2023-c",
+      "code": "2023 华数杯 C",
+      "title": "母亲身心健康对婴儿成长的影响",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2023,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 1 个随题附件",
+      "status": "完整题面",
+      "summary": "母亲是婴儿生命中最重要的人之一，她不仅为婴儿提供营养物质和身体保护，还为婴儿提供情感支持和安全感。母亲心理健康状态的不良状况，如抑郁、焦虑、压力等，可能会对婴儿的认知、情感、社会行为等方面产生负面影响。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2023-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 191638,
+          "sha256": "8dc304c6f49754157994be6035eafc75e358b61e696100412b0ae0a87171b2c9"
+        },
+        {
+          "title": "随题附件包（1 个文件）",
+          "url": "/problem-files/huashu-cup-2023-c/attachments.zip",
+          "kind": "data",
+          "bytes": 40906,
+          "sha256": "bab1b8d9d5e3df16f5f1b248e7bf19b5dc1f81aa67e278c3c35f040051338658"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1110,
+      "content_block_count": 14,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2023华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题母亲身心健康对婴儿成长的影响"
+        },
+        {
+          "type": "paragraph",
+          "text": "母亲是婴儿生命中最重要的人之一，她不仅为婴儿提供营养物质和身体保护，还为婴儿提供情感支持和安全感。母亲心理健康状态的不良状况，如抑郁、焦虑、压力等，可能会对婴儿的认知、情感、社会行为等方面产生负面影响。压力过大的母亲可能会对婴儿的生理和心理发展产生负面影响，例如影响其睡眠等方面。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件给出了包括390名3至12个月婴儿以及其母亲的相关数据。这些数据涵盖各种主题，母亲的身体指标包括年龄、婚姻状况、教育程度、妊娠时间、分娩方式，以及产妇心理指标CBTS（分娩相关创伤后应激障碍问卷）、EPDS（爱丁堡产后抑郁量表）、HADS（医院焦虑抑郁量表）和婴儿睡眠质量指标包括整晚睡眠时间、睡醒次数和入睡方式。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请查阅相关文献，了解专业背景，根据题目数据建立数学模型，回答下列问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.许多研究表明，母亲的身体指标和心理指标对婴儿的行为特征和睡眠质量有影响，请问是否存在这样的规律，根据附件中的数据对此进行研究。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.婴儿行为问卷是一个用于评估婴儿行为特征的量表，其中包含了一些关于婴儿情绪和反应的问题。我们将婴儿的行为特征分为三种类型：安静型、中等型、矛盾型。请你建立婴儿的行为特征与母亲的身体指标与心理指标的关系模型。数据表中最后有20组（编号391-410号）婴儿的行为特征信息被删除，请你判断他们是属于什么类型。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.对母亲焦虑的干预有助于提高母亲的心理健康水平，还可以改善母婴交互质量，促进婴儿的认知、情感和社交发展。CBTS、EPDS、HADS的治疗费用相对于患病程度的变化率均与治疗费用呈正比，经调研，给出了两个分数对应的治疗费用，详见表1。现有一个行为特征为矛盾型的婴儿，编号为238。请你建立模型，分析最少需要花费多少治疗费用，能够使婴儿的行为特征从矛盾型变为中等型？"
+        },
+        {
+          "type": "paragraph",
+          "text": "若要使其行为特征变为安静型，治疗方案需要如何调整？"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1.患病得分与治疗费用"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "CB",
+              "TS",
+              "EP",
+              "DS",
+              "HA",
+              "DS"
+            ],
+            [
+              "得分",
+              "治疗费用 （元）",
+              "得分",
+              "治疗费用 （元）",
+              "得分",
+              "治疗费用 （元）"
+            ],
+            [
+              "0",
+              "200",
+              "0",
+              "500",
+              "0",
+              "300"
+            ],
+            [
+              "3",
+              "2812",
+              "2",
+              "1890",
+              "5",
+              "12500"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "4.婴儿的睡眠质量指标包含整晚睡眠时间、睡醒次数、入睡方式。请你对婴儿的睡眠质量进行优、良、中、差四分类综合评判，并建立婴儿综合睡眠质量与母亲的身体指标、心理指标的关联模型，预测最后20组（编号391-410号）婴儿的综合睡眠质量。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5.在问题三的基础上，若需要让238号婴儿的睡眠质量评级为优，请问问题三的治疗策略是否需要调整？如何调整？"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第四届/2023年“华数杯”全国大学生数学建模竞赛C题/华数杯2023年C题.pdf",
+        "bytes": 191638,
+        "sha256": "8dc304c6f49754157994be6035eafc75e358b61e696100412b0ae0a87171b2c9",
+        "page_count": 2
+      }
+    },
+    {
       "id": "cumcm-2023-a",
       "code": "2023 CUMCM A",
       "title": "定日镜场的优化设计",
@@ -19524,6 +21735,1299 @@
       }
     },
     {
+      "id": "huashu-cup-2022-a",
+      "code": "2022 华数杯 A",
+      "title": "环形振荡器的优化设计",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2022,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 4 个随题附件",
+      "status": "完整题面",
+      "summary": "芯片是指内含集成电路的硅片，在我们日常生活中的手机、电脑、电视、家用电器等领域都会使用到，是高端制造业的核心基石。芯片的制造工艺非常复杂，要经历上千道工序经过复杂工艺加工制造。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2022-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 261883,
+          "sha256": "ad62b1a32b8afc4a142ae3a69439f711a828c920c9c505681edeb3ee0fa4e9a0"
+        },
+        {
+          "title": "随题附件包（4 个文件）",
+          "url": "/problem-files/huashu-cup-2022-a/attachments.zip",
+          "kind": "data",
+          "bytes": 2074183,
+          "sha256": "b161f0f1005bf852daa98df6b44f416da83cf31eb26dc04bf48eaa5d30eea176"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1630,
+      "content_block_count": 20,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2022华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题环形振荡器的优化设计"
+        },
+        {
+          "type": "paragraph",
+          "text": "芯片是指内含集成电路的硅片，在我们日常生活中的手机、电脑、电视、家用电器等领域都会使用到，是高端制造业的核心基石。芯片的制造工艺非常复杂，要经历上千道工序经过复杂工艺加工制造。尤其是数字芯片，随着工艺尺寸的不断缩小，数字芯片的优化设计变得尤为重要。"
+        },
+        {
+          "type": "paragraph",
+          "text": "而环形振荡器是数字时钟芯片中的一种重要的结构，其设计中有三个重要的指标需要考虑：速度、面积和功耗。速度是指电路运行的时钟频率，一般来说，速度越快，能处理的数据量就越多，性能越好。面积是指电路的物理实现需要占用硅片的面积，占用的面积越小，芯片成本越低。功耗是指电路工作所消耗的能量，功耗越低，发热量也越低，设备工作的时间更长，使用寿命越久。速度、面积、功耗是互相牵制的，在相同的制造工艺（制程）以及相同的电路条件下，一般来说，速度越快，晶体管尺寸越小，功耗也越高，反之亦然。相关概念与参数介绍见附录1。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请阅读相关文档说明，回答下列问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.环形振荡器的频率公式为f  1/(2 n × tpd)，其中n为反相器的个数，tpd为单级反相器的延迟时间。反相器的负载电容与下一级的反相器的栅极面积成正比，为2nF/μ m2。反相器工作时的电流公式可以分为以下两个阶段：饱和区和线性区。两个阶段的公式为："
+        },
+        {
+          "type": "paragraph",
+          "text": "Id     K W/L [(Vgs − Vth) Vds − 1/2 Vds2]，Vds  Vgs − Vth"
+        },
+        {
+          "type": "paragraph",
+          "text": "  1/2 K W/L (Vgs − Vth)2，Vds  Vgs − Vth"
+        },
+        {
+          "type": "paragraph",
+          "text": "式中，Vgs表示栅源之间的电压，Vds表示漏源之间电压，Vth表示阈值电压。请根据以上内容，计算表1中不同设计方案的环形振荡器的输出频率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1环形振荡器输出频率计算表"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "序号",
+              "反相器 个数",
+              "PMOS宽 长比",
+              "NMOS 宽 长比",
+              "电源电压/V",
+              "输出频率"
+            ],
+            [
+              "1",
+              "11",
+              "400n/100n",
+              "200n/100n",
+              "1.2",
+              ""
+            ],
+            [
+              "2",
+              "11",
+              "800n/200n",
+              "400n/200n",
+              "1.2",
+              ""
+            ],
+            [
+              "3",
+              "11",
+              "1.6u/0.4u",
+              "0.8u/0.4u",
+              "1.2",
+              ""
+            ]
+          ]
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "4",
+              "31",
+              "200n/100n",
+              "400n/100n",
+              "1.2",
+              ""
+            ],
+            [
+              "5",
+              "31",
+              "400n/200n",
+              "800n/200n",
+              "1.2",
+              ""
+            ],
+            [
+              "6",
+              "31",
+              "0.8u/0.4u",
+              "1.6u/0.4u",
+              "1.2",
+              ""
+            ],
+            [
+              "7",
+              "51",
+              "500n/100n",
+              "500n/100n",
+              "1.2",
+              ""
+            ],
+            [
+              "8",
+              "51",
+              "1000n/200n",
+              "1000n/200n",
+              "1.2",
+              ""
+            ],
+            [
+              "9",
+              "51",
+              "1.8u/0.3u",
+              "1.8u/0.3u",
+              "1.2",
+              ""
+            ],
+            [
+              "10",
+              "99",
+              "2u/0.5u",
+              "1u/0.5u",
+              "1.2",
+              ""
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "2.环形振荡器的版图见附录1。在环形振荡器的输出频率f为10MHz，反相器个数为51时，问NMOS和PMOS的W和L的尺寸为多少时，环形振荡器所需面积将达到最小。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.功耗最小是环形振荡器设计最主要的目标。请对环形振荡器重新进行设计，在环形振荡器的输出频率f为5MHz时，问反相器个数和晶体管的W及L尺寸为多少时，环形振荡器所需功耗最小？"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.芯片在流片时一般会选择多项目晶圆（MPW），即多个芯片在同一张晶圆上拼版制作，共同承担流片费用。拼版规则是在一块大小为3mm*4mm的晶圆上摆放所有芯片如图1所示，芯片之间通过划片道（红色实线）隔离开（划片道为80um宽，且划片道的数量要尽可能的少，否则容易对其它芯片造成损伤）。现有7块芯片，其中6块芯片面积固定（见表2），剩余一块芯片面积待定。接第3问，在输出频率为2KHz时，如何设计环形振荡器的尺寸，在追求功耗最小的前提下力求第7个芯片位置上安放更多的环形振荡器？"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2022-a/p002-01.jpg",
+          "alt": "huashu-cup-2022-a 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1拼版示意图"
+        },
+        {
+          "type": "paragraph",
+          "text": "表2芯片面积"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "序号",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6"
+            ],
+            [
+              "长/mm",
+              "1.76",
+              "1.046",
+              "1.096",
+              "1.05",
+              "1.77",
+              "1.5"
+            ],
+            [
+              "宽/mm",
+              "1.46",
+              "1.146",
+              "0.846",
+              "2.16",
+              "0.8",
+              "0.5"
+            ]
+          ]
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第三届/2022年“华数杯”全国大学生数学建模竞赛A题/2022华数杯全国大学生数学建模竞赛A题.pdf",
+        "bytes": 261883,
+        "sha256": "ad62b1a32b8afc4a142ae3a69439f711a828c920c9c505681edeb3ee0fa4e9a0",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2022-b",
+      "code": "2022 华数杯 B",
+      "title": "水下机器人的组装计划",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2022,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "自来水管道清理机器人（Waterpipecleaning robot，简称WPCR）是一种可在水下移动、具有视觉和感知系统、通过遥控或自主操作方式、使用机械臂代替或辅助人去完成自来水管道垃圾清理任务的装置。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2022-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 213367,
+          "sha256": "b0045ef052236bce1476811a68cc17a4e1ba0ad025436fe690a22da54d46833d"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 3360,
+      "content_block_count": 27,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2022华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题水下机器人的组装计划"
+        },
+        {
+          "type": "paragraph",
+          "text": "自来水管道清理机器人（Waterpipecleaning robot，简称WPCR）是一种可在水下移动、具有视觉和感知系统、通过遥控或自主操作方式、使用机械臂代替或辅助人去完成自来水管道垃圾清理任务的装置。运用这种装置能够及时清理管道，既可提高自来水的品质，也能够保证水流畅通，因而越来越受到水务公司和家庭住户的青睐。"
+        },
+        {
+          "type": "paragraph",
+          "text": "某工厂生产的WPCR装置需要用3个容器艇（用A表示）、4个机器臂（用B表示）、5个动力系统（用C表示）组装而成。每个容器艇（A）由6个控制器（A1）、8个划桨（A2）和2个感知器（A3）组成。每个机器臂（B）组成比较复杂，简单可划分为2个力臂组件（B1）和4个遥感器（B2）组成。每个动力系统（C）由8个蓄电池（C1）、2个微型发电机（C2）和12个发电螺旋（C3）组成。也就是说组装一个完整的WPCR装置，需要3个容器艇（A），包括18个控制器（A1）、24个划桨（A2）以及6个感知器（A3）。组装一台WPCR需要的其他部件数以此类推。组装WPCR所需要的产品统称为组件，包括A和A1、A2、A3，B和B1、B2，C和C1、C2、C3。"
+        },
+        {
+          "type": "paragraph",
+          "text": "该工厂每次生产计划的计划期为一周（即每次按照每周7天的订购数量实行订单生产），只有最终产品WPCR有外部需求，其他组件不对外销售。容器艇（A）、机器臂（B）、动力系统（C）生产要占用该工厂最为关键的设备，因而严格控制总生产工时。A、B、C的工时消耗分别为3时/件、5时/件和5时/件，即生产1件A需要占用3个工时，生产1件B需要占用5个个工时，生产1件C需要占用5个工时。每天的WPCR外部需求数及关键设备总工时限制见表5。"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了顺利生产WPCR，工厂在某一天生产组件产品时，需要付出一个与生产数量无关的固定成本，称为生产准备费用。比如第一天生产了A，则要支付A的生产准备费用，若第二天再生产A，则需要再支付A的生产准备费用。如果某一天结束时某组件有库存存在，则工厂必须付出一定的库存费用（与库存数量成正比）。数据见表6。另外，按照工厂的信誉要求，目前接收的所有订单到期必须全部交货，轻易不能有缺货事件发生。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请回答下列问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.若该工厂第一天（周一）开始时没有任何组件库存，也不希望第7天（周日）结束后留下任何组件库存。每天采购的组件马上就可用于组装，组装出来的组件也可以马上用于当天组装成WPCR。若要求总成本最小，请问如何制定每周7天的生产计划？将结果填入表1。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1：问题1的结果"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "日期",
+              "WPCR 组装数 量",
+              "A组装 数量",
+              "B组装 数量",
+              "C 组装 数量",
+              "生产准 备费用",
+              "库存费 用"
+            ],
+            [
+              "周一",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周二",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周三",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周四",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周五",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周六",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周日",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "总和",
+              "",
+              "",
+              "",
+              "",
+              "此处填",
+              "总成本"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "2.然而，事实上，组件A、B、C需要提前一天生产入库才能组装WPCR，A1、A2、A3、B1、B2、C1、C2、C3也需要提前一天生产入库才能组装A、B、C。在连续多周生产情况下，需要统筹规划。比如在周一生产WPCR前一天（上周周日）必须事先准备好组件库存，而且在本周日必须留下必要的组件库存用以保障下周一的生产。每周的WPCR需求和关键设备工时限制以及每次生产准备费用和单件库存费用数据见表5、表6，请问如何制定每周7天的生产计划以求总成本最低？将结果填入表2。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表2：问题2的结果"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "日期",
+              "WPCR 组装数 量",
+              "A组装 数量",
+              "B组装 数量",
+              "C 组装 数量",
+              "生产准 备费用",
+              "库存费 用"
+            ],
+            [
+              "周一",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周二",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周三",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周四",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周五",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周六",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周日",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "总和",
+              "",
+              "",
+              "",
+              "",
+              "此处填",
+              "总成本"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "3.接问题2。为了保障生产的持续性，工厂需要在30周210天里必须设置7次停工检修，每次检修时间为1天。检修之后关键设备生产能力有所提高，检修后的第一天A、B、C生产总工时限制将会放宽10%，随后逐日减少放宽2%的比例，直至为0（如第一天放宽10%，第二天就放宽8%，...）。检修日的订单只能提前安排生产，当天不能生产任何组件。假设每周的关键设备工时限制以及每次生产准备费用和单件库存费用数据不变，任意两次检修之间要相隔6天以上，请问，检修日放在哪几天最为合适（总成本最小）？将结果填入表3（填天的序号即可，如26，就表示是第26天）。30周的WPCR外部需求数据见表7。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表3：问题3的结果（检修日期及总成本）"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "第1次",
+              "第2次",
+              "第3次",
+              "第4次",
+              "第5次",
+              "第6次",
+              "第7次",
+              "总成本"
+            ],
+            [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "4.在生产实际中，在未知WPCR外部需求订单的前提下，公司需要有一个稳妥的单周生产计划。接问题2，表7数据视为历史周订单数据，在不知未来某周7天订单数且继续追求周总成本最小的前提下，如何制定周生产计划，既能够保障每天的WPCR订单均以95%以上的概率保证正常交付，又能够以85%以上的概率保证整周的WPCR订单能正常交付？将结果填入表4。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表4：问题4结果数据"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "日期",
+              "WPCR外部需 求数量",
+              "WPCR组装 数量",
+              "A组装 数量",
+              "B 组装 数量",
+              "C 组装 数量",
+              "生产准 备费用",
+              "库存 费用"
+            ],
+            [
+              "周一",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周二",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周三",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周四",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周五",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周六",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "周日",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "总和",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "此处填",
+              "总成本"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "表5每天WPCR需求和关键设备工时限制"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "天",
+              "周一",
+              "周二",
+              "周三",
+              "周四",
+              "周五",
+              "周六",
+              "周日"
+            ],
+            [
+              "WPCR 需求（个）",
+              "39",
+              "36",
+              "38",
+              "40",
+              "37",
+              "33",
+              "40"
+            ],
+            [
+              "A、B、C 生产总 工时限制（工时）",
+              "4500",
+              "2500",
+              "2750",
+              "2100",
+              "2500",
+              "2750",
+              "1500"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "表6每次生产准备费用和单件库存费用（单位：元）"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "产品",
+              "WPCR",
+              "A",
+              "A1",
+              "A2",
+              "A3",
+              "B",
+              "B1",
+              "B2",
+              "C",
+              "C1",
+              "C2",
+              "C3"
+            ],
+            [
+              "生产 准备 费用",
+              "240",
+              "120",
+              "40",
+              "60",
+              "50",
+              "160",
+              "80",
+              "100",
+              "180",
+              "60",
+              "40",
+              "70"
+            ],
+            [
+              "单件 库存 费用",
+              "5",
+              "2",
+              "5",
+              "3",
+              "6",
+              "1.5",
+              "4",
+              "5",
+              "1.7",
+              "3",
+              "2",
+              "3"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "表7连续30周的WPCR需求数据（单位：个）"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "天",
+              "周一",
+              "周二",
+              "周三",
+              "周四",
+              "周五",
+              "周六",
+              "周日"
+            ],
+            [
+              "第1周",
+              "39",
+              "36",
+              "38",
+              "40",
+              "37",
+              "33",
+              "40"
+            ],
+            [
+              "第2周",
+              "39",
+              "33",
+              "37",
+              "43",
+              "34",
+              "30",
+              "39"
+            ],
+            [
+              "第3周",
+              "42",
+              "36",
+              "35",
+              "38",
+              "36",
+              "35",
+              "41"
+            ],
+            [
+              "第4周",
+              "38",
+              "36",
+              "36",
+              "48",
+              "34",
+              "35",
+              "39"
+            ]
+          ]
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "第5周",
+              "38",
+              "36",
+              "40",
+              "40",
+              "40",
+              "34",
+              "39"
+            ],
+            [
+              "第6周",
+              "40",
+              "30",
+              "36",
+              "40",
+              "34",
+              "36",
+              "37"
+            ],
+            [
+              "第7周",
+              "41",
+              "36",
+              "41",
+              "41",
+              "38",
+              "29",
+              "43"
+            ],
+            [
+              "第8周",
+              "33",
+              "31",
+              "40",
+              "42",
+              "42",
+              "30",
+              "40"
+            ],
+            [
+              "第9周",
+              "35",
+              "36",
+              "38",
+              "33",
+              "35",
+              "37",
+              "41"
+            ],
+            [
+              "第10周",
+              "43",
+              "35",
+              "42",
+              "37",
+              "36",
+              "33",
+              "39"
+            ],
+            [
+              "第11周",
+              "38",
+              "32",
+              "41",
+              "36",
+              "40",
+              "31",
+              "34"
+            ],
+            [
+              "第12周",
+              "37",
+              "37",
+              "41",
+              "39",
+              "38",
+              "35",
+              "38"
+            ],
+            [
+              "第13周",
+              "38",
+              "38",
+              "33",
+              "42",
+              "42",
+              "29",
+              "33"
+            ],
+            [
+              "第14周",
+              "39",
+              "37",
+              "44",
+              "38",
+              "35",
+              "36",
+              "38"
+            ],
+            [
+              "第15周",
+              "40",
+              "39",
+              "38",
+              "38",
+              "37",
+              "34",
+              "44"
+            ],
+            [
+              "第16周",
+              "35",
+              "36",
+              "38",
+              "39",
+              "39",
+              "39",
+              "39"
+            ],
+            [
+              "第17周",
+              "43",
+              "28",
+              "39",
+              "41",
+              "38",
+              "30",
+              "38"
+            ],
+            [
+              "第18周",
+              "35",
+              "37",
+              "40",
+              "41",
+              "40",
+              "35",
+              "41"
+            ],
+            [
+              "第19周",
+              "36",
+              "35",
+              "40",
+              "41",
+              "37",
+              "38",
+              "36"
+            ],
+            [
+              "第20周",
+              "37",
+              "38",
+              "39",
+              "41",
+              "38",
+              "37",
+              "44"
+            ],
+            [
+              "第21周",
+              "37",
+              "37",
+              "37",
+              "36",
+              "39",
+              "33",
+              "41"
+            ],
+            [
+              "第22周",
+              "39",
+              "37",
+              "42",
+              "37",
+              "36",
+              "28",
+              "43"
+            ],
+            [
+              "第23周",
+              "40",
+              "32",
+              "35",
+              "45",
+              "40",
+              "34",
+              "43"
+            ],
+            [
+              "第24周",
+              "38",
+              "36",
+              "37",
+              "36",
+              "40",
+              "28",
+              "45"
+            ],
+            [
+              "第25周",
+              "38",
+              "40",
+              "38",
+              "36",
+              "35",
+              "40",
+              "42"
+            ],
+            [
+              "第26周",
+              "31",
+              "31",
+              "44",
+              "36",
+              "31",
+              "36",
+              "40"
+            ],
+            [
+              "第27周",
+              "40",
+              "36",
+              "34",
+              "43",
+              "35",
+              "32",
+              "39"
+            ],
+            [
+              "第28周",
+              "33",
+              "33",
+              "36",
+              "41",
+              "34",
+              "38",
+              "40"
+            ],
+            [
+              "第29周",
+              "35",
+              "34",
+              "37",
+              "37",
+              "39",
+              "36",
+              "40"
+            ],
+            [
+              "第30周",
+              "37",
+              "41",
+              "39",
+              "41",
+              "36",
+              "32",
+              "44"
+            ]
+          ]
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第三届/2022年“华数杯”全国大学生数学建模竞赛B题/2022华数杯全国大学生数学建模竞赛B题.pdf",
+        "bytes": 213367,
+        "sha256": "b0045ef052236bce1476811a68cc17a4e1ba0ad025436fe690a22da54d46833d",
+        "page_count": 4
+      }
+    },
+    {
+      "id": "huashu-cup-2022-c",
+      "code": "2022 华数杯 C",
+      "title": "插层熔喷非织造材料的性能控制研究",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2022,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 1 个随题附件",
+      "status": "完整题面",
+      "summary": "熔喷非织造材料是口罩生产的重要原材料，具有很好的过滤性能，其生产工艺简单、成本低、质量轻等特点，受到国内外企业的广泛关注。但是，由于熔喷非织造材料纤维非常细，在使用过程中经常因为压缩回弹性差而导致其性能得不到保障。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2022-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 184079,
+          "sha256": "bab6f397dd1fc0b84f06376d3d585e1504a497c4e12bfc1c8619af83e7821bd3"
+        },
+        {
+          "title": "随题附件包（1 个文件）",
+          "url": "/problem-files/huashu-cup-2022-c/attachments.zip",
+          "kind": "data",
+          "bytes": 23280,
+          "sha256": "4ae2c1f705c479f4401124c30efbc4d1d277c5c10545a957714c839b6fd37aa2"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1445,
+      "content_block_count": 25,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2022华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题插层熔喷非织造材料的性能控制研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "熔喷非织造材料是口罩生产的重要原材料，具有很好的过滤性能，其生产工艺简单、成本低、质量轻等特点，受到国内外企业的广泛关注。但是，由于熔喷非织造材料纤维非常细，在使用过程中经常因为压缩回弹性差而导致其性能得不到保障。因此，科学家们创造出插层熔喷法，即通过在聚丙烯（PP）熔喷制备过程中将涤纶（PET）短纤等纤维插入熔喷纤维流，制备出了“Z型”结构的插层熔喷非织造材料。"
+        },
+        {
+          "type": "paragraph",
+          "text": "插层熔喷非织造材料制备工艺参数较多，参数之间还存在交互影响，加上插层气流之后更为复杂，因此，通过工艺参数（接收距离和热空气速度）决定结构变量（厚度、孔隙率、压缩回弹性），而由结构变量决定最终产品性能（过滤阻力、过滤效率、透气性）的研究也变得较为复杂。如果能分别建立工艺参数与结构变量、结构变量和产品性能之间的关系模型，则有助于为产品性能调控机制的建立提供一定的理论基础。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请查阅相关文献，了解专业背景，研究题目数据，回答下列问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.请研究插层后结构变量、产品性能的变化规律，并分析插层率对于这些变化是否有影响？"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.请研究工艺参数与结构变量之间的关系。表1给了8个工艺参数组合，请将预测的结构变量数据填入表1中。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1：问题2的结果"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "接收距离 (cm)",
+              "热风速度 (r/min)",
+              "厚度mm",
+              "孔隙率（%）",
+              "压缩回弹性 率（%）"
+            ],
+            [
+              "38",
+              "850",
+              "",
+              "",
+              ""
+            ],
+            [
+              "33",
+              "950",
+              "",
+              "",
+              ""
+            ],
+            [
+              "28",
+              "1150",
+              "",
+              "",
+              ""
+            ],
+            [
+              "23",
+              "1250",
+              "",
+              "",
+              ""
+            ],
+            [
+              "38",
+              "1250",
+              "",
+              "",
+              ""
+            ],
+            [
+              "33",
+              "1150",
+              "",
+              "",
+              ""
+            ],
+            [
+              "28",
+              "950",
+              "",
+              "",
+              ""
+            ],
+            [
+              "23",
+              "850",
+              "",
+              "",
+              ""
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "3.请研究结构变量与产品性能的关系，以及结构变量之间、产品性能之间的关系。结合第二问，研究当工艺参数为多少时，产品的过滤效率将会达到最高？"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.实际上，产品生产需要兼顾各方面的条件和要求。如接收距离不大可能大于100cm，热空气速度也不大可能大于2000 r/min。按照应用的要求，厚度尽量不要超过3mm，压缩回弹性率尽量不要低于85%。另外，为了防止熔喷非织造过滤材料因过滤阻力大使得大量颗粒堵塞孔隙而致使过滤效率迅速下降的现象发生，产品是需要同时追求过滤效率高和过滤阻力小的目标的。请问工艺参数为多少时，能够使得过滤效率尽量的高的同时力求过滤阻力尽量的小？"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "专业术语简要解释："
+        },
+        {
+          "type": "paragraph",
+          "text": "插层率%：将卷曲高弹、力学性能优异的涤纶（PET）短纤插入聚丙烯（PP）切片（非织造材料所用到的一种聚合物）中的重量比例。插层是一种混合的方式。"
+        },
+        {
+          "type": "paragraph",
+          "text": "接收距离cm：实验时溶液喷射点到接收喷射过来的溶液位置的距离。"
+        },
+        {
+          "type": "paragraph",
+          "text": "热空气速度r/min：溶液在空气中喷射的速度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "厚度mm：形成熔喷非织造材料的厚度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "孔隙率%：形成熔喷非织造材料中空隙占材料体积的比率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "压缩回弹性%：反抗压缩的回弹能力。弹性越大说明抗压能力越强。"
+        },
+        {
+          "type": "paragraph",
+          "text": "过滤阻力Pa：阻碍物质颗粒通过熔喷非织造材料的能力。"
+        },
+        {
+          "type": "paragraph",
+          "text": "过滤效率%：物质颗粒通过熔喷非织造材料的比例。"
+        },
+        {
+          "type": "paragraph",
+          "text": "透气性mm/s：空气贯穿熔喷非织造材料的通畅性。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "数据解释："
+        },
+        {
+          "type": "list_item",
+          "text": "“C题数据.xlsx”中的data1中给出了25组对照实验。第一列为实验工艺条件组号，组号所对应的工艺参数组合见data2。其中1#表示未插层材料（普通熔喷材料），2#表示插层熔喷材料。",
+          "marker": "1."
+        },
+        {
+          "type": "list_item",
+          "text": "“C题数据.xlsx”中的data3给出了插层率固定的条件下的，不同工艺参数组合的材料结构变量数据和产品性能数据。每个组合实验重复了三次。",
+          "marker": "2."
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第三届/2022年“华数杯”全国大学生数学建模竞赛C题/2022华数杯全国大学生数学建模竞赛C题.pdf",
+        "bytes": 184079,
+        "sha256": "bab6f397dd1fc0b84f06376d3d585e1504a497c4e12bfc1c8619af83e7821bd3",
+        "page_count": 2
+      }
+    },
+    {
       "id": "cumcm-2022-a",
       "code": "2022 CUMCM A",
       "title": "波浪能最大输出功率设计",
@@ -22234,6 +25738,324 @@
       }
     },
     {
+      "id": "huashu-cup-2021-a",
+      "code": "2021 华数杯 A",
+      "title": "电动汽车无线充电优化匹配研究",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2021,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 4 个随题附件",
+      "status": "完整题面",
+      "summary": "电动汽车以环境污染小、噪音低、能源利用效率高、维修方便等优势深受消费者青睐。但现有电动汽车的有线充电方式操作复杂，且存在安全隐患，因此采用无线充电方式对电动汽车进行快速、安全、方便的充电，成为了电动汽车行业所追求的目标。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2021-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 231501,
+          "sha256": "84226430be23fad3b6a6385c097f57693432d716220e462af4c30a21c5cb4d41"
+        },
+        {
+          "title": "随题附件包（4 个文件）",
+          "url": "/problem-files/huashu-cup-2021-a/attachments.zip",
+          "kind": "data",
+          "bytes": 59556,
+          "sha256": "e4de56a62ae962363f72c8abcac45a064e2f0ccceee5c583e880da3cedf43aad"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1211,
+      "content_block_count": 17,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2021华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题电动汽车无线充电优化匹配研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "电动汽车以环境污染小、噪音低、能源利用效率高、维修方便等优势深受消费者青睐。但现有电动汽车的有线充电方式操作复杂，且存在安全隐患，因此采用无线充电方式对电动汽车进行快速、安全、方便的充电，成为了电动汽车行业所追求的目标。"
+        },
+        {
+          "type": "paragraph",
+          "text": "目前的电动汽车无线充电示意图如图1所示。当电动汽车停靠在特定位置时，电网通过地下的发射机构发射高频交变磁场对电动汽车进行无线充电，具有操作方便、空间占用小等优点，但是目前电动汽车生产厂家众多，无线充电必须满足“专车专用”的原则，即专有车型必须使用专用的无线充电设备，造成了电力资源的极大浪费。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2021-a/p001-01.jpg",
+          "alt": "huashu-cup-2021-a 第 1 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1电动汽车无线充电示意图"
+        },
+        {
+          "type": "paragraph",
+          "text": "因此通过对无线充电的非车载部分进行优化，使得无线充电设备与不同生产厂家的电动汽车之间互联互通具有重要意义。"
+        },
+        {
+          "type": "paragraph",
+          "text": "无线充电系统结构等效图见图2。无线充电系统是由车载部分与非车载部分组成。车载部分由一个RLC电路与负载组成，非车载部分由电源和另一个RLC电路组成。两个电感元件L1（发射线圈电感，也称为匹配阻抗）与L2（接收线圈电感）通过耦合产生磁场来传输电能，可假设两线圈相互之间的互感仅仅与距离相关。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2021-a/p001-02.png",
+          "alt": "huashu-cup-2021-a 第 1 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2无线充电系统结构等效图"
+        },
+        {
+          "type": "paragraph",
+          "text": "某实验室为了研究无线充电传输效率的问题，总共做了10次实验。附件1为实验室中无线充电车载部分与地面发射部分在不同距离下的10次实验数据，实验是在发射和接收线圈垂直射影完全重合的条件下进行的。附件2为实验所用无线充电地面发射装置的参数。附件3为实验设备发射装置电磁机械的可调范围。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请参考相关文献，建立数学模型，回答下列问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "1.在发射与接收线圈完全谐振下，建立发射频率、匹配阻抗与无线电能传输效率的数学模型，并结合附件1、附件2、附件3的相关数据，计算附件1中10次实验无线充电的电能传输效率，将结果展示在正文中。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.由于电动汽车自身的设计，其无线充电车载部分与地面距离可能是规定内的任意值。改造第1问的数学模型，建立发射频率、匹配阻抗、两线圈距离与无线电能传输效率的数学模型。将附件1第1次实验中两线圈的距离100mm改为150mm、200mm、250mm时，重新计算无线充电的电能传输效率并作比较分析。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.前人研究表明，通过改变发射频率、改变匹配阻抗可以提升传输效率。请给出在附件1中第1次实验（两线圈距离为100mm）情况下，可否通过调整发射频率、匹配阻抗值使得传输效率达到最大？最大值为多少？"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.当电动汽车停车进行无线充电时，很难保证发射线圈和接收线圈完全垂直射影重合，总会出现或多或少的偏离，可参见“相关说明”中的图1，其中线圈半径为r，接收线圈（距离发射线圈高h）圆心向X轴正方向偏离了a（mm）。延续第3问的研究，请计算距地面垂直距离h为100mm时，保证最高传输效率大于80%前提下a的最大值。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第二届/2021年“华数杯”全国大学生数学建模竞赛A题/2021华数杯全国大学生数学建模竞赛A题.pdf",
+        "bytes": 231501,
+        "sha256": "84226430be23fad3b6a6385c097f57693432d716220e462af4c30a21c5cb4d41",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2021-b",
+      "code": "2021 华数杯 B",
+      "title": "进出口公司的货物装运策略",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2021,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 3 个随题附件",
+      "status": "完整题面",
+      "summary": "进出口公司经常需要将销售的货物通过货运飞机进行运输。货运飞机有大、中、小三种类型，每一种飞机均有前、中、后三个货舱，每个货舱有最大容积、最大载重量的限制。每种货物可以在一个或多个货舱中任意分布，多种货物可以混装。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2021-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 161301,
+          "sha256": "671ba276a0066ce4ad52dbcf68d8cf55004685e67ed317d0207cf3b2e7c2c110"
+        },
+        {
+          "title": "随题附件包（3 个文件）",
+          "url": "/problem-files/huashu-cup-2021-b/attachments.zip",
+          "kind": "data",
+          "bytes": 27437,
+          "sha256": "0306908fa38452b6e877d351aa36368410f505892530ceb7c0409e0291399b91"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 901,
+      "content_block_count": 11,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2021华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 3,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题进出口公司的货物装运策略"
+        },
+        {
+          "type": "paragraph",
+          "text": "进出口公司经常需要将销售的货物通过货运飞机进行运输。货运飞机有大、中、小三种类型，每一种飞机均有前、中、后三个货舱，每个货舱有最大容积、最大载重量的限制。每种货物可以在一个或多个货舱中任意分布，多种货物可以混装。为了保证飞机飞行平稳，三个货舱中实际载重必须与其最大载重成比例。详细数据见附件1。"
+        },
+        {
+          "type": "paragraph",
+          "text": "销售的货物有HW1-HW10等10种，每件货物均为长方体，货物尺寸、体积（立方米）、重量（吨）、运输单价均已知。进出口公司为了精确营销，收集了前50个周期的每种货物的销售量以及下一个周期的销售价格。下一个周期货物的销售量是随机的，但销售价格是已知的，而且所有货物在装运飞机之前的所有成本为货物销售价格的40%；按照规则，一个周期内，产品如果不能销售出去，产品只能按照销售价的30%清仓甩卖。数据见附件2。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请结合附件的数据，建立数学模型，解决下列问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "1.假设只有大、中、小三种类型的货运飞机各一架，所有货物可以直接装入飞机，并按照前50个周期各种货物销售量的平均值来组织货源。问如何装运，可以使得货运飞机尽量不留空隙？"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.继续按照前50个周期各种货物销售量的平均值来组织货源，要求体积在2m3以下的货物都要用集装箱装载。集装箱为长方体，封闭，塑料制品，厚度为5厘米，数据见附件3。集装箱尽量不留空隙，货运飞机尽量不留空隙，基于这种思路，请分析确定使用哪种机型最为合适，至少需要多少架次，并给出各架次的具体装运方案。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.接第2问，进出口公司总觉得以集装箱尽量不留空隙、货运飞机尽量不留空隙作为为货物装运的思路影响了他们的经济效益。请你帮助他们调整一下装运方案，以满足他们的经济期望，并计算最佳利润。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.市场对产品的需求是不确定的，在一个周期内组织多少货源是有风险的。为安全起见，进出口公司希望能够得到在可靠性为95%下的最大利润值，以及为实现这个利润值应该实施的货运装运策略。请帮助其实现他们的目标。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5.如果将可靠性95%改为70%，最大利润值和装运策略将如何改变？"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第二届/2021年“华数杯”全国大学生数学建模竞赛B题/2021华数杯全国大学生数学建模竞赛B题.pdf",
+        "bytes": 161301,
+        "sha256": "671ba276a0066ce4ad52dbcf68d8cf55004685e67ed317d0207cf3b2e7c2c110",
+        "page_count": 1
+      }
+    },
+    {
+      "id": "huashu-cup-2021-c",
+      "code": "2021 华数杯 C",
+      "title": "电动汽车目标客户销售策略研究",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2021,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 3 个随题附件",
+      "status": "完整题面",
+      "summary": "汽车产业是国民经济的重要支柱产业，而新能源汽车产业是战略性新兴产业。大力发展以电动汽车为代表的新能源汽车是解决能源环境问题的有效途径，市场前景广阔。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2021-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 188175,
+          "sha256": "6c88e6fe28c422a3bb502954c2713559917b17e38da2d8c8d6c6d521fc82a9cc"
+        },
+        {
+          "title": "随题附件包（3 个文件）",
+          "url": "/problem-files/huashu-cup-2021-c/attachments.zip",
+          "kind": "data",
+          "bytes": 413750,
+          "sha256": "ec226f135884b7545a2519a41b3be2015b579222fa08ecd9690cbd252a167c63"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1049,
+      "content_block_count": 11,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2021华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "C题电动汽车目标客户销售策略研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "汽车产业是国民经济的重要支柱产业，而新能源汽车产业是战略性新兴产业。大力发展以电动汽车为代表的新能源汽车是解决能源环境问题的有效途径，市场前景广阔。但是，电动汽车毕竟是一个新兴的事物，与传统汽车相比，消费者在一些领域，如电池问题，还是存在着一些疑虑，其市场销售需要科学决策。"
+        },
+        {
+          "type": "paragraph",
+          "text": "某汽车公司最新推出了三款品牌电动汽车，包括合资品牌（用1表示）、自主品牌（用2表示）和新势力品牌（用3表示）。为研究消费者对电动汽车的购买意愿，制定相应的销售策略，销售部门邀请了1964位目标客户对三款品牌电动汽车进行体验。具体体验数据有电池技术性能（电池耐用和充电方便）满意度得分（满分100分，下同）a1、舒适性（环保与空间座椅）整体表现满意度得分a2、经济性（耗能与保值率）整体满意度得分a3、安全性表现（刹车和行车视野）整体满意度得分a4、动力性表现（爬坡和加速）整体满意度得分a5、驾驶操控性表现（转弯和高速的稳定性）整体满意度得分a6、外观内饰整体表现满意度得分a7、配置与质量品质整体满意度得分a8等。另外还有目标客户体验者个人特征的信息，详情见附录1和2。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请你研究数据，查阅相关文献，运用数学建模的知识回答下列问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "1.请做数据清洗工作，指出异常值和缺失数据以及处理方法。对数据做描述性统计分析，包括目标客户对于不同品牌汽车满意度的比较分析。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.决定目标客户是否购买电动车的影响因素有很多，有电动汽车本身的因素，也有目标客户个人特征的因素。在这次目标客户体验活动中，有部分目标客户购买了体验的电动汽车（购买了用1表示，没有购买用0表示）。结合这些信息，请研究哪些因素可能会对不同品牌电动汽车的销售有影响？"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.结合前面的研究成果，请你建立不同品牌电动汽车的客户挖掘模型，并评价模型的优良性。运用模型判断附件3中15名目标客户购买电动车的可能性。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.销售部门认为，满意度是目标客户汽车体验的一种感觉，只要营销者加大服务力度，在短的时间内提高a1-a8五个百分点的满意度是有可能的，但服务难度与提高的满意度百分点是成正比的，即提高体验满意度5%的服务难度是提高体验满意度1%服务难度的5倍。基于这种思路和前面的研究成果，请你在附件3每个品牌中各挑选1名没有购买电动汽车的目标客户，实施销售策略。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5.根据前面的研究结论，请你给销售部门提出不超过500字的销售策略建议。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第二届/2021年“华数杯”全国大学生数学建模竞赛C题/2021华数杯全国大学生数学建模竞赛C题.pdf",
+        "bytes": 188175,
+        "sha256": "6c88e6fe28c422a3bb502954c2713559917b17e38da2d8c8d6c6d521fc82a9cc",
+        "page_count": 2
+      }
+    },
+    {
       "id": "cumcm-2021-a",
       "code": "2021 CUMCM A",
       "title": "“FAST”主动反射面的形状调节",
@@ -24115,6 +27937,315 @@
         "bytes": 5163240,
         "sha256": "1e0d707c9cd93e7b08b50717ed5cb3a986d47d31b3204ac0cc65a03e2c64caeb",
         "page_count": 4
+      }
+    },
+    {
+      "id": "huashu-cup-2020-a",
+      "code": "2020 华数杯 A",
+      "title": "带相变材料的低温防护服御寒仿真模拟",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2020,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 2 个随题附件",
+      "status": "完整题面",
+      "summary": "在一些特定的场合，人们往往需要在极寒天气下作业，如高山高原工作、潜水员水下工作、现代化工厂的低温车间以及寒冷气候下的野外作业等。为了能使工作顺利进行，科学家们一直在研究低温防护复合材料，试图做成防护服用以保护在超低温环境下的工作者。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2020-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 688464,
+          "sha256": "1fa6eac84ae3a50e48d192fc2b06772f0dff0abffd1040d4de72d58051ae8969"
+        },
+        {
+          "title": "随题附件包（2 个文件）",
+          "url": "/problem-files/huashu-cup-2020-a/attachments.zip",
+          "kind": "data",
+          "bytes": 682764,
+          "sha256": "95f49fd1c675a675ba6e7bd4e4a9543059411f91fb1ca004729be4b54ec574d2"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1353,
+      "content_block_count": 13,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2020华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题带相变材料的低温防护服御寒仿真模拟"
+        },
+        {
+          "type": "paragraph",
+          "text": "在一些特定的场合，人们往往需要在极寒天气下作业，如高山高原工作、潜水员水下工作、现代化工厂的低温车间以及寒冷气候下的野外作业等。为了能使工作顺利进行，科学家们一直在研究低温防护复合材料，试图做成防护服用以保护在超低温环境下的工作者。"
+        },
+        {
+          "type": "paragraph",
+          "text": "某研究所研制的低温防护复合材料：三层结构，包括内层织物层、中间层功能层、外层隔热层。内层织物层主要用于舒适性。中间层是一种特殊的材料，可以产生并释放热量，用以延缓人体温度过快降低，称为相变材料。外层隔热层主要是延缓热量对外过快传递。低温防护材料主要用于短时间的低温防护，有效降低外界环境对人体的伤害。"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了延缓人体温度过快降低，研制的复合材料的中间层要具有良好的保温性能。中间层有两个特性，特性一是厚度不能大于0.45mm，因为中间层的硬度与厚度成正比，一旦超过0.45mm，人体将无法伸展，也就无法工作。特性二是在高于25 ℃左右（根据材料不同这个临界点会有小的变化）为液态，低于25 ℃开始固化，固化时就开始放热，一直到14.7 ℃左右固化完毕，将不再放热。具体数据详见附件1。注意：附件1中的数据放热温度范围与上面表述温度范围有差异，以附件数据为准。"
+        },
+        {
+          "type": "paragraph",
+          "text": "热量传递方式有对流、辐射和传导三种。但在超低温下，对外辐射微不足道，因此一般不予考虑。内层织物与人体表面之间有空气流动，外层隔热层与外部环境之间也有空气流动。空气流速不一样，所计算出来的表面换热系数也会不一样。至于热传导能力（热导率），是材料的物理属性。附件2给出了三层材料的物理属性值。"
+        },
+        {
+          "type": "paragraph",
+          "text": "为检验这种复合材料的耐低温效果，科研者按照附件2提供的厚度为一名身高1.70m，体重为60kg的中国实验者(消耗的衣料面积一般不超过人体表面积的1.25倍)制作了一套耐低温服装。实验者将前往南极洲长城站在-40 ℃的低温下进行工作实验。一般来讲，人体表面温度低于15 ℃工作将很困难，低于10 ℃将有生命危险。科研者为慎重起见，希望在去南极洲实验前先做仿真模拟。。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请你查询和阅读相关资料，运用数学模型，回答下列问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题一：假设实验者站在南极洲长城站附近。当时环境安静，晴天无风，-40 ℃。请你利用传热学原理对低温防护复合材料在低温环境下传热机理进行分析，建立热量传递数学模型。并预测实验者能够在室外坚持多久？"
+        },
+        {
+          "type": "paragraph",
+          "text": "假设长城站外面风速为3m/s，实验者做轻微运动。如何改进第一问的模型，并计算实验者大约多久后就必须要返回室内？",
+          "lead": "问题二："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题三：在问题一的室外环境下，实验者静止不动，实验者穿着较重的防护服，最大承受重量为100kg。并且每多承受10s的时间，最大承受重量将下降0.5kg。如果实验室在低温防护服材料原有支出的基础上能够增加50%以内的资金，请问如何增加防护服的厚度，使得实验者在外站立时间尽可能的长?"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题四：接着问题三，假定不追加资金，要想提高在户外活动时间，可以通过提高复合材料中间层的放热能力来实现，这是一个新的研究课题。那么，中间功能层的放热能力要比原先提高多少，才能使得实验者在室外坚持的时间不比第三问中坚持的时间少？假定放热能力的提高是在各个温度下同比例增加的。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第一届/2020年“华数杯”全国大学生数学建模竞赛A题/2020华数杯全国大学生数学建模竞赛A题.pdf",
+        "bytes": 688464,
+        "sha256": "1fa6eac84ae3a50e48d192fc2b06772f0dff0abffd1040d4de72d58051ae8969",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "huashu-cup-2020-b",
+      "code": "2020 华数杯 B",
+      "title": "工业零件切割优化方案设计",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2020,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF及 1 个随题附件",
+      "status": "完整题面",
+      "summary": "在大型工业产品中，如机床、轮船、飞机，常常需要很多的小零件，如螺钉、螺帽、螺栓、活塞等。在零件的生产过程中，第一步是需要依照零件产品尺寸从原材料中截取初级产品，这是零件制造的第一道工序。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2020-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 295598,
+          "sha256": "57c7410d8ecf65197c84cc79f0fa9189a48df73c9bf816d421c0aeca645725db"
+        },
+        {
+          "title": "随题附件包（1 个文件）",
+          "url": "/problem-files/huashu-cup-2020-b/attachments.zip",
+          "kind": "data",
+          "bytes": 3054,
+          "sha256": "1e3b96b1f7e786a22942b1c330597d91e7b7ac5a22b17a82de26b1deb3127e8a"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 898,
+      "content_block_count": 12,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "2020华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题工业零件切割优化方案设计"
+        },
+        {
+          "type": "paragraph",
+          "text": "在大型工业产品中，如机床、轮船、飞机，常常需要很多的小零件，如螺钉、螺帽、螺栓、活塞等。在零件的生产过程中，第一步是需要依照零件产品尺寸从原材料中截取初级产品，这是零件制造的第一道工序。在这道工序中，不同的截取方案具有不同的材料利用率，而原材料的利用率（原材料截取初级产品的总体积与原材料体积之比）直接影响产品的生产成本。在市场上，零件的截面（表面）形状是多种多样的，有圆形、矩形等，零件的厚度（高度）尺寸也是大小不一的。在原材料尺寸固定的前提下，截取零件的初级产品后产生的废料最少是企业的追求。"
+        },
+        {
+          "type": "paragraph",
+          "text": "某零件加工厂新进一种原材料用来加工零件，如表1所示。在零件加工的过程中，需要使用切割生产的初级产品如表2所示。假设：割缝宽度忽略不计。请你为该零件厂提供如下问题的原材料最优切割设计方案。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题一：在一块原材料上切割LJ1产品，建立数学模型，给出原材料利用率最高的切割方案，即切割的数量和原材料的利用率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题二：在一块原材料上切割LJ1、LJ2、LJ3、LJ4、LJ5、LJ6产品，建立数学模型，给出利用率由高到低排序的前5种切割方案，即每个零件产品的数量和原材料的利用率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题三：需要完成表2中LJ1、LJ2、LJ3、LJ4、LJ5、LJ6产品的生产任务，至少需要多个原材料？由于工艺的缘故，只允许至多采用5种切割方案，建立数学模型，给出原材料总利用率最高的至多5种切割方案。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题四：将问题三的产品型号拓展到LJ1-LJ9,需要完成表2中LJ1-LJ9产品的生产任务，同样需要多少个原材料？同样只允许至多采用5种切割方案，建立数学模型，给出原材料总利用率最高的至多5种切割方案。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题五：不考虑产品LJ1-LJ9的需求数量，给定100个原材料，按照表2中给出的利润，建立数学模型，给出总利润最大的切割方案（同样要求切割方案不超过5个）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "注：1）原材料总利用率=所有初级产品的总体积/所有原材料的总体积；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2）每一个问题的计算结果尽量用表格的形式展示在论文之中。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第一届/2020年“华数杯”全国大学生数学建模竞赛B题/2020华数杯全国大学生数学建模竞赛B题.pdf",
+        "bytes": 295598,
+        "sha256": "57c7410d8ecf65197c84cc79f0fa9189a48df73c9bf816d421c0aeca645725db",
+        "page_count": 1
+      }
+    },
+    {
+      "id": "huashu-cup-2020-c",
+      "code": "2020 华数杯 C",
+      "title": "脱贫帮扶绩效评价",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "category": "华数杯",
+      "year": 2020,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF及 1 个随题附件",
+      "status": "完整题面",
+      "summary": "消除贫困、改善民生、逐步实现共同富裕，是社会主义的本质要求，是我们党的重要使命。党的十八大以来，国家把扶贫开发工作纳入“四个全面”战略布局，作为实现第一个百年奋斗目标的重点工作，摆在更加突出的位置。",
+      "source_id": "huashu_cup_official",
+      "source_url": "https://m.saikr.com/contest/notice_detail/44136",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/huashu-cup-2020-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 435346,
+          "sha256": "5b6f9dea868f566066b27f7152e3c8e522c0225fcf007cb7c7d7679f32fe85ae"
+        },
+        {
+          "title": "随题附件包（1 个文件）",
+          "url": "/problem-files/huashu-cup-2020-c/attachments.zip",
+          "kind": "data",
+          "bytes": 3646294,
+          "sha256": "36d6b5876e99ac214d1a7469b6b4f244ede033a1641ac6a4d03dd57978babd68"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1220,
+      "content_block_count": 12,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "2020华数杯全国大学生数学建模竞赛题目"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "（请先阅读“华数杯数学建模竞赛论文格式规范与提交说明”）"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题脱贫帮扶绩效评价"
+        },
+        {
+          "type": "paragraph",
+          "text": "消除贫困、改善民生、逐步实现共同富裕，是社会主义的本质要求，是我们党的重要使命。党的十八大以来，国家把扶贫开发工作纳入“四个全面”战略布局，作为实现第一个百年奋斗目标的重点工作，摆在更加突出的位置。"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了更好的激励各帮扶单位提高扶贫效率，扶真贫，真扶贫。五年前，国家启动了脱贫帮扶绩效评价机制。某科研团队接受任务后，对全国32165个需要帮扶的贫困村进行了初步的贫困调查。从居民收入(记为SR)、产业发展(记为CY)、居住环境(记为HJ)、文化教育(记为WJ)、基础设施(记为SS)等五个评价指标给出了评分。以此为依据，将被帮扶的村庄划分为160个集合，每个集合指定帮扶单位（标记为0-159）进行帮扶。这160个帮扶单位按照单位属性（如国企还是民营企业等）标记为0-5等6个类型。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2020年，研究团队再次进行了调研，得到了被帮扶的这些村庄居民收入、产业发展、居住环境、文化教育、基础设施等五个方面的评分数据以及总分数据。为了便于比较和研究，所有数据都进行了标准化处理（标准化后的数值越大表示评分越高）。绩效评价，不能仅以最后的得分作为依据，需要考虑各个评价指标的进步幅度。因为这样才能公正的评判帮扶的效果，就能鼓励更多的帮扶单位愿意花精力去帮助非常贫困的地区。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请你运用数学建模，解决以下问题："
+        },
+        {
+          "type": "paragraph",
+          "text": "问题一：一般人的理解是，五年前的评分与2020年对应的各项评分有着直接的关联，如五年前的居民收入不错，现在的居民收入也会是不错的。你认为本问题有这个规律吗？请分析各个评价指标的对应关系。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题二：160个帮扶单位帮扶着基础不同的村庄，帮扶单位帮扶工作的态度、目标、投入、帮扶干部素质等显然是有差异的。仅仅用2020年各村庄评分高低显然是无法真正有效的体现一个帮扶单位在脱贫攻坚提升方面所做出的努力。请你运用附件的数据，阐明什么类型的帮扶单位，哪些帮扶单位在脱贫帮扶上面有较高的绩效？请给不同类型的帮扶单位绩效排序，给出脱贫帮扶绩效前十名的帮扶单位编号。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题三：每个帮扶单位在扶贫上有不同的工作特色，如有些单位在提高居民收入上效果很好，而有些帮扶单位可能在改善基础设施上帮助的效果不错。请问，哪些帮扶单位分别在居民收入、产业发展、居住环境、文化教育、基础设施等评价指标上帮扶业绩明显？请列出各单项评价指标前五名的帮扶单位编号。"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题四：全国计划给予10000个村庄“脱贫先进村庄”称号。请问，哪些因素对获得这个荣誉称号有着非常重要的影响？数据表中最后有10个村庄的2020年的评价分数被删除，请你判断他们能评上“脱贫先进村庄”称号吗？如果称号分为一级和二级（一、二级称号比例为1:3），这10个村庄中谁能评上“脱贫先进一级村庄”称号？"
+        },
+        {
+          "type": "paragraph",
+          "text": "问题五：依据你的研究成果，向国家扶贫办写一封500字左右的信，阐述你的观点和建议。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/huashu-cup-historical/第一届/2020年“华数杯”全国大学生数学建模竞赛C题/2020华数杯全国大学生数学建模竞赛C题.pdf",
+        "bytes": 435346,
+        "sha256": "5b6f9dea868f566066b27f7152e3c8e522c0225fcf007cb7c7d7679f32fe85ae",
+        "page_count": 2
       }
     },
     {
@@ -30049,12 +34180,13 @@
       "competition": "全国大学生数学建模竞赛",
       "category": "国赛",
       "year": 2015,
-      "problem_type": "综合建模",
+      "problem_type": "规划优化",
       "modeling_directions": [
-        "综合分析"
+        "优化模型",
+        "决策分析"
       ],
       "keywords": [
-        "数学建模"
+        "规划"
       ],
       "data_requirement": "含本地原题 PDF及 3 个随题附件",
       "status": "完整题面",

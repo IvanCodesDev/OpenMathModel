@@ -1,7 +1,112 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-06",
+  "updated_at": "2026-08-12",
   "sources": [
+    {
+      "id": "huashu_cup_official",
+      "name": "华数杯全国大学生数学建模竞赛",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "official_platform",
+      "competition": "华数杯全国大学生数学建模竞赛",
+      "domains": [
+        "www.saikr.com",
+        "m.saikr.com",
+        "publicqn.saikr.com"
+      ],
+      "entrypoints": [
+        {
+          "kind": "archive",
+          "url": "https://m.saikr.com/contest/notice_detail/44136"
+        },
+        {
+          "kind": "problems",
+          "url": "https://m.saikr.com/contest/notice_detail/46038"
+        }
+      ],
+      "allowed_paths": [
+        "/contest/notice_detail/44136",
+        "/contest/notice_detail/46038",
+        "/2026/06/17/contest/db2972cc3178e62f2e7d59f675302d2f1781688084526.zip",
+        "/contest/1786086963076/IkaHVScuDaJ97OPHF5R5RkiaFYXCVNo2.zip"
+      ],
+      "denied_paths": [
+        "/login/",
+        "/user/"
+      ],
+      "year_range": {
+        "from": 2020,
+        "to": 2026
+      },
+      "crawl_policy": {
+        "requests_per_minute": 6,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 300
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "华数杯大学生数学建模竞赛组委会与天津市未来与预测科学研究会",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "The organiser account publishes each edition on the designated contest platform; local snapshots are checksum pinned."
+      },
+      "contact": "huashubei01@163.com",
+      "notes": "Two organiser-published bundles: the historical archive carries complete A/B/C statements and supporting data for 2020–2025, and the seventh edition adds 2026 A/B/C. The 2026 bundle was collected only after the contest closed on 2026-08-10, so no statement is mirrored while a contest is running."
+    },
+    {
+      "id": "electric_cup_official",
+      "name": "中国电机工程学会杯全国大学生电工数学建模竞赛",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "official",
+      "competition": "中国电机工程学会杯全国大学生电工数学建模竞赛",
+      "domains": [
+        "shumo.neepu.edu.cn"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "https://shumo.neepu.edu.cn/ljjs/ljst.htm"
+        }
+      ],
+      "allowed_paths": [
+        "/ljjs/ljst.htm",
+        "/ljjs/ljst/",
+        "/info/1121/",
+        "/system/_content/download.jsp"
+      ],
+      "denied_paths": [],
+      "year_range": {
+        "from": 2017,
+        "to": 2026
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 180
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "中国电机工程学会与全国大学生电工数学建模竞赛组委会",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Official notice metadata may be indexed. Problem archives remain internal and unpublished pending rights review."
+      },
+      "contact": "https://shumo.neepu.edu.cn/jszz/lxwm.htm",
+      "notes": "The official archive lists A/B problems for nine editions from 2017 through 2026 (no 2020 edition). All 18 attachment endpoints currently require interactive verification; the discovery recipe records their stable file ids and rejects verification HTML as archive content."
+    },
     {
       "id": "comap_mcm_icm",
       "name": "COMAP MCM/ICM previous contests",

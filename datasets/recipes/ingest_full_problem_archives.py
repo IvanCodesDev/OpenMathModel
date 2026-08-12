@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize complete COMAP, APMCM, CUMCM and MathorCup PDF statements.
+"""Normalize complete COMAP, APMCM, CUMCM, MathorCup and Huashu Cup statements.
 
 Requires ``pypdf`` and ``pdfplumber``. Source archives and PDFs remain in
 datasets/raw. Paragraph structure, headings, lists, tables and figure placement
@@ -155,6 +155,43 @@ MATHORCUP_TITLES = {
     (2026, "E"): "罕见病药品医保谈判定价模型及用药成本优化研究",
 }
 
+HUASHU_CUP_NOTICE_URL = "https://m.saikr.com/contest/notice_detail/44136"
+# The 2020-2025 statements arrive in one organiser archive; every live edition is
+# published as its own bundle once the contest closes, so 2026 carries a separate
+# notice page and staging directory.
+HUASHU_CUP_2026_NOTICE_URL = "https://m.saikr.com/contest/notice_detail/46038"
+HUASHU_CUP_TITLES = {
+    (2020, "A"): "带相变材料的低温防护服御寒仿真模拟",
+    (2020, "B"): "工业零件切割优化方案设计",
+    (2020, "C"): "脱贫帮扶绩效评价",
+    (2021, "A"): "电动汽车无线充电优化匹配研究",
+    (2021, "B"): "进出口公司的货物装运策略",
+    (2021, "C"): "电动汽车目标客户销售策略研究",
+    (2022, "A"): "环形振荡器的优化设计",
+    (2022, "B"): "水下机器人的组装计划",
+    (2022, "C"): "插层熔喷非织造材料的性能控制研究",
+    (2023, "A"): "隔热材料的结构优化控制研究",
+    (2023, "B"): "不透明制品最优配色方案设计",
+    (2023, "C"): "母亲身心健康对婴儿成长的影响",
+    (2024, "A"): "机器臂关节角路径的优化设计",
+    (2024, "B"): "VLSI 电路单元的自动布局",
+    (2024, "C"): "老外游中国",
+    (2025, "A"): "多孔膜光反射性能的优化与控制",
+    (2025, "B"): "网络切片无线资源管理方案设计",
+    (2025, "C"): "可调控生物节律的 LED 光源研究",
+}
+
+HUASHU_CUP_2026_TITLES = {
+    (2026, "A"): "微构体中填充导电介质的仿真优化",
+    (2026, "B"): "VLSI 布图规划设计",
+    (2026, "C"): "面向算电协同的多目标调度优化研究",
+}
+
+# 2026 names each statement "<letter>题 <title>.pdf" inside a directory of the same
+# name. B also ships a reference paper as a sibling PDF, so the statement is picked
+# by its letter prefix rather than by being the only PDF in the directory.
+HUASHU_CUP_2026_STATEMENT_RE = re.compile(r"^([A-C])题[\s　]")
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -280,7 +317,7 @@ def classify(title: str) -> tuple[str, list[str], list[str]]:
     lower = title.lower()
     rules = [
         (("predict", "预测", "forecast"), "预测分析", ["预测模型", "数据分析"]),
-        (("optim", "优化", "调度", "design"), "规划优化", ["优化模型", "决策分析"]),
+        (("optim", "优化", "调度", "规划", "design"), "规划优化", ["优化模型", "决策分析"]),
         (("image", "图像", "recognition"), "图像与数据建模", ["图像处理", "机器学习"]),
         (("network", "网络", "traffic", "交通"), "系统建模", ["网络模型", "系统分析"]),
         (("environment", "ecological", "生态", "warming"), "环境与生态", ["评价模型", "可持续发展"]),
@@ -516,11 +553,68 @@ def mathorcup_problems() -> list[dict[str, Any]]:
     return output
 
 
+def huashu_cup_problems() -> list[dict[str, Any]]:
+    root = EXTRACTED_ROOT / "huashu-cup-historical"
+    output = []
+    for (year, letter), title in sorted(HUASHU_CUP_TITLES.items(), reverse=True):
+        candidates = [
+            path for path in root.rglob("*.pdf")
+            if re.search(rf"{year}.*{letter}.*题", path.name, re.I)
+            and len(path.relative_to(root).parts) <= 3
+        ]
+        if len(candidates) != 1:
+            raise RuntimeError(f"Huashu Cup {year} {letter}: expected one statement, found {candidates}")
+        pdf = candidates[0]
+        item = problem_record(
+            problem_id=f"huashu-cup-{year}-{letter.lower()}",
+            code=f"{year} 华数杯 {letter}",
+            title=title,
+            competition="华数杯全国大学生数学建模竞赛",
+            category="华数杯",
+            year=year,
+            source_id="huashu_cup_official",
+            source_url=HUASHU_CUP_NOTICE_URL,
+            pdf=pdf,
+        )
+        output.append(item)
+        print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    return output
+
+
+def huashu_cup_2026_problems() -> list[dict[str, Any]]:
+    root = EXTRACTED_ROOT / "huashu-cup-2026"
+    output = []
+    for (year, letter), title in sorted(HUASHU_CUP_2026_TITLES.items()):
+        candidates = []
+        for path in sorted(root.rglob("*.pdf")):
+            match = HUASHU_CUP_2026_STATEMENT_RE.match(path.name)
+            if match and match.group(1) == letter:
+                candidates.append(path)
+        if len(candidates) != 1:
+            raise RuntimeError(f"Huashu Cup {year} {letter}: expected one statement, found {candidates}")
+        pdf = candidates[0]
+        item = problem_record(
+            problem_id=f"huashu-cup-{year}-{letter.lower()}",
+            code=f"{year} 华数杯 {letter}",
+            title=title,
+            competition="华数杯全国大学生数学建模竞赛",
+            category="华数杯",
+            year=year,
+            source_id="huashu_cup_official",
+            source_url=HUASHU_CUP_2026_NOTICE_URL,
+            pdf=pdf,
+        )
+        output.append(item)
+        print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    return output
+
+
 def build() -> dict[str, Any]:
     for generated_root in (LEGACY_PAGE_ROOT, FIGURE_ROOT, DOWNLOAD_ROOT):
         if generated_root.exists():
             shutil.rmtree(generated_root)
-    problems = comap_problems() + cumcm_problems() + apmcm_problems() + mathorcup_problems()
+    problems = (comap_problems() + cumcm_problems() + apmcm_problems()
+                + mathorcup_problems() + huashu_cup_problems() + huashu_cup_2026_problems())
     problems.sort(key=lambda item: (-item["year"], item["category"], item["code"]))
     result = {
         "schema_version": "1.0.0",
@@ -530,6 +624,7 @@ def build() -> dict[str, Any]:
             "apmcm_count": sum(item["source_id"] == "apmcm_problems" for item in problems),
             "cumcm_count": sum(item["source_id"] == "cumcm_official" for item in problems),
             "mathorcup_count": sum(item["source_id"] == "mathorcup_official" for item in problems),
+            "huashu_cup_count": sum(item["source_id"] == "huashu_cup_official" for item in problems),
             "page_count": sum(item["source_pdf"]["page_count"] for item in problems),
             "text_block_count": sum(
                 block["type"] in {"heading", "paragraph", "list_item"}
@@ -564,12 +659,14 @@ def verify() -> dict[str, Any]:
     # Chinese-track plus the 2023 Wuyue Cup.
     # COMAP adds 2015-2017 (14 statements). 2018-2020 are absent because the
     # official year indexes for those three serve no PDFs at all.
+    # Huashu Cup is 18 from the 2020-2025 archive plus the 3 of the 2026 edition.
     expected = {
         "comap_count": 44,
         "apmcm_count": 32,
         "cumcm_count": 51,
         "mathorcup_count": 9,
-        "problem_count": 136,
+        "huashu_cup_count": 21,
+        "problem_count": 157,
     }
     for key, value in expected.items():
         if data["stats"].get(key) != value:
