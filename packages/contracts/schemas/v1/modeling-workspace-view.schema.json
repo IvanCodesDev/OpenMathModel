@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.modeling-workspace-view",
+  "title": "ModelingWorkspaceView",
+  "description": "建模运行面向 Web 的语义投影。后端只输出阶段、Agent 文案、动作和产物语义，前端负责映射到既有流程页面与 DOM 样式。",
+  "type": "object",
+  "properties": {
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-f]{32}$" },
+    "project_id": { "type": "string", "pattern": "^proj_[0-9a-f]{32}$" },
+    "project_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "goal": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "workflow_version": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "run_status": {
+      "type": "string",
+      "enum": ["QUEUED", "RUNNING", "WAITING_APPROVAL", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]
+    },
+    "active_node": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 100 },
+    "active_page": { "$ref": "#/$defs/page_key" },
+    "suggested_route": { "$ref": "#/$defs/route" },
+    "agent": { "$ref": "#/$defs/agent_projection" },
+    "pages": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/page_projection" },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "key": { "const": "running" }, "route": { "const": "/task/running" } },
+            "required": ["key", "route"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "key": { "const": "data" }, "route": { "const": "/workspace/data" } },
+            "required": ["key", "route"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "key": { "const": "model" }, "route": { "const": "/workspace/model-plan" } },
+            "required": ["key", "route"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "key": { "const": "experiments" }, "route": { "const": "/workspace/experiments" } },
+            "required": ["key", "route"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "key": { "const": "editor" }, "route": { "const": "/workspace/paper-editor" } },
+            "required": ["key", "route"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "key": { "const": "complete" }, "route": { "const": "/task/complete" } },
+            "required": ["key", "route"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact_projection" }
+    },
+    "pending_approval": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/approval_projection" }
+      ]
+    },
+    "latest_event_sequence": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1 }
+      ]
+    },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "required": [
+    "run_id",
+    "project_id",
+    "project_name",
+    "goal",
+    "workflow_version",
+    "run_status",
+    "active_node",
+    "active_page",
+    "suggested_route",
+    "agent",
+    "pages",
+    "artifacts",
+    "pending_approval",
+    "latest_event_sequence",
+    "updated_at"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "page_key": {
+      "type": "string",
+      "enum": ["running", "data", "model", "experiments", "editor", "complete"]
+    },
+    "route": {
+      "type": "string",
+      "enum": [
+        "/task/running",
+        "/workspace/data",
+        "/workspace/model-plan",
+        "/workspace/experiments",
+        "/workspace/paper-editor",
+        "/task/complete"
+      ]
+    },
+    "page_status": {
+      "type": "string",
+      "enum": ["PENDING", "RUNNING", "WAITING_APPROVAL", "PAUSED", "SUCCEEDED", "FAILED", "CANCELLED"]
+    },
+    "agent_state": {
+      "type": "string",
+      "enum": ["QUEUED", "WORKING", "WAITING_APPROVAL", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]
+    },
+    "agent_action_kind": {
+      "type": "string",
+      "enum": ["approve", "navigate", "pause", "resume", "retry", "none"]
+    },
+    "approve_agent_action": {
+      "title": "ApproveAgentAction",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "approve" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "target_route": { "$ref": "#/$defs/route" },
+        "approval_id": { "type": "string", "pattern": "^appr_[0-9a-f]{32}$" },
+        "option_id": { "type": ["string", "null"], "maxLength": 100 }
+      },
+      "required": ["kind", "label", "target_route", "approval_id", "option_id"],
+      "additionalProperties": false
+    },
+    "navigate_agent_action": {
+      "title": "NavigateAgentAction",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "navigate" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "target_route": { "$ref": "#/$defs/route" },
+        "approval_id": { "type": "null" },
+        "option_id": { "type": "null" }
+      },
+      "required": ["kind", "label", "target_route", "approval_id", "option_id"],
+      "additionalProperties": false
+    },
+    "task_agent_action": {
+      "title": "TaskAgentAction",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["pause", "resume", "retry"] },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "target_route": { "$ref": "#/$defs/route" },
+        "approval_id": { "type": "null" },
+        "option_id": { "type": "null" }
+      },
+      "required": ["kind", "label", "target_route", "approval_id", "option_id"],
+      "additionalProperties": false
+    },
+    "none_agent_action": {
+      "title": "NoneAgentAction",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "none" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "target_route": { "type": "null" },
+        "approval_id": { "type": "null" },
+        "option_id": { "type": "null" }
+      },
+      "required": ["kind", "label", "target_route", "approval_id", "option_id"],
+      "additionalProperties": false
+    },
+    "agent_action": {
+      "oneOf": [
+        { "$ref": "#/$defs/approve_agent_action" },
+        { "$ref": "#/$defs/navigate_agent_action" },
+        { "$ref": "#/$defs/task_agent_action" },
+        { "$ref": "#/$defs/none_agent_action" }
+      ]
+    },
+    "agent_projection": {
+      "type": "object",
+      "properties": {
+        "state": { "$ref": "#/$defs/agent_state" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "current_step": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "action": { "$ref": "#/$defs/agent_action" }
+      },
+      "required": ["state", "title", "summary", "current_step", "action"],
+      "additionalProperties": false
+    },
+    "page_projection": {
+      "type": "object",
+      "properties": {
+        "key": { "$ref": "#/$defs/page_key" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "route": { "$ref": "#/$defs/route" },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 100 }
+        },
+        "status": { "$ref": "#/$defs/page_status" },
+        "artifact_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^art_[0-9a-f]{32}$" }
+        }
+      },
+      "required": ["key", "label", "route", "nodes", "status", "artifact_ids"],
+      "additionalProperties": false
+    },
+    "artifact_projection": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^art_[0-9a-f]{32}$" },
+        "kind": {
+          "type": "string",
+          "enum": ["dataset", "code", "figure", "table", "log", "report", "paper", "model", "other"]
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "status": { "type": "string", "enum": ["PENDING", "READY", "STALE", "DELETED"] },
+        "producer_node": { "type": ["string", "null"], "maxLength": 100 },
+        "download_url": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^/api/v1/artifacts/art_[0-9a-f]{32}/download$" }
+          ]
+        }
+      },
+      "required": ["id", "kind", "name", "media_type", "size_bytes", "status", "producer_node", "download_url"],
+      "additionalProperties": false
+    },
+    "approval_option": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": ["string", "null"], "maxLength": 1000 }
+      },
+      "required": ["id", "label"],
+      "additionalProperties": false
+    },
+    "approval_projection": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^appr_[0-9a-f]{32}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": ["string", "null"], "maxLength": 2000 },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/approval_option" }
+        }
+      },
+      "required": ["id", "title", "description", "options"],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    }
+  }
+}

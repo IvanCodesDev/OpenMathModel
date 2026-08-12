@@ -1,5 +1,7 @@
 # Wave A 结构化赛题与附件下载验证记录
 
+> **历史证据快照（2026-08-04）。** 本文记录 Wave A 当日输入、命令、输出和哈希；当前数据目录与产品状态请以 [`datasets/README.md`](../../../datasets/README.md) 和[文档总览](../../README.md)为准。
+
 日期：2026-08-04  
 工作区：`E:\Projects\opensource\OpenMathModel`
 

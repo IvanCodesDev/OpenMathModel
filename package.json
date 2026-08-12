@@ -9,6 +9,7 @@
     "packages/contracts"
   ],
   "scripts": {
+    "dev": "node tools/dev-local.mjs",
     "dev:web": "npm run dev --workspace @openmathmodel/web",
     "check": "npm run check --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

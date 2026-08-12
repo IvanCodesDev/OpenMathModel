@@ -1,7 +1,9 @@
-# ADR-0003：Web 路由库与服务端数据层选型
+# ADR-0004：Web 路由库与服务端数据层选型
 
-- 状态：Accepted
+- 状态：Superseded（由 ADR-0006 取代）
 - 日期：2026-08-05
+
+> **当前状态说明（2026-08-08）**：本文记录的 React Router、TanStack Query 和替代页面方案未进入当前产品基线，相关工作树实现已经回滚。本文只保留为历史决策记录，不得据此重新创建 `TaskLiveScreen`、`AppShell`、`src/workbench/` 或替换现有 14 个页面。当前 Web 开发规则以 ADR-0006 和 `docs/development/web-ui-baseline-and-api-integration.md` 为准。
 
 ## 背景
 

@@ -10,7 +10,7 @@
 export type Timestamp = string;
 
 /**
- * 供 Web/Desktop 实时呈现的统一事件信封。PostgreSQL 事件表是时间线事实来源；sequence 在 run 内单调递增且唯一，SSE 的事件 id 即 sequence。
+ * 供 Web/Desktop 实时呈现的统一事件信封。数据库事件表是时间线事实来源（当前默认 SQLite，目标部署 PostgreSQL）；sequence 在 run 内单调递增且唯一，SSE 的事件 id 即 sequence。
  */
 export interface AgentEvent {
   id: string;

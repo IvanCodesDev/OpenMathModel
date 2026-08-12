@@ -1,0 +1,246 @@
+/**
+ * 输入框附件区与拖拽提示层。
+ *
+ * 只在既有 .composer 内部追加两个槽位，不改动输入框本身的边框、圆角、工具栏
+ * 排布和发送按钮位置——这些是界面基线的一部分。
+ */
+
+.composer {
+  position: relative;
+}
+
+/* 聊天页输入框是定高绝对定位的，挂上附件后改成自适应，向上生长。 */
+.chat-composer.has-attachments {
+  height: auto;
+}
+
+.composer-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 10px;
+}
+
+.composer-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 172px;
+  overflow-y: auto;
+}
+
+.composer-attachment {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  max-width: 328px;
+  padding: 8px 32px 8px 10px;
+  border: 1px solid #e4e4e0;
+  border-radius: 10px;
+  background: #f8f8f6;
+}
+
+.composer-attachment-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  font-size: 18px !important;
+  color: #5f5f5b;
+}
+
+.composer-attachment-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-attachment-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #232320;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-meta {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #7c7c77;
+}
+
+.composer-attachment-notice {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #8a6d1f;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #8d8d88;
+  cursor: pointer;
+  place-items: center;
+}
+
+.composer-attachment-remove i {
+  font-size: 13px !important;
+}
+
+.composer-attachment-remove:hover {
+  background: #e6e6e2;
+  color: #232320;
+}
+
+.composer-attachment[data-state="parsing"] .composer-attachment-meta {
+  animation: composer-attachment-pulse 1.15s ease-in-out infinite;
+}
+
+.composer-attachment[data-state="uploading"] {
+  border-color: #cfcfca;
+}
+
+.composer-attachment[data-state="pending"] .composer-attachment-icon {
+  color: #b07d12;
+}
+
+.composer-attachment[data-state="uploaded"] .composer-attachment-icon {
+  color: #2f7d4f;
+}
+
+.composer-attachment[data-state="failed"] {
+  border-color: #e6c9c4;
+  background: #fdf6f5;
+}
+
+.composer-attachment[data-state="failed"] .composer-attachment-icon,
+.composer-attachment[data-state="failed"] .composer-attachment-notice {
+  color: #a33f30;
+}
+
+.composer-attachment-status {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #7c7c77;
+}
+
+.composer-attachment-status[data-kind="error"] {
+  color: #a33f30;
+}
+
+@keyframes composer-attachment-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
+}
+
+/* 拖拽提示层：不吃指针事件，否则光标移到提示上会误触发 dragleave。 */
+.composer-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, .94);
+  pointer-events: none;
+  text-align: center;
+}
+
+.composer.is-dropping {
+  border-color: #2b2b28;
+  box-shadow: 0 0 0 3px rgba(43, 43, 40, .08);
+}
+
+.composer.is-dropping .composer-dropzone {
+  display: flex;
+}
+
+.composer-dropzone i {
+  font-size: 24px !important;
+  color: #2b2b28;
+}
+
+.composer-dropzone strong {
+  font-size: 14px;
+  color: #232320;
+}
+
+.composer-dropzone small {
+  max-width: 80%;
+  font-size: 12px;
+  color: #7c7c77;
+}
+
+html[data-theme="dark"] .composer-attachment {
+  border-color: #3b3b38;
+  background: #262625;
+}
+
+html[data-theme="dark"] .composer-attachment-icon {
+  color: #b8b7b1;
+}
+
+html[data-theme="dark"] .composer-attachment-name {
+  color: #f1f1ee;
+}
+
+html[data-theme="dark"] .composer-attachment-meta,
+html[data-theme="dark"] .composer-attachment-status,
+html[data-theme="dark"] .composer-dropzone small {
+  color: #98978f;
+}
+
+html[data-theme="dark"] .composer-attachment-notice {
+  color: #d3ab52;
+}
+
+html[data-theme="dark"] .composer-attachment-remove:hover {
+  background: #353532;
+  color: #f1f1ee;
+}
+
+html[data-theme="dark"] .composer-attachment[data-state="failed"] {
+  border-color: #5a3b35;
+  background: #2a201e;
+}
+
+html[data-theme="dark"] .composer-attachment[data-state="failed"] .composer-attachment-icon,
+html[data-theme="dark"] .composer-attachment[data-state="failed"] .composer-attachment-notice,
+html[data-theme="dark"] .composer-attachment-status[data-kind="error"] {
+  color: #e08a78;
+}
+
+html[data-theme="dark"] .composer-dropzone {
+  background: rgba(24, 24, 23, .94);
+}
+
+html[data-theme="dark"] .composer-dropzone i,
+html[data-theme="dark"] .composer-dropzone strong {
+  color: #f1f1ee;
+}
+
+html[data-theme="dark"] .composer.is-dropping {
+  border-color: #6f6f68;
+  box-shadow: 0 0 0 3px rgba(241, 241, 238, .07);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-attachment[data-state="parsing"] .composer-attachment-meta {
+    animation: none;
+  }
+}

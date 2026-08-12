@@ -119,8 +119,12 @@ async def upload_project_artifact(
     if len(content) > settings.artifact_max_bytes:
         raise ApiError(413, "PAYLOAD_TOO_LARGE", f"文件超过上限 {settings.artifact_max_bytes} 字节")
 
+    # 浏览器可能携带完整本地路径；仅保留显示文件名，并与 ORM/工作台契约上限一致。
+    name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if len(name) > 300:
+        raise ApiError(422, "VALIDATION_ERROR", "文件名不能超过 300 个字符")
     sha256, size = request.app.state.blobs.put(content)
-    name = file.filename or f"artifact-{sha256[:8]}"
+    name = name or f"artifact-{sha256[:8]}"
     row = ArtifactRow(
         id=new_id("art"),
         project_id=project_id,

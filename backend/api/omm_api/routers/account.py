@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..avatar import AVATAR_MEDIA_TYPES, sniff_avatar_media_type
 from ..config import RECOVERY_CODE_COUNT
 from ..db import get_db
 from ..deps import AuthContext, get_auth_context
@@ -13,7 +14,9 @@ from ..schemas import (
     CodeRequest,
     PasswordChangeRequest,
     PasswordRequest,
+    PreferencesUpdateRequest,
     ProfileUpdateRequest,
+    preferences_payload,
     security_payload,
     session_payload,
     user_payload,
@@ -82,6 +85,102 @@ def update_profile(
 
     db.commit()
     return {"user": user_payload(user)}
+
+
+# ── 用户偏好（高级设置里需要服务端生效的部分） ───────────────────
+
+
+@router.get("/preferences")
+def get_preferences(ctx: AuthContext = Depends(get_auth_context)):
+    return {"preferences": preferences_payload(ctx.user)}
+
+
+@router.put("/preferences")
+def update_preferences(
+    body: PreferencesUpdateRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """最大并发任务上限存服务端而不是浏览器：创建任务的闸门在这里校验，
+    放 localStorage 改个缓存就能绕过。"""
+    ctx.user.max_concurrent_runs = body.max_concurrent_runs
+    db.commit()
+    return {"preferences": preferences_payload(ctx.user)}
+
+
+# ── 头像 ─────────────────────────────────────────────────────────
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    request: Request,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """上传头像：按魔数确认格式后内容寻址存储，库内只保留引用。"""
+    settings = request.app.state.settings
+    content = await file.read()
+    if not content:
+        raise ApiError(422, "VALIDATION_ERROR", "头像文件为空")
+    if len(content) > settings.avatar_max_bytes:
+        raise ApiError(
+            413,
+            "PAYLOAD_TOO_LARGE",
+            f"头像不能超过 {settings.avatar_max_bytes // 1024} KB",
+        )
+
+    media_type = sniff_avatar_media_type(content)
+    if media_type is None:
+        raise ApiError(
+            422,
+            "UNSUPPORTED_IMAGE",
+            f"仅支持 {'、'.join(t.removeprefix('image/').upper() for t in AVATAR_MEDIA_TYPES)} 图片",
+        )
+
+    sha256, _ = request.app.state.avatars.put(content)
+    ctx.user.avatar_sha256 = sha256
+    ctx.user.avatar_media_type = media_type
+    db.commit()
+    return {"user": user_payload(ctx.user)}
+
+
+@router.delete("/avatar")
+def delete_avatar(ctx: AuthContext = Depends(get_auth_context), db: Session = Depends(get_db)):
+    """移除头像（幂等）：回落到姓名首字母。内容对象由存储层统一回收。"""
+    ctx.user.avatar_sha256 = None
+    ctx.user.avatar_media_type = None
+    db.commit()
+    return {"user": user_payload(ctx.user)}
+
+
+@router.get("/avatar")
+def get_avatar(request: Request, ctx: AuthContext = Depends(get_auth_context)) -> Response:
+    """返回当前登录用户的头像内容；仅本人可读，不按 user_id 暴露他人头像。"""
+    user = ctx.user
+    if not user.avatar_sha256:
+        raise ApiError(404, "AVATAR_NOT_FOUND", "该账户尚未设置头像")
+
+    try:
+        handle = request.app.state.avatars.open(user.avatar_sha256)
+        if handle is None:
+            raise ApiError(404, "AVATAR_NOT_FOUND", "头像内容对象缺失")
+        with handle:
+            content = handle.read()
+    except OSError as exc:
+        raise ApiError(404, "AVATAR_NOT_FOUND", "头像内容对象不可读") from exc
+
+    # 媒体类型取服务端识别值；nosniff 阻止浏览器把内容重新猜成可执行类型。
+    media_type = user.avatar_media_type
+    return Response(
+        content=content,
+        media_type=media_type if media_type in AVATAR_MEDIA_TYPES else "application/octet-stream",
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/password")

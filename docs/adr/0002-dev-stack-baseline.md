@@ -3,6 +3,8 @@
 - 状态：Accepted
 - 日期：2026-08-04
 
+> **当前实现说明（2026-08-11）**：本文中的“本机现状”、`services/api`、workspace 成员、CI 待办与默认数据库描述是决策当日快照。当前路径使用 `backend/*`，npm workspaces 已登记 `apps/web`、`packages/config`、`packages/contracts`，API 默认使用 SQLite；PostgreSQL/Redis/MinIO 是可选兼容底座和目标部署组件。最新运行事实见[系统架构](../architecture/system-overview.md)与[项目结构](../../PROJECT_STRUCTURE.md)。工具链与基础设施版本治理原则继续有效。
+
 ## 背景
 
 按开发路线进入契约与服务开发（Phase 0→1）前，仓库缺少三件事：可复现的本地基础设施、统一的工具链版本口径、以及从第一天就能拦截错误的 CI 门禁。当前开发机为 Windows 11，未安装容器运行时（Docker/Podman 均缺失，WSL 无发行版）。

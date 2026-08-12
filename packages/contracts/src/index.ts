@@ -6,6 +6,8 @@
  * 字段命名与 JSON 载荷一致（snake_case），不做驼峰转换。
  */
 
+export type { ModelingWorkspaceView } from "./ts/v1/modeling-workspace-view";
+
 // ---- TaskRun：status 是稳定生命周期，current_node 是领域阶段（两轴分离） ----
 
 export const TASK_RUN_STATUSES = [

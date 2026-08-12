@@ -6,7 +6,12 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .config import PASSWORD_MAX_BYTES, PASSWORD_MIN_LENGTH
+from .config import (
+    DEFAULT_MAX_CONCURRENT_RUNS,
+    MAX_CONCURRENT_RUNS_CEILING,
+    PASSWORD_MAX_BYTES,
+    PASSWORD_MIN_LENGTH,
+)
 from .models import AuthSession, User
 
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -125,7 +130,19 @@ class PasswordRequest(BaseModel):
     password: str
 
 
+class PreferencesUpdateRequest(BaseModel):
+    """高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。"""
+
+    max_concurrent_runs: int = Field(ge=1, le=MAX_CONCURRENT_RUNS_CEILING)
+
+
 # ── 响应体构造 ───────────────────────────────────────────────────
+
+
+def preferences_payload(user: User) -> dict:
+    return {
+        "max_concurrent_runs": user.max_concurrent_runs or DEFAULT_MAX_CONCURRENT_RUNS,
+    }
 
 
 def user_payload(user: User) -> dict:
@@ -135,6 +152,8 @@ def user_payload(user: User) -> dict:
         "name": user.name,
         "plan": user.plan,
         "avatar_letter": (user.name[:1] or user.email[:1]).upper(),
+        # 摘要进查询串：换头像后 URL 随之变化，浏览器不会命中旧图缓存。
+        "avatar_url": f"/api/account/avatar?v={user.avatar_sha256[:16]}" if user.avatar_sha256 else None,
         "created_at": iso_utc(user.created_at),
     }
 

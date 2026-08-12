@@ -1,9 +1,26 @@
 {
   "components": {
     "schemas": {
+      "AgentAction": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ApproveAgentAction"
+          },
+          {
+            "$ref": "#/components/schemas/NavigateAgentAction"
+          },
+          {
+            "$ref": "#/components/schemas/TaskAgentAction"
+          },
+          {
+            "$ref": "#/components/schemas/NoneAgentAction"
+          }
+        ],
+        "title": "AgentAction"
+      },
       "AgentEvent": {
         "additionalProperties": false,
-        "description": "供 Web/Desktop 实时呈现的统一事件信封。PostgreSQL 事件表是时间线事实来源；sequence 在 run 内单调递增且唯一，SSE 的事件 id 即 sequence。",
+        "description": "供 Web/Desktop 实时呈现的统一事件信封。数据库事件表是时间线事实来源（当前默认 SQLite，目标部署 PostgreSQL）；sequence 在 run 内单调递增且唯一，SSE 的事件 id 即 sequence。",
         "properties": {
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
@@ -72,6 +89,57 @@
         "title": "AgentEventList",
         "type": "object"
       },
+      "AgentProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AgentAction"
+          },
+          "current_step": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Current Step",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AgentState"
+          },
+          "summary": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "title",
+          "summary",
+          "current_step",
+          "action"
+        ],
+        "title": "AgentProjection",
+        "type": "object"
+      },
+      "AgentState": {
+        "enum": [
+          "QUEUED",
+          "WORKING",
+          "WAITING_APPROVAL",
+          "PAUSED",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "AgentState",
+        "type": "string"
+      },
       "ApprovalList": {
         "properties": {
           "items": {
@@ -86,6 +154,85 @@
           "items"
         ],
         "title": "ApprovalList",
+        "type": "object"
+      },
+      "ApprovalOption": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ApprovalOption",
+        "type": "object"
+      },
+      "ApprovalProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "pattern": "^appr_[0-9a-f]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalOption"
+            },
+            "minItems": 1,
+            "title": "Options",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "options"
+        ],
+        "title": "ApprovalProjection",
         "type": "object"
       },
       "ApprovalRequest": {
@@ -195,6 +342,51 @@
         "title": "ApprovalRequest",
         "type": "object"
       },
+      "ApproveAgentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "pattern": "^appr_[0-9a-f]{32}$",
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "approve",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "option_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Option Id"
+          },
+          "target_route": {
+            "$ref": "#/components/schemas/Route"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "target_route",
+          "approval_id",
+          "option_id"
+        ],
+        "title": "ApproveAgentAction",
+        "type": "object"
+      },
       "Artifact": {
         "additionalProperties": false,
         "description": "图表、数据、代码、日志、论文等交付物的元数据。内容本体在对象存储中内容寻址，服务端负责重新计算并核验 sha256。",
@@ -217,7 +409,7 @@
             "type": "array"
           },
           "kind": {
-            "$ref": "#/components/schemas/Kind"
+            "$ref": "#/components/schemas/omm_contracts__v1__artifact__Kind"
           },
           "media_type": {
             "maxLength": 255,
@@ -306,6 +498,169 @@
           "total"
         ],
         "title": "ArtifactList",
+        "type": "object"
+      },
+      "ArtifactProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "download_url": {
+            "anyOf": [
+              {
+                "pattern": "^/api/v1/artifacts/art_[0-9a-f]{32}/download$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
+          "id": {
+            "pattern": "^art_[0-9a-f]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind1"
+          },
+          "media_type": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "producer_node": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer Node"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "status": {
+            "$ref": "#/components/schemas/omm_contracts__v1__modeling_workspace_view__Status"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "media_type",
+          "size_bytes",
+          "status",
+          "producer_node",
+          "download_url"
+        ],
+        "title": "ArtifactProjection",
+        "type": "object"
+      },
+      "ArtifactText": {
+        "description": "附件正文抽取结果。\n\n``status`` 分五档：ready 完整抽出、partial 触顶截断、empty 文件正常但没有\n文字、unsupported 缺少可选依赖或格式不支持、failed 文件损坏或抽取出错。\n后三档也是正常响应（200）——调用方需要的是原因，而不是一个错误码。",
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "segments": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segments"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "empty",
+              "unsupported",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "media_type",
+          "status",
+          "engine",
+          "characters",
+          "text"
+        ],
+        "title": "ArtifactText",
+        "type": "object"
+      },
+      "Body_upload_avatar_api_account_avatar_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_avatar_api_account_avatar_post",
         "type": "object"
       },
       "Body_upload_project_artifact_api_v1_projects__project_id__artifacts_post": {
@@ -596,7 +951,7 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
-      "Kind": {
+      "Kind1": {
         "enum": [
           "dataset",
           "code",
@@ -608,7 +963,7 @@
           "model",
           "other"
         ],
-        "title": "Kind",
+        "title": "Kind1",
         "type": "string"
       },
       "LoginRequest": {
@@ -640,6 +995,204 @@
         ],
         "title": "Mode",
         "type": "string"
+      },
+      "ModelingWorkspaceView": {
+        "additionalProperties": false,
+        "description": "建模运行面向 Web 的语义投影。后端只输出阶段、Agent 文案、动作和产物语义，前端负责映射到既有流程页面与 DOM 样式。",
+        "properties": {
+          "active_node": {
+            "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "title": "Active Node",
+            "type": "string"
+          },
+          "active_page": {
+            "$ref": "#/components/schemas/PageKey"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentProjection"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactProjection"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "goal": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "latest_event_sequence": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Event Sequence"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PageProjection"
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/components/schemas/Pages"
+              }
+            ],
+            "maxLength": 6,
+            "minLength": 6,
+            "title": "Pages"
+          },
+          "pending_approval": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalProjection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "pattern": "^proj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Project Name",
+            "type": "string"
+          },
+          "run_id": {
+            "pattern": "^run_[0-9a-f]{32}$",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "suggested_route": {
+            "$ref": "#/components/schemas/Route"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "workflow_version": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Workflow Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "project_id",
+          "project_name",
+          "goal",
+          "workflow_version",
+          "run_status",
+          "active_node",
+          "active_page",
+          "suggested_route",
+          "agent",
+          "pages",
+          "artifacts",
+          "pending_approval",
+          "latest_event_sequence",
+          "updated_at"
+        ],
+        "title": "ModelingWorkspaceView",
+        "type": "object"
+      },
+      "NavigateAgentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "null"
+          },
+          "kind": {
+            "const": "navigate",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "option_id": {
+            "title": "Option Id",
+            "type": "null"
+          },
+          "target_route": {
+            "$ref": "#/components/schemas/Route"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "target_route",
+          "approval_id",
+          "option_id"
+        ],
+        "title": "NavigateAgentAction",
+        "type": "object"
+      },
+      "Node": {
+        "maxLength": 100,
+        "pattern": "^[A-Z][A-Z0-9_]*$",
+        "title": "Node",
+        "type": "string"
+      },
+      "NoneAgentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "null"
+          },
+          "kind": {
+            "const": "none",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "option_id": {
+            "title": "Option Id",
+            "type": "null"
+          },
+          "target_route": {
+            "title": "Target Route",
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "target_route",
+          "approval_id",
+          "option_id"
+        ],
+        "title": "NoneAgentAction",
+        "type": "object"
       },
       "NullableTimestamp": {
         "anyOf": [
@@ -688,6 +1241,82 @@
         "title": "Option",
         "type": "object"
       },
+      "PageKey": {
+        "enum": [
+          "running",
+          "data",
+          "model",
+          "experiments",
+          "editor",
+          "complete"
+        ],
+        "title": "PageKey",
+        "type": "string"
+      },
+      "PageProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_ids": {
+            "items": {
+              "pattern": "^art_[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "title": "Artifact Ids",
+            "type": "array"
+          },
+          "key": {
+            "$ref": "#/components/schemas/PageKey"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            },
+            "minItems": 1,
+            "title": "Nodes",
+            "type": "array"
+          },
+          "route": {
+            "$ref": "#/components/schemas/Route"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PageStatus"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "route",
+          "nodes",
+          "status",
+          "artifact_ids"
+        ],
+        "title": "PageProjection",
+        "type": "object"
+      },
+      "PageStatus": {
+        "enum": [
+          "PENDING",
+          "RUNNING",
+          "WAITING_APPROVAL",
+          "PAUSED",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "PageStatus",
+        "type": "string"
+      },
+      "Pages": {
+        "properties": {},
+        "title": "Pages",
+        "type": "object"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "current_password": {
@@ -717,6 +1346,22 @@
           "password"
         ],
         "title": "PasswordRequest",
+        "type": "object"
+      },
+      "PreferencesUpdateRequest": {
+        "description": "高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。",
+        "properties": {
+          "max_concurrent_runs": {
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Max Concurrent Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_concurrent_runs"
+        ],
+        "title": "PreferencesUpdateRequest",
         "type": "object"
       },
       "ProfileUpdateRequest": {
@@ -936,9 +1581,34 @@
         "title": "Resolution",
         "type": "object"
       },
+      "Route": {
+        "enum": [
+          "/task/running",
+          "/workspace/data",
+          "/workspace/model-plan",
+          "/workspace/experiments",
+          "/workspace/paper-editor",
+          "/task/complete"
+        ],
+        "title": "Route",
+        "type": "string"
+      },
       "RunId": {
         "pattern": "^run_[0-9a-f]{32}$",
         "title": "RunId",
+        "type": "string"
+      },
+      "RunStatus": {
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "WAITING_APPROVAL",
+          "PAUSED",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "RunStatus",
         "type": "string"
       },
       "SendEmailCodeRequest": {
@@ -1069,6 +1739,40 @@
           "items"
         ],
         "title": "StepRunList",
+        "type": "object"
+      },
+      "TaskAgentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "null"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/omm_contracts__v1__modeling_workspace_view__Kind"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "option_id": {
+            "title": "Option Id",
+            "type": "null"
+          },
+          "target_route": {
+            "$ref": "#/components/schemas/Route"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "target_route",
+          "approval_id",
+          "option_id"
+        ],
+        "title": "TaskAgentAction",
         "type": "object"
       },
       "TaskRun": {
@@ -1372,7 +2076,41 @@
         "title": "Status",
         "type": "string"
       },
+      "omm_contracts__v1__artifact__Kind": {
+        "enum": [
+          "dataset",
+          "code",
+          "figure",
+          "table",
+          "log",
+          "report",
+          "paper",
+          "model",
+          "other"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
       "omm_contracts__v1__artifact__Status": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "STALE",
+          "DELETED"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "omm_contracts__v1__modeling_workspace_view__Kind": {
+        "enum": [
+          "pause",
+          "resume",
+          "retry"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "omm_contracts__v1__modeling_workspace_view__Status": {
         "enum": [
           "PENDING",
           "READY",
@@ -1580,6 +2318,82 @@
         ]
       }
     },
+    "/api/account/avatar": {
+      "delete": {
+        "description": "移除头像（幂等）：回落到姓名首字母。内容对象由存储层统一回收。",
+        "operationId": "delete_avatar_api_account_avatar_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Avatar",
+        "tags": [
+          "account"
+        ]
+      },
+      "get": {
+        "description": "返回当前登录用户的头像内容；仅本人可读，不按 user_id 暴露他人头像。",
+        "operationId": "get_avatar_api_account_avatar_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Avatar",
+        "tags": [
+          "account"
+        ]
+      },
+      "post": {
+        "description": "上传头像：按魔数确认格式后内容寻址存储，库内只保留引用。",
+        "operationId": "upload_avatar_api_account_avatar_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_avatar_api_account_avatar_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Avatar",
+        "tags": [
+          "account"
+        ]
+      }
+    },
     "/api/account/me": {
       "get": {
         "operationId": "me_api_account_me_get",
@@ -1633,6 +2447,63 @@
           }
         },
         "summary": "Change Password",
+        "tags": [
+          "account"
+        ]
+      }
+    },
+    "/api/account/preferences": {
+      "get": {
+        "operationId": "get_preferences_api_account_preferences_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Preferences",
+        "tags": [
+          "account"
+        ]
+      },
+      "put": {
+        "description": "最大并发任务上限存服务端而不是浏览器：创建任务的闸门在这里校验，\n放 localStorage 改个缓存就能绕过。",
+        "operationId": "update_preferences_api_account_preferences_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencesUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Preferences",
         "tags": [
           "account"
         ]
@@ -1990,6 +2861,59 @@
           }
         },
         "summary": "Download Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/text": {
+      "get": {
+        "description": "读取附件正文；首次访问时现场抽取并缓存。\n\n抽取放在读取时而不是上传时：上传路径要对用户即时响应，而几十兆的 PDF 抽一遍\n要好几秒。产物内容寻址、字节不可变，因此抽一次可以一直复用；``refresh=true``\n用于服务端补装了 OCR 或解析依赖之后重跑。",
+        "operationId": "read_artifact_text_api_v1_artifacts__artifact_id__text_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactText"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Artifact Text",
         "tags": [
           "artifacts"
         ]
@@ -2672,6 +3596,48 @@
         "summary": "List Task Run Steps",
         "tags": [
           "task-runs"
+        ]
+      }
+    },
+    "/api/v1/task-runs/{run_id}/workspace": {
+      "get": {
+        "operationId": "get_modeling_workspace_api_v1_task_runs__run_id__workspace_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelingWorkspaceView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Modeling Workspace",
+        "tags": [
+          "workspace"
         ]
       }
     },

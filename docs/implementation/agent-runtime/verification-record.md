@@ -1,5 +1,7 @@
 # Agent execution-plane verification
 
+> **Historical evidence snapshot (2026-08-04), not the current runtime topology.** The `services/*` paths, package assumptions and test counts below remain unchanged as dated evidence. Current paths use `backend/*`; the standalone Worker remains a verified prototype and is not in the current API request path. See the [system architecture](../../architecture/system-overview.md).
+
 This record covers the first batch of the agent execution plane: `agents/core`
 (state machine, events, ports, replay), `agents/tools` (workspace isolation,
 tool registry/invoker, Python sandbox), `agents/prompts` + `agents/skills`

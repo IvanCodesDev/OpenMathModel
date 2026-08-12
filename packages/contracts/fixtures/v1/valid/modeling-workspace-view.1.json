@@ -1,0 +1,43 @@
+{
+  "run_id": "run_11111111111111111111111111111111",
+  "project_id": "proj_22222222222222222222222222222222",
+  "project_name": "城市共享单车调度优化",
+  "goal": "完成需求预测、区域划分与调度优化",
+  "workflow_version": "sim-0.1",
+  "run_status": "WAITING_APPROVAL",
+  "active_node": "MODEL_PLANNING",
+  "active_page": "model",
+  "suggested_route": "/workspace/model-plan",
+  "agent": {
+    "state": "WAITING_APPROVAL",
+    "title": "建模方案等待确认",
+    "summary": "候选方案已经整理完成，请确认主方案后继续实验。",
+    "current_step": "正在等待建模方案确认",
+    "action": {
+      "kind": "approve",
+      "label": "确认并继续实验",
+      "target_route": "/workspace/model-plan",
+      "approval_id": "appr_33333333333333333333333333333333",
+      "option_id": "approve"
+    }
+  },
+  "pages": [
+    { "key": "running", "label": "问题分析", "route": "/task/running", "nodes": ["CREATED", "PROBLEM_ANALYSIS"], "status": "SUCCEEDED", "artifact_ids": [] },
+    { "key": "data", "label": "数据准备", "route": "/workspace/data", "nodes": ["DATA_PREPARATION"], "status": "SUCCEEDED", "artifact_ids": [] },
+    { "key": "model", "label": "建模方案", "route": "/workspace/model-plan", "nodes": ["MODEL_PLANNING"], "status": "WAITING_APPROVAL", "artifact_ids": [] },
+    { "key": "experiments", "label": "实验与验证", "route": "/workspace/experiments", "nodes": ["EXPERIMENTING", "VALIDATING"], "status": "PENDING", "artifact_ids": [] },
+    { "key": "editor", "label": "论文编辑", "route": "/workspace/paper-editor", "nodes": ["PAPER_WRITING"], "status": "PENDING", "artifact_ids": [] },
+    { "key": "complete", "label": "最终成果", "route": "/task/complete", "nodes": ["COMPLETED"], "status": "PENDING", "artifact_ids": [] }
+  ],
+  "artifacts": [],
+  "pending_approval": {
+    "id": "appr_33333333333333333333333333333333",
+    "title": "确认建模方案",
+    "description": "确认后进入实验阶段。",
+    "options": [
+      { "id": "approve", "label": "采用推荐方案", "description": "继续运行实验与验证。" }
+    ]
+  },
+  "latest_event_sequence": 12,
+  "updated_at": "2026-08-11T00:00:00.000000Z"
+}

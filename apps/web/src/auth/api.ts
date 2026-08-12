@@ -1,5 +1,7 @@
 /** 认证与账户接口客户端：同源 Cookie 会话，统一错误结构 {code, message}。 */
 
+import { requestTimeoutSeconds } from "../preferences/network-preferences";
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -17,6 +19,8 @@ export interface UserInfo {
   name: string;
   plan: string;
   avatar_letter: string;
+  /** 已设置头像时为带内容摘要的同源地址，未设置时为 null（回落到 avatar_letter）。 */
+  avatar_url: string | null;
   created_at: string;
 }
 
@@ -29,6 +33,11 @@ export interface SecurityOverview {
 export interface MeResponse {
   user: UserInfo;
   security: SecurityOverview;
+}
+
+/** 高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。 */
+export interface AccountPreferences {
+  max_concurrent_runs: number;
 }
 
 export interface DeviceSession {
@@ -55,20 +64,32 @@ export interface TwoFaSetupResponse {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   let response: Response;
+  // FormData 的 multipart 边界由浏览器生成，显式设置 Content-Type 反而会破坏请求体。
+  const isFormData = options.body instanceof FormData;
+  const timeoutSeconds = requestTimeoutSeconds();
   try {
     response = await fetch(path, {
       method: options.method ?? "GET",
-      headers: options.body !== undefined ? { "Content-Type": "application/json" } : undefined,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      headers: options.body !== undefined && !isFormData ? { "Content-Type": "application/json" } : undefined,
+      body: options.body === undefined
+        ? undefined
+        : isFormData
+          ? (options.body as FormData)
+          : JSON.stringify(options.body),
       credentials: "same-origin",
+      // 高级设置「请求超时」：账户接口都是小请求，统一挂用户配置的超时。
+      signal: AbortSignal.timeout(timeoutSeconds * 1000),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new ApiError(0, "TIMEOUT", `请求超过 ${timeoutSeconds} 秒未响应，已中止；可在设置中心「高级设置」调整请求超时。`);
+    }
     throw new ApiError(0, "NETWORK_ERROR", "无法连接服务，请确认后端已启动");
   }
 
@@ -110,6 +131,20 @@ export const authApi = {
   },
   updateProfile(body: { name?: string; email?: string; password?: string }) {
     return request<{ user: UserInfo }>("/api/account/profile", { method: "PATCH", body });
+  },
+  getPreferences() {
+    return request<{ preferences: AccountPreferences }>("/api/account/preferences");
+  },
+  updatePreferences(body: AccountPreferences) {
+    return request<{ preferences: AccountPreferences }>("/api/account/preferences", { method: "PUT", body });
+  },
+  uploadAvatar(image: Blob, filename: string) {
+    const form = new FormData();
+    form.append("file", image, filename);
+    return request<{ user: UserInfo }>("/api/account/avatar", { method: "POST", body: form });
+  },
+  removeAvatar() {
+    return request<{ user: UserInfo }>("/api/account/avatar", { method: "DELETE" });
   },
   changePassword(body: { current_password: string; new_password: string }) {
     return request<{ ok: boolean; revoked_sessions: number }>("/api/account/password", { method: "POST", body });

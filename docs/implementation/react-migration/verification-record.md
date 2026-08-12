@@ -1,5 +1,7 @@
 # React migration verification
 
+> **Historical evidence snapshot.** Commands, audit paths, hashes and page counts below describe the migration worktree at verification time. Use the [Web UI baseline](../../development/web-ui-baseline-and-api-integration.md) for current page rules.
+
 ## Baseline
 
 ```text

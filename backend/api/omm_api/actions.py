@@ -87,7 +87,19 @@ def _approve(
         raise ConflictError("approval_id 与待处理审批不一致", {"pending": pending.id})
 
     option_ids = [option["id"] for option in pending.options]
-    option_id = payload.option_id or option_ids[0]
+    option_id = payload.option_id
+    if option_id is None:
+        # 兼容只有一个正向选择的“确认/退回”审批；存在多个正向候选时，
+        # 服务端不能替用户默选第一项，否则会把一次缺字段请求变成正式决策。
+        non_reject_option_ids = [
+            candidate for candidate in option_ids if candidate != REJECT_OPTION_ID
+        ]
+        if len(non_reject_option_ids) != 1:
+            raise ConflictError(
+                "审批包含多个候选方案，必须明确提供 option_id",
+                {"required": "option_id", "options": option_ids},
+            )
+        option_id = non_reject_option_ids[0]
     if option_id not in option_ids:
         raise ConflictError("option_id 不在候选项中", {"options": option_ids})
 

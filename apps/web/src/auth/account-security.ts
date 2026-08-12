@@ -10,7 +10,9 @@ import {
   invalidateMe,
   type DeviceSession,
   type MeResponse,
+  type UserInfo,
 } from "./api";
+import { openAuthDialog } from "./auth-dialog";
 
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>"']/g, character => (
@@ -57,6 +59,27 @@ function openDialog(title: string, bodyHtml: string): HTMLElement {
   });
   backdrop.querySelector<HTMLInputElement>("input")?.focus();
   return backdrop;
+}
+
+// ── 头像渲染 ─────────────────────────────────────────────────────
+
+/** 头像容器内容：已上传时用图片，否则回落到姓名首字母。 */
+function avatarInner(user: UserInfo): string {
+  return user.avatar_url
+    ? `<img src="${escapeHtml(user.avatar_url)}" alt="">`
+    : escapeHtml(user.avatar_letter);
+}
+
+function paintAvatar(element: HTMLElement | null, user: UserInfo | null): void {
+  if (!element) return;
+  if (user?.avatar_url) {
+    const image = document.createElement("img");
+    image.src = user.avatar_url;
+    image.alt = "";
+    element.replaceChildren(image);
+    return;
+  }
+  element.textContent = user ? user.avatar_letter : "?";
 }
 
 function dialogError(backdrop: HTMLElement, message: string): void {
@@ -139,9 +162,15 @@ function securityPaneHtml(state: PaneState): string {
 
   return `
     <div class="settings-section account-identity">
-      <span class="account-avatar-large">${escapeHtml(user.avatar_letter)}</span>
+      <button type="button" class="account-avatar-large account-avatar-button" data-sec-action="change-avatar" title="更换头像" aria-label="更换头像">
+        ${avatarInner(user)}
+        <span class="account-avatar-overlay" aria-hidden="true">${icon("camera")}</span>
+      </button>
       <div><h3>${escapeHtml(user.name)}</h3><p>${escapeHtml(user.email)} · ${escapeHtml(user.plan)}</p></div>
-      <button type="button" class="secondary-small" data-sec-action="edit-profile">编辑资料</button>
+      <div class="account-identity-actions">
+        ${user.avatar_url ? '<button type="button" class="danger-text" data-sec-action="remove-avatar">移除头像</button>' : ""}
+        <button type="button" class="secondary-small" data-sec-action="edit-profile">编辑资料</button>
+      </div>
     </div>
     <div class="settings-section">
       <div class="settings-section-heading"><div><h3>登录安全</h3><p>保护你的账户和 API 凭据。更改即时生效。</p></div></div>
@@ -213,13 +242,12 @@ function hydrateAccountCard(backdrop: HTMLElement, me: MeResponse | null): void 
   const name = card.querySelector<HTMLElement>("strong");
   const plan = card.querySelector<HTMLElement>("span:not(.avatar):not(.settings-plan)");
   const badge = card.querySelector<HTMLElement>(".settings-plan");
+  paintAvatar(avatar, me?.user ?? null);
   if (me) {
-    if (avatar) avatar.textContent = me.user.avatar_letter;
     if (name) name.textContent = me.user.name;
     if (plan) plan.textContent = me.user.plan;
     if (badge) badge.style.display = "";
   } else {
-    if (avatar) avatar.textContent = "?";
     if (name) name.textContent = "未登录";
     if (plan) plan.textContent = "登录后同步账户";
     if (badge) badge.style.display = "none";
@@ -227,6 +255,101 @@ function hydrateAccountCard(backdrop: HTMLElement, me: MeResponse | null): void 
 }
 
 // ── 各操作对话框 ─────────────────────────────────────────────────
+
+const AVATAR_EDGE = 256;
+const AVATAR_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
+
+interface PreparedAvatar {
+  blob: Blob;
+  filename: string;
+  preview: string;
+}
+
+function readAsDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new ApiError(0, "INVALID_IMAGE", "无法读取所选图片，请换一张再试"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(source: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new ApiError(0, "INVALID_IMAGE", "无法读取所选图片，请换一张再试"));
+    image.src = source;
+  });
+}
+
+/**
+ * 居中裁剪成方形并压缩到 256×256：上传体积可控，圆形头像也不会被拉伸。
+ * 浏览器缺少 canvas 能力时回退上传原图，格式与体积仍由服务端把关。
+ */
+async function prepareAvatar(file: File): Promise<PreparedAvatar> {
+  const source = await readAsDataUrl(file);
+  const image = await loadImage(source);
+  const edge = Math.min(image.naturalWidth, image.naturalHeight);
+  const canvas = document.createElement("canvas");
+  canvas.width = AVATAR_EDGE;
+  canvas.height = AVATAR_EDGE;
+  const context = edge > 0 ? canvas.getContext("2d") : null;
+  const fallback: PreparedAvatar = { blob: file, filename: file.name || "avatar", preview: source };
+  if (!context) return fallback;
+
+  context.drawImage(
+    image,
+    (image.naturalWidth - edge) / 2,
+    (image.naturalHeight - edge) / 2,
+    edge,
+    edge,
+    0,
+    0,
+    AVATAR_EDGE,
+    AVATAR_EDGE,
+  );
+  // JPEG 源保持 JPEG（照片体积更小），其余统一转 PNG 以保留透明区域
+  const type = file.type === "image/jpeg" ? "image/jpeg" : "image/png";
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, type, 0.92));
+  if (!blob) return fallback;
+  return {
+    blob,
+    filename: type === "image/jpeg" ? "avatar.jpg" : "avatar.png",
+    preview: canvas.toDataURL(type, 0.92),
+  };
+}
+
+/** 选中图片后就地换头像：裁剪 → 立即预览 → 上传 → 以服务端状态收尾。 */
+async function applyAvatar(root: HTMLElement, file: File, reload: () => void): Promise<void> {
+  const button = root.querySelector<HTMLButtonElement>('[data-sec-action="change-avatar"]');
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  }
+  try {
+    const prepared = await prepareAvatar(file);
+    if (button) {
+      // 上传期间先显示裁剪结果，避免出现空档；失败时由末尾的 reload 拉回服务端状态
+      const overlay = button.querySelector(".account-avatar-overlay");
+      const image = document.createElement("img");
+      image.src = prepared.preview;
+      image.alt = "";
+      button.replaceChildren(image, ...(overlay ? [overlay] : []));
+    }
+    await authApi.uploadAvatar(prepared.blob, prepared.filename);
+    invalidateMe();
+    showToast("头像已更新");
+  } catch (error) {
+    showToast(error instanceof ApiError ? error.message : "头像更新失败，请稍后再试", 3200);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+    reload();
+  }
+}
 
 function openEditProfileDialog(me: MeResponse, reload: () => void): void {
   const backdrop = openDialog(
@@ -424,6 +547,23 @@ export function initSecurityPane(backdrop: HTMLElement): void {
 
   const reload = () => void loadPane(root, backdrop);
 
+  // 文件选择器挂在 root 之外：面板每次刷新都会重建 root 内容，选择器需要跨刷新存活
+  let picker = pane.querySelector<HTMLInputElement>("[data-avatar-input]");
+  if (!picker) {
+    picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = AVATAR_ACCEPT;
+    picker.hidden = true;
+    picker.dataset.avatarInput = "";
+    pane.appendChild(picker);
+    picker.addEventListener("change", () => {
+      const file = picker?.files?.[0];
+      // 立即清空，用户重选同一文件时仍会触发 change
+      if (picker) picker.value = "";
+      if (file) void applyAvatar(root, file, reload);
+    });
+  }
+
   pane.addEventListener("click", event => {
     const button = (event.target as Element).closest<HTMLButtonElement>("[data-sec-action]");
     if (!button || button.disabled) return;
@@ -432,7 +572,7 @@ export function initSecurityPane(backdrop: HTMLElement): void {
     const me = latestMe;
 
     if (action === "go-login") {
-      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      openAuthDialog({ onAuthenticated: reload });
       return;
     }
     if (action === "reload") {
@@ -441,6 +581,15 @@ export function initSecurityPane(backdrop: HTMLElement): void {
     }
     if (!me) return;
 
+    if (action === "change-avatar") picker?.click();
+    if (action === "remove-avatar") {
+      openConfirmDialog("移除头像", "移除后头像会回落为姓名首字母，可随时重新上传。", "移除头像", async () => {
+        await authApi.removeAvatar();
+        invalidateMe();
+        showToast("头像已移除");
+        reload();
+      });
+    }
     if (action === "edit-profile") openEditProfileDialog(me, reload);
     if (action === "change-password") openChangePasswordDialog(reload);
     if (action === "manage-2fa") {
@@ -492,19 +641,29 @@ export async function hydrateAccountUi(): Promise<void> {
   const avatar = profileRow.querySelector<HTMLElement>(".avatar");
   const name = profileRow.querySelector<HTMLElement>("strong");
   const detail = profileRow.querySelector<HTMLElement>("small");
+  paintAvatar(avatar, me?.user ?? null);
 
   if (me) {
-    if (avatar) avatar.textContent = me.user.avatar_letter;
     if (name) name.textContent = me.user.name;
     if (detail) detail.textContent = me.user.email;
     profileRow.classList.remove("profile-row-guest");
     profileRow.removeAttribute("title");
   } else {
-    if (avatar) avatar.textContent = "?";
     if (name) name.textContent = "未登录";
     if (detail) detail.textContent = "点击登录账户";
     profileRow.classList.add("profile-row-guest");
     profileRow.title = "前往登录";
+    if (window.location.pathname.replace(/\/$/, "") === "/login") {
+      openAuthDialog({
+        onAuthenticated: () => {
+          const requested = new URLSearchParams(window.location.search).get("next") ?? "/";
+          const next = requested.startsWith("/") && !requested.startsWith("//") && !requested.startsWith("/login")
+            ? requested
+            : "/";
+          window.location.replace(next);
+        },
+      });
+    }
   }
 }
 
@@ -513,5 +672,5 @@ document.addEventListener("click", event => {
   const row = (event.target as Element).closest?.(".profile-row-guest");
   if (!row) return;
   if ((event.target as Element).closest('[data-action="settings"]')) return;
-  window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+  openAuthDialog({ onAuthenticated: () => void hydrateAccountUi() });
 });

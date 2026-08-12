@@ -2,7 +2,7 @@
 
 - 状态：当前规范（Normative）
 - 日期：2026-08-09
-- 关联：ADR-0006、`packages/contracts`、`backend/api`
+- 关联：ADR-0006、ADR-0009、`packages/contracts`、`backend/api`
 
 ## 1. 一句话原则
 
@@ -77,6 +77,8 @@
 | `/library/papers/detail` | `paperDetail` | 论文详情 | 继续使用结构化知识库数据 |
 | `/library/methods` | `methods` | 方法库 | 继续使用方法库数据 |
 
+自 2026-08-12（ADR-0009）起，`/workspace/data`、`/workspace/model-plan`、`/workspace/experiments`、`/workspace/paper-editor`、`/task/complete` 五条路径渲染同一个**合并建模工作台**：聚焦壳只挂载一次，五个阶段面板同存于 DOM 并原地切换，进入路径决定初始可见面板。路由、URL 语义与各面板视觉基线不变，工作台内的阶段切换不再整页重载。
+
 ## 4. 受保护的页面入口
 
 下列文件默认只读：
@@ -88,6 +90,8 @@
 - `apps/web/src/legacy/openmathmodel-ui.ts` 中的 shell、页面 markup 和稳定选择器
 
 普通 API、后端、Agent、数据采集或契约任务不得修改前三个文件。确需给页面挂载控制器时，改动必须是最小接线，不得改变返回的 markup、路由或组件树。
+
+例外记录：2026-08-12 经业主授权（ADR-0009），`OpenMathModelScreen.tsx` 的原始 HTML 注入路径由 `editor` 扩展到五个工作台 ScreenId（合并工作台标记包含 contenteditable 编辑器）；`App.tsx` 与 `screens.tsx` 未改动，14 条路径原样。
 
 ### 允许
 
@@ -158,7 +162,9 @@ API 实际前缀为 `/api`，Vite 将其同源代理到 `http://127.0.0.1:8000`�
 | 项目产物 | `GET /api/v1/projects/{project_id}/artifacts` | 填充附件、结果和完成页文件列表 |
 | 产物下载 | `GET /api/v1/artifacts/{artifact_id}/download` | 复用现有下载入口 |
 | 上传附件 | `POST /api/v1/projects/{project_id}/artifacts` | 保留现有附件卡片和进度位置 |
+| 附件正文 | `GET /api/v1/artifacts/{artifact_id}/text` | 服务端权威解析结果；按需抽取并缓存，`refresh=true` 重跑 |
 | 当前用户/安全设置 | `/api/account/*` | 保留现有侧栏与设置模态层 |
+| 用户偏好（并发上限） | `GET/PUT /api/account/preferences` | 高级设置「最大并发任务」的服务端事实来源；创建任务时后端按它校验 |
 
 ## 7. 主流程时序
 
@@ -251,3 +257,5 @@ sequenceDiagram
 第二十轮继续按反馈将 `/workspace/paper-editor` 与 `/task/complete` 纳入相同的聚焦工作台壳层。两页统一使用左侧 Agent 卡片、可拖动分栏、右侧圆角正文盒子、顶部轻量标签以及 `stage-document complete-wrap result-detail-document` 文档层级；论文页保留正文编辑、格式命令、来源引用、检查、导出和完成交付动作，最终成果页保留全部交付文件、继续优化、复制任务和下载全部动作。新增的论文大纲、图表引用、引用检查、论文文件、数据与代码、交付记录均使用同一摘要行与文件表模板，不新增路由或改变建模阶段顺序。
 
 第二十一轮根据论文编辑页的进一步反馈，仅精简 `/workspace/paper-editor` 右侧正文盒子：移除阶段摘要、同步状态、顶部四标签、辅助模板和额外文件区，只保留论文大纲、格式工具栏与可编辑论文正文。检查、导出和完成交付动作整合进论文工具栏，来源引用、公式、图片、引用与文字格式命令继续原位工作；聚焦工作台、左侧 Agent、可拖动分栏与 `/task/complete` 页面均保持不变。
+
+第二十二轮（2026-08-12，ADR-0009）将五个建模阶段页合并为单一工作台：五条路由渲染同一份合并标记，聚焦壳只挂载一次，阶段面板原地显隐切换并以 `history.pushState` 维护 URL 别名；浏览器后退/前进在面板间穿梭，离开工作台时整页导航。顶部返回键统一回任务执行页（成果面板改为返回首页并新增"返回首页"操作按钮），左栏六阶段时间线在真实运行下成为阶段导航，方案确认（非退回）后自动进入实验面板。各面板视觉与 DOM 槽位不变；验收在第 10 节清单之上增加：阶段切换无整页重载、SSE 跨切换存活、URL 与标题随面板同步、时间线导航不产生 `/actions` 调用。

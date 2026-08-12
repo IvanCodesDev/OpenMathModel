@@ -119,6 +119,28 @@ class ArtifactRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ArtifactTextRow(Base):
+    """附件正文抽取结果缓存。
+
+    抽取按需触发、结果长期有效：产物是内容寻址的，同一个 artifact 的字节永远
+    不会变，因此一次抽取可以一直复用。失败与不支持也要落库，否则每次 Agent
+    读取都会重跑一遍注定失败的解析。
+    """
+
+    __tablename__ = "artifact_texts"
+
+    artifact_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("artifacts.id"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    engine: Mapped[str] = mapped_column(String(40), nullable=False)
+    characters: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    segments: Mapped[Optional[int]] = mapped_column(Integer)
+    detail: Mapped[Optional[str]] = mapped_column(String(500))
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class EmailVerificationCodeRow(Base):
     """注册邮箱验证码：一次性、限时（哈希存储，不落明文）。
 

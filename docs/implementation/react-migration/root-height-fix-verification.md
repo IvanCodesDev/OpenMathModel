@@ -1,5 +1,7 @@
 # React root-height regression verification
 
+> **Historical evidence snapshot.** This file preserves the exact selector change and hashes from the React migration batch. It is not the current Web UI contract; use the [Web UI baseline](../../development/web-ui-baseline-and-api-integration.md).
+
 ## Changed field
 
 The full-viewport selector in `apps/web/src/styles.css` now covers the React mount point `#root` in addition to the legacy `#app` selector and `.app-shell`.

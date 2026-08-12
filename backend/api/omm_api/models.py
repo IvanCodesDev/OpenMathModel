@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -27,8 +27,14 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(128))
     plan: Mapped[str] = mapped_column(String(32), default="个人专业版")
+    # 头像二进制存内容寻址存储，库里只保留引用；media_type 由服务端按文件魔数识别后回写。
+    avatar_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    avatar_media_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     totp_secret: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 高级设置「最大并发任务」：None = 沿用部署默认值（config.DEFAULT_MAX_CONCURRENT_RUNS）。
+    # 可空是刻意的——SQLite 开发库靠启动补列机制加新列，只有可空列能补。
+    max_concurrent_runs: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

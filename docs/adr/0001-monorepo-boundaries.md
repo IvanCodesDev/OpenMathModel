@@ -3,6 +3,8 @@
 - 状态：Accepted
 - 日期：2026-08-02
 
+> 当前解释：本文保留最初采用 Monorepo 的决策语境。`services/` 已按 [ADR-0005](./0005-backend-directory.md) 更名为 `backend/`；目录职责和“按部署单元与领域能力划分”的原则继续有效。
+
 ## 背景
 
 产品同时包含 Web、Tauri、Python API、异步 Worker、Agent 能力、共享协议和数据资产。早期需要快速调整跨端协议，也必须防止 UI、服务与 Agent 逻辑混成一个目录。

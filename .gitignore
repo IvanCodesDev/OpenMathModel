@@ -45,6 +45,8 @@ runs/
 .vscode/
 .DS_Store
 Thumbs.db
+# PowerShell 在部分终端里会把模块缓存写进当前工作目录，而不是用户目录
+Microsoft/Windows/PowerShell/
 
 # Logs
 *.log
@@ -64,3 +66,9 @@ Thumbs.db
 
 # Cursor/Agent 本地配置与运行时产物（永久禁止入库）
 /.cursor/
+
+# KC-Chat 运行时产物（插件自动生成，请勿入库）
+.cursor/mcp.json
+.cursor/kc-mcp/
+.cursor/kc-mcp-messages/
+.cursor/kc-chat-exports/

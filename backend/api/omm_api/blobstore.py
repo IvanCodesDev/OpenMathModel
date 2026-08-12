@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import BinaryIO, Protocol, runtime_checkable
+
+
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 @runtime_checkable
@@ -58,3 +62,39 @@ class LocalContentStore:
 
     def exists(self, sha256: str) -> bool:
         return self._path(sha256).exists()
+
+
+def local_content_digest(uri: str | None, registered_sha256: str | None) -> str | None:
+    """校验 ``local://`` 引用并返回内容摘要。
+
+    URI 中的摘要必须是 64 位小写十六进制，且与 Artifact 登记摘要完全一致；
+    这样工作区投影和下载端点不会把外部 URI、伪造路径或错配对象视为本地内容。
+    """
+
+    if not uri or not registered_sha256 or not uri.startswith("local://"):
+        return None
+    digest = uri.removeprefix("local://").split("/", 1)[0]
+    if digest != registered_sha256 or _SHA256_PATTERN.fullmatch(digest) is None:
+        return None
+    return digest
+
+
+def has_readable_local_content(
+    store: ArtifactBlobStore,
+    uri: str | None,
+    registered_sha256: str | None,
+) -> bool:
+    """只在已登记的本地内容对象确实可以打开、读取时返回真。"""
+
+    digest = local_content_digest(uri, registered_sha256)
+    if digest is None:
+        return False
+    try:
+        handle = store.open(digest)
+        if handle is None:
+            return False
+        with handle:
+            handle.read(1)
+    except OSError:
+        return False
+    return True

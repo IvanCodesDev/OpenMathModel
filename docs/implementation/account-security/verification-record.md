@@ -1,5 +1,7 @@
 # 账户与安全批次 · 验证记录
 
+> **历史证据快照（2026-08-04），不是当前运行基线。** 下文保留当时的 `services/api` 路径、PostgreSQL 默认值、测试数量和工作树状态；当前路径为 `backend/api`，默认数据库为 SQLite。请从[系统架构](../../architecture/system-overview.md)、[API README](../../../backend/api/README.md)和[文档总览](../../README.md)获取当前事实。
+
 - 日期：2026-08-04
 - 范围：`services/api`（认证/账户安全）、`apps/web`（登录页、设置中心安全面板、侧栏登录态）、`packages/contracts`（未变更，回归确认）
 - 结论：**后端与前端静态验证全绿；真实进程冒烟通过**

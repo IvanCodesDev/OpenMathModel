@@ -3161,3 +3161,112 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
     padding-inline: 9px;
   }
 }
+
+/* revision 22 — 2026-08-12 typography & alignment polish for the modeling flow pages.
+   Scope: spacing / hierarchy / readability only; monochrome palette, layout and DOM unchanged. */
+
+/* Agent rail: the block title (e.g. “全部成果已交付”) reads as a heading, not body text. */
+.focused-agent-copy > strong:first-child {
+  display: block;
+  margin-bottom: 6px;
+  color: #1d1d1b;
+  font-size: 15px;
+  font-weight: 680;
+  line-height: 1.4;
+}
+.focused-agent-copy p { margin: 0; }
+.focused-step.current { color: #1f1f1d; font-weight: 560; }
+.focused-step.current time { color: #63635e; }
+.focused-stage-cta { margin-top: 6px; }
+
+/* Workspace tabs: a slightly firmer active pill, still monochrome. */
+.focused-workspace-tabs button.active,
+.focused-workspace-tabs button.active:hover {
+  color: #121210;
+  background: #e8e8e5;
+}
+
+/* Plan list: calmer meta text, an unmistakable selected row, keyboard focus ring. */
+.focused-plan-row { transition: border-color .15s ease, background-color .15s ease; }
+.focused-plan-row:hover { border-color: #d2d2cd; background: #fcfcfa; }
+.focused-plan-row.selected {
+  border-color: #1c1c1a;
+  background: #f8f8f5;
+  box-shadow: inset 0 0 0 1px #1c1c1a;
+}
+.focused-plan-row:focus-visible { outline: 2px solid #1c1c1a; outline-offset: 2px; }
+.focused-plan-row > span:not(.plan-radio) { color: #57574f; }
+
+/* Plan detail card: the left column reads as labels; body copy one step more legible;
+   rows hug their content instead of forcing tall empty bands. */
+.focused-plan-detail > div {
+  min-height: 72px;
+  padding: 15px 0;
+  grid-template-columns: 128px minmax(0, 1fr);
+}
+.focused-plan-detail h2 {
+  padding-top: 2px;
+  color: #71716a;
+  font-size: 13px;
+  font-weight: 640;
+  letter-spacing: .3px;
+}
+.focused-plan-detail p,
+.focused-plan-detail ul { color: #3f3f3b; font-size: 13px; line-height: 1.7; }
+.focused-plan-detail li + li { margin-top: 3px; }
+
+/* Experiment notes: hanging indent so wrapped lines no longer slide under the icon. */
+.focused-experiment-notes li { position: relative; padding-left: 24px; }
+.focused-experiment-notes li > i { position: absolute; top: 1px; left: 0; margin-right: 0; }
+
+/* Result documents (experiments / complete tabs): label column vs content contrast. */
+.focused-workspace .summary-row > span:first-child { color: #6d6d67; font-size: 13px; }
+
+/* Shared tables: headers read as labels, cells read as content. */
+.focused-table th { color: #6a6a64; }
+.focused-table td { color: #45453f; }
+
+/* revision 23 — 2026-08-12 unified navigation: the stage timeline doubles as page
+   navigation on real runs; the top back arrow always returns to the task hub. */
+.focused-activity-list .focused-step[data-go] { cursor: pointer; }
+.focused-activity-list .focused-step[data-go]:hover { color: #191917; }
+.focused-activity-list .focused-step[data-go]:hover > span:nth-child(2) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.focused-activity-list .focused-step[data-go]:hover .chev { color: #191917; }
+.focused-activity-list .focused-step[data-go]:focus-visible {
+  outline: 2px solid #1c1c1a;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.focused-step[aria-current="page"] { color: #141412; font-weight: 620; }
+.focused-step[aria-current="page"] time { color: #55554f; }
+
+/* revision 24 — 2026-08-12 real-run honesty: demo-only blocks hide once a real run
+   renders（data-workspace-source="api"），live-only elements appear instead. */
+[data-live-only] { display: none; }
+[data-modeling-shell][data-workspace-source="api"] [data-demo-only] { display: none !important; }
+[data-modeling-shell][data-workspace-source="api"] button[data-live-only] { display: inline-flex; }
+[data-modeling-shell][data-workspace-source="api"] section[data-live-only] { display: block; }
+.running-live-cta {
+  min-height: 44px;
+  padding: 0 22px;
+  margin-top: 2px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #11110f;
+  font-size: 14px;
+  font-weight: 600;
+}
+.running-live-cta:disabled { color: #91918b; background: #ececea; }
+.inspector-live-note { margin: 0; color: #6f6f69; font-size: 13px; line-height: 1.7; }
+
+/* revision 25 — 2026-08-12 merged workspace (B 方案): one persistent shell,
+   five stage panes living in one page and swapped in place (no full reloads). */
+.workspace-stage-host { display: flex; width: 100%; min-height: 0; flex: 1 1 auto; }
+.workspace-stage { display: contents; }
+.workspace-stage[hidden] { display: none; }

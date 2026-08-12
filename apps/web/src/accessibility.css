@@ -1,0 +1,106 @@
+/* ─────────────────────────────────────────────────────────────
+   可读性与无障碍：正文字号、减少动态效果、增强文字对比度
+
+   单独成文件并在 main.tsx 最后引入，原因有二：
+   1. styles.css 与 workflow-refresh.css 是受保护的视觉基线，这里只做叠加，不改原规则；
+   2. 这三项都需要覆盖既有声明，放在最后加载才能在同等特异性下稳定生效。
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* 正文基准字号与缩放系数；缩放由设置中心的滑块驱动，默认 1 表示保持原样 */
+  --omm-text-base: 14px;
+  --omm-text-scale: 1;
+}
+
+/* ── 正文字号 ────────────────────────────────────────────────
+   作用范围是"正文"，不是整个界面：继承 body 的阅读文本会随之缩放，
+   而标题、标签、徽章这些有设计尺寸的元素保持不变（与 Slack、Notion 的
+   字号设置同一取向）。下面单独列出的两处是硬编码了 px 的主要阅读面。   */
+html,
+body {
+  font-size: calc(var(--omm-text-base) * var(--omm-text-scale));
+}
+
+/* Agent 摘要正文（workflow-refresh.css 内为 14px） */
+.focused-agent-copy,
+.modeling-agent-copy {
+  font-size: calc(14px * var(--omm-text-scale));
+}
+
+/* 论文编辑器正文（workflow-refresh.css 内为 16px） */
+.editor-page p {
+  font-size: calc(16px * var(--omm-text-scale));
+}
+
+/* ── 减少动态效果 ────────────────────────────────────────────
+   先无条件尊重系统设置：用户在操作系统里表达过一次意愿，不该要求他
+   在每个应用里重复设置。应用内开关是额外的覆盖，只会加强、不会取消系统偏好。
+
+   用 0.001ms 而不是 none：transitionend / animationend 仍会触发，
+   依赖这些事件的交互不会因为关闭动效而卡住。                        */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html[data-reduce-motion="on"] *,
+html[data-reduce-motion="on"] *::before,
+html[data-reduce-motion="on"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* 按下位移和背景虚化不属于 transition，需要单独关掉 */
+html[data-reduce-motion="on"] button:active {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:active {
+    transform: none;
+  }
+}
+
+html[data-reduce-motion="on"] .modal-backdrop,
+html[data-reduce-motion="on"] .settings-backdrop {
+  backdrop-filter: none;
+}
+
+/* ── 增强文字对比度 ──────────────────────────────────────────
+   现有浅色调色板里 --faint (#a1a19d) 与白底的对比度约 2.6:1、
+   --muted (#777773) 约 4.5:1，都达不到 WCAG AA 对正文的 4.5:1 要求。
+   打开该开关后把这几个变量整体加深；因为暗色主题本身就是靠重定义
+   同一组变量实现的，这里对两种主题各给一套值。                      */
+html[data-contrast="high"] {
+  --ink: #000000;
+  --muted: #4a4a46;
+  --faint: #5f5f5a;
+  --line: #b9b9b4;
+}
+
+html[data-contrast="high"][data-theme="dark"] {
+  --ink: #ffffff;
+  --muted: #d6d5d0;
+  --faint: #b4b3ae;
+  --line: #6b6b67;
+}
+
+/* 少数正文颜色直接写死在规则里，绕过了变量，这里一并对齐 */
+html[data-contrast="high"] .focused-agent-copy,
+html[data-contrast="high"] .modeling-agent-copy {
+  color: var(--ink);
+}
+
+html[data-contrast="high"] .step-details,
+html[data-contrast="high"] .muted,
+html[data-contrast="high"] small {
+  color: var(--muted);
+}

@@ -58,7 +58,7 @@ files = [
   "agents/skills/src",
   "agents/tools/src",
   "agents/evals/src",
-  "backend/api/src",
+  "backend/api/omm_api",
   "backend/worker/src",
 ]
 

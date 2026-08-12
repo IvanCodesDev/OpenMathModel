@@ -12,7 +12,7 @@ from .config import Settings, get_settings
 from .db import Database
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
-from .routers import account, artifacts, auth, events, projects, task_runs
+from .routers import account, artifacts, auth, events, projects, task_runs, workspace
 from .runner import RunnerThread, WorkflowAdvancer
 
 
@@ -47,6 +47,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     blobs = LocalContentStore(resolved.artifacts_dir)
     app.state.blobs = blobs
     engine_glue.set_blobstore(blobs)
+    # 用户头像共用同一存储实现，但目录独立于运行产物（归属与回收边界不同）
+    app.state.avatars = LocalContentStore(resolved.avatars_dir)
     # 测试与内部工具可直接驱动推进（runner_enabled=False 时手动 tick）
     app.state.advancer = WorkflowAdvancer(db)
     # 登录限速：数据库实现，多实例一致（后续可等接口替换为 Redis）
@@ -80,6 +82,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     # 统一挂载在 /api 下：前端经 Vite 代理 /api → 8000 同源转发。
     app.include_router(projects.router, prefix="/api")
     app.include_router(task_runs.router, prefix="/api")
+    app.include_router(workspace.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
     app.include_router(auth.router, prefix="/api/auth")

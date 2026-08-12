@@ -4,6 +4,20 @@ import type { KnowledgeLibrary } from "../types/knowledge-library";
 import { methodCategories, methodLibrary } from "../data/method-library";
 import { RECIPE_LANGUAGES, methodRecipes } from "../data/method-recipes";
 import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
+import { applyLocale, currentLocale, t } from "../i18n/locale";
+import { hydrateMaxConcurrency, persistMaxConcurrency } from "../preferences/account-preferences";
+import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
+import {
+  notificationsSupported,
+  requestNotificationPermission,
+  sendNotificationPreview,
+} from "../notifications/desktop-notifications";
+import {
+  applyDisplayPreferences,
+  currentDisplayPreferences,
+  TEXT_BASE_PX,
+} from "../preferences/display-preferences";
+import { mountTaskAutosave } from "../tasks/task-autosave";
 
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
@@ -49,22 +63,6 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     }
     return OFFICIAL_SOURCE_HOSTS.some(allowed => host === allowed || host.endsWith(`.${allowed}`));
   };
-  const normalizeTheme = theme => theme === "dark" ? "dark" : "light";
-  const savedTheme = () => {
-    try {
-      return normalizeTheme(JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}").theme);
-    } catch {
-      return "light";
-    }
-  };
-  const applyTheme = theme => {
-    const next = normalizeTheme(theme);
-    document.documentElement.dataset.theme = next;
-    document.documentElement.style.colorScheme = next;
-    return next;
-  };
-  applyTheme(savedTheme());
-
   const sidebarCollapsed = () => {
     try {
       return localStorage.getItem("openmathmodelSidebarCollapsed") === "true";
@@ -191,7 +189,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       <div class="composer-tools">
         <input class="file-input" type="file" multiple hidden>
         <div class="composer-tool-group">
-          <button class="tool-button icon-tool" data-action="attach" title="添加文件">${icon("plus")}</button>
+          <button class="tool-button icon-tool" data-action="attach" title="添加文件（也可直接拖入或粘贴）">${icon("plus")}</button>
           <button class="tool-button" data-action="reference">${icon("at")}<span class="tool-label">添加上下文</span></button>
           <button class="tool-button" data-action="mode">${icon("circles-three-plus")}<span class="tool-label">自动模式</span>${icon("caret-down")}</button>
         </div>
@@ -216,7 +214,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
   function newScreen() {
     return shell(`
-      <section class="new-screen">
+      <section class="new-screen" data-task-start-root data-task-start-screen="new">
         ${projectLogo("hero-logo")}
         <h1>让 Agent 完成整套建模工作</h1>
         <p class="lead">从赛题解析、数据处理到实验评估与论文交付，一个任务持续推进。</p>
@@ -228,6 +226,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             <button data-task-type="模型比较">${icon("arrows-left-right")} 模型比较</button>
           </div>
           ${composer("描述任务，/ 快速调用，@ 添加上下文")}
+          <p class="muted" data-task-start-status role="status" hidden></p>
         </div>
         <p class="composer-note">AI 可能会出错，请核查关键结论、代码与引用。</p>
       </section>`, "chat");
@@ -235,12 +234,13 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
   function confirmScreen() {
     return shell(`
-      <section class="confirm-wrap">
+      <section class="confirm-wrap" data-task-start-root data-task-start-screen="confirm">
         <h1>确认任务</h1>
         <p class="muted">检查题目、文件和输出要求，确认后开始执行。</p>
-        <div class="headline">2026全国大学生数学建模竞赛A题</div>
+        <div class="headline" data-task-project-name>2026全国大学生数学建模竞赛A题</div>
+        <p class="muted" data-task-description-preview>请完成题目解析、建模、实验与论文交付。</p>
         <h3>文件</h3>
-        <div class="file-read-list">
+        <div class="file-read-list" data-task-file-list>
           ${[
             ["file-pdf", "A题.pdf", "1.28 MB"],
             ["file-xls", "附件一.xlsx", "86.7 KB"],
@@ -258,8 +258,9 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         <ul class="compact-list"><li>关键步骤需要确认</li><li>自动运行实验</li><li>保留失败实验记录</li></ul>
         <div class="confirm-actions">
           <button data-go="new">返回修改</button>
-          <button class="primary" data-go="running">开始任务</button>
+          <button class="primary" data-go="running" data-task-start-submit>开始任务</button>
         </div>
+        <p class="muted" data-task-start-status role="status" hidden></p>
       </section>`, "chat");
   }
 
@@ -303,7 +304,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     return `<header class="modeling-topbar">
       <a class="modeling-home-link" href="${routes.new}" aria-label="返回首页" title="返回首页">${icon("arrow-left")}</a>
       <a class="modeling-project-title" href="${routes.running}">
-        <strong>${projectName}</strong>
+        <strong data-bind="project-name">${projectName}</strong>
         <span>2026 国赛 A 题　·　自动模式</span>
       </a>
       <div class="modeling-topbar-actions">
@@ -339,92 +340,86 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           <div class="analysis-copy modeling-agent-copy"><p>${copy[1]}</p></div>
         </div>
       </div>
-      ${composer(active === "complete" ? "继续描述任务，快速问问，@ 添加上下文" : "继续描述任务，快速调用，@ 添加上下文", true)}
+      ${composer(active === "complete" ? "继续描述任务，快速问问，@ 添加上下文" : "继续描述任务，/ 快速调用，@ 添加上下文", true)}
     </section>`;
   }
 
   const focusedStages = new Set(["data", "model", "experiments", "editor", "complete"]);
 
   function focusedModelingHeader(active) {
-    const backRoute = {
-      data: routes.running,
-      model: routes.data,
-      experiments: routes.model,
-      editor: routes.experiments,
-      complete: routes.editor
-    }[active] || routes.running;
-    const backLabel = {
-      data: "返回任务执行",
-      model: "返回数据准备",
-      experiments: "返回模型方案",
-      editor: "返回实验结果",
-      complete: "返回论文编辑"
-    }[active] || "返回任务执行";
+    // 统一导航模型：顶部返回箭头一律回“任务执行”总览页（hub）；
+    // 阶段之间的横向跳转由左栏六阶段时间线承担，不再用返回键模拟线性浏览历史。
+    // 例外：任务已交付的“最终成果”页，返回键即一键回首页。
+    const backRoute = active === "complete" ? routes.new : routes.running;
+    const backLabel = active === "complete" ? "返回首页" : "返回任务执行";
     return `<header class="focused-modeling-topbar">
       <div class="focused-topbar-context">
-        <a class="focused-back" href="${backRoute}" aria-label="${backLabel}" title="${backLabel}">${icon("arrow-left")}</a>
-        <a class="focused-task-name" href="${routes.running}"><span>城市共享单车调度优化</span>${icon("caret-down")}</a>
+        <a class="focused-back" href="${backRoute}" data-back-from="${active}" aria-label="${backLabel}" title="${backLabel}">${icon("arrow-left")}</a>
+        <a class="focused-task-name" href="${routes.running}"><span data-bind="project-name">城市共享单车调度优化</span>${icon("caret-down")}</a>
       </div>
     </header>`;
   }
 
+  // 五个阶段的演示态左栏文案：合并工作台的 showWorkspaceStage 也要用，抽到函数外共享。
+  const FOCUSED_STAGE_DEMO = {
+    data: {
+      copy: "数据准备已完成初步检查，存在以下问题：时间粒度不一致、可用车辆数存在缺失、平均等待时间单位不明确。建议按右侧清洗方案处理后进入建模阶段。",
+      button: "确认清洗方案",
+      next: "model",
+      current: "正在准备建模数据"
+    },
+    model: {
+      copy: "已完成候选路线比较，推荐采用方案 A 作为主方案，因为其综合收益更高且风险可控。<br><br>当前已选择结果：方案 A（推荐主方案）。<br><br>如需了解更多细节，您可以继续提问方案假设、数据敏感性或潜在风险。",
+      button: "采用方案 A",
+      next: "experiments",
+      current: "正在优化模型方案"
+    },
+    experiments: {
+      copy: "已完成候选路线比较，正在输出优化后的模型方案，实验结果显示模型效果稳定，已有显著改进。<br><br><strong>风险与建议</strong><br>• 关注早晚高峰时段的区域供需错配风险。<br>• 若节假日或异常天气，模型需进行参数自适应调整。<br>• 建议结合实时数据，进一步缩短响应延迟。",
+      button: `${icon("check-circle")} 采用该结果`,
+      next: "editor",
+      current: "正在评估实验结果"
+    },
+    editor: {
+      copy: "论文正文已与实验结果同步，正在检查章节结构、公式编号、图表引用和结论一致性。<br><br><strong>当前进度</strong><br>• 第 3 章正在编辑，其余章节已生成内容骨架。",
+      button: `${icon("check-circle")} 完成并交付`,
+      next: "complete",
+      current: "正在协助论文写作"
+    },
+    complete: {
+      copy: "论文、图表、数据、代码与复现记录已经整理完成，所有交付文件均可在右侧查看。<br><br><strong>交付状态</strong><br>• 文件完整、关键数字一致，代码可复现。",
+      button: "继续优化论文",
+      next: "editor",
+      current: "全部成果已交付"
+    }
+  };
+
   function focusedAgentPane(active) {
-    const stage = {
-      data: {
-        copy: "数据准备已完成初步检查，存在以下问题：时间粒度不一致、可用车辆数存在缺失、平均等待时间单位不明确。建议按右侧清洗方案处理后进入建模阶段。",
-        button: "确认清洗方案",
-        next: "model",
-        current: "正在准备建模数据"
-      },
-      model: {
-        copy: "已完成候选路线比较，推荐采用方案 A 作为主方案，因为其综合收益更高且风险可控。<br><br>当前已选择结果：方案 A（推荐主方案）。<br><br>如需了解更多细节，您可以继续提问方案假设、数据敏感性或潜在风险。",
-        button: "采用方案 A",
-        next: "experiments",
-        current: "正在优化模型方案"
-      },
-      experiments: {
-        copy: "已完成候选路线比较，正在输出优化后的模型方案，实验结果显示模型效果稳定，已有显著改进。<br><br><strong>风险与建议</strong><br>• 关注早晚高峰时段的区域供需错配风险。<br>• 若节假日或异常天气，模型需进行参数自适应调整。<br>• 建议结合实时数据，进一步缩短响应延迟。",
-        button: `${icon("check-circle")} 采用该结果`,
-        next: "editor",
-        current: "正在评估实验结果"
-      },
-      editor: {
-        copy: "论文正文已与实验结果同步，正在检查章节结构、公式编号、图表引用和结论一致性。<br><br><strong>当前进度</strong><br>• 第 3 章正在编辑，其余章节已生成内容骨架。",
-        button: `${icon("check-circle")} 完成并交付`,
-        next: "complete",
-        current: "正在协助论文写作"
-      },
-      complete: {
-        copy: "论文、图表、数据、代码与复现记录已经整理完成，所有交付文件均可在右侧查看。<br><br><strong>交付状态</strong><br>• 文件完整、关键数字一致，代码可复现。",
-        button: "继续优化论文",
-        next: "editor",
-        current: "全部成果已交付"
-      }
-    }[active];
+    const stage = FOCUSED_STAGE_DEMO[active];
     const steps = [
       ["已读取题目与附件", "00:03"],
       ["已完成问题拆解", "00:06"],
       ["已完成数据结构分析", "00:12"],
       ["已完成候选模型比较", "00:18"]
     ];
-    const attachments = active === "data" ? `<section class="focused-attachments">
+    const attachments = `<section class="focused-attachments" data-demo-only${active === "data" ? "" : " hidden"}>
       <h3>附件</h3>
       <button type="button" class="focused-attachment" data-action="download-data"><span class="attachment-file-icon xls">X.</span><span><strong>历史供需数据_2024Q4.xlsx</strong><small>24.7 MB</small></span>${icon("download-simple")}</button>
       <button type="button" class="focused-attachment" data-action="download-data"><span class="attachment-file-icon csv">csv</span><span><strong>字段说明草稿.csv</strong><small>8.3 KB</small></span>${icon("download-simple")}</button>
-    </section>` : "";
+    </section>`;
     return `<section class="chat-pane focused-agent-chat">
       <div class="focused-agent-head"><div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div></div>
       <div class="focused-agent-scroll">
         <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
-        <div class="focused-activity-list" id="focused-activity-list-${active}">
+        <div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
           ${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
           <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>
         </div>
-        <div class="focused-agent-copy">${stage.copy}</div>
+        <div class="focused-agent-copy" data-agent-summary>${stage.copy}</div>
         ${attachments}
-        <button class="focused-stage-cta" type="button" data-go="${stage.next}">${stage.button}</button>
+        <button class="focused-stage-cta" type="button" data-go="${stage.next}" data-agent-cta>${stage.button}</button>
       </div>
-      ${composer("继续描述任务，快速调用，@ 添加上下文", true)}
+      ${composer("继续描述任务，/ 快速调用，@ 添加上下文", true)}
     </section>`;
   }
 
@@ -434,12 +429,12 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
   function modelingShell(content, active, auxiliary = "") {
     if (focusedStages.has(active)) {
-      return `<div class="modeling-shell modeling-clone-shell" data-modeling-shell data-focused-stage="${active}">
+      return `<div class="modeling-shell modeling-clone-shell" data-modeling-shell data-focused-stage="${active}" data-workspace-page="${active}">
         ${focusedModelingHeader(active)}
         <div class="focused-modeling-split" data-modeling-split>
           <aside class="focused-agent-pane">${focusedAgentPane(active)}</aside>
           <div class="modeling-resizer focused-modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 与建模内容的宽度" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="58" aria-valuenow="27" tabindex="0"></div>
-          <main class="focused-stage-pane">${content}</main>
+          <main class="focused-stage-pane" data-stage-view>${content}</main>
         </div>
       </div>`;
     }
@@ -465,11 +460,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       ["已完成候选模型比较", "00:18", "已比较 XGBoost、Prophet 和 LSTM 的适配度。"]
     ];
     return shell(`
-      <section class="running-main">
+      <section class="running-main" data-modeling-shell data-workspace-page="running">
         <section class="chat-pane running-chat-pane">
           <header class="task-toolbar">
             <a class="back" href="${routes.new}" aria-label="返回首页" title="返回首页">${icon("arrow-left")}</a>
-            <div><h2>城市共享单车调度优化</h2><p>2026 国赛 A 题　·　自动模式</p></div>
+            <div><h2 data-bind="project-name">城市共享单车调度优化</h2><p>2026 国赛 A 题　·　自动模式</p></div>
             <div class="task-toolbar-actions">
               <span class="run-status complete"><b></b> 规划完成</span>
               <button type="button" data-action="files" aria-label="查看 3 个附件">${icon("paperclip")} 3</button>
@@ -481,38 +476,42 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             <div class="assistant-block">
               <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
               <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
-              <div class="activity-list">
+              <div class="activity-list" data-agent-steps>
                 ${steps.map(step => progressStep(true, step[0], step[1], step[2], true)).join("")}
               </div>
-              <div class="analysis-copy">
+              <div class="analysis-copy modeling-agent-copy" data-agent-summary>
                 <p>我已经完成题目和附件的初步读取。这个任务可以稳定地拆成三个相互衔接的子问题：</p>
                 <ol><li>需求预测</li><li>区域划分</li><li>调度优化</li></ol>
               </div>
-              <h4>推荐建模路线</h4>
-              <div class="plan-card">
+              <h4 data-demo-only>推荐建模路线</h4>
+              <div class="plan-card" data-demo-only>
                 <div><div class="plan-title"><span class="step-dot done">${icon("check")}</span>XGBoost 需求预测 + 混合整数规划调度</div><p class="plan-reason">理由：能够捕捉短期时空需求变化，并在约束条件下获得全局最优调度方案。</p></div>
                 <div class="plan-time"><span class="muted">预计运行时间</span><strong>2.5 ~ 3.5 小时</strong></div>
-                <button type="button" class="next-step-link" data-go="data">进入数据准备 ${icon("arrow-right")}</button>
+                <button type="button" class="next-step-link" data-go="data" data-agent-cta>进入数据准备 ${icon("arrow-right")}</button>
               </div>
-              <details class="alternatives"><summary>查看备选路线</summary><p>Prophet + 层次聚类 + 线性规划；LSTM + K-means + 启发式调度。</p></details>
+              <details class="alternatives" data-demo-only><summary>查看备选路线</summary><p>Prophet + 层次聚类 + 线性规划；LSTM + K-means + 启发式调度。</p></details>
+              <button type="button" class="running-live-cta" data-agent-cta data-live-only>Agent 正在执行</button>
             </div>
           </div>
           ${composer("继续描述任务，/ 快速调用，@ 添加上下文", true)}
         </section>
         <aside class="inspector">
           <div class="inspector-head"><span>任务上下文</span><button type="button" data-action="more" aria-label="更多上下文操作">${icon("dots-three")}</button></div>
-          <section class="inspector-section">
+          <section class="inspector-section" data-live-only>
+            <p class="inspector-live-note">题意解析完成后，这里将展示本次任务的附件、目标、当前假设与输出要求。</p>
+          </section>
+          <section class="inspector-section" data-demo-only>
             <div class="inspector-title">附件 <span>3</span></div>
             <button class="attachment-chip" data-action="files">${icon("file-pdf")}2026国赛A题题目.pdf</button>
             <button class="attachment-chip" data-action="files">${icon("file-csv")}共享单车数据集.csv</button>
             <button class="attachment-chip" data-action="files">${icon("file-image")}城市区域划分示意图.png</button>
             <button class="text-action" data-action="files">管理附件</button>
           </section>
-          <section class="inspector-section">
+          <section class="inspector-section" data-demo-only>
             <div class="inspector-title">当前假设 <button class="text-action" data-action="edit-assumption">编辑</button></div>
             <ul><li>数据完整且质量可用</li><li>共享单车可跨区域调度</li><li>调度以最小化总缺车惩罚为目标</li><li>满足车辆总量与站点容量约束</li></ul>
           </section>
-          <section class="inspector-section">
+          <section class="inspector-section" data-demo-only>
             <div class="inspector-title">输出要求 <button class="text-action" data-action="edit-output">编辑</button></div>
             <ul><li>给出完整建模流程与假设说明</li><li>提供关键模型公式与变量定义</li><li>输出可复现实验结果与对比分析</li><li>编写模型求解代码与可视化结果</li></ul>
           </section>
@@ -551,7 +550,14 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             </tbody>
           </table>
         </div>
-        <div class="project-footer"><span>共 7 项</span><div class="pagination"><button class="page-button" disabled>‹</button><button class="page-button active">1</button><button class="page-button">›</button><select class="page-size"><option>20 条/页</option></select></div></div>
+        <div class="project-footer"><span>共 7 项</span><div class="pagination"><button class="page-button" disabled>‹</button><button class="page-button active">1</button><button class="page-button">›</button>
+          <div class="settings-custom-select page-size-select" data-page-size-select data-select-menu>
+            <button type="button" class="settings-select-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="每页条数"><span data-select-label>20 条/页</span>${icon("caret-down")}</button>
+            <div class="settings-select-menu" role="listbox" aria-label="每页条数">
+              ${["10", "20", "50"].map(size=>`<button type="button" role="option" data-select-option="${size}" aria-selected="${size === "20"}"><span>${size} 条/页</span>${icon("check")}</button>`).join("")}
+            </div>
+          </div>
+        </div></div>
       </section>`, "projects");
   }
 
@@ -591,8 +597,8 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     </aside>`;
   }
 
-  function dataScreen() {
-    return modelingShell(`
+  function dataStageContent() {
+    return `
       <section class="focused-workspace data-report-workspace">
         ${workspaceTabs([["data-report","数据报告","file-text"],["raw-data","原始数据","table"],["clean-data","清洗数据","sliders-horizontal"],["field-guide","字段说明","files"]], "data-report")}
         <div class="focused-workspace-panel active" data-workspace-panel="data-report">
@@ -632,11 +638,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           <div class="focused-conclusion-strip focused-template-notice">${icon("check-circle")}<span>核心建模字段已完成类型和单位校验。</span></div>
           <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table field-table"><thead><tr><th>字段</th><th>含义</th><th>类型</th><th>单位</th><th>来源</th><th>状态</th></tr></thead><tbody><tr><td><strong>timestamp</strong></td><td>统计时刻</td><td>datetime</td><td>—</td><td>订单表</td><td>已校验</td></tr><tr><td><strong>region_id</strong></td><td>运营区域</td><td>string</td><td>—</td><td>站点表</td><td>已校验</td></tr><tr><td><strong>dock_count</strong></td><td>投放点数</td><td>integer</td><td>个</td><td>站点表</td><td>已校验</td></tr><tr><td><strong>available_bikes</strong></td><td>可用车辆数</td><td>integer</td><td>辆</td><td>状态表</td><td>已清洗</td></tr><tr><td><strong>avg_wait</strong></td><td>平均等待时间</td><td>float</td><td>分钟</td><td>订单表</td><td>已校正</td></tr><tr><td><strong>order_count</strong></td><td>订单数量</td><td>integer</td><td>单</td><td>订单表</td><td>已校验</td></tr><tr><td><strong>temperature</strong></td><td>气温</td><td>float</td><td>℃</td><td>天气表</td><td>已校验</td></tr><tr><td><strong>is_holiday</strong></td><td>节假日标记</td><td>boolean</td><td>—</td><td>日历表</td><td>已校验</td></tr></tbody></table></div><footer class="focused-template-footer"><span>显示核心字段 8 / 18</span><span>最后校验 10:36</span></footer></section>
         </section></div>
-      </section>`, "data");
+      </section>`;
   }
 
-  function modelScreen() {
-    return modelingShell(`
+  function modelStageContent() {
+    return `
       <section class="focused-workspace model-plan-workspace">
         ${workspaceTabs([["model-plan","模型方案","file-text"],["assumptions","模型假设","table"],["symbols","符号表","list-dashes"],["implementation","实现计划","chart-line"]], "model-plan")}
         <div class="focused-workspace-panel active" data-workspace-panel="model-plan">
@@ -669,7 +675,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           <section class="focused-template-grid"><article class="focused-template-card"><h2>运行环境</h2><dl><div><dt>语言</dt><dd>Python 3.11</dd></div><div><dt>求解器</dt><dd>HiGHS 1.7</dd></div><div><dt>随机种子</dt><dd>42</dd></div></dl></article><article class="focused-template-card"><h2>输出产物</h2><ul><li>需求预测结果</li><li>调度决策表</li><li>实验对比报告</li></ul></article></section>
           <footer class="focused-template-callout"><strong>预计耗时</strong><span>约 12–18 分钟，可在沙盒中复现。</span></footer>
         </section></div>
-      </section>`, "model");
+      </section>`;
   }
 
   const experiments = [
@@ -782,8 +788,8 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     return resultDocument(experimentResultPages[key], key);
   }
 
-  function experimentsScreen() {
-    return modelingShell(`
+  function experimentsStageContent() {
+    return `
       <section class="focused-workspace experiment-report-workspace">
         ${workspaceTabs([["experiment-report","实验报告","file-text"],["charts","结果图表","chart-bar"],["results-table","结果表","clipboard-text"],["run-log","运行日志","terminal-window"],["model-code","模型代码","code"]], "experiment-report")}
         <div class="focused-workspace-panel active" data-workspace-panel="experiment-report">
@@ -800,11 +806,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         <div class="focused-workspace-panel" data-workspace-panel="results-table">${experimentResultDocument("results-table")}</div>
         <div class="focused-workspace-panel" data-workspace-panel="run-log">${experimentResultDocument("run-log")}</div>
         <div class="focused-workspace-panel" data-workspace-panel="model-code">${experimentResultDocument("model-code")}</div>
-      </section>`, "experiments");
+      </section>`;
   }
 
-  function editorScreen() {
-    return modelingShell(`
+  function editorStageContent() {
+    return `
       <section class="focused-workspace paper-editor-workspace paper-only-workspace">
         <div class="focused-workspace-panel active paper-only-panel">
           <section class="editor-main workflow-editor paper-only-editor">
@@ -834,7 +840,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             </div>
           </section>
         </div>
-      </section>`, "editor");
+      </section>`;
   }
 
   // 2MB 的赛题库改由 preloadKnowledgeLibrary 原地填充，使它能拆成独立 chunk 而不进主包。
@@ -842,6 +848,14 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
   const problems = [];
   const papers = [];
   const problemTabs = () => ["全部赛题", ...new Set(problems.map(problem => problem.category)), "收藏"];
+  // 列表里放不下"含本地原题 PDF及 353 个随题附件"这种全句，压缩成"原题 PDF · 353 附件"；
+  // 完整描述仍在详情页展示。
+  const problemDataSummary = problem => {
+    const requirement = String(problem.data_requirement || "");
+    if (!requirement.includes("PDF")) return requirement || "—";
+    const attachmentCount = /(\d+)\s*个/.exec(requirement)?.[1];
+    return attachmentCount ? `原题 PDF · ${attachmentCount} 附件` : "原题 PDF";
+  };
   const remotePaperPdfUrl = paper => {
     const source = String(paper?.full_text_url || "").trim();
     if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
@@ -934,12 +948,14 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         </div>
         <div class="resource-table-wrap">
           <table class="resource-table problem-resource-table">
-            <thead><tr><th>题目</th><th>比赛</th><th>年份</th><th>问题类型</th><th>关键词</th><th>数据要求</th><th>状态</th></tr></thead>
+            <thead><tr><th>题目</th><th>年份</th><th>问题类型</th><th>数据附件</th><th>收藏</th></tr></thead>
             <tbody data-problem-list>
-              ${problems.map((p,i)=>`<tr class="problem-item ${i===0?"active":""}" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-resource-search="${escapeHtml([p.code,p.title,p.competition,p.category,p.year,p.problem_type,...p.keywords,...p.modeling_directions].join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看赛题：${escapeHtml(p.code)} ${escapeHtml(p.title)}">
-                <td><div class="resource-title-cell"><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(p.code)}">${icon("star")}</button><strong>${escapeHtml(p.code)}　${escapeHtml(p.title)}</strong></div></td>
-                <td>${escapeHtml(p.category)}</td><td>${p.year}</td><td>${escapeHtml(p.problem_type)}</td><td>${escapeHtml(p.keywords.join("，"))}</td><td>${escapeHtml(p.data_requirement)}</td>
-                <td><div class="resource-status-cell"><span>${escapeHtml(p.status)}</span></div></td>
+              ${problems.map((p,i)=>`<tr class="problem-item" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-resource-search="${escapeHtml([p.code,p.title,p.competition,p.category,p.year,p.problem_type,...p.keywords,...p.modeling_directions].join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看赛题：${escapeHtml(p.code)} ${escapeHtml(p.title)}">
+                <td><div class="resource-title-cell"><div class="problem-title-copy"><strong>${escapeHtml(p.title)}</strong><span>${escapeHtml(p.code)} · ${escapeHtml(p.competition)}</span></div></div></td>
+                <td class="problem-year-cell">${p.year}</td>
+                <td><span class="problem-type-badge">${escapeHtml(p.problem_type)}</span></td>
+                <td class="problem-data-cell">${escapeHtml(problemDataSummary(p))}</td>
+                <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(p.code)}">${icon("star")}</button></td>
               </tr>`).join("")}
             </tbody>
           </table>
@@ -964,7 +980,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       <section class="library-main resource-library papers-main">
         <div class="library-heading paper-library-heading"><div><h1>优秀论文</h1><p>按研究主题、年份与题组浏览获奖论文，点击即可阅读完整正文。</p></div><span class="paper-library-total"><strong>${entries.length}</strong> 篇完整论文</span></div>
         <div class="paper-library-controls"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="paper-search" data-paper-search autocomplete="off" aria-label="搜索论文" placeholder="搜索研究主题、论文编号或关键词"></label>
-          <label class="paper-year-filter"><span>年份</span><select data-paper-year-filter aria-label="按年份筛选论文"><option value="">全部年份</option>${years.map(year=>`<option value="${year}">${year} 年</option>`).join("")}</select>${icon("caret-down")}</label>
+          <div class="paper-year-filter" data-paper-year-select data-select-menu><span>年份</span><button type="button" class="paper-year-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="按年份筛选论文"><span data-select-label>全部年份</span></button>${icon("caret-down")}
+            <div class="settings-select-menu" role="listbox" aria-label="按年份筛选论文">
+              ${[["", "全部年份"], ...years.map(year=>[String(year), `${year} 年`])].map(([value, label], index)=>`<button type="button" role="option" data-select-option="${escapeHtml(value)}" aria-selected="${index === 0}"><span>${escapeHtml(label)}</span>${icon("check")}</button>`).join("")}
+            </div>
+          </div>
           <button class="paper-filter-reset" type="button" data-paper-filter-reset>${icon("arrow-counter-clockwise")} 重置</button>
         </div>
         <div class="paper-classification-panel" aria-label="论文分类筛选">
@@ -1485,7 +1505,13 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         ["模型限制", "<ul><li>数据来源与时间范围有限，可能影响模型泛化能力。</li><li>极端天气与突发事件尚未充分建模，需结合实时机制增强鲁棒性。</li><li>实际运营中仍需考虑更多约束与成本项。</li></ul>"]
       ],
       section: "交付文件",
-      files: deliverables
+      files: deliverables,
+      actions: [
+        ["返回首页", 'data-go="new"', false],
+        ["继续优化", 'data-go="editor"', false],
+        ["复制为新任务", 'data-action="copy-task"', false],
+        ["下载全部", 'data-action="download-all"', true]
+      ]
     },
     "paper-package": {
       title: "论文文件",
@@ -1536,15 +1562,105 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     }
   };
 
-  function completeScreen() {
-    return modelingShell(`
+  function completeStageContent() {
+    return `
       <section class="focused-workspace final-delivery-workspace">
         ${workspaceTabs([["final-summary","最终成果","check-circle"],["paper-package","论文文件","file-text"],["data-code-package","数据与代码","code"],["delivery-record","交付记录","clipboard-text"]], "final-summary")}
         <div class="focused-workspace-panel active" data-workspace-panel="final-summary">${resultDocument(completeWorkspacePages["final-summary"], "final-summary", "final-delivery-document")}</div>
         <div class="focused-workspace-panel" data-workspace-panel="paper-package">${resultDocument(completeWorkspacePages["paper-package"], "paper-package", "final-delivery-document")}</div>
         <div class="focused-workspace-panel" data-workspace-panel="data-code-package">${resultDocument(completeWorkspacePages["data-code-package"], "data-code-package", "final-delivery-document")}</div>
         <div class="focused-workspace-panel" data-workspace-panel="delivery-record">${resultDocument(completeWorkspacePages["delivery-record"], "delivery-record", "final-delivery-document")}</div>
-      </section>`, "complete");
+      </section>`;
+  }
+
+  // ── B 方案合并工作台：五个阶段面板同存于一个页面，六条路由保留为面板直达别名 ──
+  const WORKSPACE_STAGES = ["data", "model", "experiments", "editor", "complete"];
+  const workspaceStageContent = {
+    data: dataStageContent,
+    model: modelStageContent,
+    experiments: experimentsStageContent,
+    editor: editorStageContent,
+    complete: completeStageContent
+  };
+  const WORKSPACE_STAGE_TITLES = {
+    data: "数据准备",
+    model: "建模方案",
+    experiments: "实验结果",
+    editor: "论文编辑",
+    complete: "任务完成"
+  };
+
+  function workspaceScreen(initialStage) {
+    const panes = WORKSPACE_STAGES.map(stage => (
+      `<div class="workspace-stage" data-stage-pane="${stage}"${stage === initialStage ? "" : " hidden"}>${workspaceStageContent[stage]()}</div>`
+    )).join("");
+    return modelingShell(`<div class="workspace-stage-host" data-workspace-stage-host>${panes}</div>`, initialStage);
+  }
+
+  function updateFocusedDemoRail(stageKey, shell) {
+    const demo = FOCUSED_STAGE_DEMO[stageKey];
+    const rail = $(".focused-agent-pane", shell);
+    if (!demo || !rail) return;
+    const copy = $(".focused-agent-copy", rail);
+    if (copy && !copy.dataset.agentState) copy.innerHTML = demo.copy;
+    const current = $(".focused-step.current > span:nth-child(2)", rail);
+    if (current) current.textContent = demo.current;
+    const cta = $("[data-agent-cta]", rail);
+    if (cta && !cta.dataset.agentAction) {
+      cta.dataset.go = demo.next;
+      cta.innerHTML = demo.button;
+    }
+    const attachments = $(".focused-attachments", rail);
+    if (attachments) attachments.hidden = stageKey !== "data";
+  }
+
+  function showWorkspaceStage(stageKey, options = {}) {
+    const host = $("[data-workspace-stage-host]");
+    if (!host || !workspaceStageContent[stageKey]) return false;
+    $$(".workspace-stage", host).forEach(pane => { pane.hidden = pane.dataset.stagePane !== stageKey; });
+    const shell = host.closest("[data-modeling-shell]");
+    if (shell) {
+      shell.dataset.focusedStage = stageKey;
+      shell.dataset.workspacePage = stageKey;
+      const stagePane = $(".focused-stage-pane", shell);
+      if (stagePane) stagePane.dataset.workspacePage = stageKey;
+      const back = $(".focused-back", shell);
+      if (back) {
+        const backLabel = stageKey === "complete" ? "返回首页" : "返回任务执行";
+        back.setAttribute("href", stageKey === "complete" ? routes.new : routes.running);
+        back.setAttribute("aria-label", backLabel);
+        back.setAttribute("title", backLabel);
+        back.dataset.backFrom = stageKey;
+      }
+      // 演示态由模板更新左栏文案；真实运行的左栏由工作台控制器渲染，这里不碰。
+      if (shell.dataset.workspaceSource !== "api") updateFocusedDemoRail(stageKey, shell);
+    }
+    document.body.dataset.screen = stageKey;
+    document.title = `OpenMathModel · ${t(WORKSPACE_STAGE_TITLES[stageKey])}`;
+    if (options.pushUrl) history.pushState({ ommStage: stageKey }, "", options.url || routes[stageKey]);
+    // 隐藏面板里的 Chart.js 画布尺寸为 0，切换可见后靠 resize 事件自适应恢复。
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    document.dispatchEvent(new CustomEvent("omm:stage-shown", { detail: { stage: stageKey } }));
+    return true;
+  }
+
+  let workspaceNavBound = false;
+  function bindWorkspaceStageNav() {
+    if (workspaceNavBound) return;
+    workspaceNavBound = true;
+    window.addEventListener("popstate", () => {
+      if (!$("[data-workspace-stage-host]")) return;
+      const raw = window.location.pathname;
+      const path = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
+      const stage = WORKSPACE_STAGES.find(key => routes[key] === path);
+      if (stage) showWorkspaceStage(stage, { pushUrl: false });
+      else window.location.reload();
+    });
+    // 工作台控制器（真实运行）经此事件请求软切换，避免模块循环依赖。
+    document.addEventListener("omm:show-stage", event => {
+      const detail = (event as CustomEvent<{ stage?: string; url?: string }>).detail || {};
+      if (detail.stage) showWorkspaceStage(detail.stage, { pushUrl: true, url: detail.url });
+    });
   }
 
   const renderers = {
@@ -1552,19 +1668,21 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     confirm: confirmScreen,
     running: runningScreen,
     projects: projectsScreen,
-    data: dataScreen,
-    model: modelScreen,
-    experiments: experimentsScreen,
-    editor: editorScreen,
+    data: () => workspaceScreen("data"),
+    model: () => workspaceScreen("model"),
+    experiments: () => workspaceScreen("experiments"),
+    editor: () => workspaceScreen("editor"),
     problems: problemsScreen,
     papers: papersScreen,
     problemDetail: problemDetailScreen,
     paperDetail: paperDetailScreen,
     methods: methodsScreen,
-    complete: completeScreen
+    complete: () => workspaceScreen("complete")
   };
 
   function go(name) {
+    // 合并工作台内的阶段跳转走软切换（无整页重载）；其余目标保持整页导航。
+    if (workspaceStageContent[name] && $("[data-workspace-stage-host]") && showWorkspaceStage(name, { pushUrl: true })) return;
     if (routes[name]) window.location.href = routes[name];
   }
 
@@ -1597,9 +1715,39 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     </div>`;
   }
 
+  /**
+   * 打开开关时立即申请系统权限：被拒绝就把开关拨回去，不留下“开着却不会响”的假状态。
+   */
+  function requestDesktopNotifications(toggle) {
+    if (!notificationsSupported()) {
+      toggle.classList.remove("active");
+      toggle.setAttribute("aria-checked", "false");
+      toast(t("当前浏览器不支持桌面通知"));
+      return;
+    }
+    void requestNotificationPermission().then(permission => {
+      if (permission === "granted") {
+        // 开关状态要先落盘，预览通知才会通过 desktopNotificationsEnabled 检查。
+        try {
+          const settings = JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}");
+          settings.desktopNotifications = true;
+          localStorage.setItem("openmathmodelSettings", JSON.stringify(settings));
+        } catch {
+          // 存储不可用时仍可在本次会话内发通知
+        }
+        sendNotificationPreview();
+        return;
+      }
+      toggle.classList.remove("active");
+      toggle.setAttribute("aria-checked", "false");
+      toast(t("浏览器已阻止通知，请在地址栏的站点设置中允许通知"));
+    });
+  }
+
   function openSettingsCenter() {
     $(".settings-backdrop")?.remove();
-    const themeBeforeOpen = normalizeTheme(document.documentElement.dataset.theme);
+    const localeBeforeOpen = currentLocale();
+    const displayBeforeOpen = currentDisplayPreferences();
     let settingsSaved = false;
     const backdrop = document.createElement("div");
     backdrop.className = "settings-backdrop";
@@ -1609,7 +1757,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           <div class="settings-brand">${projectLogo("settings-logo")}<div><strong>OpenMathModel</strong><span>设置中心</span></div></div>
           <nav class="settings-nav" aria-label="设置分类">
             <button class="active" data-settings-nav="general" data-title="通用设置" data-subtitle="语言、地区和基础任务行为">${icon("sliders-horizontal")}<span>通用</span></button>
-            <button data-settings-nav="appearance" data-title="外观与显示" data-subtitle="主题、字号和界面密度">${icon("palette")}<span>外观与显示</span></button>
+            <button data-settings-nav="appearance" data-title="外观与显示" data-subtitle="正文字号与可读性">${icon("palette")}<span>外观与显示</span></button>
             <button data-settings-nav="personalization" data-title="个性化" data-subtitle="定制 Agent 的回答习惯与工作方式">${icon("user-focus")}<span>个性化</span></button>
             <button data-settings-nav="usage" data-title="用量监控" data-subtitle="查看 Token、请求量和费用预算">${icon("chart-bar")}<span>用量监控</span></button>
             <button data-settings-nav="security" data-title="账户与安全" data-subtitle="密码、双重验证和登录设备">${icon("shield-check")}<span>账户与安全</span></button>
@@ -1651,19 +1799,8 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
             <div class="settings-pane" data-settings-pane="appearance">
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>界面主题</h3><p>选择适合当前工作环境的外观。</p></div></div>
-                <div class="theme-options" role="radiogroup" aria-label="界面主题">
-                  <button class="theme-option active" type="button" data-theme-choice="light" aria-pressed="true"><span class="theme-preview light"><i></i><b></b></span><strong>浅色</strong><small>清晰明亮</small></button>
-                  <button class="theme-option" type="button" data-theme-choice="dark" aria-pressed="false"><span class="theme-preview dark"><i></i><b></b></span><strong>深色</strong><small>减少眩光</small></button>
-                </div>
-              </div>
-              <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>显示密度</h3><p>调整列表、侧栏和正文的视觉密度。</p></div></div>
-                <div class="settings-grid two">
-                  <label class="settings-field"><span>界面密度</span><select name="interfaceDensity"><option>舒适</option><option>紧凑</option><option>宽松</option></select></label>
-                  <label class="settings-field"><span>代码字体</span><select name="codeFont"><option>JetBrains Mono</option><option>Consolas</option><option>系统等宽字体</option></select></label>
-                </div>
-                <label class="settings-range"><span><b>正文字号</b><output data-font-output>15 px</output></span><input type="range" min="13" max="19" value="15" name="fontSize" data-font-size></label>
+                <div class="settings-section-heading"><div><h3>正文与可读性</h3><p>调整正文字号、动态效果与对比度。</p></div></div>
+                <label class="settings-range"><span><b>正文字号</b><output data-font-output>${TEXT_BASE_PX} px</output></span><input type="range" min="13" max="19" value="${TEXT_BASE_PX}" name="fontSize" data-font-size></label>
                 ${settingsToggle("reduceMotion", "减少动态效果", "减少弹窗、页面切换与进度反馈动画", false)}
                 ${settingsToggle("highContrast", "增强文字对比度", "使用更深的正文与边界颜色", false)}
               </div>
@@ -1800,12 +1937,12 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
               <div class="settings-section">
                 <div class="settings-section-heading"><div><h3>网络与运行</h3><p>针对企业网络和大型 Agent 任务调整连接参数。</p></div></div>
                 <div class="settings-grid two">
-                  <label class="settings-field"><span>网络代理</span><select name="proxyMode"><option>跟随系统</option><option>不使用代理</option><option>手动配置</option></select></label>
-                  <label class="settings-field"><span>代理地址</span><input name="proxyUrl" placeholder="http://127.0.0.1:7890"></label>
-                  <label class="settings-field"><span>请求超时</span><div class="field-with-unit"><input type="number" name="requestTimeout" value="120"><b>秒</b></div></label>
-                  <label class="settings-field"><span>最大并发任务</span><select name="maxConcurrency"><option>3 个</option><option>1 个</option><option>5 个</option><option>8 个</option></select></label>
-                  <label class="settings-field"><span>下载目录</span><input name="downloadDirectory" value="E:\\OpenMathModel\\Downloads"></label>
-                  <label class="settings-field"><span>临时文件目录</span><input name="tempDirectory" value="自动管理"></label>
+                  <label class="settings-field"><span>网络代理</span><select name="proxyMode"><option>跟随系统</option><option>不使用代理</option><option>手动配置</option></select><small>将随模型服务接入后生效，当前仅保存配置</small></label>
+                  <label class="settings-field"><span>代理地址</span><input name="proxyUrl" placeholder="http://127.0.0.1:7890"><small>供服务端出站请求使用，网页自身不经过此代理</small></label>
+                  <label class="settings-field"><span>请求超时</span><div class="field-with-unit"><input type="number" name="requestTimeout" value="120" min="5" max="600" step="5"><b>秒</b></div><small>作用于网页与服务端之间的接口请求（5–600 秒）</small></label>
+                  <label class="settings-field"><span>最大并发任务</span><select name="maxConcurrency"><option>3 个</option><option>1 个</option><option>5 个</option><option>8 个</option></select><small>同时排队或执行中的任务数上限，保存后立即生效</small></label>
+                  <label class="settings-field"><span>下载目录</span><input name="downloadDirectory" value="E:\\OpenMathModel\\Downloads" disabled><small>桌面端功能：网页版的下载位置由浏览器决定</small></label>
+                  <label class="settings-field"><span>临时文件目录</span><input name="tempDirectory" value="自动管理" disabled><small>桌面端功能：服务端临时目录由部署配置管理</small></label>
                 </div>
               </div>
               <div class="settings-section">
@@ -1832,7 +1969,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 
     const closeSettings = () => {
       document.removeEventListener("keydown", onSettingsKeydown);
-      if (!settingsSaved) applyTheme(themeBeforeOpen);
+      // 语言与可读性偏好都是即时预览，未保存就关闭要还原成打开前的样子。
+      if (!settingsSaved) {
+        applyLocale(localeBeforeOpen);
+        applyDisplayPreferences(displayBeforeOpen);
+      }
       backdrop.remove();
     };
     const activatePane = button => {
@@ -1849,12 +1990,17 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         $("[data-custom-select-trigger]", select)?.setAttribute("aria-expanded", "false");
       });
     };
+    // 可读性三项即时预览：直接读当前控件状态，未保存时由 closeSettings 还原
+    const previewDisplayPreferences = () => applyDisplayPreferences({
+      fontSize: $('[name="fontSize"]', backdrop)?.value,
+      reduceMotion: $('[name="reduceMotion"]', backdrop)?.getAttribute("aria-checked") === "true",
+      highContrast: $('[name="highContrast"]', backdrop)?.getAttribute("aria-checked") === "true",
+    });
     const saveSettings = () => {
       const values = {};
       $$("[name]", backdrop).forEach(control => {
         values[control.name] = control.matches("[data-setting-toggle]") ? control.getAttribute("aria-checked") === "true" : control.value;
       });
-      values.theme = $(".theme-option.active", backdrop)?.dataset.themeChoice || "light";
       localStorage.setItem("openmathmodelSettings", JSON.stringify(values));
       $$('[data-model-choice^="custom-"]', document).forEach(option => {
         const picker = option.closest("[data-model-picker]");
@@ -1868,24 +2014,21 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         }
       });
       settingsSaved = true;
-      applyTheme(values.theme);
-      $("[data-settings-save-state]", backdrop).textContent = "已保存";
-      toast("设置已保存");
+      applyLocale(values.interfaceLanguage);
+      applyDisplayPreferences(values);
+      // 并发上限的闸门在服务端，异步推送；失败不拦保存，只提示同步结果。
+      void persistMaxConcurrency(values.maxConcurrency).then(message => {
+        if (message) toast(t(message));
+      });
+      $("[data-settings-save-state]", backdrop).textContent = t("已保存");
+      toast(t("设置已保存"));
       setTimeout(closeSettings, 280);
     };
     const restoreSettings = () => {
       try {
         const saved = JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}");
+        // 历史存档里可能残留 theme 等已下线的键，找不到对应控件时静默跳过。
         Object.entries(saved).forEach(([name, value]) => {
-          if (name === "theme") {
-            const theme = normalizeTheme(value);
-            $$("[data-theme-choice]", backdrop).forEach(option => {
-              const active = option.dataset.themeChoice === theme;
-              option.classList.toggle("active", active);
-              option.setAttribute("aria-pressed", String(active));
-            });
-            return;
-          }
           const control = $(`[name="${name}"]`, backdrop);
           if (!control) return;
           if (control.matches("[data-setting-toggle]")) {
@@ -1895,11 +2038,13 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
             control.value = value;
           }
         });
-        applyTheme(normalizeTheme(saved.theme));
       } catch (error) {
         localStorage.removeItem("openmathmodelSettings");
-        applyTheme("light");
       }
+      // 滑块回填后同步右侧读数，否则会出现"滑块在 18、标签写 14"的错位
+      const fontControl = $('[name="fontSize"]', backdrop);
+      const fontOutput = $("[data-font-output]", backdrop);
+      if (fontControl && fontOutput) fontOutput.textContent = `${fontControl.value} px`;
     };
     const enhanceSettingsSelects = () => {
       $$("select", backdrop).forEach((select, selectIndex) => {
@@ -1979,16 +2124,9 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         const next = toggle.getAttribute("aria-checked") !== "true";
         toggle.classList.toggle("active", next);
         toggle.setAttribute("aria-checked", String(next));
-        return;
-      }
-      const theme = event.target.closest("[data-theme-choice]");
-      if (theme) {
-        $$("[data-theme-choice]", backdrop).forEach(option => {
-          const active = option === theme;
-          option.classList.toggle("active", active);
-          option.setAttribute("aria-pressed", String(active));
-        });
-        applyTheme(theme.dataset.themeChoice);
+        // 通知权限只能在用户手势里申请，所以就着这次点击问，而不是等保存时。
+        if (toggle.name === "desktopNotifications" && next) requestDesktopNotifications(toggle);
+        if (toggle.name === "reduceMotion" || toggle.name === "highContrast") previewDisplayPreferences();
         return;
       }
       if (event.target.closest("[data-settings-save]")) {
@@ -2028,10 +2166,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       if (action === "reset-defaults") {
         localStorage.removeItem("openmathmodelSettings");
         settingsSaved = true;
-        applyTheme("light");
+        applyLocale("zh-CN");
+        applyDisplayPreferences({});
         closeSettings();
         openSettingsCenter();
-        toast("已恢复默认设置");
+        toast(t("已恢复默认设置"));
       }
       if (action === "export-usage") toast("用量明细 CSV 已生成");
       if (action === "export-data") toast("数据导出申请已提交，完成后会通知你");
@@ -2051,10 +2190,17 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     });
     $("[data-font-size]", backdrop).addEventListener("input", event => {
       $("[data-font-output]", backdrop).textContent = `${event.target.value} px`;
+      previewDisplayPreferences();
+    });
+    // 语言与主题一样即时预览：自定义下拉在选中后会向原生 select 派发 change。
+    backdrop.addEventListener("change", event => {
+      if (event.target?.name === "interfaceLanguage") applyLocale(event.target.value);
     });
     document.addEventListener("keydown", onSettingsKeydown);
     restoreSettings();
     enhanceSettingsSelects();
+    // 并发上限以服务端为准，异步回填显示（覆盖本机残留值）。
+    void hydrateMaxConcurrency(backdrop);
     $(".settings-close", backdrop).focus();
   }
 
@@ -2084,10 +2230,20 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
    */
   let chartLoader = null;
   function initCharts(screen) {
-    if (screen !== "data" && screen !== "experiments") return;
+    const mergedWorkspace = Boolean(workspaceStageContent[screen]);
+    if (!mergedWorkspace && screen !== "data" && screen !== "experiments") return;
     chartLoader = chartLoader || import("chart.js/auto").then(module => module.default);
     chartLoader
-      .then(Chart => renderCharts(Chart, screen))
+      .then(Chart => {
+        // 合并工作台里五个面板同存，一次把数据页与实验页的图都建好；
+        // 隐藏面板的画布在首次显示时靠 resize 自适应到正确尺寸。
+        if (mergedWorkspace) {
+          renderCharts(Chart, "data");
+          renderCharts(Chart, "experiments");
+        } else {
+          renderCharts(Chart, screen);
+        }
+      })
       .catch(error => console.error("图表库加载失败，数据可视化不可用", error));
   }
 
@@ -2268,6 +2424,43 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     });
   }
 
+  function closeSelectMenus() {
+    $$("[data-select-menu].open").forEach(wrapper => {
+      wrapper.classList.remove("open");
+      $("[data-select-trigger]", wrapper)?.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  /**
+   * 自定义下拉的通用行为：触发键开合、选项回填标签与 aria-selected。
+   * 点击外部与 Escape 的收起挂在 bindCommon 的全局监听上（识别 data-select-menu）。
+   * 返回程序化选中函数，供“重置”等入口复用同一套状态更新。
+   */
+  function bindSelectMenu(wrapper, onSelect) {
+    if (!wrapper) return () => {};
+    const trigger = $("[data-select-trigger]", wrapper);
+    const labelNode = $("[data-select-label]", wrapper);
+    const select = option => {
+      $$("[data-select-option]", wrapper).forEach(item => item.setAttribute("aria-selected", String(item === option)));
+      if (labelNode) labelNode.textContent = option.textContent.trim();
+      wrapper.classList.remove("open");
+      trigger?.setAttribute("aria-expanded", "false");
+    };
+    wrapper.addEventListener("click", event => {
+      const option = event.target.closest("[data-select-option]");
+      if (option) {
+        select(option);
+        onSelect?.(option.dataset.selectOption, option);
+        return;
+      }
+      if (!event.target.closest("[data-select-trigger]")) return;
+      const willOpen = !wrapper.classList.contains("open");
+      wrapper.classList.toggle("open", willOpen);
+      trigger?.setAttribute("aria-expanded", String(willOpen));
+    });
+    return select;
+  }
+
   function bindCommon(screen) {
     document.addEventListener("click", event => {
       if (!event.target.closest("[data-model-picker]")) {
@@ -2276,6 +2469,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           $("[data-action=\"model-picker\"]", picker)?.setAttribute("aria-expanded", "false");
         });
       }
+      if (!event.target.closest("[data-select-menu]")) closeSelectMenus();
       const codeTab = event.target.closest("[data-code-lang]");
       if (codeTab) { switchMethodLanguage(codeTab.dataset.codeLang); return; }
       const goButton = event.target.closest("[data-go]");
@@ -2529,7 +2723,6 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
     });
 
     $$("[data-command]").forEach(button => button.addEventListener("click", () => document.execCommand(button.dataset.command, false)));
-    $$(".file-input").forEach(input => input.addEventListener("change", () => toast(`已添加 ${input.files.length} 个文件`)));
     $$(".composer textarea").forEach(textarea => textarea.addEventListener("keydown", event => {
       if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
@@ -2567,6 +2760,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
           picker.classList.remove("open");
           $("[data-action=\"model-picker\"]", picker)?.setAttribute("aria-expanded", "false");
         });
+        closeSelectMenus();
       }
     });
   }
@@ -2591,7 +2785,8 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       const rows = $$(rowSelector);
       const tabs = $$(`[data-resource-kind="${kind}"]`);
       const pageSize = kind === "paper" ? 10 : RESOURCE_PAGE_SIZE;
-      const paperYearFilter = kind === "paper" ? $("[data-paper-year-filter]") : null;
+      const paperYearSelect = kind === "paper" ? $("[data-paper-year-select]") : null;
+      const paperYearOptions = paperYearSelect ? $$("[data-select-option]", paperYearSelect) : [];
       const paperGroupFilters = kind === "paper" ? $$('[data-paper-group-filter]') : [];
       const paperReset = kind === "paper" ? $("[data-paper-filter-reset]") : null;
       let currentPage = 1;
@@ -2627,7 +2822,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       const applyResourceFilters = () => {
         const query = $(searchSelector)?.value.trim().toLowerCase() || "";
         const selected = tabs.find(tab => tab.classList.contains("active"))?.dataset.resourceTab || "";
-        const selectedYear = paperYearFilter?.value || "";
+        const selectedYear = paperYearOptions.find(option => option.getAttribute("aria-selected") === "true")?.dataset.selectOption || "";
         const selectedGroup = paperGroupFilters.find(button => button.classList.contains("active"))?.dataset.paperGroupFilter || "";
         const matches = [];
         rows.forEach(row => {
@@ -2658,7 +2853,10 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         currentPage = 1;
         applyResourceFilters();
       }));
-      paperYearFilter?.addEventListener("change", () => { currentPage = 1; applyResourceFilters(); });
+      const selectPaperYear = bindSelectMenu(paperYearSelect, () => {
+        currentPage = 1;
+        applyResourceFilters();
+      });
       paperGroupFilters.forEach(button => button.addEventListener("click", () => {
         paperGroupFilters.forEach(item => item.classList.toggle("active", item === button));
         currentPage = 1;
@@ -2667,7 +2865,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       paperReset?.addEventListener("click", () => {
         const search = $(searchSelector);
         if (search) search.value = "";
-        if (paperYearFilter) paperYearFilter.value = "";
+        if (paperYearOptions.length) selectPaperYear(paperYearOptions[0]);
         tabs.forEach((tab, index) => tab.classList.toggle("active", index === 0));
         paperGroupFilters.forEach((button, index) => button.classList.toggle("active", index === 0));
         currentPage = 1;
@@ -2714,8 +2912,11 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
       $$(".project-table tbody tr").forEach(row => row.addEventListener("click", event => {
         if (!event.target.closest("button")) go("running");
       }));
+      bindSelectMenu($("[data-page-size-select]"), value => toast(`已切换为每页 ${value} 条`));
     }
-    if (screen === "data") {
+    // 合并工作台：五个阶段面板同存于 DOM，四个有交互的阶段绑定块一起生效。
+    const mergedWorkspace = Boolean(workspaceStageContent[screen]);
+    if (screen === "data" || mergedWorkspace) {
       $$("[data-data-tab]").forEach(button => button.addEventListener("click", () => {
         $$("[data-data-tab]").forEach(item => item.classList.remove("active"));
         button.classList.add("active");
@@ -2732,7 +2933,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         toast(`已切换到${button.dataset.drawerTab}`);
       }));
     }
-    if (screen === "model") {
+    if (screen === "model" || mergedWorkspace) {
       $$("[data-plan-option]").forEach(button => button.addEventListener("click", () => {
         $$("[data-plan-option]").forEach(item => item.classList.remove("selected"));
         button.classList.add("selected");
@@ -2741,7 +2942,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         if (caret) caret.className = "ph ph-caret-up";
       }));
     }
-    if (screen === "experiments") {
+    if (screen === "experiments" || mergedWorkspace) {
       $$(".experiment-item").forEach(item => item.addEventListener("click", () => {
         $$(".experiment-item").forEach(i => i.classList.remove("active")); item.classList.add("active");
         $(".experiment-titlebar h2").textContent = experiments[+item.dataset.experiment][0];
@@ -2751,7 +2952,7 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
         toast(`已切换到${button.dataset.experimentTab}`);
       }));
     }
-    if (screen === "editor") {
+    if (screen === "editor" || mergedWorkspace) {
       $$(".outline a").forEach(link => link.addEventListener("click", () => { $$(".outline a").forEach(x=>x.classList.remove("active")); link.classList.add("active"); }));
     }
     if (screen === "problems") {
@@ -3011,5 +3212,9 @@ export function activateScreen(screen: ScreenId): void {
   initCharts(screen);
   if (screen === "paperDetail") void initPaperPdfReader();
   void hydrateAccountUi();
+  mountModelingWorkspace(screen);
+  if (workspaceStageContent[screen]) bindWorkspaceStageNav();
+  // 放在工作台挂载之后：恢复对话草稿要等 composer 渲染完成。
+  mountTaskAutosave(screen);
 }
 

@@ -7,6 +7,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 const workspaceRoot = fileURLToPath(new URL("../..", import.meta.url));
+const apiTarget = process.env.OMM_API_PROXY_TARGET ?? "http://127.0.0.1:8000";
 const paperCacheRoot = resolve(
   workspaceRoot,
   "datasets/raw/sources/github/zhanwen-MathModel/papers",
@@ -31,7 +32,7 @@ async function serveAccountMe(req: IncomingMessage, res: ServerResponse): Promis
   }
 
   try {
-    const upstream = await fetch("http://127.0.0.1:8000/api/account/me", {
+    const upstream = await fetch(new URL("/api/account/me", apiTarget), {
       headers: {
         accept: req.headers.accept ?? "application/json",
         cookie: req.headers.cookie ?? "",
@@ -242,7 +243,7 @@ function localDevelopmentResources(): Plugin {
 
 const apiProxy = {
   "/api": {
-    target: "http://127.0.0.1:8000",
+    target: apiTarget,
     changeOrigin: false,
   },
 };

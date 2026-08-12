@@ -1,5 +1,7 @@
 # Project structure verification
 
+> **Historical evidence snapshot (2026-08-02), not the current structure guide.** Paths, prototype files, verifier inputs and counts below are intentionally preserved as observed on that date. Use [`PROJECT_STRUCTURE.md`](../../PROJECT_STRUCTURE.md) and the [documentation index](../README.md) for current facts.
+
 This record is populated after running the repository-local verifier and rollback preview.
 
 ## Baseline
