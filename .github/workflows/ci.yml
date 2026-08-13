@@ -13,19 +13,18 @@ jobs:
   web:
     name: Web typecheck / lint / build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: package-lock.json
+      # 按 ADR-0002：统一在仓库根安装。apps/web 的 tsconfig extends
+      # @openmathmodel/config（workspace 包），子目录单独安装解析不到它。
       - run: npm ci
-      - run: npm run check
-      - run: npm run build
+      - run: npm run check --workspace @openmathmodel/web
+      - run: npm run build --workspace @openmathmodel/web
 
   python:
     name: Python syntax + contracts gate
@@ -50,7 +49,9 @@ jobs:
       - name: API tests (activates once backend/api lands)
         run: |
           if [ -f backend/api/pyproject.toml ]; then
-            pip install -e packages/contracts -e agents/core -e "backend/api[dev]"
+            # backend/api 依赖 omm-agent-skills（真实技能节点），它只存在于本仓库，
+            # 必须与 contracts/core 一样以可编辑方式一并安装，否则 pip 会去 PyPI 找。
+            pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
             python -m pytest backend/api/tests -q
             python packages/contracts/scripts/export_openapi.py --check
           else

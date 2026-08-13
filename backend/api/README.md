@@ -22,7 +22,7 @@ npm run dev
 ```powershell
 # 首次：仓库根目录
 py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e "backend/api[dev]"
+.venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
 
 # 启动：默认 SQLite，启动时 create_all 建立本地开发表
 .venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --port 8000

@@ -52,7 +52,7 @@ git clone git@github.com:IvanCodesDev/OpenMathModel.git
 cd OpenMathModel
 npm install
 py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e "backend/api[dev]"
+.venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
 ```
 
 ### 2. 启动完整联调（推荐）
