@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -35,6 +35,9 @@ class User(Base):
     # 高级设置「最大并发任务」：None = 沿用部署默认值（config.DEFAULT_MAX_CONCURRENT_RUNS）。
     # 可空是刻意的——SQLite 开发库靠启动补列机制加新列，只有可空列能补。
     max_concurrent_runs: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 设置中心「自定义 API」：已保存接口列表 + 主接口 + 三个行为开关（llm.parse_llm_config 解析）。
+    # 密钥只落在本机后端数据库，不回传云端；None = 从未配置过。
+    llm_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

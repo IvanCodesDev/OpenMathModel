@@ -1544,7 +1544,8 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 }
 
 @media (max-width: 820px) {
-  .modeling-clone-shell { min-width: 700px; }
+  /* 早期这里锁 min-width: 700px 作为「放弃适配」的兜底；revision 33 已给出
+     真正的手机形态，锁宽只会把整个工作台顶出视口，故移除。 */
   .focused-task-meta,
   .focused-run-status { display: none; }
 }
@@ -1712,11 +1713,11 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 .focused-step-dot.done {
   border: 0;
   border-radius: 4px;
-  color: #2eb879;
+  color: #151515;
   background: #fff;
 }
 
-.focused-step-dot.done i { font-size: 16px; }
+.focused-step-dot.done i { font-size: 18px; }
 
 .focused-workspace-tabs {
   height: 54px;
@@ -1763,11 +1764,11 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 .focused-step-dot.done {
   border: 0;
   border-radius: 50%;
-  color: #2eb879;
+  color: #151515;
   background: #fff;
 }
 
-.focused-step-dot.done i { font-size: 17px; }
+.focused-step-dot.done i { font-size: 19px; }
 
 .focused-stage-pane {
   overflow: visible;
@@ -3263,10 +3264,1024 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   font-weight: 600;
 }
 .running-live-cta:disabled { color: #91918b; background: #ececea; }
-.inspector-live-note { margin: 0; color: #6f6f69; font-size: 13px; line-height: 1.7; }
 
 /* revision 25 — 2026-08-12 merged workspace (B 方案): one persistent shell,
    five stage panes living in one page and swapped in place (no full reloads). */
 .workspace-stage-host { display: flex; width: 100%; min-height: 0; flex: 1 1 auto; }
 .workspace-stage { display: contents; }
 .workspace-stage[hidden] { display: none; }
+
+/* revision 26 — 2026-08-12 AI conversation micro-interactions.
+   动效语言参考 aicss.dev 的 Thinking+Reasoning / To-do List / Streaming Text 组件，
+   按本产品黑灰白体系重写实现；仅真实运行（data-stage-status / data-agent-text）生效，
+   演示基线除加载点微光外不受影响；全部尊重 prefers-reduced-motion。 */
+
+/* Shimmer：进行中步骤标签与加载点的微光扫过（Thinking 态）。 */
+@keyframes omm-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.focused-step[data-stage-status="RUNNING"] > span:nth-child(2),
+.activity-list .progress-step[data-stage-status="RUNNING"] > span:nth-child(2),
+.focused-loading {
+  background: linear-gradient(90deg, #6d6d68 35%, #bcbcb6 50%, #6d6d68 65%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: omm-shimmer 2.2s linear infinite;
+}
+
+/* To-do 三态图标（Phosphor 单字形，替代描边圈拼装）：
+   待开始=灰虚线圈，进行中=深色填充箭头圈，完成=绿色填充对勾。仅真实运行行生效。 */
+.focused-step[data-stage-status] .focused-step-dot,
+.progress-step[data-stage-status] .step-dot {
+  border: 0;
+  border-radius: 50%;
+  background: #fff;               /* 遮住时间线竖轨 */
+  color: inherit;
+}
+.focused-step[data-stage-status] .focused-step-dot i,
+.progress-step[data-stage-status] .step-dot i {
+  font-size: 19px;
+  line-height: 1;
+}
+.focused-step[data-stage-status="PENDING"] .focused-step-dot i,
+.progress-step[data-stage-status="PENDING"] .step-dot i { color: #c2c2bd; }
+.focused-step[data-stage-status="RUNNING"] .focused-step-dot i,
+.focused-step[data-stage-status="WAITING_APPROVAL"] .focused-step-dot i,
+.focused-step[data-stage-status="PAUSED"] .focused-step-dot i,
+.focused-step[data-stage-status="FAILED"] .focused-step-dot i,
+.progress-step[data-stage-status="RUNNING"] .step-dot i,
+.progress-step[data-stage-status="WAITING_APPROVAL"] .step-dot i,
+.progress-step[data-stage-status="PAUSED"] .step-dot i,
+.progress-step[data-stage-status="FAILED"] .step-dot i { color: #232320; }
+/* 完成态：黑色圆形 + 白色对钩（填充字形的钩是镂空的，衬底即为白） */
+.focused-step[data-stage-status="SUCCEEDED"] .focused-step-dot i,
+.progress-step[data-stage-status="SUCCEEDED"] .step-dot i { color: #151515; }
+html[data-theme="dark"] .focused-step[data-stage-status="SUCCEEDED"] .focused-step-dot i,
+html[data-theme="dark"] .progress-step[data-stage-status="SUCCEEDED"] .step-dot i { color: #e8e8e4; }
+.focused-step,
+.focused-step time,
+.focused-step-dot,
+.progress-step,
+.step-dot { transition: color .18s ease, border-color .18s ease; }
+
+/* 思考/规划阶段：步骤列表位置先显示一行扫光文案（复用聊天思考态样式），
+   首个步骤启动时六个阶段按序浮现——该动画只在规划→揭示的转变发生一次。 */
+.step-planning {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 4px 0;
+  background: inherit;
+}
+.step-reveal { animation: step-reveal-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes step-reveal-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+/* 规划结束时整个步骤回复块在思考下方浮现 */
+.assistant-block-reveal { animation: step-reveal-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+html[data-reduce-motion="on"] .step-reveal,
+html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
+
+/* ── Agentic 执行轨迹（真实运行的对话页）───────────────────────────────
+   融合改造现有步骤行：去卡片化、细左轨、动作图标、右侧实时耗时；
+   演示页面（无 data-workspace-source="api"）完全不受影响。 */
+[data-modeling-shell][data-workspace-source="api"] .activity-list {
+  position: relative;
+  padding: 2px 0 2px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+[data-modeling-shell][data-workspace-source="api"] .activity-list::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: #ececea;
+}
+[data-modeling-shell][data-workspace-source="api"] .progress-step {
+  position: relative;
+  z-index: 1;
+  min-height: 34px;
+  margin: 0;
+  padding: 5px 4px 5px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: #3c3c37;
+}
+[data-modeling-shell][data-workspace-source="api"] .progress-step .step-dot {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  margin: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--soft, #fff); /* 遮住左轨 */
+  display: grid;
+  place-items: center;
+}
+[data-modeling-shell][data-workspace-source="api"] .progress-step .step-time {
+  margin-left: auto;
+  color: #b0b0aa;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+[data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="RUNNING"] .step-time,
+[data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="WAITING_APPROVAL"] .step-time {
+  color: #55554f;
+}
+/* 进行中的动作图标呼吸；等待确认暂停呼吸但保持高亮 */
+[data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="RUNNING"] .step-dot i,
+.focused-step[data-stage-status="RUNNING"] .focused-step-dot i {
+  animation: step-icon-pulse 1.5s ease-in-out infinite;
+}
+@keyframes step-icon-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+/* 尝试次数徽标 */
+.step-attempt {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f1f1ee;
+  color: #85857f;
+  font-size: 11px;
+  line-height: 1.6;
+}
+/* 展开详情：低视觉权重的浅灰圆角容器（Progressive Disclosure） */
+[data-modeling-shell][data-workspace-source="api"] .step-details {
+  display: none;
+  margin: 2px 0 8px 32px;
+  padding: 10px 14px;
+  border: 1px solid #ececea;
+  border-radius: 16px;
+  background: #fafaf8;
+  color: #6d6d67;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+[data-modeling-shell][data-workspace-source="api"] .progress-step.open + .step-details { display: block; }
+/* 失败行整体标红 */
+[data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="FAILED"],
+[data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="FAILED"] .step-time { color: #bd4840; }
+
+/* hidden 属性必须真的隐藏：这些元素带作者级 display（flex/inline-flex），
+   优先级高于 UA 的 [hidden]，不加 !important 会出现“已隐藏却仍显示”。 */
+.activity-summary[hidden],
+.activity-list[hidden],
+.focused-activity-list[hidden],
+[data-agent-summary][hidden],
+[data-agent-cta][hidden] { display: none !important; }
+
+/* 折叠开关：悬停不出现全局按钮的底色药丸；api 布局下折叠依然生效
+   （api 模式的 display:flex 特异性更高，必须显式补 collapsed 规则） */
+.activity-summary:hover { background: transparent; border-color: transparent; }
+.activity-summary:active { transform: none; }
+[data-modeling-shell][data-workspace-source="api"] .activity-list.collapsed { display: none; }
+
+/* 实时 CTA：悬停/按压零样式变化（覆盖全局 button:hover 的浅灰底） */
+.running-live-cta:hover { background: #11110f; color: #fff; border-color: transparent; }
+.running-live-cta:active { transform: none; }
+.running-live-cta:disabled:hover { color: #91918b; background: #ececea; }
+
+/* 开场分析：与执行步骤同属一条 Agent 消息，只用留白分隔 */
+.opening-analysis { margin: 0 0 16px; }
+
+/* ── 活动流：思考/工具/叙述交替的细粒度过程（参考图的节奏） ──────────── */
+.agent-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 10px;
+}
+.agent-stream:empty { display: none; }
+.stream-narration {
+  margin: 2px 0;
+  color: #3c3c37;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.stream-item { min-width: 0; }
+.stream-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 26px;
+  color: #55554f;
+  font-size: 13.5px;
+}
+.stream-row.is-expandable { cursor: pointer; }
+.stream-row > i {
+  flex: 0 0 auto;
+  font-size: 14px !important;
+  color: #8c8c86;
+}
+.stream-title { min-width: 0; overflow-wrap: break-word; }
+.stream-elapsed {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: #b0b0aa;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.stream-chevron {
+  flex: 0 0 auto;
+  font-size: 12px !important;
+  color: #b0b0aa;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.stream-row[aria-expanded="true"] .stream-chevron { transform: rotate(180deg); }
+.stream-item.is-waiting .stream-row > i {
+  color: #232320;
+  animation: step-icon-pulse 1.5s ease-in-out infinite;
+}
+.stream-item.is-waiting .stream-elapsed { color: #55554f; }
+/* 展开详情：浅灰 16px 圆角低权重容器；等宽变体用于命令/参数/输出 */
+.stream-detail {
+  margin: 6px 0 2px 23px;
+  padding: 10px 14px;
+  border: 1px solid #ececea;
+  border-radius: 16px;
+  background: #fafaf8;
+}
+.stream-detail pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  color: #6d6d67;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.stream-detail.is-mono pre {
+  font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.stream-in { animation: step-reveal-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+html[data-theme="dark"] .stream-narration { color: #d0d0ca; }
+html[data-theme="dark"] .stream-row { color: #b9b9b2; }
+html[data-theme="dark"] .stream-detail { border-color: #3a3a37; background: #262624; }
+html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; }
+html[data-reduce-motion="on"] .stream-in,
+html[data-reduce-motion="on"] .stream-item.is-waiting .stream-row > i { animation: none; }
+
+/* 输入框上方的整体运行状态条 */
+.run-progress-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 8px;
+  padding: 0 4px;
+  color: #6d6d67;
+  font-size: 12.5px;
+}
+.run-progress-spinner {
+  font-size: 14px !important;
+  color: #55554f;
+  animation: run-progress-spin 1.1s linear infinite;
+}
+.run-progress-strip.is-waiting .run-progress-spinner { animation-play-state: paused; opacity: 0.55; }
+.run-progress-count {
+  margin-left: auto;
+  color: #b0b0aa;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes run-progress-spin {
+  to { transform: rotate(360deg); }
+}
+
+html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .activity-list::before { background: #3a3a37; }
+html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step { color: #d0d0ca; }
+html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step .step-dot { background: #1e1e1c; }
+html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .step-details { border-color: #3a3a37; background: #262624; color: #a8a8a1; }
+html[data-theme="dark"] .step-attempt { background: #2e2e2c; color: #a3a39c; }
+html[data-theme="dark"] .run-progress-strip { color: #a3a39c; }
+html[data-theme="dark"] .run-progress-spinner { color: #cfcfc9; }
+html[data-reduce-motion="on"] .run-progress-spinner,
+html[data-reduce-motion="on"] [data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="RUNNING"] .step-dot i,
+html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focused-step-dot i { animation: none; }
+
+/* 步骤计数徽标（执行步骤 n/6），数值变化时轻微弹入。 */
+.steps-count {
+  min-width: 34px;
+  margin-left: 6px;
+  padding: 1px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 99px;
+  color: #55554f;
+  background: #efefec;
+  font-size: 11.5px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes omm-count-pop {
+  from { transform: translateY(4px); opacity: .2; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.steps-count.count-pop { animation: omm-count-pop .32s ease; }
+
+/* Streaming caret：Agent 摘要在排队/运行状态时尾部闪烁光标。 */
+@keyframes omm-caret {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+.focused-agent-copy[data-agent-state="QUEUED"] p[data-agent-text]::after,
+.focused-agent-copy[data-agent-state="RUNNING"] p[data-agent-text]::after,
+.modeling-agent-copy[data-agent-state="QUEUED"] p[data-agent-text]::after,
+.modeling-agent-copy[data-agent-state="RUNNING"] p[data-agent-text]::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background: #232320;
+  animation: omm-caret 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .focused-step[data-stage-status="RUNNING"] > span:nth-child(2),
+  .activity-list .progress-step[data-stage-status="RUNNING"] > span:nth-child(2),
+  .focused-loading {
+    animation: none;
+    background: none;
+    -webkit-background-clip: initial;
+    background-clip: initial;
+    color: #55554f;
+  }
+  .steps-count.count-pop { animation: none; }
+  .focused-agent-copy p[data-agent-text]::after,
+  .modeling-agent-copy p[data-agent-text]::after { content: none; animation: none; }
+}
+
+/* revision 27 — 2026-08-13 任务页移除右侧「任务上下文」栏后，对话不再铺满整块工作区：
+   正文与输入框共用同一条居中留白，列宽最多 900px，窄屏回落到 48px 边距。 */
+.running-chat-pane { --chat-gutter: max(48px, calc((100% - 900px) / 2)); }
+.running-chat-pane .chat-scroll {
+  padding-right: var(--chat-gutter);
+  padding-left: var(--chat-gutter);
+}
+.running-chat-pane > .chat-composer {
+  left: var(--chat-gutter);
+  right: var(--chat-gutter);
+}
+
+/* revision 28 — 2026-08-13 项目列表页视觉打磨：排版向资源库表格（revision 17）看齐，
+   阶段列改成带进度点的药丸，行内操作与分页补上状态样式，
+   并补齐这张表在暗色主题下缺失的配色。 */
+
+/* 搜索行原本 16px 内边距、表格单元格 20px，卡片里两条左边界差 4px。 */
+.project-search-row { padding-right: 20px; padding-left: 20px; }
+.project-search-row .search-box { width: min(340px, 100%); }
+
+.project-tabs .tab-button {
+  height: 34px;
+  padding: 0 15px;
+  color: #6f6f6b;
+  font-size: 13.5px;
+}
+.project-tabs .tab-button:hover { background: #f5f5f2; color: var(--ink); }
+.project-tabs .tab-button.active { background: #ececea; color: #20201e; }
+
+/* 后六列按内容收窄，剩余宽度全部留给项目名。不写死列宽是因为表头会被翻译，
+   英文的 Experiments / Last updated 比中文宽得多，定宽会直接溢出到相邻列。 */
+.project-table th { color: #6f6f6b; font-weight: 500; }
+.project-table td { color: #51514e; }
+.project-table tbody tr { transition: background .12s ease; }
+.project-table th:not(:first-child),
+.project-table td:not(:first-child) { width: 1%; white-space: nowrap; }
+.project-table td:nth-child(3),
+.project-table td:nth-child(4),
+.project-table td:nth-child(5),
+.project-table td:nth-child(6) { font-variant-numeric: tabular-nums; }
+.project-table th:last-child,
+.project-table td:last-child { text-align: right; }
+
+.table-doc > div { min-width: 0; }
+.table-doc > i { color: #9a9a94; }
+.project-name strong { margin-bottom: 2px; color: #242422; font-weight: 650; }
+.project-name span { display: block; color: #858580; }
+.project-table tbody tr:hover .project-name strong { color: #111110; }
+
+/* 阶段是有先后的（数据处理 → 实验验证 → 论文撰写），用点的颜色编码走到了哪一步。
+   data-stage 不在翻译属性白名单里，切英文后选择器依然命中。 */
+.stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  background: #f3f3f0;
+  color: #55554f;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.stage-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #b4b4ae;
+}
+.stage-pill[data-stage="实验验证"]::before { background: var(--blue); }
+.stage-pill[data-stage="论文撰写"]::before { background: var(--green); }
+
+/* 行内更多操作常驻可点，但平时收敛成浅灰，指针落到这一行才提上来。 */
+.row-menu-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #a1a19d;
+}
+.project-table tbody tr:hover .row-menu-button { color: #55554f; }
+.row-menu-button:hover { background: #ececea; color: #20201e; }
+
+.project-footer { color: var(--muted); font-size: 13px; }
+.pagination { gap: 8px; }
+.page-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  color: #55554f;
+  font-size: 13px;
+}
+.page-button.active {
+  border-color: #242422;
+  background: #242422;
+  color: #fff;
+  font-weight: 600;
+}
+.page-button.active:hover { border-color: #242422; background: #333330; }
+.page-button:disabled { color: #c2c2bc; cursor: default; }
+.page-button:disabled:hover { border-color: var(--line); background: #fff; }
+.page-size-select { margin-left: 10px; }
+.page-size-select .settings-select-trigger { height: 34px; }
+
+/* 暗色主题：这张表之前只有卡片底色，正文、hover 和主名称都还是浅色系的值。 */
+html[data-theme="dark"] .project-table th { color: #93938d; }
+html[data-theme="dark"] .project-table td { color: #b7b7b1; }
+html[data-theme="dark"] .project-name { color: #f1f1ee !important; }
+html[data-theme="dark"] .project-name strong { color: #f1f1ee; }
+html[data-theme="dark"] .project-name span { color: #9a9a94; }
+html[data-theme="dark"] .table-doc > i { color: #85857f; }
+html[data-theme="dark"] .project-table tbody tr:hover { background: #232322; }
+html[data-theme="dark"] .project-table tbody tr:hover .project-name strong { color: #fff; }
+html[data-theme="dark"] .stage-pill { background: #2b2b29; color: #c6c6c0; }
+html[data-theme="dark"] .row-menu-button { background: transparent; color: #85857f; }
+html[data-theme="dark"] .row-menu-button:hover { background: #2f2f2c; color: #f1f1ee; }
+html[data-theme="dark"] .project-tabs .tab-button { background: transparent; color: #9a9a94; }
+html[data-theme="dark"] .project-tabs .tab-button:hover { background: #232322; color: #f1f1ee; }
+html[data-theme="dark"] .project-tabs .tab-button.active { background: #2f2f2c; color: #f1f1ee; }
+html[data-theme="dark"] .page-button.active { border-color: #f1f1ee; background: #f1f1ee; color: #1a1a19; }
+html[data-theme="dark"] .page-button.active:hover { border-color: #fff; background: #fff; }
+html[data-theme="dark"] .page-button:disabled { color: #5a5a56; }
+html[data-theme="dark"] .page-button:disabled:hover { border-color: #3d3d3a; background: #20201f; }
+
+/* ─────────────────────────────────────────────────────────────
+   revision 29 — 2026-08-13 响应式第一批（首页 / 任务执行 / 建模工作台三页 / 我的项目）
+
+   断点收敛成四档，后续页面沿用同一套，不再一页一个数：
+     ≤1180  笔记本：侧栏自动收成 76px 图标栏（复用 .sidebar-collapsed，由 matchMedia 挂类）
+     ≤1024  小笔记本：多栏收紧留白与字号
+     ≤820   手机/平板竖屏：侧栏改抽屉，双栏工作台上下堆叠
+     ≤520   小屏手机：只保留主信息列
+
+   滚动模型保持不变：外壳满高、各区域内部滚动。改成文档级滚动会牵动
+   全站的 height:100% 链路，风险远大于收益。
+   ───────────────────────────────────────────────────────────── */
+
+.sidebar-drawer-toggle,
+.sidebar-backdrop { display: none; }
+
+@media (max-width: 1024px) {
+  .main-pad { padding: 30px 28px 26px; }
+  .page-title { font-size: 25px; }
+  .top-action { top: 30px; right: 28px; }
+}
+
+@media (max-width: 820px) {
+  /* 抽屉的触发按钮固定在左上角：14 个页面的头部结构各不相同，
+     放在共享外壳里比逐页塞进标题栏可靠。各页头部下面单独让出这块位置。 */
+  .sidebar-drawer-toggle {
+    position: fixed;
+    z-index: 82;
+    top: 10px;
+    left: 10px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(20, 20, 18, .1);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    z-index: 84;
+    inset: 0;
+    display: block;
+    background: rgba(20, 20, 18, .34);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s ease;
+  }
+  .app-shell.sidebar-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
+
+  .app-shell .sidebar {
+    position: fixed;
+    z-index: 86;
+    top: 0;
+    left: 0;
+    width: min(300px, 84vw);
+    min-width: 0;
+    height: 100%;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+  }
+  .app-shell.sidebar-open .sidebar {
+    transform: none;
+    box-shadow: 0 18px 48px rgba(20, 20, 18, .22);
+  }
+
+  .main-pad { padding: 62px 20px 24px; }
+  .page-title { font-size: 23px; }
+  .top-action { top: 13px; right: 16px; height: 36px; padding: 0 14px; }
+}
+
+@media (max-width: 520px) {
+  .main-pad { padding: 58px 14px 20px; }
+  .page-title { font-size: 21px; }
+}
+
+/* 首页 / 新任务：竖向留白按视口收，输入盒吃满宽度，快捷标签换行不横向溢出。 */
+@media (max-width: 1024px) {
+  .hero-logo { margin-top: 12vh; }
+  .new-screen h1 { font-size: 27px; }
+}
+
+@media (max-width: 820px) {
+  .new-screen { padding: 56px 18px 18px; }
+  .hero-logo { width: 76px; height: 94px; margin-top: 6vh; }
+  .new-screen h1 { margin-top: 14px; font-size: 22px; letter-spacing: -.6px; }
+  .new-screen .lead { font-size: 13.5px; }
+  .composer-area { width: 100%; }
+  .composer-shortcuts { flex-wrap: wrap; gap: 6px; }
+  .composer { min-height: 132px; }
+  .composer textarea { font-size: 14px; }
+  .composer-note { text-align: center; }
+}
+
+@media (max-width: 520px) {
+  .hero-logo { width: 62px; height: 77px; margin-top: 3vh; }
+  .new-screen h1 { font-size: 19px; }
+  .composer-shortcuts button { height: 30px; padding: 0 10px; font-size: 12px; }
+}
+
+/* 任务执行页：顶栏给抽屉按钮让位，对话列宽和气泡宽度按屏收。 */
+@media (max-width: 820px) {
+  .task-toolbar { height: 58px; padding: 0 14px 0 58px; }
+  .task-toolbar h2 { font-size: 14px; }
+  .task-toolbar p { display: none; }
+  .task-toolbar-actions { gap: 6px; }
+  .task-toolbar-actions .run-status { display: none; }
+  .running-chat-pane { --chat-gutter: 18px; }
+  .running-chat-pane .chat-scroll { padding-top: 20px; padding-bottom: 150px; }
+  .running-chat-pane > .chat-composer { bottom: 14px; height: 116px; min-height: 116px; }
+  .user-bubble { max-width: 88%; }
+}
+
+@media (max-width: 520px) {
+  .running-chat-pane { --chat-gutter: 12px; }
+  .running-chat-pane > .chat-composer { height: 108px; min-height: 108px; }
+}
+
+/* 建模工作台三页的手机形态见 revision 33（单栏 + 分段切换）。
+   这里只做与形态无关的尺寸压缩。注意这几页不走 shell()，没有侧边栏和抽屉按钮，
+   顶栏左侧不需要给按钮让位。 */
+@media (max-width: 820px) {
+  .focused-agent-head { height: 62px; flex-basis: 62px; padding: 0 16px; }
+  .focused-agent-head .assistant-id { font-size: 18px; }
+  .focused-agent-scroll { padding: 4px 16px 10px; }
+  .focused-agent-chat > .chat-composer { min-height: 118px; flex-basis: 118px; margin: 0 10px 10px; }
+  .focused-agent-chat > .chat-composer textarea { min-height: 44px; }
+  .focused-task-name { font-size: 16px; }
+}
+
+@media (max-width: 520px) {
+  .focused-task-name,
+  .focused-task-meta,
+  .focused-run-status { display: none; }
+}
+
+/* 我的项目：窄屏按信息优先级逐档隐藏统计列，保留项目名、阶段和操作。 */
+@media (max-width: 1024px) {
+  .project-search-row .search-box { width: min(280px, 100%); }
+}
+
+@media (max-width: 820px) {
+  .project-tabs { margin: 16px 0 14px; overflow-x: auto; }
+  .project-table th:nth-child(4),
+  .project-table td:nth-child(4),
+  .project-table th:nth-child(5),
+  .project-table td:nth-child(5),
+  .project-table th:nth-child(6),
+  .project-table td:nth-child(6) { display: none; }
+  .project-table th,
+  .project-table td { padding: 0 12px; }
+  .project-footer { flex-wrap: wrap; gap: 10px; }
+  .pagination { margin-left: 0; }
+}
+
+@media (max-width: 520px) {
+  .project-table th:nth-child(3),
+  .project-table td:nth-child(3) { display: none; }
+  .project-search-row { padding: 10px 12px; }
+  .project-search-row .search-box { width: 100%; }
+}
+
+html[data-theme="dark"] .sidebar-drawer-toggle {
+  border-color: #3d3d3a;
+  background: #20201f;
+  color: #f1f1ee;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   revision 30 — 2026-08-13 响应式第二批：确认任务、赛题库、优秀论文、方法库、
+   两个详情页、论文编辑与最终成果文档、通用弹层。断点沿用 revision 29 的四档。
+   ───────────────────────────────────────────────────────────── */
+
+/* 确认任务：正文栏原本靠 865px 定宽加居中外边距，窄屏改成贴边铺满；
+   底部操作条是绝对定位的，小屏拉成整行等分，避免按钮挤出可视区。 */
+@media (max-width: 1024px) {
+  .confirm-wrap { width: calc(100% - 64px); margin-left: 32px; }
+  .confirm-actions { right: 32px; }
+}
+
+@media (max-width: 820px) {
+  .confirm-wrap { width: calc(100% - 36px); margin-left: 18px; padding: 62px 0 92px; }
+  .confirm-wrap h1 { font-size: 20px; }
+  .confirm-wrap .headline { margin: 18px 0; font-size: 23px; }
+  .confirm-wrap h3 { font-size: 15px; }
+  .confirm-actions { right: 18px; left: 18px; bottom: 16px; gap: 12px; }
+  .confirm-actions button { width: auto; flex: 1 1 0; }
+  .file-read-row { grid-template-columns: minmax(0, 1fr) 78px; }
+  .file-read-row .size { display: none; }
+}
+
+/* 知识资源三页共用的页头与工具条：搜索占满一行，筛选与分类改横向滚动。 */
+@media (max-width: 1024px) {
+  .resource-library { padding: 12px 24px 22px; }
+  .resource-library .library-heading h1 { font-size: 24px; }
+  .resource-library .resource-tools .search-box { width: min(420px, 46%); flex-basis: 420px; }
+}
+
+@media (max-width: 820px) {
+  .library-main { padding: 58px 18px 24px; }
+  .resource-library { padding: 58px 16px 20px; }
+  .library-heading h1,
+  .resource-library .library-heading h1 { font-size: 21px; }
+  .library-heading p { margin-bottom: 0; font-size: 13px; }
+  .paper-library-heading { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+  .library-tools,
+  .resource-library .resource-tools,
+  .paper-library-controls { flex-wrap: wrap; gap: 10px; }
+  .library-tools .search-box,
+  .resource-library .resource-tools .search-box,
+  .paper-library-controls .search-box { width: 100%; max-width: none; flex: 1 1 100%; }
+  .filters { width: 100%; margin-left: 0; gap: 8px; overflow-x: auto; }
+  .filter-button { flex: 0 0 auto; min-width: 88px; }
+
+  .resource-tabs { margin-bottom: 12px; overflow-x: auto; }
+  .resource-tabs button { flex: 0 0 auto; }
+  .resource-footer { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 8px; }
+}
+
+/* 方法库：左侧方法树在手机档改成压在正文上的浮层，宽度跟着 --tree-w 走，
+   收起态仍由既有的 .tree-collapsed 控制，把手位置不用另算。 */
+@media (max-width: 820px) {
+  .method-layout { --tree-w: 268px; grid-template-columns: minmax(0, 1fr); }
+  .method-layout .method-tree {
+    position: absolute;
+    z-index: 6;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--tree-w);
+    padding: 16px 14px;
+    box-shadow: 0 18px 48px rgba(20, 20, 18, .18);
+  }
+  .method-layout.tree-collapsed .method-tree { display: none; }
+  /* 把手默认贴在两栏交界处，收起时会滑到最左边，正好压在抽屉按钮下面；
+     手机档固定放右上角，两种状态同一个位置，也不会和抽屉按钮抢地方。 */
+  .method-tree-toggle,
+  .method-layout.tree-collapsed .method-tree-toggle {
+    top: 14px;
+    right: 12px;
+    left: auto;
+    transform: none;
+  }
+  .method-content { padding-top: 52px; }
+}
+
+@media (max-width: 520px) {
+  .method-layout { --tree-w: 232px; }
+}
+
+/* 赛题 / 论文详情页：整页滚动容器，给抽屉按钮让出顶部，标签列表改上下堆叠。 */
+@media (max-width: 820px) {
+  .resource-detail-page { padding: 58px 16px 0; }
+  .detail-row { grid-template-columns: minmax(0, 1fr); gap: 2px; margin-top: 18px; }
+  .paper-detail h2 { font-size: 19px; }
+  .paper-detail-actions { flex-wrap: wrap; gap: 10px; }
+  .paper-detail-actions button { flex: 1 1 140px; padding: 0 16px; }
+}
+
+/* 论文编辑：≤1180 已经收成两栏（AI 面板隐藏），手机档再去掉大纲栏留下正文。
+   选择器必须带 .paper-only-editor / .workflow-editor 前缀——编辑区元素同时挂着
+   editor-main、workflow-editor、paper-only-editor 三个类，基线里成片的两类名规则
+   （0,2,0）会压过单类名写法，单写 .editor-toolbar / .editor-page 是不生效的。
+   .outline 是例外：那些前缀规则都没碰 display，单类名隐藏仍然有效。 */
+@media (max-width: 820px) {
+  .paper-only-editor .editor-layout,
+  .workflow-editor .editor-layout { grid-template-columns: minmax(0, 1fr); }
+  .outline { display: none; }
+  .paper-only-editor .editor-toolbar { height: 52px; flex-basis: 52px; padding: 0 12px; gap: 10px; }
+  .paper-only-editor .editor-page { padding: 22px 16px 56px; }
+  .paper-only-editor .editor-page h1 { margin-bottom: 20px; font-size: 21px; }
+}
+
+/* 结果类文档（实验结果 / 最终成果）：标签列与正文列堆叠，交付表只留文件名和操作。 */
+@media (max-width: 820px) {
+  .summary-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .metric-line { grid-template-columns: minmax(0, 1fr); }
+  .metric-line span + span { padding-left: 0; border-left: 0; }
+  .deliverable-head,
+  .deliverable,
+  .complete-wrap .deliverable-head,
+  .complete-wrap .deliverable { grid-template-columns: minmax(0, 1fr) 56px; }
+  .deliverable-head > :nth-child(2),
+  .deliverable-head > :nth-child(3),
+  .deliverable > :nth-child(2),
+  .deliverable > :nth-child(3) { display: none; }
+  .complete-actions { flex-wrap: wrap; gap: 10px; }
+  .complete-actions button { flex: 1 1 140px; padding: 0 16px; }
+}
+
+/* 弹层：定宽弹窗和右侧详情抽屉在小屏会顶出视口。 */
+@media (max-width: 820px) {
+  .task-detail-drawer { width: min(360px, 92vw); }
+}
+
+@media (max-width: 520px) {
+  .modal { width: min(430px, calc(100vw - 28px)); padding: 18px; }
+  .modal-actions button { flex: 1 1 0; }
+  .menu { width: min(180px, calc(100vw - 24px)); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   revision 31 — 2026-08-13 响应式收尾：补上设置中心，并把 revision 30 里
+   被高特异性基线规则压掉的论文编辑规则改成带前缀写法（见该处注释）。
+
+   旧的 1350/1320/1250/1020/980/900/860/760/720 断点予以保留：逐条核对过，
+   它们都是单类名选择器，被本文件更晚的规则正常覆盖；只有编辑区那组两类名
+   规则需要按同等特异性重写。重排这些旧断点的收益不抵风险。
+   ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 820px) {
+  .modeling-clone-shell { min-height: 100dvh; }
+}
+
+/* 设置中心：900 那档只是把弹窗撑满，左侧仍占 190px，手机上正文不足 200px。
+   小屏改成整屏 + 顶部横向导航，账户卡仍留在条上，不牺牲任何入口。 */
+@media (max-width: 640px) {
+  .settings-backdrop { padding: 0; }
+  .settings-dialog {
+    width: 100vw;
+    height: 100dvh;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    border: 0;
+    border-radius: 0;
+  }
+  .settings-sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .settings-brand { display: none; }
+  .settings-nav { grid-auto-flow: column; grid-auto-columns: max-content; gap: 4px; }
+  .settings-nav button { width: auto; height: 34px; padding: 0 10px; white-space: nowrap; }
+  .settings-account-card { flex: 0 0 auto; margin: 0 0 0 auto; padding: 0; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   revision 32 — 2026-08-13 建模流程五个阶段面板的内容区响应式。
+   revision 29 只处理了工作台外壳（左右两栏堆叠），面板内部的多列排版没动。
+   ───────────────────────────────────────────────────────────── */
+
+/* 阶段面板内的表格是 table-layout: fixed 且外层 overflow: hidden，
+   窄屏下六列表每列只剩几十像素、内容被 text-overflow 吃掉，等于不可读。
+   改成和赛题库的 .resource-table-wrap 一样：保底列宽 + 横向滚动。 */
+@media (max-width: 820px) {
+  .focused-table-wrap { overflow-x: auto; }
+  .focused-table { min-width: 560px; }
+  .focused-table th,
+  .focused-table td { padding: 0 10px; }
+
+  /* 部分工作台面板和结果文档是纵向 flex 容器：单列堆叠后内容必然比容器高，
+     默认的 flex-shrink 会把每个区块压矮、相互重叠。禁止压缩，超出交给容器滚动。 */
+  .focused-workspace-panel.active > *,
+  .stage-document > *,
+  .experiment-workspace > * { flex-shrink: 0; }
+}
+
+/* 指标条：手机档从三列改单列，分隔线由竖改横。 */
+@media (max-width: 520px) {
+  .focused-metrics.three { grid-template-columns: minmax(0, 1fr); }
+  .focused-metrics article { padding: 12px 2px; }
+  .focused-metrics article:not(:first-child) { padding-left: 2px; }
+  .focused-metrics article:not(:last-child)::after {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    height: 1px;
+  }
+}
+
+/* 建模方案：方案行原本是六列（单选 / 标题 / 三段说明 / 展开箭头），
+   窄屏改成标题一行、三段说明各占一行的卡片。 */
+@media (max-width: 820px) {
+  .model-plan-workspace .focused-workspace-panel.active { padding: 16px 14px; }
+  .focused-conclusion-strip.model-recommendation { width: auto; min-width: 0; }
+  .focused-plan-row {
+    grid-template-columns: 20px minmax(0, 1fr) 18px;
+    align-items: start;
+    gap: 4px 10px;
+    padding: 12px 14px;
+  }
+  .focused-plan-row > .plan-radio { grid-area: 1 / 1; margin-top: 2px; }
+  .focused-plan-row > strong { grid-area: 1 / 2; }
+  .focused-plan-row > i { grid-area: 1 / 3; }
+  .focused-plan-row > span:not(.plan-radio) { grid-column: 2 / -1; }
+  .focused-plan-detail { padding: 2px 16px; }
+  .focused-plan-detail > div { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+/* 实验结果：结论两栏改单栏，竖分隔线换成上边框；图表标题与图例换行。 */
+@media (max-width: 820px) {
+  .experiment-report-workspace .focused-workspace-panel.active,
+  .data-report-workspace .focused-workspace-panel.active { padding: 16px 14px; }
+  .focused-report-card { padding: 14px 14px 0; }
+  .focused-experiment-notes { grid-template-columns: minmax(0, 1fr); }
+  .focused-experiment-notes article { min-height: 0; padding: 14px 0 12px; }
+  .focused-experiment-notes article + article {
+    padding-left: 0;
+    border-top: 1px solid #e7e7e4;
+    border-left: 0;
+  }
+  .focused-chart-heading { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .focused-chart-heading > div { flex-direction: row; gap: 14px; }
+  .focused-experiment-chart .cost-chart-wrap { height: 200px; }
+  .focused-run-meta { min-height: 0; padding: 10px 0; line-height: 1.6; }
+}
+
+/* 数据准备：清洗规则三列改单列；文档标题与页脚在窄屏换行。 */
+@media (max-width: 820px) {
+  .focused-rule-list { grid-template-columns: minmax(0, 1fr); }
+  .focused-document-heading,
+  .focused-template-heading { flex-wrap: wrap; gap: 10px; }
+  .focused-table-footer,
+  .focused-template-footer { flex-wrap: wrap; gap: 8px; }
+  .focused-table-footer nav { flex-wrap: wrap; }
+}
+
+@media (max-width: 520px) {
+  /* 面板是纵向 flex：基线的 min-height 同时兼任「防压缩底线」，把它归零后
+     必须补 flex-shrink: 0，否则条带会被压到一行高、文字溢出到盒子外面。 */
+  .focused-conclusion-strip,
+  .focused-report-conclusion { min-height: 0; padding: 10px 12px; align-items: flex-start; flex: 0 0 auto; flex-wrap: wrap; font-size: 13px; }
+  /* 「结果通过：」这类短语是独立的 flex 子项，会被压到从中间折行；标签不折行，正文自己换行。 */
+  .focused-conclusion-strip strong,
+  .focused-report-conclusion strong { flex: 0 0 auto; white-space: nowrap; }
+  .focused-conclusion-strip > i,
+  .focused-report-conclusion > i { margin-right: 8px; font-size: 18px; }
+  .focused-template-heading h1 { font-size: 17px; }
+  .focused-report-card > h1 { font-size: 16px; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   revision 33 — 2026-08-13 建模工作台的手机形态：单栏 + 分段切换。
+
+   上一版把左右两栏按 44%/56% 上下堆叠，是把桌面布局压扁而不是设计移动端：
+   Agent 栏扣掉 62px 标题和 118px 输入框后几乎不剩内容区。改成一次只显示一侧，
+   由顶部分段控件切换，两边都能占满整屏。桌面端完全不受影响（控件 display:none）。
+   ───────────────────────────────────────────────────────────── */
+
+.modeling-pane-switch { display: none; }
+
+@media (max-width: 820px) {
+  .focused-modeling-split,
+  .modeling-split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 10px 10px;
+  }
+  .focused-modeling-split > .modeling-resizer,
+  .modeling-split > .modeling-resizer { display: none; }
+
+  /* 聚焦版工作台的顶栏是绝对定位的透明覆盖层（50px），高度也由两类名规则
+     锁成 100vh；这里按同等特异性改成动态视口高，并把内容整体压到顶栏之下。 */
+  .modeling-clone-shell .focused-modeling-split {
+    height: 100dvh;
+    padding: 56px 10px 10px;
+  }
+  .modeling-clone-shell .focused-agent-pane,
+  .modeling-clone-shell .focused-modeling-resizer { margin-top: 0; }
+
+  .modeling-pane-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    padding: 3px;
+    border-radius: 10px;
+    background: #ececea;
+  }
+  .modeling-pane-switch button {
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #5f5f5a;
+    font-size: 13px;
+  }
+  .modeling-pane-switch button.active {
+    background: #fff;
+    color: #1b1b19;
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(20, 20, 18, .08);
+  }
+
+  [data-modeling-split][data-mobile-pane="stage"] > .focused-agent-pane,
+  [data-modeling-split][data-mobile-pane="stage"] > .modeling-agent-pane,
+  [data-modeling-split][data-mobile-pane="agent"] > .focused-stage-pane,
+  [data-modeling-split][data-mobile-pane="agent"] > .modeling-stage-pane { display: none; }
+
+  /* 文档区页签在桌面上是绝对定位压在面板顶部、由更大的面板留白避让；
+     手机档面板留白收紧后会被盖住一截，改回文档流由 flex 正常分配高度。 */
+  .focused-workspace .focused-workspace-tabs {
+    position: relative;
+    top: auto;
+    right: auto;
+    left: auto;
+    height: auto;
+    min-height: 44px;
+    flex: 0 0 auto;
+    transform: none;
+  }
+}
+
+html[data-theme="dark"] .modeling-pane-switch { background: #2b2b29; }
+html[data-theme="dark"] .modeling-pane-switch button { background: transparent; color: #9a9a94; }
+html[data-theme="dark"] .modeling-pane-switch button.active { background: #3a3a37; color: #f1f1ee; }

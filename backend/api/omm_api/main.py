@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import platform
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.engine import make_url
 
 from . import engine_glue
 from .blobstore import LocalContentStore
@@ -12,7 +15,7 @@ from .config import Settings, get_settings
 from .db import Database
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
-from .routers import account, artifacts, auth, events, projects, task_runs, workspace
+from .routers import account, artifacts, auth, chat, events, projects, task_runs, workspace
 from .runner import RunnerThread, WorkflowAdvancer
 
 
@@ -87,6 +90,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.include_router(artifacts.router, prefix="/api")
     app.include_router(auth.router, prefix="/api/auth")
     app.include_router(account.router, prefix="/api/account")
+    app.include_router(chat.chat_router, prefix="/api/chat")
+    app.include_router(chat.llm_router, prefix="/api/llm")
 
     @app.get("/api/health", tags=["ops"])
     def api_health() -> dict[str, str]:
@@ -95,5 +100,18 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    # 供设置中心「诊断」使用的运行时信息。只暴露后端方言名等非敏感事实，
+    # 不含连接串、路径或凭据；与 /api/health 一样无需登录。
+    @app.get("/api/system", tags=["ops"])
+    def api_system() -> dict[str, object]:
+        return {
+            "name": app.title,
+            "version": app.version,
+            "python": platform.python_version(),
+            "database": make_url(resolved.database_url).get_backend_name(),
+            "runner_enabled": resolved.runner_enabled,
+            "time": datetime.now(timezone.utc).isoformat(),
+        }
 
     return app

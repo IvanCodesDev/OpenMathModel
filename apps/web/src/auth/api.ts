@@ -40,6 +40,39 @@ export interface AccountPreferences {
   max_concurrent_runs: number;
 }
 
+/** 自定义 API 的一条已保存接口；字段与设置面板一一对应。 */
+export interface LlmEndpoint {
+  id?: string | null;
+  name: string;
+  protocol: "openai" | "anthropic" | "gemini" | "ollama" | "custom";
+  base_url: string;
+  api_key: string;
+  model: string;
+  organization?: string;
+  headers?: string;
+  path_prefix?: string;
+  /** 模型能力权重（1-10，Auto 模式按它路由）；0/缺省 = 按模型名自动推断。 */
+  weight?: number;
+}
+
+/** 设置中心「自定义 API」的服务端配置：对话回复与任务执行都按它调用模型。 */
+export interface LlmConfig {
+  endpoints: LlmEndpoint[];
+  active_endpoint_id: string | null;
+  allow_proxy: boolean;
+  stream: boolean;
+  fallback: boolean;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  latency_ms: number;
+  model: string;
+  host: string;
+  third_party: boolean;
+  reply: string;
+}
+
 export interface DeviceSession {
   id: string;
   device_label: string;
@@ -137,6 +170,15 @@ export const authApi = {
   },
   updatePreferences(body: AccountPreferences) {
     return request<{ preferences: AccountPreferences }>("/api/account/preferences", { method: "PUT", body });
+  },
+  getLlmConfig() {
+    return request<{ config: LlmConfig }>("/api/account/llm-config");
+  },
+  updateLlmConfig(body: LlmConfig) {
+    return request<{ config: LlmConfig }>("/api/account/llm-config", { method: "PUT", body });
+  },
+  testLlmEndpoint(body: LlmEndpoint & { allow_proxy: boolean }) {
+    return request<LlmTestResult>("/api/llm/test", { method: "POST", body });
   },
   uploadAvatar(image: Blob, filename: string) {
     const form = new FormData();

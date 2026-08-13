@@ -6,15 +6,19 @@
   对外契约与事件流保持与旧模拟推进器兼容；
 - 审批行的"解决"侧（option/comment/client_token 与 v1 approval.resolved 事件）归
   动作层 actions.py（它持有这些上下文），投影只负责审批行创建与请求/状态事件；
-- 引擎节点是同步模拟（sim-0.1）：一次 advance = 完成一个阶段步骤。T5 起由
-  agents/skills 的真实节点替换本文件的 SimStageNode。
+- 节点装配按运行归属决定：run → project.owner → users.llm_config。配置了
+  自定义 API 的用户，问题分析与建模方案两个阶段走 agents/skills 的真实 LLM
+  节点（llm.EngineLlmPort 出网）；未配置或提示词缺失时整条链回落 sim-0.1
+  模拟节点，其余阶段（数据准备/实验/检验/论文）在真实节点补齐前仍为模拟。
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -34,6 +38,12 @@ from omm_agent_core import (
     TaskState,
     replay_events,
 )
+from omm_agent_skills import (
+    ModelPlanningNode,
+    ProblemAnalysisNode,
+    PromptRegistry,
+    load_default_registry,
+)
 from omm_contracts import (
     AgentEventType,
     ApprovalDecisionType,
@@ -47,9 +57,20 @@ from .blobstore import ArtifactBlobStore, LocalContentStore
 from .config import get_settings
 from .events import append_event
 from .ids import new_id
-from .orm import ApprovalRequestRow, ArtifactRow, DomainEventRow, StepRunRow, TaskRunRow
+from .llm import EngineLlmPort, config_usable, parse_llm_config
+from .models import User
+from .orm import (
+    ApprovalRequestRow,
+    ArtifactRow,
+    DomainEventRow,
+    ProjectRow,
+    StepRunRow,
+    TaskRunRow,
+)
 from .serialize import utcnow
 from .workflow import NODE_COMPLETED, STAGE_LABELS
+
+logger = logging.getLogger("omm.engine")
 
 CANCELLED_ERROR = "cancelled by user"
 REJECT_OPTION_ID = "reject"
@@ -179,6 +200,63 @@ SIM_NODES = {state: SimStageNode(state) for state in TaskState if state.name in 
     "VALIDATING",
     "PAPER_WRITING",
 }}
+
+
+# ── 真实 LLM 节点（设置中心「自定义 API」已配置时启用） ────────────────────
+
+
+class _GoalProblemAnalysisNode(ProblemAnalysisNode):
+    """把运行输入的 goal 映射成提示词需要的 problem_statement。"""
+
+    def build_variables(self, ctx: Any) -> dict[str, Any]:
+        statement = ctx.inputs.get("problem_statement") or ctx.inputs.get("goal") or ""
+        return {
+            "problem_statement": str(statement),
+            "attachments_summary": str(ctx.inputs.get("attachments_summary") or "无"),
+        }
+
+
+@lru_cache(maxsize=1)
+def _prompt_registry() -> Optional[PromptRegistry]:
+    """agents/prompts 的模板注册表；目录缺失（异常部署）时返回 None 并回落模拟。"""
+    try:
+        registry = load_default_registry()
+    except Exception:  # noqa: BLE001 - 提示词损坏不允许拖垮控制面
+        logger.exception("加载提示词模板失败，任务将回落模拟节点")
+        return None
+    required = {"problem_analysis.default", "model_planning.default"}
+    if not required.issubset(set(registry.ids())):
+        logger.warning("提示词模板不完整（%s），任务将回落模拟节点", registry.ids())
+        return None
+    return registry
+
+
+def _llm_wiring(session: Session, run: TaskRunRow) -> tuple[Optional[EngineLlmPort], dict]:
+    """按运行归属解析自定义 API 配置：可用则换上真实 LLM 节点。"""
+    owner = session.execute(
+        select(ProjectRow.owner).where(ProjectRow.id == run.project_id)
+    ).scalar_one_or_none()
+    user = session.get(User, owner) if owner else None
+    if user is None:
+        return None, {}
+    config = parse_llm_config(user.llm_config)
+    registry = _prompt_registry()
+    if not config_usable(config) or registry is None:
+        return None, {}
+    # 模型调用的过程事件（思考内容/调用摘要）进 run.log：与本次 advance 同事务
+    # 提交，SSE 把它们转发给工作台的执行轨迹逐条展示。
+    port = EngineLlmPort(
+        config,
+        registry,
+        on_event=lambda payload: append_event(
+            session, run.id, AgentEventType.run_log.value, payload
+        ),
+    )
+    overrides = {
+        TaskState.PROBLEM_ANALYSIS: _GoalProblemAnalysisNode(registry),
+        TaskState.MODEL_PLANNING: ModelPlanningNode(registry),
+    }
+    return port, overrides
 
 
 # ── 领域事件 → v1 投影 ─────────────────────────────────────────────────────
@@ -478,15 +556,17 @@ def _load_core_events(session: Session, run_id: str) -> list[CoreEvent]:
 
 
 def _build_engine(session: Session, run: TaskRunRow) -> TaskRunEngine:
+    llm_port, node_overrides = _llm_wiring(session, run)
     return TaskRunEngine(
         sink=_ProjectingSink(session, run),
         clock=_ApiClock(),
         ids=_ApiIds(),
-        nodes=SIM_NODES,
+        nodes={**SIM_NODES, **node_overrides},
         services=NodeServices(
             clock=_ApiClock(),
             ids=_ApiIds(),
             artifacts=ApiArtifactStore(get_blobstore()),
+            llm=llm_port,
         ),
     )
 

@@ -2,11 +2,43 @@
 import type { ScreenId } from "../types/screens";
 import type { KnowledgeLibrary } from "../types/knowledge-library";
 import { methodCategories, methodLibrary } from "../data/method-library";
+import {
+  buildDiagnosticReport,
+  copyTextToClipboard,
+  downloadDiagnosticReport,
+  runNetworkDiagnostics,
+} from "../diagnostics/system-diagnostics";
 import { RECIPE_LANGUAGES, methodRecipes } from "../data/method-recipes";
 import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 import { applyLocale, currentLocale, t } from "../i18n/locale";
 import { hydrateMaxConcurrency, persistMaxConcurrency } from "../preferences/account-preferences";
+import { ApiError, authApi } from "../auth/api";
+import { sendConversationTurn } from "../integration/agent-chat";
+import {
+  endpointHost,
+  presetHost,
+  PROVIDER_PRESETS,
+  providerPreset,
+} from "../integration/llm-providers";
+import {
+  endpointFromForm,
+  fetchLlmConfig,
+  labelFromProtocol,
+  persistLlmSettings,
+  removeEndpoint,
+  saveEndpointAsNew,
+  setEndpointWeight,
+  setPrimaryEndpoint,
+  updateEndpoint,
+} from "../integration/llm-settings";
+import {
+  clearLlmUsage,
+  listLlmUsage,
+  proxyTransparencyEnabled,
+  recordLlmUsage,
+} from "../integration/llm-usage";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
+import { renderMarkdown } from "../text/markdown";
 import {
   notificationsSupported,
   requestNotificationPermission,
@@ -31,8 +63,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     anthropic: "/assets/provider-anthropic.svg",
     ollama: "/assets/provider-ollama.svg"
   };
+  // 没有品牌资源的厂商（Gemini/Kimi/智谱/xAI 等）回落为首字母标，不放错误的图
   const providerLogo = (provider, label, extra = "") =>
-    `<img class="provider-brand-logo provider-brand-${provider} ${extra}" src="${providerLogoSources[provider]}" alt="${escapeHtml(label)}">`;
+    providerLogoSources[provider]
+      ? `<img class="provider-brand-logo provider-brand-${provider} ${extra}" src="${providerLogoSources[provider]}" alt="${escapeHtml(label)}">`
+      : `<span class="provider-brand-logo provider-letter-logo ${extra}" aria-hidden="true">${escapeHtml(String(label || provider).trim().charAt(0).toUpperCase())}</span>`;
   const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
   })[character]);
@@ -64,6 +99,19 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
     return OFFICIAL_SOURCE_HOSTS.some(allowed => host === allowed || host.endsWith(`.${allowed}`));
   };
+  /**
+   * 侧栏的三种形态按视口切换：宽屏完整、821~1180 自动收成图标栏、820 以下改抽屉。
+   * 自动收起只作用于当前视口，不写回 openmathmodelSidebarCollapsed——那是用户手动设的偏好。
+   */
+  const RAIL_VIEWPORT = "(min-width: 821px) and (max-width: 1180px)";
+  const DRAWER_VIEWPORT = "(max-width: 820px)";
+  const matchesViewport = query => {
+    try {
+      return window.matchMedia(query).matches;
+    } catch {
+      return false;
+    }
+  };
   const sidebarCollapsed = () => {
     try {
       return localStorage.getItem("openmathmodelSidebarCollapsed") === "true";
@@ -72,19 +120,48 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
   };
 
-  const composerModelOptions = () => {
+  const AUTO_MODEL_OPTION = { id: "auto", label: "Auto", detail: "智能路由 · 按问题难度自动选择", provider: "agent" };
+
+  /** 接口域名 → 厂商标（有品牌资源的用品牌图，其余按自定义 API 处理）。 */
+  const providerForEndpointHost = host =>
+    PROVIDER_PRESETS.find(preset => presetHost(preset) === host)?.logo || "custom";
+
+  /** 一条已保存接口 → 模型选择器选项；权重展示给 Auto 路由做参照。 */
+  const endpointModelOption = (endpoint, isPrimary) => {
+    const host = endpointHost(endpoint.base_url);
+    const weightText = endpoint.weight ? `权重 ${endpoint.weight}` : "权重自动";
+    return {
+      id: `endpoint-${endpoint.id}`,
+      label: endpoint.model || endpoint.name,
+      detail: `${endpoint.name} · ${isPrimary ? "主接口" : "备用"} · ${weightText}`,
+      provider: providerForEndpointHost(host),
+    };
+  };
+
+  /**
+   * 模型选择器的选项列表。已保存接口即模型池：Auto 在首位（难度判定 +
+   * 权重路由），其后是每条接口。未登录/未配置时保持演示期的静态选项。
+   */
+  const composerModelOptions = (config = null) => {
+    if (config && config.endpoints.length) {
+      return [
+        AUTO_MODEL_OPTION,
+        ...config.endpoints.map(endpoint =>
+          endpointModelOption(endpoint, endpoint.id === config.active_endpoint_id)),
+      ];
+    }
     let settings = {};
     try {
       settings = JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}");
     } catch {}
-    const customModel = settings.apiModel || "gpt-4.1";
+    const customModel = settings.apiModel || "gpt-5.6-sol";
     const customProfile = settings.apiProfileName || "OpenAI 兼容中转站";
     return [
-      { id: "auto", label: "Auto", detail: "智能路由 · 自动选择", provider: "agent" },
-      { id: "qwen-max", label: "Qwen3.7-Max", detail: "通义千问 · 官方服务", provider: "qwen" },
-      { id: "deepseek-v3", label: "DeepSeek V3", detail: "DeepSeek · 官方服务", provider: "deepseek" },
-      { id: "gpt-4.1", label: "GPT-4.1", detail: "OpenAI · 官方服务", provider: "openai" },
-      { id: "claude-sonnet", label: "Claude Sonnet", detail: "Anthropic · 官方服务", provider: "anthropic" },
+      AUTO_MODEL_OPTION,
+      { id: "qwen3.8-max", label: "Qwen3.8-Max", detail: "通义千问 · 官方服务", provider: "qwen" },
+      { id: "deepseek-v4-pro", label: "DeepSeek-V4-Pro", detail: "DeepSeek · 官方服务", provider: "deepseek" },
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", detail: "OpenAI · 官方服务", provider: "openai" },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5", detail: "Anthropic · 官方服务", provider: "anthropic" },
       { id: `custom-${customModel}`, label: customModel, detail: `${customProfile} · 自定义 API`, provider: "custom" }
     ];
   };
@@ -94,6 +171,39 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     : option.provider === "custom"
       ? `<span class="custom-api-logo">${icon("plugs-connected")}</span>`
       : providerLogo(option.provider, option.detail, "composer-provider-logo");
+
+  const modelMenuMarkup = (options, selectedId) => `
+    <div class="agent-model-menu-title">选择模型或 API</div>
+    ${options.map(option => `<button type="button" data-action="select-model" data-model-choice="${escapeHtml(option.id)}" role="option" aria-selected="${option.id === selectedId}">
+      <span class="model-choice-logo">${composerModelLogo(option)}</span>
+      <span class="model-choice-copy"><strong>${escapeHtml(option.label)}</strong><small>${escapeHtml(option.detail)}</small></span>
+      ${icon("check")}
+    </button>`).join("")}`;
+
+  /**
+   * 页面渲染后把模型选择器换成真实接口池：Auto + 已保存接口。
+   * 旧选择指向已删除接口时重置为 Auto，避免请求携带失效的 endpoint_id。
+   */
+  async function hydrateModelPickers() {
+    if (!$$("[data-model-picker]").length) return;
+    const config = await fetchLlmConfig();
+    if (!config || !config.endpoints.length) return; // 保持演示选项
+    const options = composerModelOptions(config);
+    let saved = "auto";
+    try { saved = localStorage.getItem("openmathmodelSelectedModel") || "auto"; } catch {}
+    const selected = options.find(option => option.id === saved) || options[0];
+    if (selected.id !== saved) {
+      try { localStorage.setItem("openmathmodelSelectedModel", selected.id); } catch {}
+    }
+    $$("[data-model-picker]").forEach(picker => {
+      const menu = $(".agent-model-menu", picker);
+      if (menu) menu.innerHTML = modelMenuMarkup(options, selected.id);
+      const label = $("[data-model-picker-label]", picker);
+      if (label) label.textContent = selected.label;
+      const logo = $("[data-model-picker-icon]", picker);
+      if (logo) logo.innerHTML = composerModelLogo(selected);
+    });
+  }
 
   const routes = {
     new: "/",
@@ -173,8 +283,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   }
 
   function shell(content, active, options = {}) {
-    return `<div class="app-shell ${sidebarCollapsed() ? "sidebar-collapsed" : ""}" data-sidebar-shell>
+    // 手机档侧栏是抽屉，抽屉里要展示完整侧栏，图标栏状态不能同时挂着。
+    const railed = !matchesViewport(DRAWER_VIEWPORT) && (sidebarCollapsed() || matchesViewport(RAIL_VIEWPORT));
+    return `<div class="app-shell ${railed ? "sidebar-collapsed" : ""}" data-sidebar-shell>
+      <button class="sidebar-drawer-toggle" type="button" data-action="toggle-sidebar-drawer" aria-label="打开导航" aria-expanded="false">${icon("list")}</button>
       ${sidebar(active)}
+      <div class="sidebar-backdrop" data-action="close-sidebar-drawer"></div>
       <main class="main">${content}</main>
       ${options.window === false ? "" : windowControls()}
     </div>`;
@@ -200,12 +314,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <span data-model-picker-label>${escapeHtml(selected.label)}</span>${icon("caret-down")}
           </button>
           <div class="agent-model-menu" role="listbox" aria-label="选择模型">
-            <div class="agent-model-menu-title">选择模型或 API</div>
-            ${options.map(option => `<button type="button" data-action="select-model" data-model-choice="${escapeHtml(option.id)}" role="option" aria-selected="${option.id === selected.id}">
-              <span class="model-choice-logo">${composerModelLogo(option)}</span>
-              <span class="model-choice-copy"><strong>${escapeHtml(option.label)}</strong><small>${escapeHtml(option.detail)}</small></span>
-              ${icon("check")}
-            </button>`).join("")}
+            ${modelMenuMarkup(options, selected.id)}
           </div>
         </div>
         <button class="send-button primary" data-action="send" aria-label="发送" title="发送（Enter）">${icon("arrow-up")}</button>
@@ -411,7 +520,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return `<section class="chat-pane focused-agent-chat">
       <div class="focused-agent-head"><div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div></div>
       <div class="focused-agent-scroll">
-        <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
+        <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
         <div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
           ${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
           <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>
@@ -428,11 +537,23 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return `<div class="focused-workspace-tabs" role="tablist">${tabs.map(([key, label, iconName]) => `<button type="button" class="${key === activeTab ? "active" : ""}" data-workspace-tab="${key}" role="tab" aria-selected="${key === activeTab}">${icon(iconName)}<span>${label}</span></button>`).join("")}</div>`;
   }
 
+  /**
+   * 手机档两栏放不下，改成一次只显示一侧。控件常驻 DOM，靠 CSS 在桌面端隐藏，
+   * 这样切换视口宽度时不需要重新渲染页面。
+   */
+  function modelingPaneSwitch() {
+    return `<div class="modeling-pane-switch" role="tablist" aria-label="切换 Agent 对话与工作区">
+      <button type="button" data-modeling-pane="agent" role="tab" aria-selected="false">Agent 对话</button>
+      <button type="button" class="active" data-modeling-pane="stage" role="tab" aria-selected="true">工作区</button>
+    </div>`;
+  }
+
   function modelingShell(content, active, auxiliary = "") {
     if (focusedStages.has(active)) {
       return `<div class="modeling-shell modeling-clone-shell" data-modeling-shell data-focused-stage="${active}" data-workspace-page="${active}">
         ${focusedModelingHeader(active)}
-        <div class="focused-modeling-split" data-modeling-split>
+        <div class="focused-modeling-split" data-modeling-split data-mobile-pane="stage">
+          ${modelingPaneSwitch()}
           <aside class="focused-agent-pane">${focusedAgentPane(active)}</aside>
           <div class="modeling-resizer focused-modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 与建模内容的宽度" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="58" aria-valuenow="27" tabindex="0"></div>
           <main class="focused-stage-pane" data-stage-view>${content}</main>
@@ -441,7 +562,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
     return `<div class="modeling-shell" data-modeling-shell>
       ${modelingHeader(active)}
-      <div class="modeling-split" data-modeling-split>
+      <div class="modeling-split" data-modeling-split data-mobile-pane="stage">
+        ${modelingPaneSwitch()}
         <aside class="modeling-agent-pane">${modelingAgentPane(active)}</aside>
         <div class="modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 对话与建模流程的显示比例" aria-orientation="vertical" aria-valuemin="24" aria-valuemax="62" aria-valuenow="32" tabindex="0"></div>
         <main class="modeling-stage-pane">
@@ -476,7 +598,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <div class="user-message"><div class="user-bubble">${escapeHtml(prompt)}</div></div>
             <div class="assistant-block">
               <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-              <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
+              <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
               <div class="activity-list" data-agent-steps>
                 ${steps.map(step => progressStep(true, step[0], step[1], step[2], true)).join("")}
               </div>
@@ -496,27 +618,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           </div>
           ${composer("继续描述任务，/ 快速调用，@ 添加上下文", true)}
         </section>
-        <aside class="inspector">
-          <div class="inspector-head"><span>任务上下文</span><button type="button" data-action="more" aria-label="更多上下文操作">${icon("dots-three")}</button></div>
-          <section class="inspector-section" data-live-only>
-            <p class="inspector-live-note">题意解析完成后，这里将展示本次任务的附件、目标、当前假设与输出要求。</p>
-          </section>
-          <section class="inspector-section" data-demo-only>
-            <div class="inspector-title">附件 <span>3</span></div>
-            <button class="attachment-chip" data-action="files">${icon("file-pdf")}2026国赛A题题目.pdf</button>
-            <button class="attachment-chip" data-action="files">${icon("file-csv")}共享单车数据集.csv</button>
-            <button class="attachment-chip" data-action="files">${icon("file-image")}城市区域划分示意图.png</button>
-            <button class="text-action" data-action="files">管理附件</button>
-          </section>
-          <section class="inspector-section" data-demo-only>
-            <div class="inspector-title">当前假设 <button class="text-action" data-action="edit-assumption">编辑</button></div>
-            <ul><li>数据完整且质量可用</li><li>共享单车可跨区域调度</li><li>调度以最小化总缺车惩罚为目标</li><li>满足车辆总量与站点容量约束</li></ul>
-          </section>
-          <section class="inspector-section" data-demo-only>
-            <div class="inspector-title">输出要求 <button class="text-action" data-action="edit-output">编辑</button></div>
-            <ul><li>给出完整建模流程与假设说明</li><li>提供关键模型公式与变量定义</li><li>输出可复现实验结果与对比分析</li><li>编写模型求解代码与可视化结果</li></ul>
-          </section>
-        </aside>
       </section>`, "chat");
   }
 
@@ -545,8 +646,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <tbody>
               ${projectRows.map(r => `<tr data-project="${r[0]}">
                 <td class="project-name"><div class="table-doc">${icon("file-text")}<div><strong>${r[0]}</strong><span>${r[1]}</span></div></div></td>
-                <td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td>
-                <td><button style="border:0" data-action="row-menu">${icon("dots-three")}</button></td>
+                <td><span class="stage-pill" data-stage="${r[2]}">${r[2]}</span></td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td>
+                <td><button type="button" class="row-menu-button" data-action="row-menu" aria-label="更多操作">${icon("dots-three")}</button></td>
               </tr>`).join("")}
             </tbody>
           </table>
@@ -1238,7 +1339,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       .then(katex => {
         nodes.forEach(node => {
           try {
-            katex.render(node.dataset.tex, node, { throwOnError: false, displayMode: true });
+            // 聊天气泡里的行内公式带 data-tex-inline；方法库等块级公式保持原行为
+            katex.render(node.dataset.tex, node, {
+              throwOnError: false,
+              displayMode: node.dataset.texInline !== "true",
+            });
             node.dataset.texDone = "true";
           } catch {
             // 渲染失败时保留 LaTeX 源码文本，不让公式区变空白
@@ -1468,7 +1573,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const requestedMethod = new URLSearchParams(window.location.search).get("method");
     const selected = methodLibrary.find(entry => entry.id === requestedMethod) || methodLibrary[0];
     const favorites = readMethodFavorites();
-    const collapsed = methodTreeCollapsed();
+    // 手机档左侧方法树是浮层，默认必须收起，否则一进页面就盖住正文。
+    const collapsed = methodTreeCollapsed() || matchesViewport(DRAWER_VIEWPORT);
     methodCompareIds = [];
     return shell(`
       <div class="method-layout ${collapsed ? "tree-collapsed" : ""}" data-method-layout>
@@ -1760,7 +1866,59 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     });
   }
 
-  function openSettingsCenter() {
+  /** 诊断按钮的忙碌态包装：执行期间禁用并替换文案，结束后还原原始内容。 */
+  async function withBusyButton(button, busyLabel, work) {
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.textContent = busyLabel;
+    try {
+      return await work();
+    } finally {
+      button.disabled = false;
+      button.innerHTML = original;
+    }
+  }
+
+  function renderDiagnosticReport(host, checks) {
+    if (!host) return;
+    const iconFor = { ok: "check-circle", warn: "warning-circle", fail: "x-circle" };
+    host.replaceChildren(...checks.map(check => {
+      const row = document.createElement("div");
+      row.className = "diagnostic-report-row";
+      row.dataset.status = check.status;
+      const statusIcon = document.createElement("i");
+      statusIcon.className = `ph ph-${iconFor[check.status]}`;
+      statusIcon.setAttribute("aria-hidden", "true");
+      const name = document.createElement("strong");
+      name.textContent = t(check.name);
+      const detail = document.createElement("span");
+      detail.textContent = check.detail;
+      row.append(statusIcon, name, detail);
+      return row;
+    }));
+    host.hidden = false;
+  }
+
+  async function runDiagnosticsInto(button, host) {
+    const outcome = await withBusyButton(button, t("诊断中…"), runNetworkDiagnostics);
+    renderDiagnosticReport(host, outcome.checks);
+    const failed = outcome.checks.some(check => check.status === "fail");
+    toast(t(failed ? "网络诊断完成，存在异常项" : "网络诊断完成，未发现异常"));
+  }
+
+  async function exportDiagnostics(button) {
+    const outcome = await withBusyButton(button, t("正在生成报告…"), runNetworkDiagnostics);
+    downloadDiagnosticReport(buildDiagnosticReport(outcome));
+    toast(t("诊断报告已导出"));
+  }
+
+  async function copySystemInfo(button) {
+    const outcome = await withBusyButton(button, t("正在收集…"), runNetworkDiagnostics);
+    const copied = await copyTextToClipboard(buildDiagnosticReport(outcome));
+    toast(t(copied ? "系统信息已复制" : "复制失败，请改用导出诊断报告"));
+  }
+
+  function openSettingsCenter(initialPane) {
     $(".settings-backdrop")?.remove();
     const localeBeforeOpen = currentLocale();
     const displayBeforeOpen = currentDisplayPreferences();
@@ -1773,8 +1931,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           <div class="settings-brand">${projectLogo("settings-logo")}<div><strong>OpenMathModel</strong><span>设置中心</span></div></div>
           <nav class="settings-nav" aria-label="设置分类">
             <button class="active" data-settings-nav="general" data-title="通用设置" data-subtitle="语言、地区和基础任务行为">${icon("sliders-horizontal")}<span>通用</span></button>
-            <button data-settings-nav="appearance" data-title="外观与显示" data-subtitle="正文字号与可读性">${icon("palette")}<span>外观与显示</span></button>
-            <button data-settings-nav="personalization" data-title="个性化" data-subtitle="定制 Agent 的回答习惯与工作方式">${icon("user-focus")}<span>个性化</span></button>
+            <button data-settings-nav="personalization" data-title="个性化" data-subtitle="正文字号、可读性与使用习惯">${icon("user-focus")}<span>个性化</span></button>
             <button data-settings-nav="usage" data-title="用量监控" data-subtitle="查看 Token、请求量和费用预算">${icon("chart-bar")}<span>用量监控</span></button>
             <button data-settings-nav="security" data-title="账户与安全" data-subtitle="密码、双重验证和登录设备">${icon("shield-check")}<span>账户与安全</span></button>
             <button data-settings-nav="providers" data-title="模型厂商" data-subtitle="管理官方模型服务与默认路由">${icon("circles-four")}<span>模型厂商</span></button>
@@ -1813,25 +1970,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
               </div>
             </div>
 
-            <div class="settings-pane" data-settings-pane="appearance">
+            <div class="settings-pane" data-settings-pane="personalization">
               <div class="settings-section">
                 <div class="settings-section-heading"><div><h3>正文与可读性</h3><p>调整正文字号、动态效果与对比度。</p></div></div>
                 <label class="settings-range"><span><b>正文字号</b><output data-font-output>${TEXT_BASE_PX} px</output></span><input type="range" min="13" max="19" value="${TEXT_BASE_PX}" name="fontSize" data-font-size></label>
                 ${settingsToggle("reduceMotion", "减少动态效果", "减少弹窗、页面切换与进度反馈动画", false)}
                 ${settingsToggle("highContrast", "增强文字对比度", "使用更深的正文与边界颜色", false)}
-              </div>
-            </div>
-
-            <div class="settings-pane" data-settings-pane="personalization">
-              <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>默认工作方式</h3><p>让 Agent 更贴合你的表达和交付偏好。</p></div></div>
-                <div class="settings-grid two">
-                  <label class="settings-field"><span>回答风格</span><select name="responseStyle"><option>专业、简洁</option><option>详细解释</option><option>学术写作</option><option>启发式引导</option></select></label>
-                  <label class="settings-field"><span>默认任务模式</span><select name="defaultMode"><option>自动模式</option><option>深度研究</option><option>快速分析</option></select></label>
-                  <label class="settings-field"><span>默认模型</span><select name="defaultModel"><option>自动选择</option><option>Qwen3.7-Max</option><option>DeepSeek V3</option><option>GPT-4.1</option></select></label>
-                  <label class="settings-field"><span>引用格式</span><select name="citationStyle"><option>GB/T 7714</option><option>APA 7th</option><option>IEEE</option><option>MLA</option></select></label>
-                </div>
-                <label class="settings-field settings-textarea"><span>自定义指令</span><textarea name="customInstructions" placeholder="例如：回答前先给结论；数学公式使用 LaTeX；论文段落保持学术语气。">优先使用中文回答；建模任务中先说明假设，再给出公式和可复现步骤。</textarea><small>这些指令会应用到所有新任务，你仍可在单个任务中覆盖。</small></label>
               </div>
               <div class="settings-section">
                 ${settingsToggle("deepReasoning", "复杂任务自动开启深度思考", "检测到研究、编程或数学建模任务时提升推理强度", true)}
@@ -1880,40 +2024,42 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
             <div class="settings-pane" data-settings-pane="providers">
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>已接入模型厂商</h3><p>启用厂商并指定任务的默认模型。</p></div><button type="button" class="primary-small" data-settings-jump="api">${icon("plus")} 添加厂商</button></div>
+                <div class="settings-section-heading"><div><h3>模型厂商</h3><p>点「配置」自动填入官方接口参数，连接状态来自已保存的接口。</p></div><button type="button" class="primary-small" data-settings-jump="api">${icon("plus")} 添加厂商</button></div>
                 <div class="provider-list">
-                  <div class="provider-card connected"><div class="provider-logo">${providerLogo("qwen", "通义千问")}</div><div><strong>通义千问</strong><span>Qwen3.7-Max · 官方服务</span></div><span class="provider-status">${icon("check-circle")} 已连接</span><button type="button" data-settings-action="configure-provider" data-provider="通义千问">管理</button></div>
-                  <div class="provider-card connected"><div class="provider-logo">${providerLogo("deepseek", "DeepSeek")}</div><div><strong>DeepSeek</strong><span>DeepSeek V3 / R1</span></div><span class="provider-status">${icon("check-circle")} 已连接</span><button type="button" data-settings-action="configure-provider" data-provider="DeepSeek">管理</button></div>
-                  <div class="provider-card"><div class="provider-logo">${providerLogo("openai", "OpenAI")}</div><div><strong>OpenAI</strong><span>GPT-4.1 / o3</span></div><span class="provider-status idle">未配置</span><button type="button" data-settings-action="configure-provider" data-provider="OpenAI">配置</button></div>
-                  <div class="provider-card"><div class="provider-logo">${providerLogo("anthropic", "Anthropic")}</div><div><strong>Anthropic</strong><span>Claude Sonnet / Opus</span></div><span class="provider-status idle">未配置</span><button type="button" data-settings-action="configure-provider" data-provider="Anthropic">配置</button></div>
-                  <div class="provider-card"><div class="provider-logo">${providerLogo("ollama", "Ollama")}</div><div><strong>本地模型</strong><span>Ollama / LM Studio</span></div><span class="provider-status idle">未发现服务</span><button type="button" data-settings-action="configure-provider" data-provider="本地模型">扫描</button></div>
+                  ${PROVIDER_PRESETS.map(preset => `<div class="provider-card" data-provider-card="${escapeHtml(preset.id)}">
+                    <div class="provider-logo">${providerLogo(preset.logo, preset.label)}</div>
+                    <div><strong>${escapeHtml(preset.label)}</strong><span>${escapeHtml(preset.subtitle || preset.models.slice(0, 3).join(" / "))}</span></div>
+                    <span class="provider-status idle" data-provider-status>未配置</span>
+                    <button type="button" data-settings-action="configure-provider" data-provider-id="${escapeHtml(preset.id)}">配置</button>
+                  </div>`).join("")}
                 </div>
               </div>
               <div class="settings-section">
                 <div class="settings-section-heading"><div><h3>智能路由</h3><p>根据任务类型、速度与费用自动选择模型。</p></div></div>
                 ${settingsToggle("smartRouting", "启用模型智能路由", "优先满足质量要求，并在同等能力下选择成本更低的模型", true)}
                 <div class="settings-grid two">
-                  <label class="settings-field"><span>编程与 Agent</span><select name="codingModel"><option>自动选择</option><option>GPT-4.1</option><option>DeepSeek V3</option></select></label>
-                  <label class="settings-field"><span>深度研究</span><select name="researchModel"><option>Qwen3.7-Max</option><option>DeepSeek R1</option><option>Claude Opus</option></select></label>
-                  <label class="settings-field"><span>长文写作</span><select name="writingModel"><option>自动选择</option><option>Claude Sonnet</option><option>Qwen3.7-Max</option></select></label>
-                  <label class="settings-field"><span>视觉理解</span><select name="visionModel"><option>自动选择</option><option>GPT-4.1</option><option>Qwen VL Max</option></select></label>
+                  <label class="settings-field"><span>编程与 Agent</span><select name="codingModel"><option>自动选择</option><option>GPT-5.6 Sol</option><option>Claude Opus 5</option><option>GLM-5.2</option><option>DeepSeek-V4-Pro</option></select></label>
+                  <label class="settings-field"><span>深度研究</span><select name="researchModel"><option>自动选择</option><option>Qwen3.8-Max</option><option>DeepSeek-V4-Pro</option><option>Claude Fable 5</option><option>GPT-5.6 Sol</option></select></label>
+                  <label class="settings-field"><span>长文写作</span><select name="writingModel"><option>自动选择</option><option>Claude Sonnet 5</option><option>Qwen3.8-Max</option><option>Kimi K3</option></select></label>
+                  <label class="settings-field"><span>视觉理解</span><select name="visionModel"><option>自动选择</option><option>Gemini 3.5 Flash</option><option>GPT-5.6 Sol</option><option>Qwen3.8-Max</option></select></label>
                 </div>
               </div>
             </div>
 
             <div class="settings-pane" data-settings-pane="api">
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>自定义模型接口</h3><p>支持厂商官方 API、OpenAI 兼容接口和第三方中转站。</p></div><span class="api-security-note">${icon("shield-check")} 密钥仅加密保存在本机</span></div>
+                <div class="settings-section-heading"><div><h3>自定义模型接口</h3><p>支持厂商官方 API、OpenAI 兼容接口和第三方中转站。</p></div><span class="api-security-note">${icon("shield-check")} 密钥仅保存在本机后端</span></div>
                 <div class="settings-grid two">
                   <label class="settings-field"><span>配置名称</span><input name="apiProfileName" value="OpenAI 兼容中转站" placeholder="例如：团队模型网关"></label>
                   <label class="settings-field"><span>接口协议</span><select name="apiProtocol"><option>OpenAI Compatible</option><option>Anthropic Messages API</option><option>Google Gemini API</option><option>Ollama</option><option>自定义 REST</option></select></label>
                   <label class="settings-field settings-span-two"><span>Base URL</span><input name="apiBaseUrl" value="https://api.example.com/v1" placeholder="https://api.example.com/v1"></label>
                   <label class="settings-field settings-span-two"><span>API Key</span><div class="secret-field"><input type="password" name="apiKey" value="sk-openmathmodel-demo-key"><button type="button" data-settings-action="toggle-secret" aria-label="显示或隐藏 API Key">${icon("eye")}</button></div></label>
-                  <label class="settings-field"><span>默认模型 ID</span><input name="apiModel" value="gpt-4.1" placeholder="gpt-4.1"></label>
+                  <label class="settings-field"><span>默认模型 ID</span><input name="apiModel" value="gpt-5.6-sol" placeholder="gpt-5.6-sol"></label>
                   <label class="settings-field"><span>组织 / 项目标识</span><input name="apiOrganization" placeholder="可选"></label>
                 </div>
-                <details class="api-advanced"><summary>请求头与高级参数 ${icon("caret-down")}</summary><div class="settings-grid two"><label class="settings-field"><span>自定义请求头</span><input name="customHeader" placeholder="X-API-Source: OpenMathModel"></label><label class="settings-field"><span>路径前缀</span><input name="apiPathPrefix" placeholder="/chat/completions"></label></div></details>
-                <div class="api-actions"><button type="button" data-settings-action="test-api">${icon("pulse")} 测试连接</button><button type="button" class="primary-small" data-settings-action="add-endpoint">${icon("plus")} 保存为新接口</button></div>
+                <details class="api-advanced"><summary>请求头与高级参数 ${icon("caret-down")}</summary><div class="settings-grid two"><label class="settings-field"><span>自定义请求头</span><input name="customHeader" placeholder="X-API-Source: OpenMathModel"></label><label class="settings-field"><span>路径前缀</span><input name="apiPathPrefix" placeholder="/chat/completions"></label><label class="settings-field"><span>模型能力权重</span><div class="field-with-unit"><input type="number" name="apiWeight" min="0" max="10" step="1" placeholder="自动"><b>1-10</b></div><small>Auto 模式按权重路由：难题给高权重接口。留空按模型名自动推断</small></label></div></details>
+                <input type="hidden" name="apiEditingEndpointId" value="">
+                <div class="api-actions"><button type="button" data-settings-action="test-api">${icon("pulse")} 测试连接</button><button type="button" data-settings-action="cancel-endpoint-edit" data-endpoint-edit-cancel hidden>取消编辑</button><button type="button" class="primary-small" data-settings-action="add-endpoint"><span data-endpoint-save-label>${icon("plus")} 保存为新接口</span></button></div>
               </div>
               <div class="settings-section">
                 ${settingsToggle("allowProxyApi", "允许使用第三方中转站", "发送请求前显示实际域名，并记录接口用量", true)}
@@ -1921,11 +2067,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                 ${settingsToggle("fallbackApi", "失败时自动切换备用接口", "仅在主接口超时或达到限流后触发", true)}
               </div>
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>已保存接口</h3><p>可为不同任务绑定不同接口。</p></div></div>
+                <div class="settings-section-heading"><div><h3>已保存接口</h3><p>主接口负责默认调用；Auto 模式按能力权重在这些接口间路由，其余接口在超时或限流时作为备用。</p></div></div>
                 <div class="endpoint-list" data-endpoint-list>
-                  <div class="endpoint-item"><span class="endpoint-dot online"></span><div><strong>团队模型网关</strong><span>https://gateway.example.com/v1 · 6 个模型</span></div><span>主接口</span><button type="button" data-settings-action="endpoint-menu">${icon("dots-three")}</button></div>
-                  <div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>本地 Ollama</strong><span>http://127.0.0.1:11434/v1 · 3 个模型</span></div><span>本地</span><button type="button" data-settings-action="endpoint-menu">${icon("dots-three")}</button></div>
+                  <div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>正在读取已保存接口…</strong><span>接口配置保存在本机后端，随账户生效</span></div></div>
                 </div>
+              </div>
+              <div class="settings-section">
+                <div class="settings-section-heading"><div><h3>接口用量记录</h3><p>「允许使用第三方中转站」开启时记录每次调用的实际域名、模型与 token 用量。</p></div><button type="button" class="secondary-small" data-settings-action="clear-llm-usage">${icon("trash")} 清空记录</button></div>
+                <div class="endpoint-list" data-llm-usage-list></div>
               </div>
             </div>
 
@@ -1963,13 +2112,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
               </div>
               <div class="settings-section">
                 ${settingsToggle("retryRequest", "自动重试失败请求", "针对网络错误和限流最多重试 3 次", true)}
-                ${settingsToggle("parallelTools", "允许并行调用工具", "Agent 可同时运行互不依赖的搜索、分析和文件任务", true)}
-                ${settingsToggle("confirmExternal", "外部操作前请求确认", "发送邮件、发布内容或变更远程数据前暂停确认", true)}
+                ${settingsToggle("confirmExternal", "外部操作前请求确认", "发送邮件、发布内容或变更远程数据前暂停确认", false)}
                 ${settingsToggle("developerMode", "开发者模式", "显示请求 ID、Token 明细、工具调用和调试日志", false)}
               </div>
               <div class="settings-section">
                 <div class="settings-section-heading"><div><h3>诊断</h3><p>用于排查模型接口和本地运行问题。</p></div></div>
-                <div class="diagnostic-actions"><button type="button" data-settings-action="network-diagnosis">${icon("pulse")} 运行网络诊断</button><button type="button" data-settings-action="open-logs">${icon("file-text")} 打开日志目录</button><button type="button" data-settings-action="copy-system-info">${icon("copy")} 复制系统信息</button></div>
+                <div class="diagnostic-actions"><button type="button" data-settings-action="network-diagnosis">${icon("pulse")} 运行网络诊断</button><button type="button" data-settings-action="export-diagnostics">${icon("download-simple")} 导出诊断报告</button><button type="button" data-settings-action="copy-system-info">${icon("copy")} 复制系统信息</button></div>
+                <div class="diagnostic-report" data-diagnostic-report hidden></div>
               </div>
             </div>
           </div>
@@ -2012,20 +2161,24 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       reduceMotion: $('[name="reduceMotion"]', backdrop)?.getAttribute("aria-checked") === "true",
       highContrast: $('[name="highContrast"]', backdrop)?.getAttribute("aria-checked") === "true",
     });
-    const saveSettings = () => {
+    const collectSettingsValues = () => {
       const values = {};
       $$("[name]", backdrop).forEach(control => {
         values[control.name] = control.matches("[data-setting-toggle]") ? control.getAttribute("aria-checked") === "true" : control.value;
       });
+      return values;
+    };
+    const saveSettings = () => {
+      const values = collectSettingsValues();
       localStorage.setItem("openmathmodelSettings", JSON.stringify(values));
       $$('[data-model-choice^="custom-"]', document).forEach(option => {
         const picker = option.closest("[data-model-picker]");
         const wasSelected = option.getAttribute("aria-selected") === "true";
-        option.dataset.modelChoice = `custom-${values.apiModel || "gpt-4.1"}`;
-        $(".model-choice-copy strong", option).textContent = values.apiModel || "gpt-4.1";
+        option.dataset.modelChoice = `custom-${values.apiModel || "gpt-5.6-sol"}`;
+        $(".model-choice-copy strong", option).textContent = values.apiModel || "gpt-5.6-sol";
         $(".model-choice-copy small", option).textContent = `${values.apiProfileName || "OpenAI 兼容中转站"} · 自定义 API`;
         if (wasSelected && picker) {
-          $("[data-model-picker-label]", picker).textContent = values.apiModel || "gpt-4.1";
+          $("[data-model-picker-label]", picker).textContent = values.apiModel || "gpt-5.6-sol";
           localStorage.setItem("openmathmodelSelectedModel", option.dataset.modelChoice);
         }
       });
@@ -2035,6 +2188,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       // 并发上限的闸门在服务端，异步推送；失败不拦保存，只提示同步结果。
       void persistMaxConcurrency(values.maxConcurrency).then(message => {
         if (message) toast(t(message));
+      });
+      // 自定义 API 同样存服务端：对话与任务执行按它出网调用模型。
+      void persistLlmSettings(values).then(message => {
+        if (message) toast(t(message));
+        // 接口池或开关可能变化，任务页的模型选择器同步刷新
+        void hydrateModelPickers();
       });
       $("[data-settings-save-state]", backdrop).textContent = t("已保存");
       toast(t("设置已保存"));
@@ -2159,25 +2318,74 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         actionButton.innerHTML = icon(visible ? "eye" : "eye-slash");
       }
       if (action === "test-api") {
-        actionButton.disabled = true;
-        actionButton.innerHTML = `${icon("spinner-gap")} 正在连接…`;
-        setTimeout(() => {
-          actionButton.disabled = false;
-          actionButton.classList.add("connection-ok");
-          actionButton.innerHTML = `${icon("check-circle")} 连接成功 · 428ms`;
-          toast("API 连接成功，已发现 12 个模型");
-        }, 780);
+        const values = collectSettingsValues();
+        const endpoint = endpointFromForm(values);
+        if (!endpoint) { toast(t("请先填写有效的 Base URL")); return; }
+        void withBusyButton(actionButton, t("正在连接…"), async () => {
+          try {
+            const result = await authApi.testLlmEndpoint({ ...endpoint, allow_proxy: values.allowProxyApi !== false });
+            actionButton.classList.add("connection-ok");
+            toast(`${t("连接正常")} · ${result.latency_ms}ms · ${result.model}`);
+          } catch (error) {
+            actionButton.classList.remove("connection-ok");
+            // 404 只会来自我们自己的后端：说明运行中的进程还没加载新路由
+            if (error instanceof ApiError && error.code === "NOT_FOUND") {
+              toast(t("后端尚未加载新接口，请重启后端服务（npm run dev）"));
+              return;
+            }
+            toast(error instanceof Error && error.message ? error.message : t("连接失败，请检查地址与密钥"));
+          }
+        });
       }
       if (action === "add-endpoint") {
-        const name = $('[name="apiProfileName"]', backdrop).value.trim() || "未命名接口";
-        const url = $('[name="apiBaseUrl"]', backdrop).value.trim() || "尚未填写地址";
-        $("[data-endpoint-list]", backdrop).insertAdjacentHTML("afterbegin", `<div class="endpoint-item"><span class="endpoint-dot online"></span><div><strong>${escapeHtml(name)}</strong><span>${escapeHtml(url)} · 待同步模型</span></div><span>新接口</span><button type="button" data-settings-action="endpoint-menu">${icon("dots-three")}</button></div>`);
-        toast("自定义接口已添加");
+        const values = collectSettingsValues();
+        const editingId = String(values.apiEditingEndpointId || "").trim();
+        void withBusyButton(actionButton, t("正在保存…"), async () => {
+          if (editingId) {
+            const { config, message } = await updateEndpoint(editingId, values);
+            toast(t(message));
+            if (config) {
+              renderEndpointItems(backdrop, config);
+              renderProviderStatus(backdrop, config);
+            }
+            return Boolean(config);
+          }
+          const message = await saveEndpointAsNew(values);
+          toast(t(message));
+          await renderEndpointList(backdrop);
+          return true;
+        }).then(saved => {
+          // withBusyButton 会还原按钮内容，编辑态的按钮文案要等它结束后再复位
+          if (saved && editingId) exitEndpointEditing(backdrop);
+          void hydrateModelPickers();
+        });
+      }
+      if (action === "cancel-endpoint-edit") {
+        exitEndpointEditing(backdrop);
+        void hydrateLlmPanel(backdrop);
+        toast(t("已取消编辑"));
+      }
+      if (action === "clear-llm-usage") {
+        clearLlmUsage();
+        renderLlmUsageList(backdrop);
+        toast(t("用量记录已清空"));
       }
       if (action === "configure-provider") {
         activatePane($('[data-settings-nav="api"]', backdrop));
-        $('[name="apiProfileName"]', backdrop).value = `${actionButton.dataset.provider} API`;
-        $('[name="apiBaseUrl"]', backdrop).focus();
+        const preset = providerPreset(actionButton.dataset.providerId);
+        if (!preset) return;
+        const assign = (name, value) => { const control = $(`[name="${name}"]`, backdrop); if (control) control.value = value; };
+        assign("apiProfileName", `${preset.label} 官方 API`);
+        assign("apiBaseUrl", preset.baseUrl);
+        assign("apiModel", preset.models[0] || "");
+        assign("apiOrganization", "");
+        assign("apiPathPrefix", "");
+        assign("apiKey", "");
+        setProtocolSelect(backdrop, preset.protocol);
+        $('[name="apiKey"]', backdrop)?.focus();
+        toast(t(preset.id === "ollama"
+          ? "已填入本地 Ollama 参数，无需密钥，模型 ID 填你已安装的模型"
+          : "已填入官方接口参数，补上 API Key 后点「测试连接」"));
       }
       if (action === "reset-defaults") {
         localStorage.removeItem("openmathmodelSettings");
@@ -2192,17 +2400,55 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (action === "export-data") toast("数据导出申请已提交，完成后会通知你");
       if (action === "clear-cache") toast("本地缓存已清理，共释放 386 MB");
       if (action === "delete-account") toast("演示环境不会执行账户删除");
-      if (action === "endpoint-menu") popupMenu(actionButton, ["设为主接口", "编辑", "复制配置", "删除"]);
-      if (action === "network-diagnosis") {
-        actionButton.disabled = true;
-        actionButton.textContent = "诊断中…";
-        setTimeout(() => { actionButton.disabled = false; actionButton.innerHTML = `${icon("check-circle")} 网络正常`; }, 680);
+      if (action === "endpoint-menu") {
+        const endpointId = actionButton.dataset.endpointId;
+        if (!endpointId) return;
+        popupMenu(actionButton, ["设为主接口", "编辑", "调整权重", "删除"], choice => {
+          if (choice === "编辑") {
+            void (async () => {
+              const config = await fetchLlmConfig();
+              const endpoint = config?.endpoints.find(item => item.id === endpointId);
+              if (!endpoint) { toast(t("操作失败，请确认已登录")); return; }
+              enterEndpointEditing(backdrop, endpoint);
+              toast(t("正在编辑该接口，改完点「保存修改」"));
+            })();
+            return;
+          }
+          if (choice === "调整权重") {
+            const weightItems = [
+              "自动推断",
+              ...Array.from({ length: 10 }, (_, index) => {
+                const value = index + 1;
+                return `权重 ${value}${value === 1 ? "（最弱）" : value === 10 ? "（最强）" : ""}`;
+              }),
+            ];
+            popupMenu(actionButton, weightItems, weightChoice => {
+              const weight = weightChoice === "自动推断" ? 0 : Number(weightChoice.match(/\d+/)?.[0] || 0);
+              void (async () => {
+                const config = await setEndpointWeight(endpointId, weight);
+                if (!config) { toast(t("操作失败，请确认已登录")); return; }
+                toast(t(weight ? "权重已更新" : "已恢复自动推断"));
+                renderEndpointItems(backdrop, config);
+                void hydrateModelPickers();
+              })();
+            });
+            return;
+          }
+          void (async () => {
+            const config = choice === "设为主接口"
+              ? await setPrimaryEndpoint(endpointId)
+              : await removeEndpoint(endpointId);
+            if (!config) { toast(t("操作失败，请确认已登录")); return; }
+            toast(t(choice === "设为主接口" ? "已设为主接口" : "接口已删除"));
+            renderEndpointItems(backdrop, config);
+            renderProviderStatus(backdrop, config);
+            void hydrateModelPickers();
+          })();
+        });
       }
-      if (action === "open-logs") toast("日志目录已打开");
-      if (action === "copy-system-info") {
-        navigator.clipboard?.writeText("OpenMathModel v1.0 · Windows · Chromium");
-        toast("系统信息已复制");
-      }
+      if (action === "network-diagnosis") void runDiagnosticsInto(actionButton, $("[data-diagnostic-report]", backdrop));
+      if (action === "export-diagnostics") void exportDiagnostics(actionButton);
+      if (action === "copy-system-info") void copySystemInfo(actionButton);
     });
     $("[data-font-size]", backdrop).addEventListener("input", event => {
       $("[data-font-output]", backdrop).textContent = `${event.target.value} px`;
@@ -2217,10 +2463,16 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     enhanceSettingsSelects();
     // 并发上限以服务端为准，异步回填显示（覆盖本机残留值）。
     void hydrateMaxConcurrency(backdrop);
+    // 自定义 API 同理：表单、开关与已保存接口列表都以服务端为准回填。
+    void hydrateLlmPanel(backdrop);
+    if (initialPane) {
+      const nav = $(`[data-settings-nav="${initialPane}"]`, backdrop);
+      if (nav) activatePane(nav);
+    }
     $(".settings-close", backdrop).focus();
   }
 
-  function popupMenu(anchor, items) {
+  function popupMenu(anchor, items, onPick) {
     $(".menu")?.remove();
     const menu = document.createElement("div");
     menu.className = "menu";
@@ -2233,10 +2485,165 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       const button = e.target.closest("button");
       if (!button) return;
       anchor.dataset.value = button.dataset.menuValue;
-      toast(`已选择：${button.dataset.menuValue}`);
+      if (onPick) onPick(button.dataset.menuValue);
+      else toast(`已选择：${button.dataset.menuValue}`);
       menu.remove();
     });
     setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+  }
+
+  /** 已保存接口列表：从服务端配置渲染（null = 未登录/后端不可用）。 */
+  function renderEndpointItems(backdrop, config) {
+    const host = $("[data-endpoint-list]", backdrop);
+    if (!host) return;
+    if (!config) {
+      host.innerHTML = `<div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>登录后可管理已保存接口</strong><span>接口配置保存在本机后端，随账户生效</span></div></div>`;
+      return;
+    }
+    if (!config.endpoints.length) {
+      host.innerHTML = `<div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>尚未保存任何接口</strong><span>填写上方表单后点击「保存为新接口」</span></div></div>`;
+      return;
+    }
+    host.innerHTML = config.endpoints.map(endpoint => {
+      const active = endpoint.id === config.active_endpoint_id;
+      const weightText = endpoint.weight ? `权重 ${endpoint.weight}` : "权重自动";
+      return `<div class="endpoint-item"><span class="endpoint-dot ${active ? "online" : ""}"></span><div><strong>${escapeHtml(endpoint.name)}</strong><span>${escapeHtml(endpoint.base_url)} · ${escapeHtml(endpoint.model || "未填模型")}</span></div><span>${active ? "主接口" : "备用"} · ${weightText}</span><button type="button" data-settings-action="endpoint-menu" data-endpoint-id="${escapeHtml(endpoint.id || "")}" aria-label="接口操作">${icon("dots-three")}</button></div>`;
+    }).join("");
+  }
+
+  async function renderEndpointList(backdrop) {
+    renderEndpointItems(backdrop, await fetchLlmConfig());
+  }
+
+  /** 接口用量记录列表：随「允许使用第三方中转站」开关变化（关闭即停记）。 */
+  function renderLlmUsageList(backdrop) {
+    const host = $("[data-llm-usage-list]", backdrop);
+    if (!host) return;
+    if (!proxyTransparencyEnabled()) {
+      host.innerHTML = `<div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>用量记录已停用</strong><span>开启上方「允许使用第三方中转站」并保存后恢复记录</span></div></div>`;
+      return;
+    }
+    const records = listLlmUsage();
+    if (!records.length) {
+      host.innerHTML = `<div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>暂无调用记录</strong><span>在任务页与 Agent 对话后，这里会列出每次调用的实际接口</span></div></div>`;
+      return;
+    }
+    host.innerHTML = records.slice(0, 8).map(record => {
+      const when = new Date(record.ts).toLocaleString("zh-CN", { hour12: false });
+      const tags = [
+        record.third_party ? "第三方中转站" : "官方/本机",
+        record.difficulty ? `Auto 难度 ${record.difficulty}/5` : "",
+        record.fallback_used ? "已用备用" : "",
+      ].filter(Boolean).join(" · ");
+      const tokens = Number.isFinite(record.prompt_tokens) || Number.isFinite(record.completion_tokens)
+        ? `${record.prompt_tokens ?? 0}+${record.completion_tokens ?? 0} tok`
+        : (Number.isFinite(record.elapsed_ms) ? `${(record.elapsed_ms / 1000).toFixed(1)}s` : "");
+      return `<div class="endpoint-item"><span class="endpoint-dot ${record.third_party ? "" : "online"}"></span><div><strong>${escapeHtml(record.host || record.endpoint || "未知接口")} · ${escapeHtml(record.model || "-")}</strong><span>${escapeHtml(when)}${tags ? ` · ${escapeHtml(tags)}` : ""}</span></div><span>${escapeHtml(tokens)}</span></div>`;
+    }).join("");
+  }
+
+  /** 「编辑」某条已保存接口：回填表单并进入编辑态，「保存」写回原接口。 */
+  function enterEndpointEditing(backdrop, endpoint) {
+    const assign = (name, value) => {
+      const control = $(`[name="${name}"]`, backdrop);
+      if (control) control.value = value ?? "";
+    };
+    assign("apiProfileName", endpoint.name);
+    assign("apiBaseUrl", endpoint.base_url);
+    assign("apiKey", endpoint.api_key);
+    assign("apiModel", endpoint.model);
+    assign("apiOrganization", endpoint.organization);
+    assign("customHeader", endpoint.headers);
+    assign("apiPathPrefix", endpoint.path_prefix);
+    assign("apiWeight", endpoint.weight || "");
+    assign("apiEditingEndpointId", endpoint.id || "");
+    setProtocolSelect(backdrop, endpoint.protocol);
+    const saveLabel = $("[data-endpoint-save-label]", backdrop);
+    if (saveLabel) saveLabel.innerHTML = `${icon("check")} 保存修改`;
+    const cancel = $("[data-endpoint-edit-cancel]", backdrop);
+    if (cancel) cancel.hidden = false;
+    $('[data-settings-pane="api"]', backdrop)?.scrollIntoView?.({ block: "start" });
+    $('[name="apiProfileName"]', backdrop)?.focus();
+  }
+
+  function exitEndpointEditing(backdrop) {
+    const marker = $('[name="apiEditingEndpointId"]', backdrop);
+    if (marker) marker.value = "";
+    const saveLabel = $("[data-endpoint-save-label]", backdrop);
+    if (saveLabel) saveLabel.innerHTML = `${icon("plus")} 保存为新接口`;
+    const cancel = $("[data-endpoint-edit-cancel]", backdrop);
+    if (cancel) cancel.hidden = true;
+  }
+
+  /** 「协议」下拉：原生 select 与增强的自定义下拉都要同步，否则显示会分叉。 */
+  function setProtocolSelect(backdrop, protocol) {
+    const select = $('[name="apiProtocol"]', backdrop);
+    if (!select) return;
+    const label = labelFromProtocol(protocol);
+    const option = [...select.options].find(item => (item.textContent || "").trim() === label);
+    if (!option) return;
+    select.value = option.value;
+    const custom = select.nextElementSibling;
+    if (custom instanceof HTMLElement && custom.classList.contains("settings-custom-select")) {
+      const trigger = $("[data-custom-select-trigger] span", custom);
+      if (trigger) trigger.textContent = label;
+      $$("[data-custom-select-option]", custom).forEach(button => {
+        button.setAttribute("aria-selected", String(button.getAttribute("data-custom-select-option") === option.value));
+      });
+    }
+  }
+
+  /** 厂商卡片状态：已保存接口中存在同域名的即视为已连接。 */
+  function renderProviderStatus(backdrop, config) {
+    $$("[data-provider-card]", backdrop).forEach(card => {
+      const preset = providerPreset(card.dataset.providerCard);
+      const connected = Boolean(
+        preset && config?.endpoints.some(item => endpointHost(item.base_url) === presetHost(preset)),
+      );
+      card.classList.toggle("connected", connected);
+      const status = $("[data-provider-status]", card);
+      if (status) {
+        status.classList.toggle("idle", !connected);
+        status.innerHTML = connected ? `${icon("check-circle")} 已连接` : "未配置";
+      }
+      const button = $('[data-settings-action="configure-provider"]', card);
+      if (button) button.textContent = connected ? "管理" : "配置";
+    });
+  }
+
+  /** 打开设置时回填「自定义 API」：以服务端配置为准覆盖本机残留显示。 */
+  async function hydrateLlmPanel(backdrop) {
+    // restoreSettings 可能把上次会话的编辑标记复原回来，打开面板一律回到非编辑态
+    exitEndpointEditing(backdrop);
+    renderLlmUsageList(backdrop);
+    const config = await fetchLlmConfig();
+    renderEndpointItems(backdrop, config);
+    renderProviderStatus(backdrop, config);
+    if (!config) return;
+    const setToggle = (name, on) => {
+      const toggle = $(`[name="${name}"]`, backdrop);
+      if (!toggle) return;
+      toggle.classList.toggle("active", Boolean(on));
+      toggle.setAttribute("aria-checked", String(Boolean(on)));
+    };
+    setToggle("allowProxyApi", config.allow_proxy);
+    setToggle("streamResponse", config.stream);
+    setToggle("fallbackApi", config.fallback);
+    const active = config.endpoints.find(item => item.id === config.active_endpoint_id) || config.endpoints[0];
+    if (!active) return;
+    const assign = (name, value) => {
+      const control = $(`[name="${name}"]`, backdrop);
+      if (control) control.value = value ?? "";
+    };
+    assign("apiProfileName", active.name);
+    assign("apiBaseUrl", active.base_url);
+    assign("apiKey", active.api_key);
+    assign("apiModel", active.model);
+    assign("apiOrganization", active.organization);
+    assign("customHeader", active.headers);
+    assign("apiPathPrefix", active.path_prefix);
+    assign("apiWeight", active.weight || "");
+    setProtocolSelect(backdrop, active.protocol);
   }
 
   /**
@@ -2347,6 +2754,51 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
   }
 
+  /**
+   * 任务开场分析：控制器广播规划阶段（omm:run-planning）时，Agent 像回复
+   * 聊天消息一样先「思考」再给出对任务的开场分析——真实模型调用，思考块
+   * 与流式 Markdown 均与手动对话同构；未配置接口/未登录时整块静默消失，
+   * 每个运行只发起一次（sessionStorage 防重，刷新页面不重复扣费）。
+   */
+  document.addEventListener("omm:run-planning", event => {
+    const runId = event.detail?.runId;
+    const scroll = $(".chat-scroll");
+    if (!runId || !scroll) return;
+    const guard = `openmathmodelOpeningReply.${runId}`;
+    try {
+      if (sessionStorage.getItem(guard)) return;
+      sessionStorage.setItem(guard, "1");
+    } catch {
+      return;
+    }
+    const replyId = `reply-opening-${Date.now()}`;
+    // 开场分析与执行步骤同属一条 Agent 消息：注入步骤块头部之后，
+    // 思考完成 → 分析正文 → 计划在同一气泡内接续展开，不拆成两条对话。
+    const stepsBlock = $(".chat-scroll .assistant-block:not(.follow-up-reply)");
+    const host = document.createElement("div");
+    host.className = "opening-analysis opening-reply";
+    host.id = replyId;
+    host.innerHTML = `<div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>`;
+    const anchor = stepsBlock?.querySelector(".assistant-id");
+    if (anchor) anchor.insertAdjacentElement("afterend", host);
+    else if (stepsBlock) stepsBlock.prepend(host);
+    else scroll.append(host);
+    // 开场分析结束前，计划部分（折叠开关/步骤/摘要/CTA）一律不出现
+    if (stepsBlock) stepsBlock.dataset.openingState = "pending";
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+    void streamAssistantReply(
+      "请先对这个建模任务做开场分析：你对题目的理解、主要难点、以及接下来的执行思路，控制在两三段。",
+      replyId,
+      scroll,
+      { removeOnUnavailable: true },
+    ).finally(() => {
+      // 回复彻底结束（成功、失败或静默移除）后才放行计划部分，并立即通知
+      // 控制器重渲染，不必等下一次 SSE 刷新。
+      if (stepsBlock) stepsBlock.dataset.openingState = "done";
+      document.dispatchEvent(new CustomEvent("omm:opening-analysis-done"));
+    });
+  });
+
   function appendConversationTurn(text) {
     const scroll = $(".chat-scroll");
     if (!scroll) return;
@@ -2355,15 +2807,160 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       <div class="user-message"><div class="user-bubble">${escapeHtml(text)}</div></div>
       <div class="assistant-block follow-up-reply" id="${replyId}">
         <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-        <div class="analysis-copy"><p class="muted">正在分析你的补充要求…</p></div>
+        <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>
       </div>`);
     scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
-    setTimeout(() => {
-      const reply = document.getElementById(replyId);
-      if (!reply) return;
-      reply.querySelector(".analysis-copy").innerHTML = "<p>已收到。我会把这项要求合并到当前建模计划中，并在后续的数据处理、实验评估和论文交付阶段持续遵循。</p>";
+    void streamAssistantReply(text, replyId, scroll);
+  }
+
+  /**
+   * 思考过程块：推理型模型输出 reasoning 时插在回答上方。流式期间展开、
+   * 自动跟随最新内容；回答开始后折叠为「已思考 N 秒」，可点击展开回看。
+   */
+  function createThinkingBlock(replyBlock) {
+    const host = document.createElement("div");
+    host.className = "reply-thinking";
+    host.innerHTML = `
+      <button type="button" class="thinking-header" aria-expanded="true" aria-label="展开或收起思考过程">
+        <span class="thinking-label thinking-shimmer">${t("思考中…")}</span>
+        ${icon("caret-up", "thinking-chevron")}
+      </button>
+      <div class="thinking-collapsible">
+        <div class="thinking-inner">
+          <div class="thinking-viewport"><div class="thinking-stream"></div></div>
+        </div>
+      </div>`;
+    replyBlock.insertBefore(host, replyBlock.querySelector(".analysis-copy"));
+    const header = $(".thinking-header", host);
+    const label = $(".thinking-label", host);
+    const collapsible = $(".thinking-collapsible", host);
+    const viewport = $(".thinking-viewport", host);
+    const stream = $(".thinking-stream", host);
+    const startedAt = Date.now();
+    let done = false;
+    let open = true;
+    const applyOpen = () => {
+      header.setAttribute("aria-expanded", String(open));
+      collapsible.classList.toggle("is-collapsed", !open);
+    };
+    header.addEventListener("click", () => {
+      if (!done) return;
+      open = !open;
+      applyOpen();
+      if (open) viewport.scrollTop = 0;
+    });
+    return {
+      append(fullText) {
+        stream.textContent = fullText;
+        viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
+        viewport.scrollTop = viewport.scrollHeight;
+      },
+      finish() {
+        if (done) return;
+        done = true;
+        const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+        label.classList.remove("thinking-shimmer");
+        label.innerHTML = `<span class="thinking-verb">${t("已思考")}</span> ${seconds} ${t("秒")}`;
+        header.classList.add("is-clickable");
+        open = false;
+        applyOpen();
+      },
+    };
+  }
+
+  /** 回复右下角操作区：复制原始回复文本（Markdown 源码，便于粘贴到论文与笔记）。 */
+  function appendReplyActions(replyBlock, replyText) {
+    const actions = document.createElement("div");
+    actions.className = "reply-actions";
+    actions.innerHTML = `<button type="button" class="reply-action-button" data-reply-copy title="复制回复" aria-label="复制回复">${icon("copy")}</button>`;
+    replyBlock.appendChild(actions);
+    const button = $("[data-reply-copy]", actions);
+    let resetTimer = null;
+    button.addEventListener("click", async () => {
+      const copied = await copyTextToClipboard(replyText);
+      button.innerHTML = icon(copied ? "check" : "copy");
+      toast(t(copied ? "回复已复制" : "复制失败，请手动选择文本"));
+      clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => { button.innerHTML = icon("copy"); }, 1400);
+    });
+  }
+
+  /** 真实模型回复：思考块 + Markdown 正文流式渲染到回复气泡。
+   *  对话页不暴露接口域名与模型名；「允许使用第三方中转站」开启时只把用量
+   *  写入本机记录（设置中心可查），关闭时连记录也不留。
+   *  options.removeOnUnavailable：未配置接口/未登录时整块静默移除
+   *  （用于系统自动发起的开场分析，不该向用户弹配置提示）。 */
+  async function streamAssistantReply(text, replyId, scroll, options = {}) {
+    const replyBlock = document.getElementById(replyId);
+    const copy = replyBlock?.querySelector(".analysis-copy");
+    if (!replyBlock || !copy) return;
+    const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
+    const render = value => {
+      copy.innerHTML = value
+        ? renderMarkdown(value)
+        : `<p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p>`;
+    };
+    const transparency = proxyTransparencyEnabled();
+    let thinking = null;
+    let answerStarted = false;
+    try {
+      const { text: reply, meta } = await sendConversationTurn(text, {
+        onReasoning: (_piece, full) => {
+          const stick = nearBottom();
+          if (!thinking) {
+            thinking = createThinkingBlock(replyBlock);
+            // 思考块自带「思考中…」标签，回答区占位不必重复
+            if (!answerStarted) copy.innerHTML = "";
+          }
+          thinking.append(full);
+          if (stick) scroll.scrollTo({ top: scroll.scrollHeight });
+        },
+        onDelta: (_piece, full) => {
+          answerStarted = true;
+          thinking?.finish();
+          const stick = nearBottom();
+          render(full);
+          if (stick) scroll.scrollTo({ top: scroll.scrollHeight });
+        },
+      });
+      thinking?.finish();
+      render(reply);
+      // 公式在全文到齐后一次性排版，流式期间保留 LaTeX 源码回退
+      renderFormulas(copy);
+      // 对话页不显示域名/模型等接口信息；透明度只体现在本机用量记录里
+      // 「记录接口用量」：随开关开启才落本机记录
+      if (transparency && (meta.host || meta.endpoint)) {
+        recordLlmUsage({
+          ts: Date.now(),
+          endpoint: meta.endpoint ?? "",
+          host: meta.host ?? "",
+          model: meta.model ?? "",
+          third_party: Boolean(meta.third_party),
+          fallback_used: Boolean(meta.fallback_used),
+          prompt_tokens: meta.usage?.prompt_tokens,
+          completion_tokens: meta.usage?.completion_tokens,
+          elapsed_ms: meta.elapsed_ms,
+          difficulty: meta.route?.difficulty,
+        });
+      }
+      appendReplyActions(replyBlock, reply);
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
-    }, 650);
+    } catch (error) {
+      const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
+      if (options.removeOnUnavailable && unavailable) {
+        replyBlock.remove();
+        return;
+      }
+      const message = error instanceof Error ? error.message : "对话请求失败，请稍后再试";
+      copy.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+      if (error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED") {
+        copy.insertAdjacentHTML(
+          "beforeend",
+          `<p class="muted"><button type="button" class="reply-configure-link" data-action="open-api-settings">${t("前往设置中心配置模型接口")}</button></p>`,
+        );
+      }
+      scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+    }
   }
 
   function initModelingResizer() {
@@ -2477,7 +3074,44 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return select;
   }
 
+  function closeSidebarDrawer(shellNode) {
+    const host = shellNode || $("[data-sidebar-shell]");
+    if (!host?.classList.contains("sidebar-open")) return;
+    host.classList.remove("sidebar-open");
+    $('[data-action="toggle-sidebar-drawer"]', host)?.setAttribute("aria-expanded", "false");
+  }
+
+  /**
+   * 视口跨过断点时同步侧栏形态：进入 821~1180 自动收成图标栏，回到宽屏还原用户偏好，
+   * 离开手机档必须收掉抽屉，否则宽屏会留下一层遮罩挡住页面。
+   */
+  let responsiveShellBound = false;
+  function bindResponsiveShell() {
+    if (responsiveShellBound) return;
+    let rail;
+    let drawer;
+    try {
+      rail = window.matchMedia(RAIL_VIEWPORT);
+      drawer = window.matchMedia(DRAWER_VIEWPORT);
+    } catch {
+      return;
+    }
+    responsiveShellBound = true;
+    const sync = () => {
+      const shellNode = $("[data-sidebar-shell]");
+      if (!shellNode) return;
+      const collapsed = !drawer.matches && (sidebarCollapsed() || rail.matches);
+      shellNode.classList.toggle("sidebar-collapsed", collapsed);
+      const toggle = $('[data-action="toggle-sidebar"]', shellNode);
+      toggle?.setAttribute("aria-expanded", String(!collapsed));
+      if (!drawer.matches) closeSidebarDrawer(shellNode);
+    };
+    rail.addEventListener("change", sync);
+    drawer.addEventListener("change", sync);
+  }
+
   function bindCommon(screen) {
+    bindResponsiveShell();
     document.addEventListener("click", event => {
       if (!event.target.closest("[data-model-picker]")) {
         $$("[data-model-picker].open").forEach(picker => {
@@ -2490,13 +3124,37 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (codeTab) { switchMethodLanguage(codeTab.dataset.codeLang); return; }
       const goButton = event.target.closest("[data-go]");
       if (goButton) { go(goButton.dataset.go); return; }
+      const paneButton = event.target.closest("[data-modeling-pane]");
+      if (paneButton) {
+        const split = paneButton.closest("[data-modeling-split]");
+        if (!split) return;
+        split.dataset.mobilePane = paneButton.dataset.modelingPane;
+        $$("[data-modeling-pane]", split).forEach(button => {
+          const on = button === paneButton;
+          button.classList.toggle("active", on);
+          button.setAttribute("aria-selected", String(on));
+        });
+        // 图表按容器宽度绘制，从隐藏态切回来必须重算一次。
+        requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+        return;
+      }
       const action = event.target.closest("[data-action]")?.dataset.action;
       if (!action) return;
       const target = event.target.closest("[data-action]");
       if (action === "new-task") go("new");
+      if (action === "toggle-sidebar-drawer" || action === "close-sidebar-drawer") {
+        const sidebarShell = target.closest("[data-sidebar-shell]");
+        if (!sidebarShell) return;
+        const open = action === "toggle-sidebar-drawer" && !sidebarShell.classList.contains("sidebar-open");
+        sidebarShell.classList.toggle("sidebar-open", open);
+        $('[data-action="toggle-sidebar-drawer"]', sidebarShell)?.setAttribute("aria-expanded", String(open));
+        return;
+      }
       if (action === "toggle-sidebar") {
         const sidebarShell = target.closest("[data-sidebar-shell]");
         if (!sidebarShell) return;
+        // 手机档侧栏本身就是抽屉，这颗按钮的语义随之变成“收起抽屉”。
+        if (matchesViewport(DRAWER_VIEWPORT)) { closeSidebarDrawer(sidebarShell); return; }
         const collapsed = sidebarShell.classList.toggle("sidebar-collapsed");
         target.setAttribute("aria-expanded", String(!collapsed));
         target.title = collapsed ? "展开侧栏" : "收起侧栏";
@@ -2599,6 +3257,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           textarea.value = "";
         }
       }
+      if (action === "open-api-settings") openSettingsCenter("api");
       if (action === "files") modal("附件", '<div class="attachment-chip">2026国赛A题题目.pdf</div><div class="attachment-chip">共享单车数据集.csv</div><div class="attachment-chip">城市区域划分示意图.png</div>');
       if (action === "more" || action === "row-menu") popupMenu(target, ["重命名", "复制", "归档"]);
       if (action === "toggle-activity") {
@@ -2607,12 +3266,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         list?.classList.toggle("collapsed");
         const collapsed = list?.classList.contains("collapsed") ?? false;
         target.setAttribute("aria-expanded", String(!collapsed));
+        // 重建文案时保留步骤计数徽标（n/6 由控制器持续更新），不再写死数字
+        const badge = target.querySelector("[data-steps-count]");
+        const badgeHtml = badge ? badge.outerHTML : '<span class="steps-count" data-steps-count hidden></span>';
         target.innerHTML = collapsed
-          ? `${icon("eye")} 查看 4 个执行步骤 ${icon("caret-down")}`
-          : `${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}`;
+          ? `${icon("eye")} 查看执行步骤 ${badgeHtml}${icon("caret-down")}`
+          : `${icon("eye-slash")} 收起执行步骤 ${badgeHtml}${icon("caret-up")}`;
       }
-      if (action === "edit-assumption") modal("编辑假设", '<textarea>数据完整且质量可用\n共享单车可跨区域调度\n调度以最小化总缺车惩罚为目标</textarea>', () => toast("假设已更新"));
-      if (action === "edit-output") modal("编辑输出要求", '<textarea>给出完整建模流程与假设说明\n提供关键模型公式与变量定义\n输出可复现实验结果与对比分析</textarea>', () => toast("输出要求已更新"));
       if (action === "new-project") modal("新建项目", '<label>项目名称</label><input placeholder="输入项目名称"><label>项目说明</label><textarea placeholder="简单描述建模目标"></textarea>', () => toast("项目已创建"));
       if (action === "upload-data") $(".file-input")?.click() || toast("可直接拖入 CSV、XLSX 文件");
       if (action === "clean-data") { target.textContent = "清洗中…"; setTimeout(() => { target.textContent = "清洗完成"; toast("已处理缺失值与异常记录"); }, 850); }
@@ -2770,6 +3430,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         $(".global-search input")?.focus();
       }
       if (event.key === "Escape") {
+        closeSidebarDrawer();
         $(".menu")?.remove();
         $(".modal-backdrop")?.remove();
         $$("[data-model-picker].open").forEach(picker => {
@@ -3232,5 +3893,7 @@ export function activateScreen(screen: ScreenId): void {
   if (workspaceStageContent[screen]) bindWorkspaceStageNav();
   // 放在工作台挂载之后：恢复对话草稿要等 composer 渲染完成。
   mountTaskAutosave(screen);
+  // 模型选择器换成真实接口池（Auto + 已保存接口），未配置时保持演示选项。
+  void hydrateModelPickers();
 }
 

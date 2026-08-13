@@ -104,3 +104,15 @@ html[data-contrast="high"] .muted,
 html[data-contrast="high"] small {
   color: var(--muted);
 }
+
+html[data-contrast="high"] .project-table th,
+html[data-contrast="high"] .project-table td,
+html[data-contrast="high"] .stage-pill {
+  color: var(--ink);
+}
+
+html[data-contrast="high"] .project-name span,
+html[data-contrast="high"] .table-doc > i,
+html[data-contrast="high"] .row-menu-button {
+  color: var(--muted);
+}

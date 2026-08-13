@@ -14,6 +14,19 @@ export interface TaskRunActionInput {
   client_token?: string | null;
 }
 
+/** 步骤运行记录（/steps）：执行轨迹的真实耗时与尝试次数来源。 */
+export interface WorkspaceStepRun {
+  id: string;
+  node: string;
+  attempt: number;
+  status: string;
+  failure_class?: string | null;
+  failure_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+}
+
 interface ErrorEnvelope {
   code?: string;
   message?: string;
@@ -98,6 +111,13 @@ export const modelingWorkspaceApi = {
   get(runId: string, signal?: AbortSignal): Promise<ModelingWorkspaceView> {
     return request<ModelingWorkspaceView>(
       `/api/v1/task-runs/${encodeURIComponent(runId)}/workspace`,
+      { signal },
+    );
+  },
+
+  steps(runId: string, signal?: AbortSignal): Promise<{ items: WorkspaceStepRun[] }> {
+    return request<{ items: WorkspaceStepRun[] }>(
+      `/api/v1/task-runs/${encodeURIComponent(runId)}/steps`,
       { signal },
     );
   },

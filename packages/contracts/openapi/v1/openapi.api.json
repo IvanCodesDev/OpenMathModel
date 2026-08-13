@@ -779,6 +779,90 @@
         "title": "BudgetInput",
         "type": "object"
       },
+      "ChatMessageModel": {
+        "properties": {
+          "content": {
+            "maxLength": 100000,
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatMessageModel",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "properties": {
+          "endpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Id"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageModel"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "stream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
       "CodeRequest": {
         "properties": {
           "code": {
@@ -965,6 +1049,204 @@
         ],
         "title": "Kind1",
         "type": "string"
+      },
+      "LlmConfigUpdateRequest": {
+        "description": "整体替换式保存：与设置面板「保存更改」语义一致。",
+        "properties": {
+          "active_endpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Endpoint Id"
+          },
+          "allow_proxy": {
+            "default": true,
+            "title": "Allow Proxy",
+            "type": "boolean"
+          },
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/LlmEndpointModel"
+            },
+            "maxItems": 20,
+            "title": "Endpoints",
+            "type": "array"
+          },
+          "fallback": {
+            "default": true,
+            "title": "Fallback",
+            "type": "boolean"
+          },
+          "stream": {
+            "default": true,
+            "title": "Stream",
+            "type": "boolean"
+          }
+        },
+        "title": "LlmConfigUpdateRequest",
+        "type": "object"
+      },
+      "LlmEndpointModel": {
+        "description": "一条已保存接口；字段与设置面板一一对应，密钥仅存本机后端。",
+        "properties": {
+          "api_key": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "maxLength": 500,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "headers": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Headers",
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Model",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "organization": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Organization",
+            "type": "string"
+          },
+          "path_prefix": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Path Prefix",
+            "type": "string"
+          },
+          "protocol": {
+            "default": "openai",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "weight": {
+            "default": 0,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "title": "LlmEndpointModel",
+        "type": "object"
+      },
+      "LlmTestRequest": {
+        "description": "「测试连接」直接携带表单当前值，无需先保存。",
+        "properties": {
+          "allow_proxy": {
+            "default": true,
+            "title": "Allow Proxy",
+            "type": "boolean"
+          },
+          "api_key": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "maxLength": 500,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "headers": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Headers",
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Model",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "organization": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Organization",
+            "type": "string"
+          },
+          "path_prefix": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Path Prefix",
+            "type": "string"
+          },
+          "protocol": {
+            "default": "openai",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "weight": {
+            "default": 0,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "title": "LlmTestRequest",
+        "type": "object"
       },
       "LoginRequest": {
         "properties": {
@@ -2394,6 +2676,63 @@
         ]
       }
     },
+    "/api/account/llm-config": {
+      "get": {
+        "operationId": "get_llm_config_api_account_llm_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Llm Config",
+        "tags": [
+          "account"
+        ]
+      },
+      "put": {
+        "description": "整体替换保存。密钥存服务端而不是浏览器：对话回复与任务执行都在\n服务端出网调用模型，密钥留在本机后端、不随页面分发。",
+        "operationId": "update_llm_config_api_account_llm_config_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmConfigUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Llm Config",
+        "tags": [
+          "account"
+        ]
+      }
+    },
     "/api/account/me": {
       "get": {
         "operationId": "me_api_account_me_get",
@@ -2801,6 +3140,45 @@
         ]
       }
     },
+    "/api/chat": {
+      "post": {
+        "operationId": "chat_api_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/health": {
       "get": {
         "operationId": "api_health_api_health_get",
@@ -2821,6 +3199,69 @@
           }
         },
         "summary": "Api Health",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/llm/test": {
+      "post": {
+        "description": "用表单当前值做一次最小补全，验证地址、密钥与模型 ID 全链路可用。",
+        "operationId": "test_llm_endpoint_api_llm_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Llm Endpoint",
+        "tags": [
+          "llm"
+        ]
+      }
+    },
+    "/api/system": {
+      "get": {
+        "operationId": "api_system_api_system_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api System Api System Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Api System",
         "tags": [
           "ops"
         ]

@@ -136,12 +136,108 @@ class PreferencesUpdateRequest(BaseModel):
     max_concurrent_runs: int = Field(ge=1, le=MAX_CONCURRENT_RUNS_CEILING)
 
 
+# ── 自定义模型接口（设置中心「自定义 API」） ─────────────────────
+
+_LLM_PROTOCOLS = ("openai", "anthropic", "gemini", "ollama", "custom")
+
+
+class LlmEndpointModel(BaseModel):
+    """一条已保存接口；字段与设置面板一一对应，密钥仅存本机后端。"""
+
+    id: Optional[str] = Field(default=None, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    protocol: str = "openai"
+    base_url: str = Field(max_length=500)
+    api_key: str = Field(default="", max_length=500)
+    model: str = Field(default="", max_length=200)
+    organization: str = Field(default="", max_length=200)
+    headers: str = Field(default="", max_length=2000)
+    path_prefix: str = Field(default="", max_length=200)
+    #: 模型能力权重（1-10，Auto 模式按它路由）；0 = 未设置，按模型名自动推断。
+    weight: int = Field(default=0, ge=0, le=10)
+
+    @field_validator("protocol")
+    @classmethod
+    def check_protocol(cls, value: str) -> str:
+        if value not in _LLM_PROTOCOLS:
+            raise ValueError(f"接口协议必须是 {', '.join(_LLM_PROTOCOLS)} 之一")
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def check_base_url(cls, value: str) -> str:
+        url = value.strip().rstrip("/")
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("Base URL 必须以 http:// 或 https:// 开头")
+        return url
+
+    @field_validator("path_prefix")
+    @classmethod
+    def check_path_prefix(cls, value: str) -> str:
+        prefix = value.strip()
+        if prefix and not prefix.startswith("/"):
+            raise ValueError("路径前缀必须以 / 开头")
+        return prefix
+
+
+class LlmConfigUpdateRequest(BaseModel):
+    """整体替换式保存：与设置面板「保存更改」语义一致。"""
+
+    endpoints: list[LlmEndpointModel] = Field(default_factory=list, max_length=20)
+    active_endpoint_id: Optional[str] = None
+    allow_proxy: bool = True
+    stream: bool = True
+    fallback: bool = True
+
+
+class LlmTestRequest(LlmEndpointModel):
+    """「测试连接」直接携带表单当前值，无需先保存。"""
+
+    allow_proxy: bool = True
+
+
+class ChatMessageModel(BaseModel):
+    role: str
+    content: str = Field(max_length=100_000)
+
+    @field_validator("role")
+    @classmethod
+    def check_role(cls, value: str) -> str:
+        if value not in ("system", "user", "assistant"):
+            raise ValueError("消息角色必须是 system / user / assistant")
+        return value
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessageModel] = Field(min_length=1, max_length=100)
+    # None = 跟随设置中心「流式输出」开关
+    stream: Optional[bool] = None
+    model: Optional[str] = Field(default=None, max_length=200)
+    # "auto" = 先判定问题难度，再按接口权重路由到强弱合适的模型
+    route: Optional[str] = Field(default=None, max_length=20)
+    # 指定某条已保存接口作为本次主接口（模型选择器手动选中时携带）
+    endpoint_id: Optional[str] = Field(default=None, max_length=64)
+
+
 # ── 响应体构造 ───────────────────────────────────────────────────
 
 
 def preferences_payload(user: User) -> dict:
     return {
         "max_concurrent_runs": user.max_concurrent_runs or DEFAULT_MAX_CONCURRENT_RUNS,
+    }
+
+
+def llm_config_payload(user: User) -> dict:
+    """返回完整配置（含密钥）：仅本人可读，本机部署下等价于“保存在本机”。"""
+    raw = user.llm_config if isinstance(user.llm_config, dict) else {}
+    endpoints = [e for e in (raw.get("endpoints") or []) if isinstance(e, dict)]
+    return {
+        "endpoints": endpoints,
+        "active_endpoint_id": raw.get("active_endpoint_id") or (endpoints[0].get("id") if endpoints else None),
+        "allow_proxy": bool(raw.get("allow_proxy", True)),
+        "stream": bool(raw.get("stream", True)),
+        "fallback": bool(raw.get("fallback", True)),
     }
 
 

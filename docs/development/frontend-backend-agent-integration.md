@@ -585,6 +585,54 @@ GET /api/health
 
 尚未验收（需浏览器）：设置中心外观分区只剩可读性三项、保存/恢复默认不再改动主题、历史保存过深色偏好的浏览器打开后界面为浅色。
 
+### 2026-08-12 设置中心「诊断」做实
+
+高级设置的诊断分区此前三个按钮全是假动作（定时器伪装诊断、toast 假装打开目录、剪贴板写死字符串）。本轮全部接真：
+
+- 后端新增 `GET /api/system`（ops，免登录，同 `/api/health`）：返回服务名、版本、Python 版本、数据库方言名、runner 开关与服务器时间；刻意不暴露连接串、路径与凭据（`test_system_endpoint.py` 断言序列化结果不含 `://` 与文件路径）。OpenAPI 基线已重新导出并通过 `--check`。
+- 前端新增 `apps/web/src/diagnostics/system-diagnostics.ts`：并发探测 `/api/health`（连通性与延迟）、`/api/system`（后端信息，404 归为提示以兼容旧后端）、`/api/account/me`（登录态，401 视为接口正常），5 秒超时；报告文本汇总前端环境（UA/语言/视口/在线状态）与后端信息。
+- 「运行网络诊断」把三项结果渲染为分区内的状态行（通过/提示/异常三色图标）；「打开日志目录」浏览器内无真实语义，改为「导出诊断报告」（下载 txt）；「复制系统信息」复制同一份报告，剪贴板不可用时提示改用导出。三个按钮执行期间禁用并显示进行中文案。
+- 图标排版修正：`.diagnostic-actions button` 改 inline-flex 居中 + 7px 间距，图标统一 15px，不再随文字基线漂移。
+- 英文词典同步：移除“打开日志目录”等失效词条，新增诊断结果与提示语翻译。
+
+当日执行并通过：`pytest backend/api/tests -q`（98 个用例）、`export_openapi.py --check`、`node --test`（en-US 词典 5 项）、`npm run check` 与 `npm run build --workspace @openmathmodel/web`；对运行中的后端实测 `/api/system` 返回 200 与预期字段。
+
+尚未验收（需浏览器）：三个按钮的交互与状态行视觉、导出的 txt 内容、未登录/后端停机两种场景下的诊断结论展示。
+
+### 2026-08-13 自定义 API 全链路做实（对话回复 + 任务执行）
+
+设置中心「自定义 API」此前整页是摆设：表单只落 localStorage、「测试连接」是定时器假动作、已保存接口是写死的演示行、三个开关无消费方。本轮全部接真，对话回复与任务执行统一按该配置在服务端出网调用模型（密钥不下发页面、无浏览器跨域问题）：
+
+- 后端新增 `users.llm_config`（迁移 0010，JSON 可空列兼容 SQLite 补列）：已保存接口列表（名称/协议/Base URL/密钥/模型/组织/自定义请求头/路径前缀）、主接口与三个行为开关；`GET/PUT /api/account/llm-config` 仅本人可读写。
+- 新增 `omm_api/llm.py`：接口协议下拉的五个选项全部可用——OpenAI Compatible / Ollama / 自定义 REST 走 Chat Completions 形状（Base URL 为裸域名时自动补 `/v1/chat/completions`，已带路径则原样拼接，显式路径前缀最优先），Anthropic Messages（x-api-key + anthropic-version）、Gemini generateContent（key 走查询串）各自映射；流式 SSE 逐协议解析、用量归一并输出结构化用量日志（「记录接口用量」）。「允许使用第三方中转站」关闭时仅放行官方域名与本机地址（403 PROXY_DISABLED）；「失败时自动切换备用接口」仅在超时、网络层失败或 HTTP 429 时按保存顺序切换，模型侧 4xx/5xx 属配置问题不重试；流式一旦开始输出不再回退，避免内容重复。`httpx` 升为运行时依赖；测试经 `_transport_factory` 注入 MockTransport，全程不出网。
+- 新增 `POST /api/chat`（需登录）：无状态代理，对话历史随请求携带、服务端不落库；按「流式输出」开关走 SSE（meta/delta/done/error 事件）或一次性 JSON。`POST /api/llm/test`：用表单当前值做最小补全，返回时延、实际模型与回复摘录，验证地址/密钥/模型 ID 全链路。
+- 任务执行换脑（engine_glue）：按 run → project.owner → `users.llm_config` 装配节点，配置可用时「问题分析」「建模方案」两个阶段走 `omm-agent-skills` 真实 LLM 节点（goal→problem_statement 适配；JSON Schema 校验 + 一次修复重试；方案 A/B 产出后停在审批），未配置或提示词缺失时整链回落 sim-0.1；其余四阶段仍为模拟节点，待后续批次替换。`omm-agent-skills` 的 requires-python 放宽至 3.10（与 core 同理：纯标准库 + 惰性注解，backend venv 当前为 3.10）。
+- 前端：对话页发送后的假回复（650ms 定时器固定文案）改为真实流式渲染（`integration/agent-chat.ts`），完成后标注实际域名、模型与是否切换备用（第三方中转站按开关文案显示实际域名），未配置/未登录时提供「前往设置中心配置模型接口」入口；设置保存时同步 llm-config（更新主接口或创建首个；example.com 示例占位视为未配置，避免把演示值当真实接口）；「测试连接」「保存为新接口」接真；已保存接口列表从服务端渲染，菜单支持设为主接口/删除；面板打开时表单、三个开关与协议下拉均以服务端为准回填（`integration/llm-settings.ts`）。密钥提示文案改为「密钥仅保存在本机后端」。
+- OpenAPI 基线重导出（新增 3 个路径）；英文词典删除假动作词条、新增对话与接口管理文案。
+
+当日执行并通过：`pytest backend/api/tests -q`（126 个用例，含 llm-config 读写、五协议映射、流式/回退/门控、任务换脑与修复重试等 28 个新用例；本机需 `PYTHONUTF8=1`——alembic.ini 是 UTF-8 而系统 locale 为 GBK，属环境问题与本轮改动无关）、`pytest agents/skills/tests`（3.10 兼容 26 用例）、`export_openapi.py --check`、`node --test`（en-US 词典 5 项）、`npm run check` 与 `npm run build --workspace @openmathmodel/web`。
+
+尚未验收（需浏览器 + 真实厂商接口）：设置面板的回填/测试连接/接口列表交互、对话页流式渲染与错误提示视觉、真实 OpenAI 兼容网关与 Ollama 的实测（本轮上游全部为 MockTransport 模拟）。
+
+### 2026-08-13（追加）主流厂商官方 API 预设与「模型厂商」页更新
+
+实测反馈驱动的三轮加固与厂商预设落地：
+
+- 错误兜底：`llm.py` 把网络层异常全部归一为可执行错误信封（超时 504 LLM_TIMEOUT、连接失败 502 LLM_UNREACHABLE、重定向 LLM_REDIRECTED 提示改 Base URL、非 JSON 响应 LLM_BAD_RESPONSE 展示响应开头），不再向页面裸露 500；超时/网络失败与 429 一样触发备用接口切换；「测试连接」不再限制 max_tokens（推理模型思考预算可能远超小额上限），读超时放宽至 45 秒。
+- 路径与域名护栏：OpenAI 兼容协议在 Base URL 为裸域名时自动补 `/v1/chat/completions`（带路径原样拼接、显式前缀最优先）；填知名厂商官网/聊天页域名（deepseek.com、chatgpt.com、claude.ai、kimi.com、x.ai、bigmodel.cn 等）时直接提示正确 API 地址（400 LLM_WEBSITE_URL）。前端把我们自己后端的 404 映射为「后端尚未加载新接口，请重启后端服务」。
+- 厂商预设（`integration/llm-providers.ts`）：九家主流厂商官方 API 一键填入——OpenAI（gpt-5.6-sol/terra/luna）、Anthropic（claude-opus-5/sonnet-5/fable-5/haiku-4-5）、Google Gemini（gemini-3.6-flash/3.5-flash/3.5-flash-lite）、DeepSeek（deepseek-v4-pro/flash，旧 deepseek-chat 已于 2026-07-24 停用）、通义千问（qwen3.8-max，DashScope 兼容模式）、Kimi（kimi-k3）、智谱（glm-5.2/5/5-turbo）、xAI（grok-4.6/4.5）、本地 Ollama。模型名与接入地址采集自各厂商官方文档（2026-08-13）。
+- 「模型厂商」页：卡片改由预设生成（副标题=当前在售模型），「配置」跳转自定义 API 并自动填入协议/地址/模型（用户只补 Key），「已连接」状态按已保存接口的域名真实判定；智能路由下拉与输入区模型选择器同步为最新型号；无品牌资源的厂商 logo 回落首字母标。官方域名白名单扩充（api.x.ai、火山方舟、百度千帆、腾讯混元、阶跃、硅基流动等），不受「允许第三方中转站」开关影响。
+- 新增测试：网络异常信封 5 例、官网域名护栏 1 例、官方域名门控 1 例（累计 41 个 LLM 相关用例）。词典同步增删。
+- 思考过程展示：后端按协议提取推理内容（OpenAI 系 `reasoning_content`/`reasoning`、Anthropic `thinking` 内容块、Gemini `thought: true` 部件），流式经 SSE `reasoning` 事件转发、非流式随响应 `reasoning` 字段返回；前端在回答上方渲染思考块——流式期间「思考中…」shimmer 标签 + 180px 封顶自动跟随视口（超高时上下渐隐遮罩），回答开始后折叠为「已思考 N 秒」可点击展开回看；思考内容只展示、不回写对话历史；适配深色主题与「减少动态效果」偏好。无思考内容的模型在等待首个回答增量时同样显示扫光「思考中…」占位；思考头部按钮覆盖全局 button 悬停底色保持裸文本观感；回复完成后右下角提供复制按钮（复制 Markdown 原文，成功后短暂切换对勾图标）。
+- 执行步骤时间线：完成态图标由绿钩改为黑色圆形白色对钩（19px，深色主题反白），与单色设计语言一致。
+- 细粒度活动流（参考图节奏：思考/工具/叙述交替）：真实 LLM 节点的每次模型调用产出过程事件进 `run.log`（`EngineLlmPort.on_event` → 同事务 append_event）——`thinking`（思考内容截断至 6000 字 + 耗时）与 `llm_call`（模型/接口/耗时/tokens 摘要）；工作台回复区在摘要之后渲染 `.agent-stream`：`run.log` 过程行（深度思考=sparkle、调用模型=lightning，右侧真实耗时，点开浅灰 16px 圆角容器看思考全文或调用参数）、`artifact.published`（写入 X，可展开）、`approval.requested/resolved`（等待确认行实时走秒、落定显示等待时长）、`node_changed/status_changed` 作为叙述行穿插；按 sequence 去重，SSE 首连回放历史、重连不重复；`step.*` 事件归上方阶段时间线不重复展示。follow-tail 浮标按产品反馈移除。配套后端测试断言 thinking/llm_call 过程事件入流。
+- Agentic 执行轨迹（融合改造，参考 Codex 语义时间线/RemCodex 统一纵向流的公开设计）：真实运行下（`data-workspace-source="api"`）把运行页的六个步骤行去卡片化为时间线行——左侧动作图标（分析/数据/方案/实验/写作/交付各一，进行中呼吸脉冲，完成保持既定的黑底白钩，失败红叉）、中间阶段名（重试时加「第 n 次尝试」徽标）、右侧真实耗时（数据来自 `/task-runs/{id}/steps` 控制面接口，与快照并行拉取；完成/失败=服务端起止差，进行中每 500ms 走秒）；行点击展开的详情区为浅灰 16px 圆角低权重容器（失败时显示失败原因，进行中显示 current_step）；细左轨 + 垂直留白建立时间线关系；「回到最新」follow-tail 浮标（上翻 160px 出现，不抢滚动位置）；输入框上方运行状态条（spinner + 状态 · 当前阶段 + n/6，等待确认暂停旋转，规划期与终态不显示）。演示页面完全不受影响（样式全部按 api 来源作用域隔离）。
+- 任务执行节奏（按 ADR-0007 组件语义实现，不新增容器）：任务创建后、首个步骤启动前（QUEUED 或 RUNNING 且全部页面 PENDING）为规划阶段，控制器广播 `omm:run-planning`，页面层在**同一条 Agent 消息内**（注入步骤块头部之后，不拆成第二条对话）发起一次**真实的开场分析**（走 /api/chat：思考块流式 → 折叠「已思考 N 秒」→ Markdown 分析正文，未配置接口/未登录时整块静默消失，sessionStorage 按 run 防重、刷新不重复扣费）。严格顺序出现：开场分析落定前（`data-opening-state="pending"`）计划部分（折叠开关/步骤列表/阶段摘要/CTA）完全不渲染也不占位——包括「任务正在排队」摘要与「等待任务开始」按钮；回复结束（成功/失败/静默移除均算）后置为 done 并广播 `omm:opening-analysis-done`，控制器立即重渲染，六个阶段按 140ms 级联缓速揭示（等待期间刻意不构建时间线，保留 planning 标记，放行时才播放级联；之后的 SSE 刷新与中途进页不重播）。注意 `hidden` 属性对带作者级 `display:flex/inline-flex` 的元素无效，这些元素需显式 `[hidden] { display: none !important }`，否则会出现「已隐藏却仍显示」。
+- 对话页不暴露接口信息：回复正文不再附带实际域名、模型名与 Auto 难度判定（流式期间的「正在调用 <host>」行一并移除）；「允许使用第三方中转站」的透明化只体现为设置中心的本机用量记录，关闭时连记录也不留。
+- 对话回复 Markdown 渲染（`text/markdown.ts`，零依赖）：转义优先的受限子集——标题/列表/引用/表格/分隔线/粗斜体/行内代码/代码块/http(s) 链接；`$…$`、`$$…$$`、`\(…\)`、`\[…\]` 公式输出为 `data-tex` 节点（行内加 `data-tex-inline`），复用方法库的 KaTeX 懒加载器在全文到齐后排版，加载前保留 LaTeX 源码回退；「$5 和 $10」这类金额不会误判为公式，`javascript:` 链接保持纯文本。流式期间逐增量重渲染，未闭合代码块随增量增长。配套 `markdown.test.mjs` 10 个用例（XSS 转义、注入路径、表格、流式半截代码块等）。
+
+当日执行并通过：`pytest backend/api/tests/test_llm_*.py test_task_runs_llm_nodes.py`、`node --test`（词典 5 项）、`npm run check` 与 `npm run build --workspace @openmathmodel/web`。真实接口对 ainb.plus 网关探针验证连通（假密钥返回上游 401 信封）；DeepSeek 官方等真实密钥实测留给浏览器验收。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

@@ -9,13 +9,15 @@ from ..config import RECOVERY_CODE_COUNT
 from ..db import get_db
 from ..deps import AuthContext, get_auth_context
 from ..errors import ApiError
-from ..models import AuthSession, RecoveryCode, User, utcnow
+from ..models import AuthSession, RecoveryCode, User, new_id, utcnow
 from ..schemas import (
     CodeRequest,
+    LlmConfigUpdateRequest,
     PasswordChangeRequest,
     PasswordRequest,
     PreferencesUpdateRequest,
     ProfileUpdateRequest,
+    llm_config_payload,
     preferences_payload,
     security_payload,
     session_payload,
@@ -106,6 +108,40 @@ def update_preferences(
     ctx.user.max_concurrent_runs = body.max_concurrent_runs
     db.commit()
     return {"preferences": preferences_payload(ctx.user)}
+
+
+# ── 自定义模型接口配置（设置中心「自定义 API」） ──────────────────
+
+
+@router.get("/llm-config")
+def get_llm_config(ctx: AuthContext = Depends(get_auth_context)):
+    return {"config": llm_config_payload(ctx.user)}
+
+
+@router.put("/llm-config")
+def update_llm_config(
+    body: LlmConfigUpdateRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """整体替换保存。密钥存服务端而不是浏览器：对话回复与任务执行都在
+    服务端出网调用模型，密钥留在本机后端、不随页面分发。"""
+    endpoints = []
+    for endpoint in body.endpoints:
+        data = endpoint.model_dump()
+        data["id"] = data["id"] or f"ep_{new_id()[:12]}"
+        endpoints.append(data)
+    known_ids = {e["id"] for e in endpoints}
+    active = body.active_endpoint_id if body.active_endpoint_id in known_ids else None
+    ctx.user.llm_config = {
+        "endpoints": endpoints,
+        "active_endpoint_id": active or (endpoints[0]["id"] if endpoints else None),
+        "allow_proxy": body.allow_proxy,
+        "stream": body.stream,
+        "fallback": body.fallback,
+    }
+    db.commit()
+    return {"config": llm_config_payload(ctx.user)}
 
 
 # ── 头像 ─────────────────────────────────────────────────────────

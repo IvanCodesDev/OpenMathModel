@@ -5,7 +5,9 @@
  * 排布和发送按钮位置——这些是界面基线的一部分。
  */
 
-.composer {
+/* 聊天页输入框本身就是绝对定位（靠 left/right/bottom 贴住对话区），
+   这里不能把它降级成 relative：那样宽度会按流内算，右半截连同发送按钮被裁掉。 */
+.composer:not(.chat-composer) {
   position: relative;
 }
 

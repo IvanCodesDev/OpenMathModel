@@ -19,8 +19,12 @@ dependencies = [
   "python-multipart>=0.0.9",
   # 附件正文抽取：OOXML/OpenDocument/压缩包/纯文本走标准库，PDF 必须有它
   "pypdf>=5",
+  # 自定义模型接口的服务端出网调用（对话回复与任务执行共用）
+  "httpx>=0.27",
   "omm-contracts",
   "omm-agent-core",
+  # 问题分析 / 建模方案两个阶段的真实 LLM 节点与提示词注册表
+  "omm-agent-skills",
 ]
 
 [project.optional-dependencies]
