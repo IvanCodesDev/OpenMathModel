@@ -99,9 +99,14 @@ def validate_registry(registry: dict[str, Any]) -> list[str]:
         missing_rights = sorted(rights_fields - set(rights))
         if missing_rights:
             errors.append(f"{prefix}.license_record: missing {', '.join(missing_rights)}")
+        # HTTPS is the rule. A source may declare plain_http_only when its
+        # official site simply has no TLS endpoint (the statistical modelling
+        # contest's site keeps port 443 closed), which keeps the exception in
+        # the ledger instead of silently weakening the invariant.
+        schemes = {"https", "http"} if source.get("plain_http_only") else {"https"}
         for entrypoint in source["entrypoints"]:
             parsed = urllib.parse.urlparse(entrypoint.get("url", ""))
-            if parsed.scheme != "https" or not parsed.netloc:
+            if parsed.scheme not in schemes or not parsed.netloc:
                 errors.append(f"{prefix}.entrypoints: only absolute HTTPS URLs are accepted")
             if parsed.hostname not in source["domains"]:
                 errors.append(f"{prefix}.entrypoints: domain is not registered: {parsed.hostname}")

@@ -20,6 +20,7 @@ from typing import Any
 
 from pypdf import PdfReader
 
+import html_layout
 import pdf_layout
 
 
@@ -27,6 +28,21 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW_ROOT = ROOT / "datasets/raw/sources/full-problem-archives"
 EXTRACTED_ROOT = RAW_ROOT / "extracted-v2"
 COMAP_MANIFEST = RAW_ROOT / "comap/manifest.json"
+TIPDM_CUP_MANIFEST = RAW_ROOT / "tipdm-cup/manifest.json"
+TIPDM_BDRACE_MANIFEST = RAW_ROOT / "tipdm-cup-bdrace/manifest.json"
+TJJMDS_MANIFEST = RAW_ROOT / "tjjmds/manifest.json"
+
+# What counts as "the problem" in a notice announcing a choose-your-own-topic
+# contest: the numbered section naming the theme or the topic categories, plus
+# the inline appendix spelling the topic requirements out. Everything else in
+# the notice is contest administration.
+TJJMDS_KEEP_SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、\s*.{0,14}(主题|选题)")
+TJJMDS_SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、")
+TJJMDS_KEEP_APPENDIX_RE = re.compile(r"^(附件\s*1\s*[：:]\s*)?选题具体要求$")
+TJJMDS_APPENDIX_RE = re.compile(r"^附件\s*\d")
+# Lines on the interpretation page that exist only to route readers to the
+# video edition; the text edition follows them.
+TJJMDS_VIDEO_CHROME_RE = re.compile(r"二维码|扫一扫|^《.*》(（[^）]*）)?$")
 OUTPUT = ROOT / "datasets/interim/full_problem_sources/problems.json"
 LEGACY_PAGE_ROOT = ROOT / "apps/web/public/problem-pages"
 FIGURE_ROOT = ROOT / "apps/web/public/problem-figures"
@@ -609,12 +625,211 @@ def huashu_cup_2026_problems() -> list[dict[str, Any]]:
     return output
 
 
+def tipdm_cup_problems() -> list[dict[str, Any]]:
+    """Publish the Teddy Cup statements staged from the organiser's own domain.
+
+    ``related_files`` is pinned empty rather than discovered: every statement of
+    an edition is staged into one directory, so walking a statement's parent
+    would hand it its siblings as attachments. The real data sets live on
+    pan.baidu.com and are reachable only through the edition page, which is
+    already published as the record's source URL.
+    """
+    manifest_path = TIPDM_CUP_MANIFEST
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            f"{manifest_path} missing. Stage it first:\n"
+            "  python datasets/recipes/stage_tipdm_cup_statements.py all"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    output = []
+    for record in manifest["records"]:
+        letter = record.get("letter")
+        code = (f"{record['year']} 泰迪杯 {letter}" if letter
+                else f"{record['year']} 泰迪杯")
+        item = problem_record(
+            problem_id=record["id"],
+            code=code,
+            title=record["title"],
+            competition="“泰迪杯”数据挖掘挑战赛",
+            category="泰迪杯",
+            year=record["year"],
+            source_id="tipdm_cup_official",
+            source_url=record["notice_url"],
+            pdf=ROOT / record["path"],
+            related_files=[],
+        )
+        output.append(item)
+        print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    return output
+
+
+def tipdm_bdrace_problems() -> list[dict[str, Any]]:
+    """Publish the Teddy Cup statements the organiser's platform serves as rich text.
+
+    Only the bodies the platform published whole are emitted. The rest stop at a
+    row of dots or an invitation to fetch the remainder from a WeChat account,
+    and a partial statement does not belong in the problem library; the staging
+    manifest records every one of them either way.
+
+    These records carry no ``source_pdf`` and no attachments: the API body is the
+    published form, and the real PDFs and data sets sit behind registration.
+    """
+    if not TIPDM_BDRACE_MANIFEST.is_file():
+        raise RuntimeError(
+            f"{TIPDM_BDRACE_MANIFEST} missing. Snapshot it first:\n"
+            "  python datasets/recipes/stage_tipdm_bdrace_statements.py all"
+        )
+    manifest = json.loads(TIPDM_BDRACE_MANIFEST.read_text(encoding="utf-8"))
+    output = []
+    for record in manifest["problems"]:
+        if not record["complete"]:
+            continue
+        body = (ROOT / record["path"]).read_text(encoding="utf-8")
+        blocks, full_text = html_layout.build_blocks(body, record["id"], FIGURE_ROOT)
+        if not blocks:
+            raise RuntimeError(f"{record['id']} produced no content blocks")
+        problem_type, directions, keywords = classify(record["title"])
+        item = {
+            "id": record["id"],
+            "code": f"{record['year']} 泰迪杯 {record['letter']}",
+            "title": record["title"],
+            "competition": record["competition"],
+            "category": "泰迪杯",
+            "year": record["year"],
+            "problem_type": problem_type,
+            "modeling_directions": directions,
+            "keywords": keywords or ["泰迪杯", str(record["year"])],
+            "data_requirement": "题面由主办方平台发布；随题数据仅在竞赛期间开放",
+            "status": "完整题面",
+            "summary": summarize(blocks, record["title"]),
+            "source_id": "tipdm_cup_official",
+            "source_url": record["source_url"],
+            "source_status": "official",
+            "access_scope": "stored_content",
+            "attachments": [],
+            "content_format": "structured_text",
+            "content_status": "complete",
+            "content_character_count": len(full_text),
+            "content_block_count": len(blocks),
+            "content_blocks": blocks,
+        }
+        output.append(item)
+        print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    return output
+
+
+def tjjmds_theme_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the background, theme and topic-requirement parts of one notice.
+
+    The preamble names the organisers and the contest's purpose -- the closest
+    thing to a problem background this contest publishes -- so it is kept along
+    with the theme section. The length gate drops the salutation line and the
+    signature block, which are also set as short paragraphs.
+    """
+    kept: list[dict[str, Any]] = []
+    mode: str | None = None
+    seen_section = False
+    for block in blocks:
+        text = (block.get("text") or "").strip()
+        opens = bool(TJJMDS_KEEP_SECTION_RE.match(text))
+        opens_appendix = bool(TJJMDS_KEEP_APPENDIX_RE.match(text))
+        if opens:
+            mode = "section"
+        elif opens_appendix:
+            mode = "appendix"
+        elif mode == "section" and TJJMDS_SECTION_RE.match(text):
+            mode = None
+        elif mode == "appendix" and TJJMDS_APPENDIX_RE.match(text):
+            mode = None
+        if TJJMDS_SECTION_RE.match(text):
+            seen_section = True
+        if not mode:
+            if not seen_section and block["type"] == "paragraph" and len(text) >= 60:
+                kept.append(block)
+            continue
+        if kept and text and kept[-1].get("text", "").strip() == text:
+            continue
+        if opens or opens_appendix:
+            kept.append({"type": "heading", "level": 2, "text": text})
+        else:
+            kept.append(block)
+    return kept
+
+
+def tjjmds_problems() -> list[dict[str, Any]]:
+    """Publish the statistical modelling contest's per-edition themes.
+
+    The contest sets no problems: each edition announces a theme -- or, before
+    2021, topic categories with judging criteria -- and every team writes a
+    paper on a title of its own choosing. The theme section of the official
+    notice is therefore the entire published form of the assignment, and that
+    is what these records carry; a per-year A/B/C statement does not exist
+    anywhere to collect.
+    """
+    if not TJJMDS_MANIFEST.is_file():
+        raise RuntimeError(
+            f"{TJJMDS_MANIFEST} missing. Snapshot it first:\n"
+            "  python datasets/recipes/stage_tjjmds_notices.py all"
+        )
+    manifest = json.loads(TJJMDS_MANIFEST.read_text(encoding="utf-8"))
+    interpretations = {item["year"]: item for item in manifest.get("interpretations", [])}
+    output = []
+    for record in manifest["records"]:
+        body = (ROOT / record["body_path"]).read_text(encoding="utf-8")
+        blocks, _full = html_layout.build_blocks(body, record["id"], FIGURE_ROOT)
+        blocks = tjjmds_theme_blocks(blocks)
+        if not blocks:
+            raise RuntimeError(f"{record['id']}: no theme section found in the notice")
+        # The 2022 edition also published its theme interpretation as text --
+        # several professors spelling out suggested research directions. That is
+        # the most statement-like material this contest has ever released, so it
+        # rides along as an appendix; the other editions ship video only.
+        extra = interpretations.get(record["year"])
+        if extra is not None:
+            jiedu_body = (ROOT / extra["body_path"]).read_text(encoding="utf-8")
+            jiedu_blocks, _ = html_layout.build_blocks(jiedu_body, record["id"], FIGURE_ROOT)
+            jiedu_blocks = [block for block in jiedu_blocks
+                            if not TJJMDS_VIDEO_CHROME_RE.search(block.get("text") or "")]
+            if not jiedu_blocks:
+                raise RuntimeError(f"{record['id']}: interpretation text came out empty")
+            blocks = blocks + [{"type": "document_break", "title": "主题解读（文字版）"}] + jiedu_blocks
+        plain = "\n".join(block.get("text", "") for block in blocks)
+        item = {
+            "id": record["id"],
+            "code": f"{record['year']} 统计建模",
+            "title": record["title"],
+            "competition": "全国大学生统计建模大赛",
+            "category": "统计建模",
+            "year": record["year"],
+            "problem_type": "统计建模",
+            "modeling_directions": ["统计模型", "数据分析"],
+            "keywords": ["统计建模", "自拟题目", str(record["year"])],
+            "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+            "status": "完整题面",
+            "summary": summarize(blocks, record["title"]),
+            "source_id": "tjjmds_official",
+            "source_url": record["notice_url"],
+            "source_status": "official",
+            "access_scope": "stored_content",
+            "attachments": [],
+            "content_format": "structured_text",
+            "content_status": "complete",
+            "content_character_count": len(plain),
+            "content_block_count": len(blocks),
+            "content_blocks": blocks,
+        }
+        output.append(item)
+        print(f"FULL {item['id']} blocks={item['content_block_count']} chars={item['content_character_count']}")
+    return output
+
+
 def build() -> dict[str, Any]:
     for generated_root in (LEGACY_PAGE_ROOT, FIGURE_ROOT, DOWNLOAD_ROOT):
         if generated_root.exists():
             shutil.rmtree(generated_root)
     problems = (comap_problems() + cumcm_problems() + apmcm_problems()
-                + mathorcup_problems() + huashu_cup_problems() + huashu_cup_2026_problems())
+                + mathorcup_problems() + huashu_cup_problems() + huashu_cup_2026_problems()
+                + tipdm_cup_problems() + tipdm_bdrace_problems() + tjjmds_problems())
     problems.sort(key=lambda item: (-item["year"], item["category"], item["code"]))
     result = {
         "schema_version": "1.0.0",
@@ -625,7 +840,11 @@ def build() -> dict[str, Any]:
             "cumcm_count": sum(item["source_id"] == "cumcm_official" for item in problems),
             "mathorcup_count": sum(item["source_id"] == "mathorcup_official" for item in problems),
             "huashu_cup_count": sum(item["source_id"] == "huashu_cup_official" for item in problems),
-            "page_count": sum(item["source_pdf"]["page_count"] for item in problems),
+            "tipdm_cup_count": sum(item["source_id"] == "tipdm_cup_official" for item in problems),
+            "tjjmds_count": sum(item["source_id"] == "tjjmds_official" for item in problems),
+            # A statement collected as rich text has no page count to add.
+            "page_count": sum(item["source_pdf"]["page_count"] for item in problems
+                              if item.get("source_pdf")),
             "text_block_count": sum(
                 block["type"] in {"heading", "paragraph", "list_item"}
                 for item in problems for block in item["content_blocks"]
@@ -660,13 +879,20 @@ def verify() -> dict[str, Any]:
     # COMAP adds 2015-2017 (14 statements). 2018-2020 are absent because the
     # official year indexes for those three serve no PDFs at all.
     # Huashu Cup is 18 from the 2020-2025 archive plus the 3 of the 2026 edition.
+    # The Teddy Cup contributes 12: one combined 2015 paper, A-C for 2016, 2019
+    # and 2020, the 2020 Nandu special problem, and the single 2023 statement the
+    # organiser's platform published whole rather than cutting off.
+    # The statistical modelling contest sets no problems; its eight records are
+    # the per-edition themes, one for every notice the official site publishes.
     expected = {
         "comap_count": 44,
         "apmcm_count": 32,
         "cumcm_count": 51,
         "mathorcup_count": 9,
         "huashu_cup_count": 21,
-        "problem_count": 157,
+        "tipdm_cup_count": 12,
+        "tjjmds_count": 8,
+        "problem_count": 177,
     }
     for key, value in expected.items():
         if data["stats"].get(key) != value:
@@ -678,9 +904,12 @@ def verify() -> dict[str, Any]:
             raise RuntimeError(f"Page screenshot block remains in {problem['id']}")
         if not any(block["type"] in {"heading", "paragraph", "list_item"} for block in problem["content_blocks"]):
             raise RuntimeError(f"No structured text in {problem['id']}")
-        source_pdf = ROOT / problem["source_pdf"]["path"]
-        if sha256(source_pdf) != problem["source_pdf"]["sha256"]:
-            raise RuntimeError(f"PDF hash mismatch {source_pdf}")
+        # A record published from a rich-text API has no source PDF to hash; its
+        # snapshot is pinned by its own staging recipe instead.
+        if problem.get("source_pdf"):
+            source_pdf = ROOT / problem["source_pdf"]["path"]
+            if sha256(source_pdf) != problem["source_pdf"]["sha256"]:
+                raise RuntimeError(f"PDF hash mismatch {source_pdf}")
         for block in problem["content_blocks"]:
             if block["type"] == "image":
                 asset = ROOT / "apps/web/public" / block["src"].lstrip("/")

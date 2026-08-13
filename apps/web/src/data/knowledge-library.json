@@ -1,9 +1,9 @@
 {
   "schema_version": "1.0.0",
-  "dataset_version": "wave-a-2d51293ffa70",
+  "dataset_version": "wave-a-eae1e68028b3",
   "generated_at": "2026-08-04T02:29:43+00:00",
   "stats": {
-    "problem_count": 169,
+    "problem_count": 189,
     "paper_count": 906,
     "source_count": 8
   },
@@ -932,7 +932,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 1825,
+      "content_character_count": 1823,
       "content_block_count": 33,
       "content_blocks": [
         {
@@ -1027,7 +1027,7 @@
         },
         {
           "type": "paragraph",
-          "text": "https://huggingface.co/datasets/cxyzhang/caseReportBench_Cl inicalDenseExtraction_Benchmark"
+          "text": "https://huggingface.co/datasets/cxyzhang/caseReportBench_ClinicalDenseExtraction_Benchmark"
         },
         {
           "type": "paragraph",
@@ -1055,7 +1055,7 @@
         },
         {
           "type": "paragraph",
-          "text": "https://www.cnopendata.com/data/m/food&medical/chs-drug.htm l"
+          "text": "https://www.cnopendata.com/data/m/food&medical/chs-drug.html"
         },
         {
           "type": "paragraph",
@@ -1914,8 +1914,8 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 2519,
-      "content_block_count": 54,
+      "content_character_count": 2523,
+      "content_block_count": 34,
       "content_blocks": [
         {
           "type": "heading",
@@ -1936,12 +1936,9 @@
           "text": "布图规划旨在给定的芯片轮廓内确定各功能模块的位置和方向，为后续的布局和布线奠定基础。芯片轮廓通常为正方形，其尺寸由所有模块的总面积（total_block_area）和预设的死区比例（dead_space_ratio）共同确定，死区比例反映了布线和其他开销所需的额外空间。芯片轮廓的尺寸计算如公式(1)所示，则芯片的左下角坐标和右上角坐标分别为()和(ℎ)。"
         },
         {
-          "type": "paragraph",
-          "text": "0,0,"
-        },
-        {
-          "type": "paragraph",
-          "text": "=ℎ = _ _ ∗ 1+ _ _ 1"
+          "type": "image",
+          "src": "/problem-figures/huashu-cup-2026-b/p001-eq01.png",
+          "alt": "huashu-cup-2026-b 第 1 页公式 1"
         },
         {
           "type": "paragraph",
@@ -2008,7 +2005,7 @@
         },
         {
           "type": "paragraph",
-          "text": "https://www.bohrium.com/sciencepedia/feynman/keyword/half_perimet er_wirelength"
+          "text": "https://www.bohrium.com/sciencepedia/feynman/keyword/half_perimeter_wirelength"
         },
         {
           "type": "paragraph",
@@ -2016,7 +2013,7 @@
         },
         {
           "type": "paragraph",
-          "text": "https://cc.ee.ntu.edu.tw/~ywchang/Papers/tcad06mfloorplanning.pdf"
+          "text": "https://cc.ee.ntu.edu.tw/~ywchang/Papers/tcad06-mfloorplanning.pdf"
         },
         {
           "type": "paragraph",
@@ -2039,44 +2036,8 @@
           "text": "该文件描述了功能模块的基本信息。功能模块分为两类：1) HardBlock，需要确定其摆放位置和方向；2) Terminal，位置和方向都已固定的模块。功能模块的名称、类型、尺寸均在该文件中给出。Terminal尺寸对解题并无帮助，因此略去其尺寸信息。Terminal仅作为固定引脚参与HPWL计算，不参与面积约束和重叠约束。文件格式示例如下："
         },
         {
-          "type": "paragraph",
-          "text": "NumHardBlocks：5"
-        },
-        {
-          "type": "paragraph",
-          "text": "//待确定位置和方向的blocks总个数"
-        },
-        {
-          "type": "paragraph",
-          "text": "NumTerminals：32"
-        },
-        {
-          "type": "paragraph",
-          "text": "//固定位置的terminals的总个数"
-        },
-        {
-          "type": "paragraph",
-          "text": "b0block4(0,0)(0,82)(199,82)(199,0)"
-        },
-        {
-          "type": "paragraph",
-          "text": "//模块名称类型边角个数节点1坐标节点2坐标节点3坐标节点4坐标"
-        },
-        {
-          "type": "paragraph",
-          "text": "…"
-        },
-        {
-          "type": "paragraph",
-          "text": "p1terminal"
-        },
-        {
-          "type": "paragraph",
-          "text": "//模块名称类型"
-        },
-        {
-          "type": "paragraph",
-          "text": "…"
+          "type": "code",
+          "text": "NumHardBlocks：5\n// 待确定位置和方向的blocks总个数\nNumTerminals：32\n// 固定位置的terminals的总个数\nb0 block 4 (0,0) (0,82) (199,82) (199,0)\n// 模块名称 类型 边角个数 节点1坐标 节点2坐标 节点3坐标 节点4坐标\n…\np1 terminal\n// 模块名称 类型\n…"
         },
         {
           "type": "paragraph",
@@ -2087,40 +2048,8 @@
           "text": "该文件描述了连线网络（亦可简称为“线网”）的基本信息。在优化线网的HPWL指标时，仅需要关注线网的所有引脚坐标组成的外接矩形的半周长，而不用考虑引脚内部具体如何连线。文件格式示例如下："
         },
         {
-          "type": "paragraph",
-          "text": "NumNets：10"
-        },
-        {
-          "type": "paragraph",
-          "text": "//线网的总个数"
-        },
-        {
-          "type": "paragraph",
-          "text": "NumPins：20"
-        },
-        {
-          "type": "paragraph",
-          "text": "//引脚的总个数"
-        },
-        {
-          "type": "paragraph",
-          "text": "//NetDegree：2"
-        },
-        {
-          "type": "paragraph",
-          "text": "//每个线网有多少个引脚p1"
-        },
-        {
-          "type": "paragraph",
-          "text": "b0"
-        },
-        {
-          "type": "paragraph",
-          "text": "//节点名称"
-        },
-        {
-          "type": "paragraph",
-          "text": "…"
+          "type": "code",
+          "text": "NumNets：10\n// 线网的总个数\nNumPins：20\n// 引脚的总个数\n// NetDegree：2\n// 每个线网有多少个引脚\np1\nb0\n// 节点名称\n…"
         },
         {
           "type": "paragraph",
@@ -2131,16 +2060,8 @@
           "text": "该文件描述了Terminal的基本信息，包括名称、X坐标和Y坐标。文件格式示例如下："
         },
         {
-          "type": "paragraph",
-          "text": "p100"
-        },
-        {
-          "type": "paragraph",
-          "text": "//模块名称X坐标Y坐标"
-        },
-        {
-          "type": "paragraph",
-          "text": "…"
+          "type": "code",
+          "text": "p1 0 0\n// 模块名称 X坐标 Y坐标\n…"
         }
       ],
       "source_pdf": {
@@ -2273,6 +2194,51 @@
         "sha256": "0adc971ab421a7de5e3dd1c19c8540479b16977893edf4af13486e88410622c9",
         "page_count": 2
       }
+    },
+    {
+      "id": "tjjmds-2026",
+      "code": "2026 统计建模",
+      "title": "服务国家战略 创新统计赋能",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2026,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2026"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "2026年（第十二届）全国大学生统计建模大赛（以下简称大赛）定于2026年3月正式启动。大赛由中国统计教育学会主办，国赛由内蒙古财经大学承办，省赛由27个赛区院校承办（见附件1）。现将相关事宜通知如下：",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/37119.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 146,
+      "content_block_count": 3,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "2026年（第十二届）全国大学生统计建模大赛（以下简称大赛）定于2026年3月正式启动。大赛由中国统计教育学会主办，国赛由内蒙古财经大学承办，省赛由27个赛区院校承办（见附件1）。现将相关事宜通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大赛主题"
+        },
+        {
+          "type": "paragraph",
+          "text": "大赛主题为“服务国家战略 创新统计赋能”，参赛队围绕主题自拟题目撰写论文。"
+        }
+      ]
     },
     {
       "id": "huashu-cup-2025-a",
@@ -2509,7 +2475,7 @@
       "keywords": [
         "数学建模"
       ],
-      "data_requirement": "含本地原题 PDF及 8 个随题附件",
+      "data_requirement": "含本地原题 PDF及 7 个随题附件",
       "status": "完整题面",
       "summary": "发光二极管（Light Emitting Diode, LED）作为一种高效、节能、环保的新型光源，近年来在多个领域得到了广泛应用。",
       "source_id": "huashu_cup_official",
@@ -2525,7 +2491,7 @@
           "sha256": "a6ab2be14eef48c45591b0875c44fbff14c12c22587e5f3ee36407dda62d8945"
         },
         {
-          "title": "随题附件（8 个文件，约 125 MB，官网下载）",
+          "title": "随题附件（7 个文件，约 119 MB，官网下载）",
           "url": "https://m.saikr.com/contest/notice_detail/44136",
           "kind": "data",
           "bytes": 0,
@@ -3534,6 +3500,51 @@
       }
     },
     {
+      "id": "tjjmds-2025",
+      "code": "2025 统计建模",
+      "title": "统计创新应用 数据引领未来",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2025,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2025"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "2025年（第十一届）全国大学生统计建模大赛（以下简称大赛）定于2025年2月正式启动。大赛由中国统计教育学会主办，国赛由东北财经大学承办，省赛由27个赛区院校承办（见附件1）。现将相关事宜通知如下：",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/37047.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 147,
+      "content_block_count": 3,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "2025年（第十一届）全国大学生统计建模大赛（以下简称大赛）定于2025年2月正式启动。大赛由中国统计教育学会主办，国赛由东北财经大学承办，省赛由27个赛区院校承办（见附件1）。现将相关事宜通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大赛主题"
+        },
+        {
+          "type": "paragraph",
+          "text": "本届大赛主题为“统计创新应用 数据引领未来”，参赛队围绕主题自拟题目撰写论文。"
+        }
+      ]
+    },
+    {
       "id": "comap-2025-icm-d",
       "code": "2025 ICM D",
       "title": "A Roadmap to a Better City",
@@ -3565,7 +3576,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 11964,
+      "content_character_count": 11966,
       "content_block_count": 64,
       "content_blocks": [
         {
@@ -3801,7 +3812,7 @@
         },
         {
           "type": "paragraph",
-          "text": "There are many valuable data sets available at: https://baltometro.org/about-us/datamaps/regional-gis-data-center and https://opendata.baltimorecountymd.gov/"
+          "text": "There are many valuable data sets available at: https://baltometro.org/about-us/data-maps/regional-gis-data-center and https://opendata.baltimorecountymd.gov/"
         },
         {
           "type": "heading",
@@ -3827,7 +3838,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[1] Rebuild of Baltimore’s Key Bridge to start ConstructConnect. Rebuild of Baltimore's key bridge to start. ConstructConnect. 2024 Jan 18. Available from: https://www.constructconnect.com/construction-economic-news/rebuild-of-baltimores-keybridge-to-start"
+          "text": "[1] Rebuild of Baltimore’s Key Bridge to start ConstructConnect. Rebuild of Baltimore's key bridge to start. ConstructConnect. 2024 Jan 18. Available from: https://www.constructconnect.com/construction-economic-news/rebuild-of-baltimores-key-bridge-to-start"
         },
         {
           "type": "paragraph",
@@ -3847,7 +3858,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[6] City of Baltimore. Baltimore Transit Data: Bus Stops [Internet]. Baltimore, MD: City of Baltimore; 2025 [cited 2025 Jan 7]. Available from: https://data.baltimorecity.gov/datasets/baltimore::bus-stops/explore?location=39.285971%2C- 76.620462%2C10.70"
+          "text": "[6] City of Baltimore. Baltimore Transit Data: Bus Stops [Internet]. Baltimore, MD: City of Baltimore; 2025 [cited 2025 Jan 7]. Available from: https://data.baltimorecity.gov/datasets/baltimore::bus-stops/explore?location=39.285971%2C-76.620462%2C10.70"
         },
         {
           "type": "paragraph",
@@ -3859,7 +3870,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[9] Maryland Department of Transportation. MDOT SHA Annual Average Daily Traffic (AADT) Locations [Internet]. Baltimore, MD: Maryland Department of Transportation; 2025 [cited 2025 Jan 10]. Available from: https://data.imap.maryland.gov/datasets/maryland::mdot-sha-annualaverage-daily-traffic-aadt-locations/explore"
+          "text": "[9] Maryland Department of Transportation. MDOT SHA Annual Average Daily Traffic (AADT) Locations [Internet]. Baltimore, MD: Maryland Department of Transportation; 2025 [cited 2025 Jan 10]. Available from: https://data.imap.maryland.gov/datasets/maryland::mdot-sha-annual-average-daily-traffic-aadt-locations/explore"
         }
       ],
       "source_pdf": {
@@ -4576,7 +4587,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 5825,
+      "content_character_count": 5826,
       "content_block_count": 27,
       "content_blocks": [
         {
@@ -4695,7 +4706,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[3] https://alaskapublic.org/2023/08/07/crammed-with-tourists-juneau-wonders-what-willhappen-as-mendenhall-glacier-recedes/"
+          "text": "[3] https://alaskapublic.org/2023/08/07/crammed-with-tourists-juneau-wonders-what-will-happen-as-mendenhall-glacier-recedes/"
         },
         {
           "type": "paragraph",
@@ -11366,6 +11377,51 @@
       ]
     },
     {
+      "id": "tjjmds-2024",
+      "code": "2024 统计建模",
+      "title": "大数据与人工智能时代的统计研究",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2024,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2024"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "2024年（第十届）全国大学生统计建模大赛（以下简称“大赛”）定于2024年2月正式启动。大赛由中国统计教育学会主办，国赛由西安财经大学承办，省赛由28个赛区院校承办（见附件1）。现将相关事宜通知如下：",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/36972.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 150,
+      "content_block_count": 3,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "2024年（第十届）全国大学生统计建模大赛（以下简称“大赛”）定于2024年2月正式启动。大赛由中国统计教育学会主办，国赛由西安财经大学承办，省赛由28个赛区院校承办（见附件1）。现将相关事宜通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大赛主题"
+        },
+        {
+          "type": "paragraph",
+          "text": "本届大赛主题为“大数据与人工智能时代的统计研究”，参赛队围绕主题自拟题目撰写论文。"
+        }
+      ]
+    },
+    {
       "id": "comap-2024-icm-d",
       "code": "2024 ICM D",
       "title": "Great Lakes Water Problem",
@@ -11397,7 +11453,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 12343,
+      "content_character_count": 12345,
       "content_block_count": 52,
       "content_blocks": [
         {
@@ -11638,12 +11694,12 @@
         },
         {
           "type": "list_item",
-          "text": "Explanation of the IJC’s Efforts to Manage the Great Lakes Basin: National Research Council; The Royal Society of Canada. (2006). Review of Lake Ontario-St. Lawrence River Studies. Washington D.C.: National Research Council of the National Academies. Retrieved from https://nap.nationalacademies.org/catalog/11481/review-ofthe-lake-ontario-st-lawrence-river-studies",
+          "text": "Explanation of the IJC’s Efforts to Manage the Great Lakes Basin: National Research Council; The Royal Society of Canada. (2006). Review of Lake Ontario-St. Lawrence River Studies. Washington D.C.: National Research Council of the National Academies. Retrieved from https://nap.nationalacademies.org/catalog/11481/review-of-the-lake-ontario-st-lawrence-river-studies",
           "marker": "1."
         },
         {
           "type": "list_item",
-          "text": "Description of the Great Lakes Navigation Systems: Great Lakes Seaway Navigation System. (2023). Retrieved from American Great Lakes Ports Association: https://www.greatlakesports.org/industry-overview/the-great-lakes-seaway-navigationsystem/#:~:text=Lake%20Erie%20drains%20into%20Lake,in%20elevation%20approxim ately%20600%20feet v102023 Use of Large Language Models and Generative AI Tools in COMAP Contests",
+          "text": "Description of the Great Lakes Navigation Systems: Great Lakes Seaway Navigation System. (2023). Retrieved from American Great Lakes Ports Association: https://www.greatlakesports.org/industry-overview/the-great-lakes-seaway-navigation-system/#:~:text=Lake%20Erie%20drains%20into%20Lake,in%20elevation%20approxim ately%20600%20feet v102023 Use of Large Language Models and Generative AI Tools in COMAP Contests",
           "marker": "2."
         },
         {
@@ -11807,7 +11863,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 11393,
+      "content_character_count": 11395,
       "content_block_count": 44,
       "content_blocks": [
         {
@@ -11894,15 +11950,15 @@
         },
         {
           "type": "paragraph",
-          "text": "[1] Boston Consulting Group. (2023, December 4). An Insurance Risk Framework for Climate Adaptation. Retrieved at: https://www.bcg.com/publications/2023/an-insurance-risk-framework-forclimate-adaptation"
+          "text": "[1] Boston Consulting Group. (2023, December 4). An Insurance Risk Framework for Climate Adaptation. Retrieved at: https://www.bcg.com/publications/2023/an-insurance-risk-framework-for-climate-adaptation"
         },
         {
           "type": "paragraph",
-          "text": "[2] Munich RE. (2022, January 10). Hurricanes, cold waves, tornadoes: Weather disasters in USA dominate natural disaster losses in 2021. Retrieved at: https://www.munichre.com/en/company/mediarelations/media-information-and-corporate-news/media-information/2022/natural-disaster-losses- 2021.html"
+          "text": "[2] Munich RE. (2022, January 10). Hurricanes, cold waves, tornadoes: Weather disasters in USA dominate natural disaster losses in 2021. Retrieved at: https://www.munichre.com/en/company/media-relations/media-information-and-corporate-news/media-information/2022/natural-disaster-losses-2021.html"
         },
         {
           "type": "paragraph",
-          "text": "[3] Union of Concerned Scientists. (2016, July 19). Saving an Icon: Moving the Cape Hatteras Lighthouse Away from the Shifting Shoreline. Retrieved at: https://www.ucsusa.org/resources/movingcape-hatteras-lighthouse-away-shifting-shoreline"
+          "text": "[3] Union of Concerned Scientists. (2016, July 19). Saving an Icon: Moving the Cape Hatteras Lighthouse Away from the Shifting Shoreline. Retrieved at: https://www.ucsusa.org/resources/moving-cape-hatteras-lighthouse-away-shifting-shoreline"
         },
         {
           "type": "heading",
@@ -14849,7 +14905,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 11686,
+      "content_character_count": 11685,
       "content_block_count": 53,
       "content_blocks": [
         {
@@ -15229,7 +15285,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[1]Link:https://ecloud.10086.cn/api/query/developer/user/home.html#match@matchDeta ils?id=c0466578cfeb4369905c9657614f71f5&utm_source=WUYUEBEI&_channel_track_ke y=dpPYo2aG"
+          "text": "[1]Link:https://ecloud.10086.cn/api/query/developer/user/home.html#match@matchDetails?id=c0466578cfeb4369905c9657614f71f5&utm_source=WUYUEBEI&_channel_track_ke y=dpPYo2aG"
         }
       ],
       "source_pdf": {
@@ -15762,8 +15818,8 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 3568,
-      "content_block_count": 59,
+      "content_character_count": 3581,
+      "content_block_count": 60,
       "content_blocks": [
         {
           "type": "heading",
@@ -15981,7 +16037,11 @@
         },
         {
           "type": "paragraph",
-          "text": "表3问题X设计参数表"
+          "text": "设计参数表"
+        },
+        {
+          "type": "paragraph",
+          "text": "表/定日镜尺寸3问题X/定日镜安装高度"
         },
         {
           "type": "table",
@@ -16128,11 +16188,11 @@
         },
         {
           "type": "paragraph",
-          "text": "[3]百度百科，太阳高度角，https://baike.baidu.com/item/%E5%A4%AA%E9%98%B3%E9%AB%98%E5%BA%A6%E8%A7% 92?fromModule=lemma_search-box"
+          "text": "[3]百度百科，太阳高度角，https://baike.baidu.com/item/%E5%A4%AA%E9%98%B3%E9%AB%98%E5%BA%A6%E8%A7%92?fromModule=lemma_search-box"
         },
         {
           "type": "paragraph",
-          "text": "[4]百度百科，太阳方位角，https://baike.baidu.com/item/%E5%A4%AA%E9%98%B3%E6%96%B9%E4%BD%8D%E8%A7% 92?fromModule=lemma_search-box"
+          "text": "[4]百度百科，太阳方位角，https://baike.baidu.com/item/%E5%A4%AA%E9%98%B3%E6%96%B9%E4%BD%8D%E8%A7%92?fromModule=lemma_search-box"
         },
         {
           "type": "paragraph",
@@ -16784,6 +16844,81 @@
         "sha256": "a066df6f2816c4c2124bed2e09ce41e0e42b5d1d5296790d2137b791b55d5b30",
         "page_count": 1
       }
+    },
+    {
+      "id": "tipdm-cup-2023-a",
+      "code": "2023 泰迪杯 A",
+      "title": "新冠疫情防控数据的分析",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2023,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "题面由主办方平台发布；随题数据仅在竞赛期间开放",
+      "status": "完整题面",
+      "summary": "自2019年底至今，全国各地陆续出现不同程度的新冠病毒感染疫情，如何控制疫情蔓延、维持社会生活及经济秩序的正常运行是疫情防控的重要课题。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org:10010/#/competition/1620719578957127680",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 664,
+      "content_block_count": 11,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、问题背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "自2019年底至今，全国各地陆续出现不同程度的新冠病毒感染疫情，如何控制疫情蔓延、维持社会生活及经济秩序的正常运行是疫情防控的重要课题。大数据分析为疫情的精准防控提供了高效处置、方便快捷的工具，特别是在人员的分类管理、传播途径追踪、疫情研判等工作中起到了重要作用，为卫生防疫部门的管理决策提供了可靠依据。疫情数据主要包括人员信息、场所信息、个人自查上报信息、场所码扫码信息、核酸采样检测信息、疫苗接种信息等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "本赛题提供了某市新冠疫情防疫系统的相关数据信息，请根据这些数据信息进行综合分析，主要任务包括数据仓库设计、疫情传播途径追踪、传播指数估计及疫情趋势研判等。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、解决问题"
+        },
+        {
+          "type": "paragraph",
+          "text": "1. 根据核酸检测中阳性人员的出行时间与场所追踪密接者，将结果保存到“result1.csv”文件中（文件模板见附件1中的result1.csv）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2. 由问题1的结果，根据密接者的出行时间与场所追踪相应的次密接者，将结果保存到“result2.csv”文件中（文件模板见附件1中的result2.csv）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3. 建立模型，分析接种疫苗对病毒传播指数的影响。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4. 根据阳性人员的数量及辐射范围，分析确定需要重点管控的场所。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5. 为了更精准地进行疫情防控和人员管理，你认为还需要收集哪些相关数据。基于这些数据构建模型，分析其精准防控的效果。"
+        },
+        {
+          "type": "paragraph",
+          "text": "注 在解决上述问题时，要求结合赛题提供的数据信息表建立数据仓库，实现数据治理的内容，请在论文中明确阐述做了哪些数据治理工作，具体是如何实现的。"
+        },
+        {
+          "type": "paragraph",
+          "text": "根据出题方要求，竞赛结束后不对外提供数据。"
+        }
+      ]
     },
     {
       "id": "cpmcm-2023-a",
@@ -19411,6 +19546,51 @@
       ]
     },
     {
+      "id": "tjjmds-2023",
+      "code": "2023 统计建模",
+      "title": "中国式现代化的统计测度",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2023,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2023"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "为在大学生中营造学习统计知识、应用统计技能的良好氛围，激发大学生关注时事、聚焦经济社会发展热点难点问题的积极性，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，推动统计学科教学发展和大数据时代统计人才培养，助力推进统计…",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/36882.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 338,
+      "content_block_count": 3,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "为在大学生中营造学习统计知识、应用统计技能的良好氛围，激发大学生关注时事、聚焦经济社会发展热点难点问题的积极性，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，推动统计学科教学发展和大数据时代统计人才培养，助力推进统计现代化改革，在国家统计局统计教育培训中心指导下，中国统计教育学会联合教育部高等学校统计学类专业教学指导委员会、全国应用统计专业学位研究生教育指导委员会举办2023年（第九届）全国大学生统计建模大赛（以下简称“大赛”）。本届大赛由浙江财经大学承办，中国政府统计研究中心协办。省赛环节由27个赛区院校负责（见附件1），现将有关事项通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大赛主题"
+        },
+        {
+          "type": "paragraph",
+          "text": "本届大赛主题为“中国式现代化的统计测度”。各参赛队根据主题自行拟定题目撰写参赛论文。"
+        }
+      ]
+    },
+    {
       "id": "comap-2023-icm-d",
       "code": "2023 ICM D",
       "title": "Prioritizing the UN Sustainability Goals",
@@ -19888,7 +20068,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 2497,
+      "content_character_count": 2498,
       "content_block_count": 16,
       "content_blocks": [
         {
@@ -19964,7 +20144,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[1] Matheson, V. and Zimbalist, A. (2021, April 19). Why Cities No Longer Clamor to Host the Olympic Games. Georgetown Journal of International Affairs. Found February 9, 2023 at: https://gjia.georgetown.edu/2021/04/19/why-cities-no-longer-clamor-to-host-the-olympicgames/."
+          "text": "[1] Matheson, V. and Zimbalist, A. (2021, April 19). Why Cities No Longer Clamor to Host the Olympic Games. Georgetown Journal of International Affairs. Found February 9, 2023 at: https://gjia.georgetown.edu/2021/04/19/why-cities-no-longer-clamor-to-host-the-olympic-games/."
         }
       ],
       "source_pdf": {
@@ -21395,7 +21575,7 @@
         },
         {
           "type": "paragraph",
-          "text": "[2] National Oceanographic and Atmospheric Administration. NOAA Research News & Features. (2022, June 3). Carbon dioxide now mare than 50% higher than pre-industrial levels [Internet].https://www.noaa.gov/news-release/carbon-dioxide-now-more-than-50-higher-thanpre-industrial-levels."
+          "text": "[2] National Oceanographic and Atmospheric Administration. NOAA Research News & Features. (2022, June 3). Carbon dioxide now mare than 50% higher than pre-industrial levels [Internet].https://www.noaa.gov/news-release/carbon-dioxide-now-more-than-50-higher-than-pre-industrial-levels."
         },
         {
           "type": "paragraph",
@@ -21403,7 +21583,7 @@
         },
         {
           "type": "paragraph",
-          "text": "https://www.oecd.org/env/cc/Outlook%20to%202050_Climate%20Change%20Chapter_HIG LIGHTS-FINA-8pager-UPDATED%20NOV2012.pdf."
+          "text": "https://www.oecd.org/env/cc/Outlook%20to%202050_Climate%20Change%20Chapter_HIGLIGHTS-FINA-8pager-UPDATED%20NOV2012.pdf."
         }
       ],
       "source_pdf": {
@@ -23935,6 +24115,326 @@
       }
     },
     {
+      "id": "tjjmds-2022",
+      "code": "2022 统计建模",
+      "title": "构建新发展格局的统计测度",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2022,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2022"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "为在大学生中倡导学习统计知识、应用统计技能的良好氛围，聚焦经济社会发展热点难点问题，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，加强创新思维意识，助力推进统计现代化改革。",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/36602.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 8100,
+      "content_block_count": 70,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "为在大学生中倡导学习统计知识、应用统计技能的良好氛围，聚焦经济社会发展热点难点问题，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，加强创新思维意识，助力推进统计现代化改革。在国家统计局统计教育培训中心指导下，中国统计教育学会、教育部高等学校统计学类专业教学指导委员会、全国应用统计专业学位研究生教育指导委员会联合主办2022年（第八届）全国大学生统计建模大赛（以下简称“大赛”）。本届大赛由成都信息工程大学承办，中国政府统计研究中心和北京东方艾学信息技术有限责任公司协办。省赛环节由28个赛区院校负责（见附件1），现将有关事项通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大赛主题"
+        },
+        {
+          "type": "paragraph",
+          "text": "经组委会研究，本届大赛主题为“构建新发展格局的统计测度”。各参赛队根据主题自行拟定题目撰写参赛论文。"
+        },
+        {
+          "type": "document_break",
+          "title": "主题解读（文字版）"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "01主题解读一：易东（陆军军医大学）"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大数据时代需要生物医学统计测度创新研究"
+        },
+        {
+          "type": "paragraph",
+          "text": "统计测度就是用一定的符号和数字，通过某种形式和载体，对所研究的现象或事物的特征进行量化反映，表现为可用于统计分析的数据的过程。当前，在“大数据+健康中国”背景下，始终把人民群众生命安全和身体健康放在第一位。智慧医疗是医疗信息化最新发展阶段的产物，是5G、云计算、大数据、AR/VR、人工智能等技术与医疗行业进行深度融合的结果，是互联网医疗的演进。因此，生物医学统计学的研究对象已经从结构化数据延伸到了包括非结构化数据在内的一切数据。面对大数据提出的新挑战，我们应该大胆探索生物医学统计测度的新思路、新理论和新方法，共同推动统计学与数据科学的发展。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、生物医学测度研究的主要考虑"
+        },
+        {
+          "type": "paragraph",
+          "text": "主题中的两个关键词，一个是“新发展格局”，反映到生物医学领域就是生物医学大数据蓬勃发展的时代；另一个是“统计测度”，该测度需具有统计学属性，且由于生物医学大数据具有类型多样，来源复杂等不同于一般“小数据”的特征，该“统计测度”在定义上或可不必像数学中所定义的测度那样的抽象，同时，可不受制于函数的具体表现形式，甚至可超越数学上的界定，如：可以基于不同的数据类型和变量维度，定义测度函数。强调生物医学统计始终以生物医学数据为研究对象，但是在大数据新发展格局下，数据类型多样，来源复杂，范围扩大，需要新型生物统计理论方法加以支撑。新统计理论的发展离不开新统计测度的定义，而新测度的定义离不开新数据的推动。强调生物医学统计实质是方法论，统计学拥有一整既能让分散的数据集合又能让综合的数据分解、既能展现数据规律又能显现数据关系的方法。但在新发展格局下，方法论的基础将更加广泛，应该更加注重与生物医学实践相结合。强调生物医学领域不同于其他领域，更应注重对数据背后的因果价值挖掘，有了因果证据才能实现干预，降低疾病负担，促进健康。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "三、建议的研究方向"
+        },
+        {
+          "type": "paragraph",
+          "text": "1. 临床医学研究方向"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）疾病的诊断、治疗与预后的准确性或有效性、安全性测度"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）临床试验相关的指标和测度；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）基于大数据的疾病风险预测指标和分析模型；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（4）基于真实世界的指标体系和测度方法。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2. 精准医学方面"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）精准医学相关的指标和测度；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）个体化治疗方案选择的标准和评价；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）现代精准医学与高通量组学结合多维测度融合研究。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3. 高通量组学数据"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）高通量组学数据的指标和测度；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）组学数据数字特征提取；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）组学数据数字特征的降维；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（4）组学数据数字特征的多维测度融合研究。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4. 因果推断方面"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）因果推断相关工具指标和测度；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）基于反事实框架的倾向性评分（propensity score, PS）研究；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）被破坏的随机试验中因果效应测度和估计；"
+        },
+        {
+          "type": "paragraph",
+          "text": "5. 公共卫生与健康医疗大数据分析"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）疾病流行规律、疾病的风险评估与预测指标测度；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）人群健康以及环境和经济影响程度的衡量；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）传染病防控格局的影响测度（基于多源大数据）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（4）政策干预效果评估的统计测度；"
+        },
+        {
+          "type": "paragraph",
+          "text": "（5）政府基本公共医疗服务和管理相关测度。"
+        },
+        {
+          "type": "paragraph",
+          "text": "（6）健康医疗大数据分析相关测度（如健康风险预测管理评价）。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "02主题解读二：王学钦（中国科技大学）"
+        },
+        {
+          "type": "paragraph",
+          "text": "统计测度是什么？通常，当人们听到测度这个术语时，可能会想到测量某物的长度或测量某物的数量。简单来说，统计测度就是用一定形式的载体（符号或数字），对所研究的现象或事物的特征进行量化反映，表现为可用于统计分析的数据的过程。"
+        },
+        {
+          "type": "paragraph",
+          "text": "但事实上，我们更关心的，是一种更“广义”的测度，它可以理解为一种利用数据来描述世界的方法。往大了说，它可以是全国甚至全球的经济核算相关指标方法：GDP核算方法与模型、全球价值链测度、“三新”经济核算、区域碳排放核算、生态产品价值核算等研究、统计监测分析体系、高质量发展综合绩效评价、共同富裕统计监测指标体系、生育形势统计监测、养老健康等生活性服务业统计监测等研究、疫情综合防控指标体系的建立优化等等；往小了说，它也可以体现在自己生活的方方面面，包括：就业时对公司及岗位综合评分体系的构建、购物节中不同商品性价比指标的分析、疫情冲击下大家的生活幸福指数评估等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "测度的本质，就是让事物变得明白清晰、有理有据。无论从宏观上还是微观上，可以定性分析的问题往往不缺，缺少的是一种将定性问题转化为定量问题的数据思维与解决手段。其中的关键是要善于发现问题，提炼问题并转换问题，懂得利用数据作为工具去尝试实现、发展及创新一种统计测度。下面我们举一个统计测度的例子。最近股市与基金的一涨一跌都牵动着大家的心，作为把握股票市场动态最重要的工具之一，股票价格综合指数 [1]（包括上证指数、深证指数、各大板块指数以及美国纳斯达克指数等等）就是一种非常有效的统计测度。不同的指数就是将不同上市公司股票整体的涨跌情况，按照一定规则，通过权重比例综合在一起，形成的一系列统一量化指标。借助这一统计学指标，我们不仅可以把握整个市场的变化规律，还能从侧面动态衡量不同行业的经济冷暖变化情况。还需注意，只从单一指标上来看待某一问题往往是不充分、不合理的，可以将多种不同维度的指标量化综合成一套体系，科学系统地反映现象并解决问题，这套体系须是规范、量化且可得的。"
+        },
+        {
+          "type": "paragraph",
+          "text": "科学的统计测度还应该是与时俱进的。构建新发展格局的统计测度，不仅是社会经济发展的要求，也是全球竞争的必然。习近平总书记强调：“加快构建以国内大循环为主体、国内国际双循环相互促进的新发展格局，是‘十四五’规划《建议》 [2] 提出的一项关系我国发展全局的重大战略任务，需要从全局高度准确把握和积极推进。”这一任务要求我们紧跟时代步伐，着力解决目前社会上与生活中遇到的重点问题。落实到统计科学与大数据应用层面，我们可以从如下几个方面入手。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1. 研读《“十四五”大数据产业发展规划》 [3]。规划指出，“十四五”时期是我国工业经济向数字经济迈进的关键时期，对大数据产业发展提出了新的要求，产业将步入集成创新、快速发展、深度应用、和结构优化的新阶段。规划还介绍了多个专栏方向，包括：数据治理能力，重点标准研制及应用推广，工业大数据价值提升，行业大数据开发利用与数据安全铸盾。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2. 学习《“十四五”数字经济发展规划》 [4]。规划部署了八方面重点任务：优化升级数字基础设施；充分发挥数据要素作用；大力推进产业数字化转型；加快推动数字产业化；持续提升公共服务数字化水平；健全完善数字经济治理体系；着力强化数字经济安全体系；有效拓展数字经济国际合作。同时围绕八大任务，规划还明确了信息网络基础设施优化升级等十一个专项工程。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3. 参考《全国统计科学研究项目2022年度课题指南》 [5]。指南建议了九个重要研究选题方向：统计管理体制、国民经济核算、“三新”经济核算研究、统计法治与监督、统计制度方法和调查体系、统计监测分析、统计数据质量、统计基础理论、数字经济及其他。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4. 了解《Trends and Future Perspective Challenges in Big Data》 [6]。文章讨论了当前全球大数据的问题、机遇、趋势及挑战，进行详细解读与深度思考，同时给出了针对大数据系列问题的有效解决方案。其为我们提供了目前全球大数据遇到的热点与难点问题，让我们在了解新发展格局的同时，能够具有国际视野，拓宽思维边界。"
+        },
+        {
+          "type": "paragraph",
+          "text": "这些规划指南与参考文献虽然给定了大的方向，但论文具体的着重点，还是要避免太大、太泛，尽量以小见大，见微知著，找到实际立足点，落到实处上来。统计本质上是一门解决实际问题的学科，不是由一堆定理与公式堆砌的空中楼阁。下面我们以“碳中和”为例，抛砖引玉。"
+        },
+        {
+          "type": "paragraph",
+          "text": "全球工业化至今，人类各项活动排放的以二氧化碳为首的各类温室气体急剧增加，其已经超过了大自然的消纳能力，长此以往，将对地球生态系统造成难以挽回的伤害。目前，全球已有一百多个国家提出了“零碳”或“碳中和”的气候目标，但这一目标对于正处于工业化进程的中国来说是个巨大的挑战和考验 [7]。“十四五”期间，碳约束下的减排成为未来政策发力的重点，中共中央、国务院2021年底发布《关于完整准确全面贯彻新发展理念做好碳达峰碳中和工作的意见》 [8]，对努力推动实现碳达峰、碳中和目标进行全面部署，要求完善标准计量体系并提升统计监测能力。目前已有一些与统计测度相关的研究工作，如：中国碳市场压力指数的构建及应用 [10]；新时代我国能源高质量发展评价体系构建与测度研究 [11]；利用多种测度指标的碳足迹方法研究 [12, 13] 等等。但整体看，还有长足进步的空间，例如：我国现有的碳排放核算体系不够完善；碳排放核算方式与结果不够权威；碳排放核算方法体系相比于国际标准较落后等 [9]。核算体系不够完善，不够权威就意味着我们在国际上没有足够的话语权，若不尽早启动相关标准与核算体系的研究，难免将受制于人，因此这一系列问题的研究具有很强的现实意义与时代价值。"
+        },
+        {
+          "type": "paragraph",
+          "text": "最后，以上解读仅为一家之言，期待同学们都能够在比赛中有所收获，取得理想的成绩！"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "03主题解读三：吕光明（北京师范大学）"
+        },
+        {
+          "type": "paragraph",
+          "text": "国民经济是一个诸多活动单位组成的相互影响和彼此连接的循环，其根本目的在于从供给和需求两端从机制和过程两个方面来保障经济的持续稳定增长和发展的高质量。国民经济循环从过程上看大致分为生产、分配、流通和使用四个环节，从截面上看则表现为相应环节的比例结构。一般来说，在不同时期，受资源禀赋、发展阶段和发展战略或理念等因素的影响，各国国民经济循环的结构特征会出现不同程度的差别，但一段时期内相对稳定的循环结构特征就构成了特定的发展格局（蔡昉，2021）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1978年前，我国实行的是相对封闭的计划经济，对应的经济循环基本上以国内循环为主。1978年后，我国在稳步推进国内城市和农村经济改革的同时，逐步扩大对外开放，积极参与国际经济分工和经济全球化，形成了“两头在外、大进大出”的国际大循环发展格局。这一发展格局在特定发展阶段发挥了我国的比较优势，提高了企业的劳动生产率和产业的竞争力，推动了国民经济持续高速增长。2008年全球金融危机以来，我国发展面临的外部和内部环境发生较大变化。世界经济停滞趋势明显，逆全球化浪潮加剧，民粹主义和保护主义抬头，同时，国内人口红利消失，未富先老的压力变大，经济也由以前高速增长步入中低速增长的新常态。在这种情况下，亟待在国民经济循环上做出新调整和变革，以实现长期稳定的高质量发展。"
+        },
+        {
+          "type": "paragraph",
+          "text": "加快构建以国内大循环为主体、国内国际双循环相互促进的新发展格局是以习近平同志为核心的党中央立足国内外环境变化和面向全面建设社会主义现代化新征程的“十四五”和未来更长时期针对我国经济发展作出的重大战略安排，是着眼于重塑我国未来国际合作和竞争新优势而做出的重大战略部署。为落实这一战略安排和部署，国家“十四五”规划从坚持深化供给侧结构性改革、建立扩大内需的有效制度、坚定不移推进改革、坚定不移扩大开放和强化国内大循环的主导作用五个方面提出相应的政策导向安排。"
+        },
+        {
+          "type": "paragraph",
+          "text": "统计测度是对所研究的现象或事物的特征或规律进行量化描述和定量刻画的过程，其创新意义在于揭示以前没有发现的或不能测度的定量特征或规律。本届大赛以构建新发展格局的统计测度为题，正是期待参赛者能够运用不同的统计测度分析手段、方法和技术，定量刻画新发展格局构建过程中出现的新变化、形成的新特征、萌发的新动能，研究揭示其背后的驱动因素、作用渠道与作用机制，提炼形成一些典型化事实和相对可靠的经济规律。这些发现既可以从针对国民经济整体循环的系统研究中得出，也可以从针对局部或单一循环、具体循环环节甚至重要循环堵点的深入研究中得出。既可以是对内外部环境变化特点及其关联影响的深入揭示，也可以是核心变量和重要参数变化特征或趋势的系统挖掘。既可以是对综合循环变动特征或结构变化规律的量化挖掘，也可以是对五大政策导向安排具体建议或干预效果的统计分析。"
+        },
+        {
+          "type": "paragraph",
+          "text": "在紧扣主题选择参赛题目和设计测度分析方案时，个人认为需要注意如下四点：(1)循环结构变化是测度分析的核心基础。其中，循环结构包括生产、分配、需求等多个方面。(2)国内循环特征测度分析的空间很大。该类测度分析在研究角度、使用指标和研究方法等方面有很大的伸缩性和发挥空间。(3)国际国内循环测度分析的模式相对固定，主要以全球或全国多区域投入产出表为数据基础。(4)构建新发展格局需要主动作为，迫切需要大量结构变动的政策评价作为支撑。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "04主题解读四：朱建平（厦门大学）"
+        },
+        {
+          "type": "paragraph",
+          "text": "为在大学生中倡导学习统计知识、应用统计技能的良好氛围，聚焦经济社会发展热点难点问题，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，加强创新思维意识，助力推进统计现代化改革。在国家统计局统计教育培训中心指导下，中国统计教育学会、教育部高等学校统计学类专业教学指导委员会、全国应用统计专业学位研究生教育指导委员会联合主办2022年（第八届）全国大学生统计建模大赛，本届大赛主题为“构建新发展格局的统计测度”。在此，谈谈主题的内涵，以便选择具有时代特色的，具有民族气息的，适应推进人类和社会发展的选题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "谈到构建新格局，离不开大数据发展的新格局。为此，必须把眼光放到2015年，人们都在说2015年是我国大数据发展的“元年”，因为从2015年开始我国对推进大数据发展连续出了几个重拳。"
+        },
+        {
+          "type": "paragraph",
+          "text": "重拳之一是转变观念。2015年3月5日,十二届全国人大三次会议上的政府工作报告中首次提出“互联网十”行动计划,这是中国大数据发展的节点之一。在此之前大家都在谈论大数据的概念、大数据的发展历史、大数据的发展特征等,在此之后转变观念,重点转移到探讨大数据“产业”如何发展。"
+        },
+        {
+          "type": "paragraph",
+          "text": "重拳之二是战略实施。2015年8月31日,国务院发布《促进大数据发展行动纲要》,这是中国大数据发展的节点之二。在此将大数据产业发展上升至国家“战略”来实施。随之2016年3月,全国人大通过的“十三五”规划纲要提出,实施国家大数据战略,把大数据作为基础性战略资源,全面实施促进大数据发展行动,实际上就是对中国大数据产业的发展做了战略性的布局。"
+        },
+        {
+          "type": "paragraph",
+          "text": "重拳之三是理念提升。2017年7月8日,国务院发布《新一代人工智能发展规划》,这是中国大数据发展的节点之三,也是中国认知和发展大数据产业“理念”的一个重要提升。它抢抓了人工智能发展的重大战略机遇,构筑了中国人工智能发展的先发优势,促进了创新型国家和世界科技强国建设。"
+        },
+        {
+          "type": "paragraph",
+          "text": "重拳之四是共同治理。2018年3月17日国务院办公厅印发《科学数据管理办法》，旨在进一步加强和规范科学数据管理，保障科学数据安全，提高开放共享水平，更好地为国家科技创新、经济社会发展和国家安全提供支撑。明确了科学数据是国家科技创新发展和经济社会发展的重要基础性战略资源。"
+        },
+        {
+          "type": "paragraph",
+          "text": "第五个重拳更加重要，给了数据一个重要的“定位”。2020年3月30日国务院《关于构建更加完善的要素市场化配置体制机制的意见》，明确了加快培育数据要素市场，推进政府数据开放共享、提升社会数据资源价值、加强数据资源整合和安全保护。数据作为一种新型生产要素写入文件中，与土地、劳动力、资本、技术等传统要素并列为要素之一。"
+        },
+        {
+          "type": "paragraph",
+          "text": "中共中央政治局2021年10月18日就推动我国数字经济健康发展进行第三十四次集体学习。习近平在主持学习时强调，要统筹国内国际两个大局、发展安全两件大事，促进数字技术与实体经济深度融合，赋能传统产业转型升级，催生新产业新业态新模式，不断做强做优做大我国数字经济。"
+        },
+        {
+          "type": "paragraph",
+          "text": "这样进一步明确了大数据发展“共建、共享、共治”的新格局。在此基础上，加快数据要素新发展，激发数字经济新动能的同时，也将会为统计学研究开辟重要的领域和方向。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1. 数据要素的开发与应用研究。数据”作为“要素”，其概念的理论界定和统计界定，解决统计对象问题。包括数据与自然资源、资本、劳动和技术要素的联系与区别；数据要素统计框架的构建，数据要素市场统计，数据要素生产收入核算；数据要素的增长贡献及其对国民经济各部门、国家治理各领域的影响测度等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2. 数字经济运行机制的计算研究。国家统计局2021年5月14日常务会议通过发布《数字经济及其核心产业统计分类(2021)》，本分类将数字经济产业范围确定为：01数字产品制造业、02数字产品服务业、03数字技术应用业、04数字要素驱动业、05数字化效率提升业等5个大类。其研究的内容和方向凸显出来，如能否作为宏观调控主要手段，开展数据经济运行机制模拟及运行状况评价研究；数字经济核算的系统理论框架与方法体系研究；数字经济环境下的宏观经济的统计监测及预警研究；数字经济与经济增长和其他产业的联动效应研究等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3. 大数据质量提升研究。随着智能产品的大规模普及，某些行业或企业通过互联网和物联网，人为产生大量的“虚数据”和“假数据”。那么，根据数据的生命周期中影响数据质量的因素主要来源于四方面：信息因素、技术因素、流程因素和管理因素。对数据运行的全过程进行监控，密切关注数据质量的发展和变化，深入研究数据质量问题所遵循的客观规律，分析其产生的机理，探索科学有效的控制方法和改进措施，这是我们需要亟待明确的重要研究领域。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4. 网络产品的质量和生产率统计方法及其应用研究。网络产品是指在网络经济条件下物质产品、信息产品和网络服务等的总称。随着数字经济的发展，企业的决策者和管理者要提高网络产品的质量和生产率，分析网络产品生产过程的统计方法是必不可少的工具，这也是一个全新的研究领域，可以从统计角度探讨，即统计过程控制；统计实验设计、可靠性、接受抽样。这些是一个迫切需要引进新思想的课题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5. 社会经济大数据计算研究(计算社会经济学)。这些数据往往不是传统社会科学惯常处理的数据，而是通过卫星遥感、移动通讯、社交媒体、物联网等等产生的新型数据。这些数据通过分析可以更好地感知社会经济态势，启发和孕育新理论，发现可能的异常，预测未来的趋势等等。这些研究是基于大规模的真实数据，用定量化的手段研究社会经济发展中的各种现象，特别是与社会过程有关的经济发展问题，以及与经济发展有关的社会问题，"
+        },
+        {
+          "type": "paragraph",
+          "text": "6. 健康医学和生物卫生中的大数据分析应用研究(计算社会医学)。健康医学和生物卫生大数据应用研究的方向是社会化医学和个性化医学，即以医疗大数据为基础引导政务、教育、商业等各个领域的变革；以大数据为基础为患者量身设计出最佳方案，以期达到治疗效果最大化和副作用最小化的定制医疗模式，可以把这一领域的研究问题，界定为计算社会医学。"
+        },
+        {
+          "type": "paragraph",
+          "text": "7. 统计学方法在企业数字化转型中的应用。数字化转型是开发数字化技术及支持能力以新建一个富有活力的数字化商业模式。运用统计学理论和方法，建立完善的企业数字化转型的评价指标体系；利用大数据、人工智能、区块链等创新技术，帮助企业搭建管理驾驶舱，获取企业的核心数据，构建企业的动态数据模型；运用统计学方法，并结合行业大数据构建预警监测系统，加强企业核心竞争力；运用统计学方法对现代化企业生产经营过程进行科学的设计和控制等等。"
+        }
+      ]
+    },
+    {
       "id": "comap-2022-icm-e",
       "code": "2022 ICM E",
       "title": "Forestry for Carbon Sequestration",
@@ -25463,7 +25963,7 @@
         "optim",
         "design"
       ],
-      "data_requirement": "含本地原题 PDF及 31 个随题附件",
+      "data_requirement": "含本地原题 PDF及 28 个随题附件",
       "status": "完整题面",
       "summary": "In recent years, the world’s major powers have turned their eyes one after another to “the sea of stars”, formulating va…",
       "source_id": "apmcm_problems",
@@ -25479,11 +25979,11 @@
           "sha256": "b7ea4304bb4ebfd1a700f35cf9e485292ba3adf2a75cfa0c974d4a79f17c2459"
         },
         {
-          "title": "随题附件包（31 个文件）",
+          "title": "随题附件包（28 个文件）",
           "url": "/problem-files/apmcm-2021-b/attachments.zip",
           "kind": "data",
-          "bytes": 4335297,
-          "sha256": "c80aa1d783724594f4374cef230cc4ba78df994c621262c12500f616d5c0e514"
+          "bytes": 1101670,
+          "sha256": "c59efbd5baee0836fafb44607cf99410dc15c0cd55bff94f7bd712afac6e9378"
         }
       ],
       "content_format": "structured_text",
@@ -26927,6 +27427,51 @@
       }
     },
     {
+      "id": "tjjmds-2021",
+      "code": "2021 统计建模",
+      "title": "数据新动能的统计测度研究",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2021,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2021"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "为在大学生中倡导学习统计、应用统计的良好氛围，促进关注经济社会热点难点问题，适应大数据时代高校及统计部门对统计人才的培养要求，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，加强创新思维意识，助力推进统计现代化改革，中…",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/36600.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 263,
+      "content_block_count": 3,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "为在大学生中倡导学习统计、应用统计的良好氛围，促进关注经济社会热点难点问题，适应大数据时代高校及统计部门对统计人才的培养要求，提高大学生数据挖掘、数据分析、运用统计方法及计算机技术处理数据的能力，加强创新思维意识，助力推进统计现代化改革，中国统计教育学会、全国应用统计专业学位研究生教育指导委员会联合举办2021年（第七届）全国大学生统计建模大赛。本届大赛由天津财经大学统计学院承办。现将有关事项通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、大赛主题"
+        },
+        {
+          "type": "paragraph",
+          "text": "经组委会研究，本届大赛主题为“数据新动能的统计测度研究”。各参赛队根据主题自行拟定参赛题目撰写参赛论文。"
+        }
+      ]
+    },
+    {
       "id": "comap-2021-icm-e",
       "code": "2021 ICM E",
       "title": "Re-Optimizing Food Systems",
@@ -26959,7 +27504,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 4566,
+      "content_character_count": 4568,
       "content_block_count": 25,
       "content_blocks": [
         {
@@ -27064,11 +27609,11 @@
         },
         {
           "type": "paragraph",
-          "text": "[1] Food, United Nations. Retrieved from: ‘https://www.un.org/en/sections/issuesdepth/food/index.html’"
+          "text": "[1] Food, United Nations. Retrieved from: ‘https://www.un.org/en/sections/issues-depth/food/index.html’"
         },
         {
           "type": "paragraph",
-          "text": "[2] World Hunger, Poverty Facts, Statistics 2018 – World Hunger News, World Hunger News, 2018. Retrieved from: ‘https://www.worldhunger.org/world-hunger-and-poverty-facts-andstatistics/’"
+          "text": "[2] World Hunger, Poverty Facts, Statistics 2018 – World Hunger News, World Hunger News, 2018. Retrieved from: ‘https://www.worldhunger.org/world-hunger-and-poverty-facts-and-statistics/’"
         },
         {
           "type": "paragraph",
@@ -28925,6 +29470,1188 @@
       }
     },
     {
+      "id": "tipdm-cup-2020-a",
+      "code": "2020 泰迪杯 A",
+      "title": "基于数据挖掘的上市公司高送转预测",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2020,
+      "problem_type": "预测分析",
+      "modeling_directions": [
+        "预测模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "预测"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "近年来，我国证券市场的高速发展催生了一批题材股，根据重大事件的不同分类，可以分为资产重组板块、粤港澳板块、新能源板块等等。在这些题材中间，高送转这一题材无疑是中小投资者强烈追捧的对象。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzbstysj/1637.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2020-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 635948,
+          "sha256": "4f0d9e9e4c31e2d6e1381decbd09e6ad7563e8a72e8caf0d1a8e58522ee3b133"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1432,
+      "content_block_count": 26,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第八届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题：基于数据挖掘的上市公司高送转预测"
+        },
+        {
+          "type": "paragraph",
+          "text": "近年来，我国证券市场的高速发展催生了一批题材股，根据重大事件的不同分类，可以分为资产重组板块、粤港澳板块、新能源板块等等。在这些题材中间，高送转这一题材无疑是中小投资者强烈追捧的对象。因为实施高送转后股价将做除权处理，投资者可以通过填权行情从二级市场的股票增值中获利。很多股票在公布派送预案的第二天直接涨停，而等除权后再买入可能会面临很大的回撤风险。如果我们能准确预测下一年可能实施高送转的上市公司并提前买入，这对我们投资的安全性具有很大的现实意义。"
+        },
+        {
+          "type": "paragraph",
+          "text": "经过研究，影响上市公司实施高送转的因子主要有两类：一是基本因子，包括股价、总股本、上市年限等；二是成长因子，包括每股未分配利润、每股资本公积、每股现金流、每股收益等。除此之外，还有“未来6个月是否存在解禁”、“是否存在定增方案”等因子需要挖掘。"
+        },
+        {
+          "type": "paragraph",
+          "text": "针对附件给出的因子数据，根据经济学意义以及数理统计方法，筛选出对上市公司实施高送转方案有较大影响的因子。",
+          "lead": "问题1"
+        },
+        {
+          "type": "paragraph",
+          "text": "利用问题1中确定的因子，建立模型来预测哪些上市公司可能会实施高送转，并对附件提供的数据，用所建立的模型来预测第8年上市公司实施高送转的情况。",
+          "lead": "问题2"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "名词解释"
+        },
+        {
+          "type": "paragraph",
+          "text": "送股：上市公司分红的一种形式，把上市公司的盈余公积金或未分配利润转化为股份，以股票的形式派发给投资者，把资金以股票的形式留存在公司。由于是利润分配，因此股民需要缴税。"
+        },
+        {
+          "type": "paragraph",
+          "text": "转股：上市公司分红的一种形式，把上市公司的资本公积金转化成股票，再向投资者派发。转股和送股一样是把资金以股票的形式留存在公司，由于资本公积金是公司投入资本本身所带来的资金增值，并不是公司经营带来的利润，所以转股并不属于公司的利润分配。通过转股实现分红只需借贷公司的会计科目，不需要缴税，且操作简单，成本低廉，为上市公司所青睐。"
+        },
+        {
+          "type": "paragraph",
+          "text": "除权：根据上市公司总市值（总股本×每股单价），送股、转股都不影响公司总市值，但公司的总股本增加了，使得每股股票所代表的企业实际价值（每股净资产）有所减少，因此需要在发生该事实后从股票市场价格中剔除这部分因素，该行为称为除权。"
+        },
+        {
+          "type": "paragraph",
+          "text": "填权：在某一股票除权后的一段时间里，如果多数人对该股看好，该股票的交易市价将高于除权的基准价，这种行情称为填权行情。"
+        },
+        {
+          "type": "paragraph",
+          "text": "高送转：指送红股或者转增股票的比例较大。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "附件"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件数据为上市公司数据，包含年数据、日数据、基础数据三张表。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "附录"
+        },
+        {
+          "type": "paragraph",
+          "text": "请仔细阅读以下说明。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.关于赛题数据"
+        },
+        {
+          "type": "paragraph",
+          "text": "(1)示例数据：2020年3月1日9:00:00随赛题公布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(2)全部数据：2020年4月25日9:00:00公布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(3)测试数据：2020年5月9日9:00:00公布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.提交作品"
+        },
+        {
+          "type": "paragraph",
+          "text": "(1)命名方式：论文命名为“A题”，附件命名为“作品附件”，测试结果命名为“作(cid:1)品测试结果”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(2)论文及附件内请勿出现队号、学校、学院、队员以及指导老师相关任何信息，否则该作品视为无效作品。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(3)请参赛队于2020年5月8日16:00:00之前在竞赛官网“提交作品”处提交论文（PDF版，大小不超过50M）及附件（论文正文（Word版）、程序源代码、代码实现的流程图以及输入、输出说明的压缩包，大小不超过200M）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.公布测试数据，提交测试结果"
+        },
+        {
+          "type": "paragraph",
+          "text": "2020年5月9日9:00:00准时公布测试数据，请在“赛题与数据”页面对应的题目右下方下载测试数据，并于2020年5月10日9:00:00前在“提交测试结果”页面提交测试结果。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2020/tipdm-cup-2020-a.pdf",
+        "bytes": 635948,
+        "sha256": "4f0d9e9e4c31e2d6e1381decbd09e6ad7563e8a72e8caf0d1a8e58522ee3b133",
+        "page_count": 2
+      }
+    },
+    {
+      "id": "tipdm-cup-2020-b",
+      "code": "2020 泰迪杯 B",
+      "title": "电力巡检智能缺陷检测",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2020,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "为了保证输电线路的安全、可靠运行，电网运行部门需要定期对输电线变电系统进行巡检、维修以及维护来确保消除故障或者隐患。随着我国经济的高速发展，对电力输电网设备等基础设施的安全运营也提出了更高的要求。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzbstysj/1637.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2020-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 763618,
+          "sha256": "87979967f7ba0d0e542db9314442c7b4bc0cbde0ee91ff4c112c538094041849"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2848,
+      "content_block_count": 77,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第八届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题：电力巡检智能缺陷检测"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、问题背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "为了保证输电线路的安全、可靠运行，电网运行部门需要定期对输电线变电系统进行巡检、维修以及维护来确保消除故障或者隐患。随着我国经济的高速发展，对电力输电网设备等基础设施的安全运营也提出了更高的要求。"
+        },
+        {
+          "type": "paragraph",
+          "text": "架空线路巡检作为保障输配电网正常运行的重要手段之一，一直以来都面临着网线分布广、设施布置复杂，巡线作业强度大、周期长，部分区域自然环境复杂恶劣等问题。传统的电网巡查方式是通过人工进行巡检的，该方法存在以下几个问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）劳动强度大，工作效率低，在危险地段会危及到巡查工人的生命安危"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）人工录入数据量大，而且录入过程容易出错"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）对于工人是否巡查到位无法进行有效的管理，巡查质量不能得到保障"
+        },
+        {
+          "type": "paragraph",
+          "text": "近年来由于无人机或者智能机器人技术的飞速发展，考虑通过拍摄的大量电力设备及线路的现场图片代替人工巡检，其基本工作流程如下。"
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）划定无人机工作区域，设定巡查时间"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）无人机飞达指定区域，进行图片拍摄（要求尽可能达到360 °全方位），"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）分析无人机拍摄的图片，并进行问题标注，反馈至调度中心"
+        },
+        {
+          "type": "paragraph",
+          "text": "（4）调度中心根据问题，安排对应人员进行检修"
+        },
+        {
+          "type": "paragraph",
+          "text": "但是由于无人机拍摄图片数目多（单个高架塔拍摄图像大于300张），尺寸大（4096*2160），人工进行一张图片标注就需要5-10分钟，工作量巨大。同时执行标注工作的相关人员极易用眼疲劳，从而导致漏标，错标。鉴于以上情况，考虑使用图像处理与机器学习（深度学习）的方法，对图片进行标注。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、任务"
+        },
+        {
+          "type": "paragraph",
+          "text": "架空输电线路巡视主要巡视内容包括：杆塔、导线及避雷线、导线及避雷线的固定与链接、绝缘子、拉线、杆上开关设备、沿线路附近的其他工程等7大项内容。以上7大项内容中的每一项都还有子项，检查内容繁多，流程繁琐。为了能够先行探索出切实有效的步骤，本次任务以绝缘子巡视中的绝缘子自爆这一故障为目标，主要实现以下两部分内容。1、绝缘子串珠分割"
+        },
+        {
+          "type": "paragraph",
+          "text": "由于无人机图片较大一般为（4096*2160），绝缘子串珠占据图片中很小的一部分区域，需要设计图像分割算法，对绝缘子串珠坐在的区域进行分割。参赛者需要标记出所给样例每幅图像中的标记绝缘子串珠区域的掩模图像。掩模区域仅整个绝缘子串珠。原图与掩模图像对比如图1所示。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-b/p002-01.jpg",
+          "alt": "tipdm-cup-2020-b 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1原图与掩模图对比2、绝缘子自爆识别和定位"
+        },
+        {
+          "type": "paragraph",
+          "text": "根据分割图像初步识别绝缘子所在的位置，并对绝缘子串珠进行分割，而后参赛者根据所给出的标记样本的Ground Truth构建自爆绝缘子识别模型。参赛者利用训练模型对图像中的自爆绝缘子位置进行检测，并利用BoundingBox对其进行标记。自爆标记需包括自爆位置周围2个完好绝缘子。绝缘子自爆位置标记如图2所示。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-b/p002-02.jpg",
+          "alt": "tipdm-cup-2020-b 第 2 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2样例示范"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "三、数据说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "本赛题数据总共由三部分组成。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "（1）绝缘子自爆缺陷原图（2）基于原图的标准掩模图像（3）自爆绝缘子BoundingBox标签"
+        },
+        {
+          "type": "paragraph",
+          "text": "绝缘子自爆缺陷原图主要是高架线路上拍摄的原图，原图中可能存在自爆点，原图的基本形式如图3所示。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-b/p003-01.jpg",
+          "alt": "tipdm-cup-2020-b 第 3 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图3绝缘子自爆缺陷原图"
+        },
+        {
+          "type": "paragraph",
+          "text": "基于原图的标准掩模图像是使用绝缘子自爆缺陷原图掩模之后的图形，通过掩模的方式可以去除背景，凸显自爆点。基于原图的标准掩模图的基本形式如图4所示。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-b/p003-02.png",
+          "alt": "tipdm-cup-2020-b 第 3 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图4基于原图的标准掩模图"
+        },
+        {
+          "type": "paragraph",
+          "text": "每张绝缘子自爆原图都会对应一个自爆绝缘子BoundingBox标签。这个标签以xml文件的形式存放，可以使用浏览器、记事本、VSCode、NotePad++等文本编辑软件打开。文件中的各项数据及其意义如表1所示。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1自爆绝缘子BoundingBox标签"
+        },
+        {
+          "type": "paragraph",
+          "text": "标签文件内容解释<?xml version=\"1.0\"?> <doc>"
+        },
+        {
+          "type": "paragraph",
+          "text": "可忽略"
+        },
+        {
+          "type": "paragraph",
+          "text": "<path>.\\2.JPG</path>"
+        },
+        {
+          "type": "paragraph",
+          "text": "<outputs>"
+        },
+        {
+          "type": "paragraph",
+          "text": "<object> object内部存放标签"
+        },
+        {
+          "type": "paragraph",
+          "text": "<item> item代表一个标签，可存在多个item"
+        },
+        {
+          "type": "paragraph",
+          "text": "<name>1</name> name为标签名（可忽略）"
+        },
+        {
+          "type": "paragraph",
+          "text": "<bndbox> bndbox内部存放标记位置"
+        },
+        {
+          "type": "paragraph",
+          "text": "<xmin>4045</xmin> xmin,xmax,ymin,ymax表示标记方框的"
+        },
+        {
+          "type": "paragraph",
+          "text": "<ymin>2440</ymin> x、y，可组成标记框的4个点，分比为："
+        },
+        {
+          "type": "paragraph",
+          "text": "<xmax>4276</xmax> (xmin,ymin), (xmin,ymax), (xmax,ymin),"
+        },
+        {
+          "type": "paragraph",
+          "text": "<ymax>2700</ymax> (xmax,ymax)"
+        },
+        {
+          "type": "paragraph",
+          "text": "</bndbox>"
+        },
+        {
+          "type": "paragraph",
+          "text": "</item>"
+        },
+        {
+          "type": "paragraph",
+          "text": "</object>"
+        },
+        {
+          "type": "paragraph",
+          "text": "可忽略"
+        },
+        {
+          "type": "paragraph",
+          "text": "</outputs>"
+        },
+        {
+          "type": "paragraph",
+          "text": "<time_labeled>1577170405866</time_labeled>"
+        },
+        {
+          "type": "paragraph",
+          "text": "<labeled>true</labeled>"
+        },
+        {
+          "type": "paragraph",
+          "text": "<size> size用于存放图像尺寸信息"
+        },
+        {
+          "type": "paragraph",
+          "text": "<width>7360</width> width表示原始图像的宽度"
+        },
+        {
+          "type": "paragraph",
+          "text": "<height>4912</height> height表示原始图像的高度"
+        },
+        {
+          "type": "paragraph",
+          "text": "<depth>3</depth> depth表示原始图像的深度"
+        },
+        {
+          "type": "paragraph",
+          "text": "</size>"
+        },
+        {
+          "type": "paragraph",
+          "text": "可忽略</doc>"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "四、评价方案"
+        },
+        {
+          "type": "paragraph",
+          "text": "1、Dice系数"
+        },
+        {
+          "type": "paragraph",
+          "text": "绝缘子串珠分割采用Dice系数进行评价，通常计算两个样本的相似度"
+        },
+        {
+          "type": "paragraph",
+          "text": "dice(A,B)= 2|A∩B|/(|A|+|B|)"
+        },
+        {
+          "type": "paragraph",
+          "text": "其中，A为GroundTruth区域即专业人士标注的区域，B为算法分割所得到的区域。Dice系数取值范围是[0，1]，取值越接近1则越表明预测的结果与专业人士标注的结果相符合。2、IOU"
+        },
+        {
+          "type": "paragraph",
+          "text": "绝缘子自爆区域评价采用IOU，IOU表示产生的候选框（Candidate Bound）与原标记框（Ground Truth Bound）的交叠率或者说重叠度，也就是它们的交集与并集的比值。相关度越高该值。最理想情况是完全重叠，即比值为1。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-b/p004-01.jpg",
+          "alt": "tipdm-cup-2020-b 第 4 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "area（C）∩area（G）"
+        },
+        {
+          "type": "paragraph",
+          "text": "IOU="
+        },
+        {
+          "type": "paragraph",
+          "text": "area（C）∪area（G）"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "附录："
+        },
+        {
+          "type": "paragraph",
+          "text": "请仔细阅读以下说明：1、关于赛题数据"
+        },
+        {
+          "type": "paragraph",
+          "text": "(1)示例数据：2020年3月1日9:00:00随赛题公布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(2)全部数据：2020年4月2 5日9:00:00公布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(3)测试数据：2020年5月9日9:00:00公布。(cid:1) 2、提交作品"
+        },
+        {
+          "type": "paragraph",
+          "text": "(1)命名方式：论文命名为“B题”，附件命名为“作品附件”，测试结果命名为“作品测试结果”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(2)论文及附件内请勿出现队号、学校、学院、队员以及指导老师相关任何信息，否则该作品视为无效作品。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(3)请参赛队于2020年5月8日16:00:00之前在竞赛官网“提交作品”处提交论文（PDF版，大小不超过50M）及附件（论文正文（Word版）、源数据（组委会提供的源数据除外）、程序的压缩包，大小不超过200M）。3、公布测试数据，提交测试结果"
+        },
+        {
+          "type": "paragraph",
+          "text": "2020年5月9日9:00:00准时放出测试数据，请在“赛题与数据”页面对应的题目右下方下载测试数据，并于2020年5月10日9:00:00前请在“提交测试结果”页面提交测试结果。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2020/tipdm-cup-2020-b.pdf",
+        "bytes": 763618,
+        "sha256": "87979967f7ba0d0e542db9314442c7b4bc0cbde0ee91ff4c112c538094041849",
+        "page_count": 5
+      }
+    },
+    {
+      "id": "tipdm-cup-2020-c",
+      "code": "2020 泰迪杯 C",
+      "title": "“智慧政务”中的文本挖掘应用",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2020,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "近年来，随着微信、微博、市长信箱、阳光热线等网络问政平台逐步成为政府了解民意、汇聚民智、凝聚民气的重要渠道，各类社情民意相关的文本数据量不断攀升，给以往主要依靠人工来进行留言划分和热点整理的相关部门的工作带来了极大挑战。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzbstysj/1637.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2020-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 573274,
+          "sha256": "7fd01a0503c3f6403219636c2e558c4f126c65d2ac3d4a64e4da8c82fbe628a7"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2993,
+      "content_block_count": 44,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第八届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题：“智慧政务”中的文本挖掘应用"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、问题背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "近年来，随着微信、微博、市长信箱、阳光热线等网络问政平台逐步成为政府了解民意、汇聚民智、凝聚民气的重要渠道，各类社情民意相关的文本数据量不断攀升，给以往主要依靠人工来进行留言划分和热点整理的相关部门的工作带来了极大挑战。同时，随着大数据、云计算、人工智能等技术的发展，建立基于自然语言处理技术的智慧政务系统已经是社会治理创新发展的新趋势，对提升政府的管理水平和施政效率具有极大的推动作用。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件给出了收集自互联网公开来源的群众问政留言记录，及相关部门对部分群众留言的答复意见。请利用自然语言处理和文本挖掘的方法解决下面的问题。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、解决问题"
+        },
+        {
+          "type": "paragraph",
+          "text": "1、群众留言分类"
+        },
+        {
+          "type": "paragraph",
+          "text": "在处理网络问政平台的群众留言时，工作人员首先按照一定的划分体系（参考附件1提供的内容分类三级标签体系）对留言进行分类，以便后续将群众留言分派至相应的职能部门处理。目前，大部分电子政务系统还是依靠人工根据经验处理，存在工作量大、效率低，且差错率高等问题。请根据附件2给出的数据，建立关于留言内容的一级标签分类模型。"
+        },
+        {
+          "type": "paragraph",
+          "text": "通常使用F-Score对分类方法进行评价："
+        },
+        {
+          "type": "paragraph",
+          "text": "F 1  1/n ∑ i  n 1 P 2 i P  i R R i i，"
+        },
+        {
+          "type": "paragraph",
+          "text": "其中Pi为第i类的查准率，Ri为第i类的查全率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、热点问题挖掘"
+        },
+        {
+          "type": "paragraph",
+          "text": "某一时段内群众集中反映的某一问题可称为热点问题，如“XXX小区多位业主多次反映入夏以来小区楼下烧烤店深夜经营导致噪音和油烟扰民”。及时发现热点问题，有助于相关部门进行有针对性地处理，提升服务效率。请根据附件3将某一时段内反映特定地点或特定人群问题的留言进行归类，定义合理的热度评价指标，并给出评价结果，按表1的格式给出排名前5的热点问题，并保存为文件“热点问题表.xls”。按表2的格式给出相应热点问题对应的留言信息，并保存为“热点问题留言明细表.xls”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1-热点问题表"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "热度",
+              "问题",
+              "热度",
+              "",
+              "",
+              ""
+            ],
+            [
+              "",
+              "",
+              "",
+              "时间范围",
+              "地点/人群",
+              "问题描述"
+            ],
+            [
+              "排名",
+              "ID",
+              "指数",
+              "",
+              "",
+              ""
+            ],
+            [
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "1",
+              "1",
+              "…",
+              "2019/08/18至 2019/09/04",
+              "A市A5区魅力之城小 区",
+              "小区临街餐饮店油烟噪音扰民"
+            ],
+            [
+              "2",
+              "2",
+              "…",
+              "2017/06/08至 2019/11/22",
+              "A市经济学院学生",
+              "学校强制学生去定点企业实习"
+            ],
+            [
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "表2热点问题留言明细表"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "问",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "点",
+              "反"
+            ],
+            [
+              "",
+              "留言编",
+              "留言",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "题",
+              "",
+              "",
+              "留言主题",
+              "留言时间",
+              "留言详情",
+              "赞",
+              "对"
+            ],
+            [
+              "",
+              "号",
+              "用户",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "ID",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "数",
+              "数"
+            ],
+            [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "1",
+              "360104",
+              "A0124 17",
+              "A 市魅力之城 商铺无排烟 管道，小区内 到处油烟味",
+              "2019/08/18 14:44:00",
+              "A 市魅力之城小区自打交房入住后， 底层商铺无排烟管道，经营餐馆导致 大量油烟排入小区内，每天到凌晨还 在营业……",
+              "0",
+              "0"
+            ],
+            [
+              "1",
+              "360105",
+              "A1203 56",
+              "A5 区魅力之 城小区一楼 被搞成商业 门面，噪音扰 民严重",
+              "2019/08/26 08:33:03",
+              "我们是魅力之城小区居民，小区朝北 大门两侧的楼栋下面一楼，本来应是 架空层，现搞成商业门面，嗓声严重 扰民，有很大的油烟味往楼上窜，没 办法居住……",
+              "1",
+              "0"
+            ],
+            [
+              "1",
+              "360106",
+              "A2353 67",
+              "A 市魅力之城 小区底层商 铺营业到凌 晨，各种噪音 好痛苦",
+              "2019/08/26 01:50:38",
+              "2019年5月起，小区楼下商铺越发嚣 张，不仅营业到凌晨不休息，各种烧 烤、喝酒的噪音严重影响了小区居民 休息……",
+              "0",
+              "0"
+            ],
+            [
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…"
+            ],
+            [
+              "1",
+              "360109",
+              "A0080 252",
+              "魅力之城小 区底层门店 深夜经营，各 种噪音扰民",
+              "2019/09/04 21:00:18",
+              "您好：我是魅力之城小区的业主，小 区临街的一楼是商铺，尤其是餐馆夜 宵摊等，每到凌晨都还在营业，每到 晚上睡觉耳边都充斥着吆喝……",
+              "0",
+              "0"
+            ],
+            [
+              "2",
+              "360110",
+              "A1100 21",
+              "A 市经济学院 寒假过年期 间组织学生 去工厂工作",
+              "2019/11/22 14:42:14",
+              "西地省A市经济学院寒假过年期间组 织学生去工厂工作，过年本该是家人 团聚的时光，很多家长一年回来一次， 也就过年和自己孩子见一次面，可是 这样搞……",
+              "0",
+              "0"
+            ],
+            [
+              "2",
+              "360111",
+              "A1204 455",
+              "A 市经济学院 组织学生外 出打工合理 吗？",
+              "2019/11/5 10:31:38",
+              "学校组织我们学生在外边打工,在东 莞做流水线工作，还要倒白夜班。本 来都在学校好好上课，十月底突然说 组织到外省打工……",
+              "1",
+              "0"
+            ],
+            [
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…",
+              "…"
+            ],
+            [
+              "2",
+              "360114",
+              "A0182 491",
+              "A 市经济学院 变相强制实 习",
+              "2017/06/08 17:31:20",
+              "系里要求我们在实习前分别去指定的 不同公司实训，我这的公司的工作内 容和老师之前介绍以及我们专业几乎 不对口，不做满6个月不给实训分， 不能毕业……",
+              "9",
+              "0"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "3、答复意见的评价"
+        },
+        {
+          "type": "paragraph",
+          "text": "针对附件4相关部门对留言的答复意见，从答复的相关性、完整性、可解释性等角度对答复意见的质量给出一套评价方案，并尝试实现。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "三、数据说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件1提供了一种内容分类三级标签体系，样例如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "内容分类三级标签体系"
+        },
+        {
+          "type": "paragraph",
+          "text": "(表3-)/一级分类"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "一级分类",
+              "二级分类",
+              "三级分类"
+            ],
+            [
+              "城乡建设",
+              "安全生产",
+              "事故处理"
+            ],
+            [
+              "城乡建设",
+              "安全生产",
+              "安全生产管理"
+            ],
+            [
+              "城乡建设",
+              "安全生产",
+              "安全隐患"
+            ],
+            [
+              "...",
+              "...",
+              "..."
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "附件2、附件3、附件4的数据来源于互联网公开渠道，具体表结构如下："
+        },
+        {
+          "type": "paragraph",
+          "text": "表4附件2表结构留言留言"
+        },
+        {
+          "type": "paragraph",
+          "text": "留言主题留言时间留言详情一级分类编号用户744 A089211建议增加A小区快递柜2019/10/18 14:44我们是A小区居民...交通运输"
+        },
+        {
+          "type": "paragraph",
+          "text": "表5附件3表结构留言留言点赞反对"
+        },
+        {
+          "type": "paragraph",
+          "text": "留言主题留言时间留言详情编号用户数数"
+        },
+        {
+          "type": "paragraph",
+          "text": "A08921建议增加A小区快递2019/10/18我们是A小区居"
+        },
+        {
+          "type": "paragraph",
+          "text": "744 100 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "1柜14:44民..."
+        },
+        {
+          "type": "paragraph",
+          "text": "表6附件4表结构留言留言"
+        },
+        {
+          "type": "paragraph",
+          "text": "留言主题留言时间留言详情答复意见答复时间编号用户"
+        },
+        {
+          "type": "paragraph",
+          "text": "A0892建议增加A小区2019/10/18我们是某小区网民‘A089211’ 2019/10/19"
+        },
+        {
+          "type": "paragraph",
+          "text": "11快递柜14:44居民...你好... 8:40"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "附录："
+        },
+        {
+          "type": "paragraph",
+          "text": "请仔细阅读以下说明：1、关于赛题数据"
+        },
+        {
+          "type": "list_item",
+          "text": "示例数据：2020年3月1日9:00:00随赛题公布。",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "全部数据：2020年4月11日9:00:00公布。",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "测试数据：2020年4月25日9:00:00公布。2、提交作品",
+          "marker": "③"
+        },
+        {
+          "type": "list_item",
+          "text": "命名方式：论文命名为“C题”，附件命名为“作品附件”，测试结果命名为“作品测试结果”。",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "论文及附件内请勿出现队号、学校、学院、队员以及指导老师相关任何信息，否则视该作品为无效作品。",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "请参赛队于2020年4月24日16:00:00之前在竞赛官网“提交作品”处提交论文（PDF版，大小不超过50M）及附件（包含论文正文（Word版）、过程数据、程序、热点问题表、热点问题留言明细表的压缩包，大小不超过200M）。3、公布测试数据，提交测试结果2020年4月25日9:00:00准时公布测试数据，请在“赛题与数据”页面对应的题目右下方下载测试数据，并于2020年4月26日9:00:00前在“提交测试结果”页面提交测试结果。",
+          "marker": "③"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2020/tipdm-cup-2020-c.pdf",
+        "bytes": 573274,
+        "sha256": "7fd01a0503c3f6403219636c2e558c4f126c65d2ac3d4a64e4da8c82fbe628a7",
+        "page_count": 4
+      }
+    },
+    {
+      "id": "tipdm-cup-2020-t",
+      "code": "2020 泰迪杯 T",
+      "title": "疫情通报文本中涉疫地点的自动提取（南都大数据研究院特别赛题）",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2020,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "随着我国“智慧城市”建设进程的不断推进，如何用“大数据”为公共服务提质加码是大数据研究者一直在不断为之努力的课题。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzbstysj/1640.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2020-t/problem.pdf",
+          "kind": "problem",
+          "bytes": 413858,
+          "sha256": "54f564e5739ae14702b614c0f17dad9bb8e9fa6b72cf66bc61efbb93a06b8fcc"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2161,
+      "content_block_count": 24,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第八届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "南都大数据研究院特别赛题：疫情通报文本中涉疫地点的自动提取"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "一、问题背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "随着我国“智慧城市”建设进程的不断推进，如何用“大数据”为公共服务提质加码是大数据研究者一直在不断为之努力的课题。自2020年初新型冠状病毒疫情发生以来，从中央到地方各级政府已形成常态化的信息发布模式，进一步推动了以“知情权”为基础的政府信息公开及数据开放步伐。应用大数据技术分析疫情通报信息，构建疫情发展模型，可以对传染源、传播速度、传播路径、传播风险等进行评估和预测。精细的疫情通报信息颗粒度，有助于获取疫情流散特征；完整、透明的疫情分析，可以探究疫情通报信息的质效；梳理确诊病患居住小区或逗留场所，追踪建立个体关系图谱，可以定位疫情传播路径，防控疫情扩散。本赛题提供收集自网络的官方通报和媒体报道网址，要求参赛者建立文本分析模型，自动提取包括确诊病例所在城市、行政区、小区或逗留场所等的涉疫地点分布信息。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、解决问题"
+        },
+        {
+          "type": "paragraph",
+          "text": "疫情期间全国有400余城市公布新冠肺炎确诊病例的包括居住小区或逗留场所等具体位置信息，这是公众非常关心的话题。从流行病学调查角度来看，分析新冠肺炎确诊病例居住小区或逗留场所，对寻找密切接触者意义也很大，有助于社区进行有针对性地防控和公众更好进行个人防护。在这些疫情通报或媒体报道的网页中，确诊病例的常住地点或逗留场所多嵌入在自然语言文本中，并以页面正文、页面内嵌文本和截图等多种形式表现。要从这些信息来源中及时分析涉疫地点的分布情况，首先要从包括自然语言文本和图片等非结构化数据中提取有关信息并转化为结构化数据的形式。这项工作以往主要通过人工对文本中的特定信息的查找与分类来实现，工作量大并且效率低下，缺乏时效性。"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1所示的附件1提供了南都大数据研究院收集的官方通报和媒体报道的网址，以及已经提取的涉疫地点数据。请参赛者利用自然语言处理和文本挖掘技术，从表2所示的附件2提供的URL对应的疫情通报中提取如附件1所示的包括城市、行政区、具体位置等涉疫地点的相关信息，并保存为文件“广东新冠肺炎确诊病例小区或场所信息.xls”。对信息提取模型采用F1-score做为评价指标。"
+        },
+        {
+          "type": "paragraph",
+          "text": "提取示范1："
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-t/p001-01.png",
+          "alt": "tipdm-cup-2020-t 第 1 页插图 1"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-t/p002-01.png",
+          "alt": "tipdm-cup-2020-t 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "提取示范2："
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-t/p002-02.png",
+          "alt": "tipdm-cup-2020-t 第 2 页插图 2"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2020-t/p002-03.png",
+          "alt": "tipdm-cup-2020-t 第 2 页插图 3"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "三、数据说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "表1：附件1数据结构及示例"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "省份",
+              "城 市",
+              "行政 区",
+              "具体位置",
+              "数据来 源",
+              "网址"
+            ],
+            [
+              "广东 省",
+              "广 州",
+              "从化 区",
+              "城郊街新雍丽 酒店",
+              "南方都 市报",
+              "https://mp.weixin.qq.com/s/Y2tnLZ1Oa FofrnxWPtHREg"
+            ],
+            [
+              "广东 省",
+              "广 州",
+              "增城 区",
+              "新塘镇西洲村",
+              "南方都 市报",
+              "https://mp.weixin.qq.com/s/Y2tnLZ1Oa FofrnxWPtHREg"
+            ],
+            [
+              "广东 省",
+              "广 州",
+              "增城 区",
+              "新塘镇大墩村",
+              "南方都 市报",
+              "https://mp.weixin.qq.com/s/N76fZ6R4z eiB6Zqa3TYaxg"
+            ],
+            [
+              "广东 省",
+              "深 圳",
+              "南山 区",
+              "鸿丰大酒店",
+              "南方都 市报",
+              "https://mp.weixin.qq.com/s/KkYpkD4oV 997_ZPNRa0vHg"
+            ],
+            [
+              "广东 省",
+              "珠 海",
+              "金湾 区",
+              "三灶镇万科城 市花园",
+              "南方都 市报",
+              "https://mp.weixin.qq.com/s/KkYpkD4oV 997_ZPNRa0vHg"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "表2：附件2疫情通报网址样例"
+        },
+        {
+          "type": "paragraph",
+          "text": "网址"
+        },
+        {
+          "type": "paragraph",
+          "text": "https://mp.weixin.qq.com/s/Y2tnLZ1OaFofrnxWPtHREg"
+        },
+        {
+          "type": "paragraph",
+          "text": "https://m.mp.oeeee.com/a/BAAFRD000020200203257725.html"
+        },
+        {
+          "type": "paragraph",
+          "text": "http://wjw.gz.gov.cn/ztzl/xxfyyqfk/yqtb/content/post_5655251.html"
+        },
+        {
+          "type": "paragraph",
+          "text": "http://static.nfapp.southcn.com/content/202002/04/c3062247.html?colID=17078https://m.mp.oeeee.com/a/BAAFRD000020200203257514.html?layer=4&share=chat&isndappinstalled=16"
+        },
+        {
+          "type": "paragraph",
+          "text": "http://wx.hznews.com/data/hzby_2019-nCoV/index_bl.php"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "附录：请仔细阅读以下说明：1、关于赛题数据①建模数据：2020年4月25日9:00:00公布。②测试数据：2020年5月9日9:00:00公布。2、提交作品①命名方式：论文命名为“南都特别赛题”，附件命名为“作品附件”，测试结果命名为“作品测试结果”。②论文及附件内请勿出现队号、学校、学院、队员以及指导老师相关任何信息，否则视该作品为无效作品。③请参赛队于2020年5月8日16:00:00之前在竞赛官网“提交作品”处提交论文（PDF版，大小不超过50M）及附件（包含论文正文（Word版）、过程数据、程序的压缩包，大小不超过200M）。3、公布测试数据，提交测试结果2020年5月9日9:00:00准时公布测试数据，请在“赛题与数据”页面对应的题目右下方下载测试数据，并于2020年5月10日9:00:00前在“提交测试结果”页面提交测试结果。(cid:1)"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2020/tipdm-cup-2020-t.pdf",
+        "bytes": 413858,
+        "sha256": "54f564e5739ae14702b614c0f17dad9bb8e9fa6b72cf66bc61efbb93a06b8fcc",
+        "page_count": 4
+      }
+    },
+    {
       "id": "cumcm-2019-a",
       "code": "2019 CUMCM A",
       "title": "高压油管的压力控制",
@@ -29521,6 +31248,947 @@
         "sha256": "541e4d2c2f7ef4bacfdee5b0756493d815a93f2b4ab9b84e9c07ea0b98b18463",
         "page_count": 1
       }
+    },
+    {
+      "id": "tipdm-cup-2019-a",
+      "code": "2019 泰迪杯 A",
+      "title": "通过机器学习优化股票多因子模型",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2019,
+      "problem_type": "规划优化",
+      "modeling_directions": [
+        "优化模型",
+        "决策分析"
+      ],
+      "keywords": [
+        "优化"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "Fama通过分析美国市场几十年的数据发现，美国股市绝大部分可以被市值、估值以及市场收益3个因子解释，并因此获得了2013年诺贝尔经济学奖。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/1544.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2019-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 620737,
+          "sha256": "37289e8d81c9a60ae940bd91b4f6b8c78dd03ff90dce857474db686dbdf63324"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 4331,
+      "content_block_count": 50,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第七届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题：通过机器学习优化股票多因子模型"
+        },
+        {
+          "type": "paragraph",
+          "text": "Fama通过分析美国市场几十年的数据发现，美国股市绝大部分可以被市值、估值以及市场收益3个因子解释，并因此获得了2013年诺贝尔经济学奖。Fama的工作开启了通过因子化分析股市获取超额收益的先河，此后学术界及业界不断地寻找其他能获取超额收益的因子及其组合和风险控制的方式。在我国，基于财务因子（比如市盈率、市值等）及长周期的量价因子（比如月度反转、月度成交量等）为主要因子的传统多因子模型在A股市场曾经获得过较为稳健的超额收益，但是由于A股市场存在明显的风格切换（比如2017年下半年从传统的小市值风格切换到只有极少数大市值股票上涨，而绝大部分股票下跌的风格），传统多因子模型的稳定性及有效性受到了较大的考验。相比传统的线性多因子模型，机器学习算法能够通过对因子的非线性表达，捕捉到更加精细的市场信号，获取较为稳健的超额收益。根据2016年1月1日至2018年9月30日我国A股市场的数据（数据提取方式见附录2），筛选出各大类股票因子中较优的子因子。在此基础上，分析不同的机器学习算法对提升这些因子的等权重线性模型表现的优劣，并使用“Auto-Trader策略研究回测引擎”进行策略回测（初始资金为1000万元整，手续费为双边千分之3，每月月初调仓）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "可以从以下角度入手进行分析：(1)利用Auto-Trader中各大类因子（见附录3）的日频数据（数据提取方式见附录4），分别做单因子策略研究和绩效分析，挑选出使得年化夏普比率（Sharpe ratio）最优的各个大类的因子。(2)基于机器学习算法对(1)中挑选的因子，进行增强，利用2016年1月1日至2018年9月30日的数据进行选股和回测，比较不同机器学习算法选股策略与等权重线性模型选股策略之间年化夏普比率的优劣。(3)对选股策略进行风险控制，要求将最大回撤控制在10%以内，重新完成(2)。"
+        },
+        {
+          "type": "paragraph",
+          "text": "注：除提交论文外，参赛队还须提交策略的回测报告，提交方式详见附录7。"
+        },
+        {
+          "type": "paragraph",
+          "text": "参考文献"
+        },
+        {
+          "type": "paragraph",
+          "text": "[1] Aurélien Géron，机器学习实战：基于Scikit-Learn和TensorFlow，机械工业出版社，2018.9."
+        },
+        {
+          "type": "paragraph",
+          "text": "[2]李航，统计学习方法，清华大学出版社，2012.3."
+        },
+        {
+          "type": "paragraph",
+          "text": "[3]林晓明，陈烨，华泰多因子模型体系初探—华泰多因子系列之一，2016.9.21."
+        },
+        {
+          "type": "paragraph",
+          "text": "[4]林晓明，陈烨，人工智能1：人工智能选股框架及经典算法简介，2017.6.1."
+        },
+        {
+          "type": "paragraph",
+          "text": "[5]罗军，胡海涛，大浪淘金，Alpha因子何处寻，2011.8.15."
+        },
+        {
+          "type": "paragraph",
+          "text": "附录1名词解释夏普比率：用来衡量产品风险收益的相对表现。夏普比率为正值，说明在衡量期内产品的平均收益率超过了无风险利率。同时夏普比率越大，说明产品单位风险所获得的风险回报越高。当夏普比率为负数时，按大小排序没有意义。一般采用一年期定存利率作为无风险收益率。计算公式为"
+        },
+        {
+          "type": "paragraph",
+          "text": "Sm = R̅̅̅E̅̅X̅/(σ REX)"
+        },
+        {
+          "type": "paragraph",
+          "text": "其中Sm表示单位时间产品的夏普比率，R̅̅̅E̅̅X̅表示单位时间的超额收益率平均值，σREX表"
+        },
+        {
+          "type": "paragraph",
+          "text": "示单位时间超额收益率的标准差。"
+        },
+        {
+          "type": "paragraph",
+          "text": "超额收益率平均值计算公式为"
+        },
+        {
+          "type": "paragraph",
+          "text": "n"
+        },
+        {
+          "type": "paragraph",
+          "text": "R̅̅̅E̅̅X̅ = 1/n ∑(Rt −Rf)"
+        },
+        {
+          "type": "paragraph",
+          "text": "t=1其中Rt表示产品收益率的序列数据，Rf表示市场无风险收益率，n表示根据时间频度决"
+        },
+        {
+          "type": "paragraph",
+          "text": "定的收益率个数。"
+        },
+        {
+          "type": "paragraph",
+          "text": "年化夏普比率计算公式为"
+        },
+        {
+          "type": "paragraph",
+          "text": "SA =Sm √N"
+        },
+        {
+          "type": "paragraph",
+          "text": "其中SA表示产品收益率的年化夏普，Sm表示单位时间产品的夏普比率，N表示不同周期"
+        },
+        {
+          "type": "paragraph",
+          "text": "的年化因子，计算周期为日，相应的N为250。"
+        },
+        {
+          "type": "paragraph",
+          "text": "风险控制：控制组合相对基准（基准可以是hs300，sz50，zz500指数）的回撤，包括但不限于使用风险模型、择时模型、行业中性等方法控制最大回撤。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附录2获取A股代码及价格这里取数据示例以python为例。获取A股交易代码：traderGetCodeList获取2018年9月30日沪深300指数的成分股及权重："
+        },
+        {
+          "type": "paragraph",
+          "text": "A=get_code_list('hs300',date='2018-09-30')设置date参数可以获取指定日期的成分股和权重；不设置date参数，默认取最近一个交易日的成分股和权重。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2019-a/p002-01.png",
+          "alt": "tipdm-cup-2019-a 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "获取2017年6月25日至7月26日平安银行和万科A的bar数据：day_data=get_kdata(target_list=['SZSE.000001','SZSE.000002'],frequency='day',fre_num=1, begin_date='2017-06-25',end_date='2017-07-26',fill_up=False,df=True,fq=1, sort_by_date=False)"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2019-a/p003-01.png",
+          "alt": "tipdm-cup-2019-a 第 3 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "更多获取标的及价格的用法参见：点宽网-AT相关-Matlab API或者点宽网-AT相关-"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "Python API"
+        },
+        {
+          "type": "paragraph",
+          "text": "附录3因子分类说明常见因子分类可采用如下分类。"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "基础科目衍生类",
+              "净营运资本、净债务、留存收益、毛利等"
+            ],
+            [
+              "质量类因子",
+              "产权比率、超速动比率、非流动资产比率、股东权益比率等"
+            ],
+            [
+              "收益风险类因子",
+              "120日方差、股价偏度、历史贝塔、历史波动等"
+            ],
+            [
+              "情绪类因子",
+              "20日成交量标准差、20日平均换手率、20日换手率与120日换 手率之比等"
+            ],
+            [
+              "成长类因子",
+              "营业收入增长率、总资产增长率、5年收益增长率等"
+            ],
+            [
+              "常用技术指标因子",
+              "MA10、MA120、MTM、DBCD等"
+            ],
+            [
+              "动量类因子",
+              "BIAS20、CMO、PVT等"
+            ],
+            [
+              "价值类因子",
+              "PE、PB、PCF、PS等"
+            ],
+            [
+              "每股指标类因子",
+              "EPS、EBIPTS、TORPS等"
+            ],
+            [
+              "模式识别类因子",
+              "十字暮星、吞噬形态、刺透形态、倒锤头等"
+            ],
+            [
+              "行业与分析师类因子",
+              "12月相对强势、分析师盈利预期、投资回报率预测等"
+            ],
+            [
+              "特色技术指标",
+              "绝对价格振荡器、平均价格、均势指标等"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "以上为因子分类数据，具体可以在点宽网—数据字典—BP因子中找到，参赛者也可以根据BP因子或数据字典中的其他数据来构建因子分类进行分析，但应明确说明构建因子分类的数据来源。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附录4获取股票因子数据获取2017年6月25日至7月2日平安银行的PE和PB的因子数据：Factor_code=get_factor_by_code(factor_list=['PE','PB'],target='SZSE.000001',begin_date='2017- 06-25', end_date='2017-07-02')"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2019-a/p003-02.png",
+          "alt": "tipdm-cup-2019-a 第 3 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "获取2017年6月30日的因子数据：Factor_day=get_factor_by_day(factor_list=['PE','PB'],target_list=['SZSE.000001','SZSE.000002'], date='2017-06-30')"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2019-a/p004-01.png",
+          "alt": "tipdm-cup-2019-a 第 4 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "附录5 Auto-Trader软件说明编程语言：Auto-Trader平台须运用Matlab软件或者Python软件"
+        },
+        {
+          "type": "list_item",
+          "text": "Matlab Matlab版本：2013a及以上版本安装环境：Windows 7或Windows 10，64位建议配置：i5 8G及以上内存",
+          "marker": "(1)"
+        },
+        {
+          "type": "list_item",
+          "text": "Python Auto-Trader仅支持64位版本(x64)的Python 3.5x，Python 3.6x和Python 3.7x",
+          "marker": "(2)"
+        },
+        {
+          "type": "paragraph",
+          "text": "Auto-Trader已经成为PyPI中的项目，安装好Python后，可以通过在cmd中输入pip install atrader安装atrader。atrader完全使用SDK的方式，用户使用时可以使用任意的IDE，包括Pycharm、NoteBook、VScode、Sublime等等常用的Python IDE进行Python策略的编写。当使用atrader时，需要保持Auto-Trader客户端打开且正常登陆。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附录6赛题说明1.关于赛题数据说明(1)示例数据：2019年3月16日公布2016年1月1日至2016年12月31日A股市场股票因子数据。(2)全部数据：2019年4月13日公布2016年1月1日至2018年9年30日A股市场股票因子数据。(3)数据下载请登录DigQuant量化社区（网址：www.digquant.com.cn，进入【泰迪杯】栏目，建议使用Google浏览器），初始登录账号密码见竞赛组委会发出的竞赛报名成功邮件，社区和Auto-Trader客户端的登录名和密码一致。(4)数据的使用方法请查看DigQuant社区【泰迪杯】专栏中的《比赛数据包》。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.数据包使用方法的补充说明数据包SingleBPFactor_2016.zip为Zip格式压缩文件，下载成功后，使用Zip解压软件解压后形成数据文件夹。进入文件二级文件夹（文件夹I）中，将会看到有一个或多个文件夹（如：sse、szse等）。创建C:\\Users\\Public\\Documents\\Bitpower\\AT\\SingleBPFactor文件夹（文件夹II），将文件夹I中的所有子文件夹及其中的文件复制到文件夹II。登陆Auto-Trader客户端后就可以使用这些数据文件。"
+        },
+        {
+          "type": "paragraph",
+          "text": "注：答题过程中遇到数据或软件使用问题，请拨打0755-86952080客服热线。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附录7赛题结果提交说明第一部分：作品提交(1)论文命名为“A题”，附件命名为“作品附件”。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(2)论文及附件内不得出现队号、学校、学院、队员以及指导教师姓名等任何相关信息，否则该作品视为无效作品。(3)请参赛队于2019年4月26日16:00之前在竞赛官网【提交作品】处提交论文（PDF版，大小不超过50M）及附件（论文正文（Word版）、源数据（组委会提供的源数据除外）、过程数据、程序的压缩包，大小不超过200M）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "第二部分：策略提交策略的回测报告、Matlab或Python源代码、执行脚本说明、调用的外部的代码包（若没有调用，则无需上传）通过Auto-Trader内置的“私有云策略池”上传提交。操作步骤如下：(1)策略在Auto-Trader上完成后，点击【同步到私有云】。(2)登录www.digquant.com.cn，进入泰迪杯栏目页面，点击【提交策略】。(3)点击【从私有云选择策略】，选择拟提交的策略，若有使用外部函数和数据包，点击【上传附件】一并上传，最后点击【提交策略】。(4)每个参赛队只有第1位队员有权限提交策略，在2019年4月26日16:00之前可重新选择作品覆盖提交，系统默认以提交的最后一份作品为准；提交的策略需与论文一致，否则会影响成绩。"
+        },
+        {
+          "type": "paragraph",
+          "text": "答案提交操作演示请登录www.digquant.com.cn【泰迪杯栏目】中的赛前培训版块查看。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2019/tipdm-cup-2019-a.pdf",
+        "bytes": 620737,
+        "sha256": "37289e8d81c9a60ae940bd91b4f6b8c78dd03ff90dce857474db686dbdf63324",
+        "page_count": 5
+      }
+    },
+    {
+      "id": "tipdm-cup-2019-b",
+      "code": "2019 泰迪杯 B",
+      "title": "直肠癌淋巴结转移的智能诊断",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2019,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "直肠癌是指从齿状线至直肠乙状结肠交界处之间的恶性肿瘤，是消化道最常见的恶性肿瘤之一。近几年在中国，直肠癌的发病率越来越高，特别在一些大城市，它已经跃居至恶性肿瘤发病率排行榜前三位。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/1544.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2019-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 846120,
+          "sha256": "ecd207b562221b4e6925e2ead4385da23278346b83c37495c558b7d6c0ba8125"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 2506,
+      "content_block_count": 42,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第七届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题：直肠癌淋巴结转移的智能诊断"
+        },
+        {
+          "type": "paragraph",
+          "text": "一、问题的背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "直肠癌是指从齿状线至直肠乙状结肠交界处之间的恶性肿瘤，是消化道最常见的恶性肿瘤之一。近几年在中国，直肠癌的发病率越来越高，特别在一些大城市，它已经跃居至恶性肿瘤发病率排行榜前三位。直肠癌易向肠外浸润并发生淋巴结及远处转移，一旦发生转移病人常常需先进行辅助放化疗才能获得手术机会，患者预后较早期直肠癌患者的预后差。直肠癌患者是否有淋巴结转移对治疗方案的决策以及病人预后有重要的影响，因此对是否有淋巴结转移的准确判断是直肠癌治疗的重要步骤，但目前尚无一种方法能在术前准确地判断淋巴结转移情况。直肠癌肿瘤本身的特性和周围淋巴结转移存在一定的关联性，所以本问题期待参赛者能够设计出有效的算法通过对直肠癌CT影像特征的判断来对淋巴结转移情况进行评估，提高影像学对淋巴结转移判断的准确性。"
+        },
+        {
+          "type": "paragraph",
+          "text": "二、任务"
+        },
+        {
+          "type": "paragraph",
+          "text": "本问题提供直肠肿瘤病人的动脉期和门脉期两类影像数据，参赛者可选择其中的一类或两类影像开展研究。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.直肠肿瘤分割"
+        },
+        {
+          "type": "paragraph",
+          "text": "在CT动脉期和门脉期增强图像上，肿瘤区域和周围组织在强度上存在差异。以数据集1中提供的CT影像和医生标记出的直肠肿瘤掩模为训练样本，设计图像分割算法，分割出直肠肿瘤所在的区域。由于CT图像是一个连续的扫描序列，参赛者需要给出每个病例每幅图像中标记肿瘤区域的掩模图像（掩模图像的解释见第三部分数据集说明）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.直肠肿瘤部分特征的提取"
+        },
+        {
+          "type": "paragraph",
+          "text": "提取CT图像中直肠癌肿瘤区域的影像特征（参见[1]），可以是平面的二维特征如形状、面积、强度、纹理、小波系数等，也可以是肿瘤部位的三维特征如体积、表面积等，也欢迎提出新的影像特征。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.肿瘤影像特征与淋巴结转移的相关性验证"
+        },
+        {
+          "type": "paragraph",
+          "text": "所给数据中包含淋巴结转移阴性和阳性的两类病例，请分析直肠肿瘤区域影像特征与是否淋巴结转移之间的关系，基于CT影像数据建立分类模型并评估模型的有效性。可适当引入病人临床数据（如性别、年龄、实验室指标等）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "直肠肿瘤的影像学研究中，精确分割肿瘤区域一直是实践中的一个难点。本问题拓展的一个方向是通过实验来验证当所选取区域适当扩大（例如覆盖一部分肿瘤的周边组织）或适当缩小（例如只选取肿瘤的部分核心区域）时，是否仍然能构建有效的模型来判断肿瘤是否已发生淋巴结转移。"
+        },
+        {
+          "type": "paragraph",
+          "text": "三、数据集说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "赛题数据包括临床数据和CT影像数据。临床数据保存在EXCEL表中，包含病人ID、性别、年龄、是否淋巴结转移等字段。CT影像方面，提供每个病人的DCM格式的腹部横断位动脉期和门脉期两种增强CT影像数据，分别保存在以病人ID命名的文件夹下的“arterial phase”和“venous phase”子文件夹中。"
+        },
+        {
+          "type": "paragraph",
+          "text": "用于模型训练的数据集1包含多位患直肠癌病人的临床数据和相应的CT图像文件（格式为dcm），以及与每幅CT图像对应的由医生标记出的直肠肿瘤的掩模图像文件（在CT图像文件名后加“_mask”，格式为png，例如：如果CT图像文件为“10066.dcm”，对应的掩模图像文件为“10066_mask.png”）。掩模图像是一个与CT图像具有同样分辨率的二值图像，像素取值为1表示该像素属于目标（肿瘤区域），像素取值为0表示该像素属于背景（非肿瘤区域）。如果某幅CT图像中不存在直肠肿瘤，则对应的掩模图像为全黑。数据集1将于2019年4月13日在竞赛官网发布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "用于模型测试的数据集2的临床数据中没有标识病人是否淋巴结转移的字段，也不提供直肠肿瘤的掩模图像。参赛者需提交每个病人每幅CT图像对应的肿瘤掩模图像以及该病人是否发生淋巴结转移的预测结果。数据集2将于2019年4月27日上午9:00:00在竞赛官网发布。"
+        },
+        {
+          "type": "paragraph",
+          "text": "四、评价方案"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.分割的评价指标"
+        },
+        {
+          "type": "paragraph",
+          "text": "图像分割采用Dice系数进行评价,它是一种集合相似度度量函数，通常用于计算两个样本的相似度："
+        },
+        {
+          "type": "paragraph",
+          "text": "Dice(A,B)= 2|A∩B|/(|A|+|B|)"
+        },
+        {
+          "type": "paragraph",
+          "text": "其中A是医生勾画的直肠肿瘤区域，B是算法分割得到的直肠肿瘤区域。Dice系数的取值范围是[0,1]，取值越接近1表明直肠肿瘤分割的结果与医生给出的结果越接近。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.淋巴结转移预测的评价指标"
+        },
+        {
+          "type": "paragraph",
+          "text": "使用F-Score对分类结果进行评价："
+        },
+        {
+          "type": "paragraph",
+          "text": "F = 2PR/(P+R)"
+        },
+        {
+          "type": "paragraph",
+          "text": "其中P为查准率（Precision），R为查全率（Recall）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "五、DCM格式"
+        },
+        {
+          "type": "paragraph",
+          "text": "DCM文件是遵循DICOM（DICOM：Digital Imaging and Communications in Medicine，医学数字成像和通信）标准的一种文件。DICOM标准支持的设备包括心电图、核磁共振成像、血管镜、超声心动图等多种医疗设备，因而DCM文件被广泛应用于医疗行业。DCM格式文件可以用MedImaView、Millensys DICOM MiniViewer、DICOM Viewer等软件打开。MATLAB和Python中都有专门的函数用于读取DCM文件。"
+        },
+        {
+          "type": "paragraph",
+          "text": "参考文献"
+        },
+        {
+          "type": "paragraph",
+          "text": "[1]魏炜、刘振宇、王硕、田捷，影像组学技术研究进展及其在结直肠癌中的临床应用，中国生物医学工程学报，2018，37:513-520."
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "附录："
+        },
+        {
+          "type": "paragraph",
+          "text": "请仔细阅读以下说明："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、关于赛题数据"
+        },
+        {
+          "type": "list_item",
+          "text": "示例数据：2019年3月16日随赛题公布。",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "全部数据：2019年4月13日公布。",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "测试数据：2019年4月27日9:00:00公布。",
+          "marker": "③"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、提交作品"
+        },
+        {
+          "type": "list_item",
+          "text": "命名方式：论文命名为“B题”，附件命名为“作品附件”，测试结果命名为“作品测试结果”。",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "论文及附件内请勿出现队号、学校、学院、队员以及指导老师相关任何信息，否则该作品视为无效作品。",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "请参赛队于2019年4月26日16:00之前在竞赛官网【提交作品】处提交论文（PDF版，大小不超过50M）及附件（论文正文（Word版）、源数据（组委会提供的源数据除外）、过程数据、程序的压缩包，大小不超过200M）。",
+          "marker": "③"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、公布测试数据，提交测试结果"
+        },
+        {
+          "type": "paragraph",
+          "text": "2019年4月27日9:00:00准时放出测试数据，请在\"赛题与数据\"页面对应的题目右下方下载测试数据，并于2019年4月28日9:00:00前请在“提交测试结果”页面提交测试结果。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2019/tipdm-cup-2019-b.pdf",
+        "bytes": 846120,
+        "sha256": "ecd207b562221b4e6925e2ead4385da23278346b83c37495c558b7d6c0ba8125",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "tipdm-cup-2019-c",
+      "code": "2019 泰迪杯 C",
+      "title": "运输车辆安全驾驶行为的分析",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2019,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "车联网是指借助装载在车辆上的电子标签通过无线射频等识别技术，实现在信息网络平台上对所有车辆的属性信息和静、动态信息进行提取和有效利用，并根据不同的功能需求对所有车辆的运行状态进行有效的监管和提供综合服务的系统。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/1544.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2019-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 621095,
+          "sha256": "e05bd7c598cca7cb978dcf1b19e299942d7d7f29b761353cb50bcde3f592e764"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1946,
+      "content_block_count": 34,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第七届“泰迪杯”数据挖掘挑战赛——"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题：运输车辆安全驾驶行为的分析"
+        },
+        {
+          "type": "paragraph",
+          "text": "一、问题背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "车联网是指借助装载在车辆上的电子标签通过无线射频等识别技术，实现在信息网络平台上对所有车辆的属性信息和静、动态信息进行提取和有效利用，并根据不同的功能需求对所有车辆的运行状态进行有效的监管和提供综合服务的系统。当前道路运输行业等相关部门利用车联网等系统数据，开展道路运输过程安全管理的数据分析，以提高运输安全管理水平和运输效率。"
+        },
+        {
+          "type": "paragraph",
+          "text": "某运输企业所辖各车辆均存在常规运输路线与驾驶人员。在驾驶员每次运输过程中，车辆均可自动采集当前驾驶行为下的行车状态信息并上传至车联网系统。驾驶行为可能随气象、路况等因素的变化而变化，进一步影响行车安全、运输效率与节能水平。"
+        },
+        {
+          "type": "paragraph",
+          "text": "请根据该运输企业所采集的数据（见附件1、附件2），分析车辆行驶过程中的驾驶行为对行车安全、运输效率与节能情况的影响，运用数据挖掘的方法，建立有效的数学模型进行评价。"
+        },
+        {
+          "type": "paragraph",
+          "text": "二、研究问题"
+        },
+        {
+          "type": "paragraph",
+          "text": "(1)利用附件1所给数据，提取并分析车辆的运输路线以及其在运输过程中的速度、加速度等行车状态。提交附表中10辆车每辆车每条线路在经纬度坐标系下的运输线路图及对应的行车里程、平均行车速度、急加速急减速情况。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(2)利用附件1所给数据，挖掘每辆运输车辆的不良驾驶行为，建立行车安全的评价模型，并给出评价结果。"
+        },
+        {
+          "type": "paragraph",
+          "text": "(3)综合考虑运输车辆的安全、效率和节能，并结合自然气象条件与道路状况等情况，为运输车辆管理部门建立行车安全的综合评价指标体系与综合评价模型。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附表"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "序号",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "10"
+            ],
+            [
+              "车牌号",
+              "AA00002",
+              "AB00006",
+              "AD00003",
+              "AD00013",
+              "AD00053",
+              "AD00083",
+              "AD00419",
+              "AF00098",
+              "AF00131",
+              "AF00373"
+            ]
+          ]
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "三、数据说明"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.附件1给出450辆运输车辆的行车轨迹采集数据，由于采集设备精度，实际采集数据可能存在某些异常。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件1的数据说明"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "序号",
+              "指标名称",
+              "指标说明",
+              "说明"
+            ],
+            [
+              "1",
+              "vehicleplatenumber",
+              "车牌号码",
+              ""
+            ],
+            [
+              "2",
+              "device_num",
+              "设备号",
+              ""
+            ],
+            [
+              "3",
+              "direction_angle",
+              "方向角",
+              "范围：0-359（方向角指从定位点的正北方向 起，以顺时针方向至行驶方向间的水平夹角）"
+            ],
+            [
+              "4",
+              "lng",
+              "经度",
+              "东经"
+            ]
+          ]
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "5",
+              "lat",
+              "纬度",
+              "北纬"
+            ],
+            [
+              "6",
+              "acc_state",
+              "ACC状态",
+              "点火1/熄火0"
+            ],
+            [
+              "7",
+              "right_turn_signals",
+              "右转向灯",
+              "灭0/开1"
+            ],
+            [
+              "8",
+              "left_turn_signals",
+              "左转向灯",
+              "灭0/开1"
+            ],
+            [
+              "9",
+              "hand_brake",
+              "手刹",
+              "灭0/开1"
+            ],
+            [
+              "10",
+              "foot_brake",
+              "脚刹",
+              "无0/有1"
+            ],
+            [
+              "11",
+              "location_time",
+              "采集时间",
+              ""
+            ],
+            [
+              "12",
+              "gps_speed",
+              "GPS速度",
+              "单位：km/h"
+            ],
+            [
+              "13",
+              "mileage",
+              "GPS里程",
+              "单位：km"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "2.附件2给出2018年7月30日至2018年10月10日全国主要城市的自然气象数据。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件2的数据说明"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "序号",
+              "指标名称",
+              "指标说明",
+              "说明"
+            ],
+            [
+              "1",
+              "province",
+              "省/自治区/直辖市",
+              ""
+            ],
+            [
+              "2",
+              "prefecture_city",
+              "地级市",
+              ""
+            ],
+            [
+              "3",
+              "county",
+              "县级市/县",
+              ""
+            ],
+            [
+              "4",
+              "wind_direction",
+              "风向",
+              ""
+            ],
+            [
+              "5",
+              "wind_power",
+              "风力",
+              ""
+            ],
+            [
+              "6",
+              "high_temp",
+              "最高温度",
+              ""
+            ],
+            [
+              "7",
+              "low_temp",
+              "最低温度",
+              ""
+            ],
+            [
+              "8",
+              "conditions",
+              "天气状况",
+              "如：多云、晴、雨、雪"
+            ],
+            [
+              "9",
+              "relative_humidity",
+              "相对湿度",
+              ""
+            ],
+            [
+              "10",
+              "precipitation",
+              "降水量",
+              "单位：mm"
+            ],
+            [
+              "11",
+              "record_date",
+              "采集日期",
+              ""
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "3.在车辆运输过程中，不良驾驶行为主要包括疲劳驾驶、急加速、急减速、怠速预热、超长怠速、熄火滑行、超速、急变道等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.目前常用的坐标系有如下三种："
+        },
+        {
+          "type": "paragraph",
+          "text": "（1）WGS-84（世界标准地理坐标系）"
+        },
+        {
+          "type": "paragraph",
+          "text": "（2）GCJ-02（中国国测局地理坐标系）"
+        },
+        {
+          "type": "paragraph",
+          "text": "（3）BD-09（百度地理坐标系）"
+        },
+        {
+          "type": "paragraph",
+          "text": "本道赛题附件1所给的行车轨迹采集数据中，经纬度数据所使用的坐标系为WGS-84，若需调用高德地图或百度地图等工具进行经纬度处理，则需做相应的坐标系转换。"
+        },
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "附录："
+        },
+        {
+          "type": "paragraph",
+          "text": "请仔细阅读以下说明：1、关于赛题数据"
+        },
+        {
+          "type": "list_item",
+          "text": "示例数据：2019年3月16日随赛题公布。",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "全部数据：2019年4月13日公布。",
+          "marker": "②"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、提交作品"
+        },
+        {
+          "type": "list_item",
+          "text": "命名方式：论文命名为“C题”，附件请直接命名为“作品附件”。",
+          "marker": "①"
+        },
+        {
+          "type": "list_item",
+          "text": "论文及附件内请勿出现队号、学校、学院、队员以及指导老师相关任何信息，否则该作品视为无效作品。",
+          "marker": "②"
+        },
+        {
+          "type": "list_item",
+          "text": "请参赛队于2019年4月26日16:00之前在竞赛官网【提交作品】处提交论文（PDF版，大小不超过50M）及附件（论文正文（Word版）、源数据（组委会提供的源数据除外）、过程数据、程序的压缩包，大小不超过200M）。",
+          "marker": "③"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2019/tipdm-cup-2019-c.pdf",
+        "bytes": 621095,
+        "sha256": "e05bd7c598cca7cb978dcf1b19e299942d7d7f29b761353cb50bcde3f592e764",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "tjjmds-2019",
+      "code": "2019 统计建模",
+      "title": "统计建模、大数据应用、市场调查分析、生物医学四类自选题",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2019,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2019"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "为在大学生中倡导学习统计、应用统计的良好氛围，适应大数据时代的高校统计人才的培养要求，提高大学生的数据挖掘、数据分析、运用计算机处理数据的能力，加强创新思维意识，协助解决社会实际问题，中国统计教育学会、教育部高等学校统计学类专业教学指导委员…",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/36597.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 489,
+      "content_block_count": 3,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "为在大学生中倡导学习统计、应用统计的良好氛围，适应大数据时代的高校统计人才的培养要求，提高大学生的数据挖掘、数据分析、运用计算机处理数据的能力，加强创新思维意识，协助解决社会实际问题，中国统计教育学会、教育部高等学校统计学类专业教学指导委员会、全国应用统计专业学位研究生教育指导委员会联合举办2019年（第六届）全国大学生统计建模大赛。本届大赛由河南大学承办，现将有关事项通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、参赛论文选题的范围和要求"
+        },
+        {
+          "type": "paragraph",
+          "text": "本届大赛论文选题分为“统计建模类”、“大数据应用类”、“市场调查分析类”和“生物医学类”四类。在四类中，参赛队自定论文题目。“统计建模类”论文以选题的有效性、假设的合理性、建模的创造性、结果的正确性和表述的清晰性为主要标准。“大数据应用类”论文以统计模型和探索处理过程的合理性，批量数据背后的信息准确性挖掘为主要标准。“市场调查分析类”论文以选题的实效性、方案的合理性、分析的科学性、结论的价值性和表述的清晰性为主要标准。“生物医学类”论文以选题的新颖性和实用性、方法的可操作性、数据的真实性和时效性、分析推理的合理性和完整性为主要标准。（选题具体要求见附件1）。"
+        }
+      ]
     },
     {
       "id": "apmcm-2018-a",
@@ -30913,6 +33581,93 @@
       }
     },
     {
+      "id": "tjjmds-2017",
+      "code": "2017 统计建模",
+      "title": "统计建模、市场调查分析、大数据工程三类自选题",
+      "competition": "全国大学生统计建模大赛",
+      "category": "统计建模",
+      "year": 2017,
+      "problem_type": "统计建模",
+      "modeling_directions": [
+        "统计模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "统计建模",
+        "自拟题目",
+        "2017"
+      ],
+      "data_requirement": "围绕年度主题自拟题目，数据由参赛队自行搜集",
+      "status": "完整题面",
+      "summary": "为在大学生中倡导学习统计、应用统计的良好氛围，适应大数据时代的高校统计人才的培养要求，提高大学生的数据挖掘、数据分析、运用计算机处理数据的能力，加强创新思维意识，协助解决社会实际问题，中国统计教育学会、教育部高等学校统计学类专业教学指导委员…",
+      "source_id": "tjjmds_official",
+      "source_url": "http://tjjmds.ai-learning.net/dstz/36596.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1657,
+      "content_block_count": 13,
+      "content_blocks": [
+        {
+          "type": "paragraph",
+          "text": "为在大学生中倡导学习统计、应用统计的良好氛围，适应大数据时代的高校统计人才的培养要求，提高大学生的数据挖掘、数据分析、运用计算机处理数据的能力，加强创新思维意识，协助解决社会实际问题，中国统计教育学会、教育部高等学校统计学类专业教学指导委员会、国务院学位办全国应用统计专业学位研究生教育指导委员会、中国现场统计研究会、中国数学会概率统计学会、中国卫生信息学会、中国市场信息调查业协会联合举办2017年（第五届）全国大学生统计建模大赛。本次大赛由江西财经大学协助承办，现将有关事项通知如下："
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "二、 参赛论文选题的范围和要求"
+        },
+        {
+          "type": "paragraph",
+          "text": "本次大赛论文选题分为“统计建模类”、“市场调查分析类”、“大数据工程类”三类，参赛者需结合自己的专业领域和研究方向为参赛论文选取具体名称（选题具体要求见附件1）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "本次大赛分别设本科生组和研究生组，建议本科生组多关注一些更为实际、具体的问题，研究生组多关注理论与实际相结合、具有一定研究深度的问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "本次大赛分为两个阶段，第一阶段为论文撰写阶段，参赛者须在规定的截止日期之前（2017年6月30日）按照赛会要求提交参赛论文，大赛执委会以匿名评审的方式进行评审。"
+        },
+        {
+          "type": "paragraph",
+          "text": "（论文评分标准）“统计建模类”论文以选题的有效性、假设的合理性、建模的创造性、结果的正确性和表述的清晰性为主要标准。“市场调查分析类”论文以选题的实效性、方案的合理性、分析的科学性、结论的价值性和表述的清晰性为主要标准。“大数据工程类”论文以统计模型和探索处理过程的合理性，批量数据背后的信息准确性挖掘为主要标准。第二阶段为论文答辩阶段及应用考核阶段，入选参赛者须按照规定的时间和要求对所做参赛论文进行自述、并回答答辩专家的提问，以考核参赛论文的原创性、合理性和正确性，参加第二阶段论文答辩的时间和地点另行通知。 参赛者须公开数据来源，提交原始数据包和数据分析程序。大赛要求参赛者提交承诺书，承诺参赛论文是在赛期（2017年5月10日至6月30日之间）由所有参赛队员共同参与原创的。大赛执委会将对参赛论文进行查重。大赛要求参赛论文使用正版统计分析软件。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "附件1：选题具体要求"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "选题具体要求"
+        },
+        {
+          "type": "paragraph",
+          "text": "本次参赛论文分为“统计建模类”、“市场调查分析类”和“大数据工程类”。“统计建模类”大赛旨在揭示批量数据背后的因素，诠释社会经济现象，对经济和社会发展做出预测或判断。“市场调查分析类”大赛在于分析市场情况，了解市场现状及其发展趋势，为市场预测和营销决策提供客观的、正确的资料。“数据工程类”大赛旨在通过大赛构建良好的资源共享平台，促进大数据与云计算等战略新兴产业的融合，促进大数据专业技术人才的培养。"
+        },
+        {
+          "type": "paragraph",
+          "text": "“统计建模类”选题可以是与社会发展息息相关的经济、贸易、金融、生态、人口、交通、能源、城市化、农业、生物、医药、卫生等诸多方面的问题，本次大赛建议以“新经济”和“大数据”作为关键词考虑选题。由参赛者自行搜集数据，提出问题和假设条件，建立模型，运用统计分析方法和统计分析软件进行模型求解，阐明主要结论及意义，并对结果进行分析与检验，讨论模型的优缺点和改进方向。"
+        },
+        {
+          "type": "paragraph",
+          "text": "“市场调查分析类”选题是为了结合社会的热点、企业的需求和个人的关注方向，由参赛者提出需要解决的问题，制定调查方案，通过调查问卷收集所需数据，针对所提出的问题分析数据，给出解决问题的对策和建议。本届大赛提倡学生走出校园，直接面对社会中实际存在的各种现象、问题，运用所学的知识进行调查、服务社会。尤其欢迎来自社会单位委托的各种调查课题。学会网站上也会陆续提供一"
+        },
+        {
+          "type": "paragraph",
+          "text": "些市场调查公司等单位提供的实际问题，作为选题推荐。"
+        },
+        {
+          "type": "paragraph",
+          "text": "“大数据工程类”选题是根据公司、企业和科研院所等方面在生产和研究过程中遇到的实际问题，经过适当简化加工提炼出所需解决的问题，要求参赛者能够利用相关的软件从网页中爬取所需的数据，通过统计模型运用进行数据分析（特别是文本数据）的处理，从批量的数据中挖掘有效信息建立统计模型解决实际问题，要求参赛者对相关领域背景问题能够足够的理解、能够做到模型评价的客观性、创新性和准确性。"
+        }
+      ]
+    },
+    {
       "id": "comap-2017-icm-d",
       "code": "2017 ICM D",
       "title": "Optimizing the Passenger Throughput at an Airport Security Checkpoint",
@@ -30945,7 +33700,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 7009,
+      "content_character_count": 7011,
       "content_block_count": 27,
       "content_blocks": [
         {
@@ -31049,11 +33804,11 @@
         },
         {
           "type": "paragraph",
-          "text": "[1] http://www.wsj.com/articles/why-tsa-security-lines-arent-as-bad-as-youd-feared- 1469032116"
+          "text": "[1] http://www.wsj.com/articles/why-tsa-security-lines-arent-as-bad-as-youd-feared-1469032116"
         },
         {
           "type": "paragraph",
-          "text": "[2] http://www.chicagotribune.com/news/ct-tsa-airport-security-lines-met-20160823story.html"
+          "text": "[2] http://www.chicagotribune.com/news/ct-tsa-airport-security-lines-met-20160823-story.html"
         },
         {
           "type": "paragraph",
@@ -31061,11 +33816,11 @@
         },
         {
           "type": "paragraph",
-          "text": "[4] http://wgntv.com/2016/07/13/extremely-long-lines-reported-at-chicago-midwayairports-tsa-checkpoint/"
+          "text": "[4] http://wgntv.com/2016/07/13/extremely-long-lines-reported-at-chicago-midway-airports-tsa-checkpoint/"
         },
         {
           "type": "paragraph",
-          "text": "[5] http://www.cnbc.com/2016/04/14/long-lines-and-missed-flights-fuel-criticism-of-tsascreening.html"
+          "text": "[5] http://www.cnbc.com/2016/04/14/long-lines-and-missed-flights-fuel-criticism-of-tsa-screening.html"
         }
       ],
       "source_pdf": {
@@ -31308,7 +34063,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 10406,
+      "content_character_count": 10405,
       "content_block_count": 48,
       "content_blocks": [
         {
@@ -31525,7 +34280,7 @@
         },
         {
           "type": "paragraph",
-          "text": "https://www.kansascityfed.org/~/media/files/publicat/community/workforce/transforming workforcedevelopment/book/transformingworkforcedevelopmentpolicies.pdf"
+          "text": "https://www.kansascityfed.org/~/media/files/publicat/community/workforce/transformingworkforcedevelopment/book/transformingworkforcedevelopmentpolicies.pdf"
         },
         {
           "type": "paragraph",
@@ -32765,6 +35520,506 @@
       }
     },
     {
+      "id": "tipdm-cup-2016-a",
+      "code": "2016 泰迪杯 A",
+      "title": "电商平台图片中文字的识别",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2016,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "由于电子商务环境下用户无法接触商品实物，电商网站提供的商品信息是用户做出购买决定的重要依据。不同的电商平台展现商品信息的风格虽然各有不同，总的来说商品信息除了一部分以文本、表格形式给出外，越来越多地以图片的形式呈现。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/712.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2016-a/problem.pdf",
+          "kind": "problem",
+          "bytes": 1152495,
+          "sha256": "dab28d78900b6deef3a1b1742cb384024afaa66fd73c4cc329b1026608dfee6c"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1564,
+      "content_block_count": 32,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "A题电商平台图片中文字的识别"
+        },
+        {
+          "type": "paragraph",
+          "text": "一、背景："
+        },
+        {
+          "type": "paragraph",
+          "text": "由于电子商务环境下用户无法接触商品实物，电商网站提供的商品信息是用户做出购买决定的重要依据。不同的电商平台展现商品信息的风格虽然各有不同，总的来说商品信息除了一部分以文本、表格形式给出外，越来越多地以图片的形式呈现。图1是京东商城上某电水壶商品页面的示例。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p001-01.jpg",
+          "alt": "tipdm-cup-2016-a 第 1 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1、京东商城的某商品页面"
+        },
+        {
+          "type": "paragraph",
+          "text": "京东商城商品页面中的“规格参数”部分以文本表格的形式给出了商品的常规属性，对特定的商品类目这部分往往有比较固定的内容格式，如图2所示。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p001-02.jpg",
+          "alt": "tipdm-cup-2016-a 第 1 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图2、某品牌电水壶的规格参数信息"
+        },
+        {
+          "type": "paragraph",
+          "text": "京东商城的“商品介绍”部分主要以图片列表的形式提供有关商品的更多信息，包括商品独特的设计特点、商品的优势、适用场景等。商品信息图片提供了很多“规格参数”部分未包含的商品信息，是顾客了解和选择商品的重要参考，如图3所示。"
+        },
+        {
+          "type": "paragraph",
+          "text": "图片是一种更为生动和形象的视觉表达方式，但也为电子商务网站的管理者带来了技术上的挑战。电商平台对商家发布的商品信息有严格的管理规范，如《京东开放平台禁发商品及信息管理规范》：http://help.jd.com/Vender/viewQuestion-852-2011.html和《京东开放平台商品标题及广告语发布规范》http://help.jd.com/Vender/viewQuestion-852-2687.html。在这里，我们主要考虑商品信息图片中的文本信息的管理问题：图片中的文本以光学字符的形式表达，不能使用计算机直接检索和处理。"
+        },
+        {
+          "type": "paragraph",
+          "text": "最常见的问题是，商品信息图片中的内容和商品规格参数中的内容不一致。例如某电热水壶产品规格参数中标明材质为“拉丝不锈钢”，而商品信息图片中介绍为304不锈钢。这将造成用户理解上的困扰：到底哪一个是准确的呢？实际上“拉丝”是不锈钢的一种表面处理工艺，“拉丝不锈钢”并没有说明所采用不锈钢材料的成分所符合的国家标准。"
+        },
+        {
+          "type": "paragraph",
+          "text": "商品信息图片可能出现的另一个问题是，采用图片的方式来规避对敏感或违禁词的检测。我国的《广告法》和《反"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p002-01.jpg",
+          "alt": "tipdm-cup-2016-a 第 2 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "不正当竞争法》分别对虚假广告和利用广告作引人误解的虚假宣传作了禁止性规定。文本形式的商品介绍信息较易进行检测，而使用图片将大大增加电商网站监管的难度和工作量。除了电商网站，微信等社交软件中也存在大量以图像格式存在的文本信息，所以这一问题具有普遍性。"
+        },
+        {
+          "type": "paragraph",
+          "text": "要解决以上的这些问题，需要设计一个系统来自动地从商品信息图片上提取其中的文本信息，这将有助于电子商务企业更好地做出商品推荐、售后服务和信息监管。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p002-02.jpg",
+          "alt": "tipdm-cup-2016-a 第 2 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图3、某电水壶的商品信息图片（部分）"
+        },
+        {
+          "type": "paragraph",
+          "text": "二、根据附件提供的数据，设计相应的算法，解决以下任务，并做出评测（F-score）。1、图片中的字符检测"
+        },
+        {
+          "type": "paragraph",
+          "text": "根据商品信息图片中字符和背景的特点，设计算法从图片中检测字符（包括中文字符、英文字符和数字、标点）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "检测结果保存在以box为后缀的文本文件中，输出字符在原图中的位置范围（字符的最小外接矩形，如图4所示）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "以图片左下角为原点，输出字符的最小外接矩形的坐标4元组：（左下角x坐标,左下角y坐标,右上角x坐标,右"
+        },
+        {
+          "type": "paragraph",
+          "text": "上角y坐标），如图5(b)中的后四列所示。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p003-01.jpg",
+          "alt": "tipdm-cup-2016-a 第 3 页插图 1"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p003-02.jpg",
+          "alt": "tipdm-cup-2016-a 第 3 页插图 2"
+        },
+        {
+          "type": "paragraph",
+          "text": "图4字符的最小外接矩形"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、字符识别"
+        },
+        {
+          "type": "paragraph",
+          "text": "对所提取字符进行自动识别，识别结果列在字符位置四元组之前，如图5(b)所示。"
+        },
+        {
+          "type": "paragraph",
+          "text": "三、数据说明1、附件1为训练样本，包含了1000张商品图片及对应的box文件。图1(a)是某品牌服装商品的图片。图1(b)是图1所对应的box文件。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p003-03.jpg",
+          "alt": "tipdm-cup-2016-a 第 3 页插图 3"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2016-a/p003-04.png",
+          "alt": "tipdm-cup-2016-a 第 3 页插图 4"
+        },
+        {
+          "type": "list_item",
+          "text": "(b)",
+          "marker": "(a)"
+        },
+        {
+          "type": "paragraph",
+          "text": "图5.附件1数据(a)商品信息图片(b)对应的box文件2、附件2为检测样本，包含了500张商品图片，将于5月14日8:00在赛题发布页面（http://www.tipdm.org/qk/729.jhtml）中公布。参赛队需在最后提交作品期限之内，以box文件方式完成识别结果。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2016/tipdm-cup-2016-a.pdf",
+        "bytes": 1152495,
+        "sha256": "dab28d78900b6deef3a1b1742cb384024afaa66fd73c4cc329b1026608dfee6c",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "tipdm-cup-2016-b",
+      "code": "2016 泰迪杯 B",
+      "title": "铁路旅客流量预测",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2016,
+      "problem_type": "预测分析",
+      "modeling_directions": [
+        "预测模型",
+        "数据分析"
+      ],
+      "keywords": [
+        "预测"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "一、背景随着发改委发布的《关于改革完善高铁动车组旅客票价政策的通知》，高铁动车票价将由铁路总公司（下称铁总）根据市场情况自行定价的政策出台。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/712.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2016-b/problem.pdf",
+          "kind": "problem",
+          "bytes": 313813,
+          "sha256": "a5c6112f9b978c8309eadb0d2e466f807bc238e50a43378add7199645c57795b"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 1642,
+      "content_block_count": 15,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "B题铁路旅客流量预测"
+        },
+        {
+          "type": "paragraph",
+          "text": "一、背景随着发改委发布的《关于改革完善高铁动车组旅客票价政策的通知》，高铁动车票价将由铁路总公司（下称铁总）根据市场情况自行定价的政策出台。铁路部门为了保持市场的竞争力，实现利润的最大化，需要了解日常铁路客运流量、淡旺季变动指数、冷热门线路的具体情况，而其中对客流的充分了解和预测是准确把握市场的首要条件，因此铁路客流预测的研究也成为铁路客运服务需要重点研究的方向。然而铁路客流量受多种因素的影响，比如：“春运”期间铁路客流量骤增，导致铁路运力无法满足客户乘车需求，同时也给铁路客运组织带来巨大压力。在非节假日期间，一些冷门线路区间上座率不足，造成铁路车辆资源的浪费。因此铁路客流量预测，可以为制定合理的价格、改善客运站组织方式、优化铁路车辆资源配置、提高客运设备的服务能力提供帮助，对提高铁路客运运输效率具有重要的意义。二、问题请针对该铁路公司的ZD190(站)至ZD111(站)区段的客运专线完成以下任务：(1)根据附件1，按车次、时段（小时）、车站、区间（两个车站之间）等条件分析客流规律。(2)考虑相关因素的影响，构建客流量预测模型，并预测未来两周的客流量。(3)针对D02~D19，优化设计车辆配置及车站停靠方案。三、要求(1)设计数据库（包括表、视图、报表）以实现上述分析。(2)设计并实现EXCEL表中数据的自动导入功能。(3)将分析结果进行可视化展现。四、说明1.附件1提供了ZD190(站)至ZD111(站)区段客运专线2015年1月至2016年3月的旅客列车梯形密度表（文件名对应列车发车日期）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "1 /3"
+        },
+        {
+          "type": "paragraph",
+          "text": "D05 ZD190-01—ZD111-01开行1天日均定员：1172客座率：47.3%"
+        },
+        {
+          "type": "paragraph",
+          "text": "上车站ZD190-01 ZD062 ZD250 ZD326"
+        },
+        {
+          "type": "paragraph",
+          "text": "下车人数合计下车站开/到点06:43 07:30 ZD190-01 07:59站上车后的旅客，08:39 ZD190-01 06:43 ZD062 07:28 17在沿途各站下车的人数统计17 ZD250 07:57 13 28 41 ZD326 08:35 64 18 75 157 ZD111-01 09:27 123 62 327 430 942上车人数合计217 108 402 430 1157"
+        },
+        {
+          "type": "paragraph",
+          "text": "ZD190-01站上车总人数。2.附件2相关术语、公式和参数"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "术语",
+              "公式",
+              "描述"
+            ],
+            [
+              "旅客周转量",
+              "∑ 旅客运输量 * 运输距离",
+              "列车上所有旅客位移的合计"
+            ],
+            [
+              "实载率（%）",
+              "旅客周转量 / 客座总公里数",
+              "表示火车完成的旅客周转量 与其客座公里总数之比。"
+            ],
+            [
+              "空载率（%）",
+              "1 - 实载率",
+              ""
+            ],
+            [
+              "客座率（%）",
+              "旅客周转量 / 客座总公里数",
+              "表示火车完成的旅客周转量 与其客座公里总数之比。"
+            ],
+            [
+              "运输密度",
+              "旅客周转量 / 线路营业里程",
+              "平均每公里线路通过旅客的 周转量"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "3.附件3提供了ZD111市至ZD190市区段各车站里程(公里）"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "所属地区",
+              "车站",
+              "里程（公里）"
+            ],
+            [
+              "ZD111市",
+              "ZD111-01",
+              "0"
+            ],
+            [
+              "",
+              "ZD111-02",
+              "3"
+            ],
+            [
+              "",
+              "ZD311",
+              "49"
+            ],
+            [
+              "ZD326市",
+              "ZD326",
+              "110"
+            ],
+            [
+              "ZD250市",
+              "ZD192",
+              "153"
+            ],
+            [
+              "",
+              "ZD022",
+              "186"
+            ],
+            [
+              "",
+              "ZD250",
+              "210"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "2 /3"
+        },
+        {
+          "type": "table",
+          "rows": [
+            [
+              "",
+              "ZD062",
+              "295"
+            ],
+            [
+              "ZD190市",
+              "ZD120",
+              "320"
+            ],
+            [
+              "",
+              "ZD121",
+              "330"
+            ],
+            [
+              "",
+              "ZD143",
+              "341"
+            ],
+            [
+              "",
+              "ZD370",
+              "362"
+            ],
+            [
+              "",
+              "ZD190-02",
+              "378"
+            ],
+            [
+              "",
+              "ZD190-01",
+              "393"
+            ]
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "4.附件4提供了2015年1月至2016年3月车站所属地区气象状况，如下表所示。"
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "text": "地区日期天气状况气温风力风向ZD190市2016年03月01日晴/晴5 ℃ /3 ℃南风南风3-4 3-4级级/ZD326市2016年03月01日晴/晴14 ℃ /3 ℃南风南风3-4 3-4级级/ZD250市2016年03月01日晴/晴12 ℃ /2 ℃南风南风3-4 3-4级级/ZD111市2016年03月01日晴/晴13 ℃ /7 ℃南风南风3-4 3-4级级/"
+        },
+        {
+          "type": "paragraph",
+          "text": "3 /3"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2016/tipdm-cup-2016-b.pdf",
+        "bytes": 313813,
+        "sha256": "a5c6112f9b978c8309eadb0d2e466f807bc238e50a43378add7199645c57795b",
+        "page_count": 3
+      }
+    },
+    {
+      "id": "tipdm-cup-2016-c",
+      "code": "2016 泰迪杯 C",
+      "title": "网络招聘信息的分析与挖掘",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2016,
+      "problem_type": "系统建模",
+      "modeling_directions": [
+        "网络模型",
+        "系统分析"
+      ],
+      "keywords": [
+        "网络"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "随着计算机网络技术的迅速发展，网络招聘信息平台现已成为招聘者发布和应聘者获取信息的主要渠道。网络招聘信息一方面能够直接反映了用人单位对人才基本条件、能力和素质的要求，为应聘者提供求职参考；",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/712.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2016-c/problem.pdf",
+          "kind": "problem",
+          "bytes": 156827,
+          "sha256": "e48a8a32a2d5c97bb7bf113b7a2e79f5b2389a7e8d9896b93726b707b962c01c"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 955,
+      "content_block_count": 15,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "C题网络招聘信息的分析与挖掘"
+        },
+        {
+          "type": "paragraph",
+          "text": "一、背景"
+        },
+        {
+          "type": "paragraph",
+          "text": "随着计算机网络技术的迅速发展，网络招聘信息平台现已成为招聘者发布和应聘者获取信息的主要渠道。网络招聘信息一方面能够直接反映了用人单位对人才基本条件、能力和素质的要求，为应聘者提供求职参考；另一方面也能够反映出社会和各行业对人才的需求现状，或未来一段时间的人才需求趋向；同时也能够为高等院校及时了解社会对人才的需求变化情况，分析预测未来的人才市场的热点，有针对性的调整人才培养方案和设置安排相关课程提供重要的参考信息，促进高校培养出更多适用的优秀人才以满足社会的需求。因此，对网络招聘信息进行分析研究，了解社会和相关行业的需求特点与趋势，为广大求职者提供正确的就业指导都有着非常重要的意义。"
+        },
+        {
+          "type": "paragraph",
+          "text": "二、数据描述"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.附件1 ~附件3给出了某招聘网站发布的招聘信息的实际数据，时间跨度为3个月。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2.虽然不同的招聘网站都有各自的页面发布方式，但其招聘信息都包含结构化数据和非结构化数据两部分。结构化数据通常是以表格形式给出的常规信息（见附件1），如公司的基本情况、职位名称、行业领域、供职地点、发布时间、薪酬待遇、学历要求、工作性质等。非结构化数据通常是以文本的形式给出的说明信息，包含招聘单位的基本情况（见附件2）和岗位职责与任职要求（见附件3）等，这也是招聘信息的重要内容。"
+        },
+        {
+          "type": "paragraph",
+          "text": "三、要解决的问题"
+        },
+        {
+          "type": "paragraph",
+          "text": "1.根据招聘职位的工作性质和内涵，试分析目前所需要的人才中可以分为哪些职业类型和专业领域？"
+        },
+        {
+          "type": "paragraph",
+          "text": "2．根据招聘单位的行业、职位、地域等特点，分析目前的人才需求情况，哪些是热门行业、职位、地域等？并展望其未来的人才需求走向。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3.随着数据分析/数据挖掘行业的兴起，涌现出了一些新的职位，如数据分析师、大数据分析师、数据产品经理、数据挖掘算法工程师等，试分析与预测相关职位的需求情况。"
+        },
+        {
+          "type": "paragraph",
+          "text": "4.深入分析IT人才市场的供求现状及未来的发展趋势，包括地域和职位、人才的专业和学历层次等方面的情况。"
+        },
+        {
+          "type": "paragraph",
+          "text": "5.根据你们的研究结果，结合你们所学的专业给所在学校人才培养方案的修订写一份建议书，或给在校大学生的就业规划提出你们的建议（不超过两页）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件1：招聘信息.csv (共530445条记录)；"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件2：招聘单位基本情况.csv（共50893条记录）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "附件3：职位描述.csv（共539216条记录）。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2016/tipdm-cup-2016-c.pdf",
+        "bytes": 156827,
+        "sha256": "e48a8a32a2d5c97bb7bf113b7a2e79f5b2389a7e8d9896b93726b707b962c01c",
+        "page_count": 2
+      }
+    },
+    {
       "id": "comap-2016-icm-d",
       "code": "2016 ICM D",
       "title": "Measuring the Evolution and Influence in Society's Information Networks",
@@ -32797,7 +36052,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 5170,
+      "content_character_count": 5174,
       "content_block_count": 37,
       "content_blocks": [
         {
@@ -32903,7 +36158,7 @@
         },
         {
           "type": "paragraph",
-          "text": "http://www.technologyreview.com/news/427787/are-smart-phones-spreading-faster-than-any-technologyin-human-history/"
+          "text": "http://www.technologyreview.com/news/427787/are-smart-phones-spreading-faster-than-any-technology-in-human-history/"
         },
         {
           "type": "paragraph",
@@ -32911,7 +36166,7 @@
         },
         {
           "type": "paragraph",
-          "text": "http://www.poynter.org/news/mediawire/189819/pew-tv-viewing-habit-grays-as-digital-newsconsumption-tops-print-radio/"
+          "text": "http://www.poynter.org/news/mediawire/189819/pew-tv-viewing-habit-grays-as-digital-news-consumption-tops-print-radio/"
         },
         {
           "type": "paragraph",
@@ -32928,11 +36183,11 @@
         },
         {
           "type": "paragraph",
-          "text": "https://www.quora.com/How-did-news-get-around-the-world-before-the-invention-of-newspapers-andother-media"
+          "text": "https://www.quora.com/How-did-news-get-around-the-world-before-the-invention-of-newspapers-and-other-media"
         },
         {
           "type": "paragraph",
-          "text": "http://2012books.lardbucket.org/books/a-primer-on-communication-studies/s15-media-technology-andcommunica.html"
+          "text": "http://2012books.lardbucket.org/books/a-primer-on-communication-studies/s15-media-technology-and-communica.html"
         },
         {
           "type": "paragraph",
@@ -32999,7 +36254,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 5539,
+      "content_character_count": 5540,
       "content_block_count": 22,
       "content_blocks": [
         {
@@ -33040,7 +36295,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Task 2: Using the UN water scarcity map (http://www.unep.org/dewa/vitalwater/jpg/0222waterstress-overuse-EN.jpg) pick one country or region where water is either heavily or moderately overloaded. Explain why and how water is scarce in that region. Make sure to explain both the social and environmental drivers by addressing physical and/or economic scarcity."
+          "text": "Task 2: Using the UN water scarcity map (http://www.unep.org/dewa/vitalwater/jpg/0222-waterstress-overuse-EN.jpg) pick one country or region where water is either heavily or moderately overloaded. Explain why and how water is scarce in that region. Make sure to explain both the social and environmental drivers by addressing physical and/or economic scarcity."
         },
         {
           "type": "paragraph",
@@ -33143,7 +36398,7 @@
       ],
       "content_format": "structured_text",
       "content_status": "complete",
-      "content_character_count": 8135,
+      "content_character_count": 8136,
       "content_block_count": 27,
       "content_blocks": [
         {
@@ -33260,7 +36515,7 @@
         },
         {
           "type": "paragraph",
-          "text": "http://www.euro.who.int/en/health-topics/health-determinants/migration-and-health/migrant-health-inthe-european-region/migration-and-health-key-issues"
+          "text": "http://www.euro.who.int/en/health-topics/health-determinants/migration-and-health/migrant-health-in-the-european-region/migration-and-health-key-issues"
         },
         {
           "type": "paragraph",
@@ -34264,6 +37519,385 @@
       }
     },
     {
+      "id": "tipdm-cup-2015",
+      "code": "2015 泰迪杯",
+      "title": "第三届“泰迪杯”全国大学生数据挖掘竞赛赛题",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "category": "泰迪杯",
+      "year": 2015,
+      "problem_type": "综合建模",
+      "modeling_directions": [
+        "综合分析"
+      ],
+      "keywords": [
+        "数学建模"
+      ],
+      "data_requirement": "含本地原题 PDF",
+      "status": "完整题面",
+      "summary": "随着互联网与移动互联网的快速发展，截止2014年6月，我国的网民规模达6.32亿，互联网普及率为46.9%，2015年中国网民的渗透率将接近50%。2014年天猫双十一的交易额达571亿，网上购物将成为人民生活的一部分。",
+      "source_id": "tipdm_cup_official",
+      "source_url": "https://www.tipdm.org/tzjingsai/613.jhtml",
+      "source_status": "official",
+      "access_scope": "stored_content",
+      "attachments": [
+        {
+          "title": "原题 PDF",
+          "url": "/problem-files/tipdm-cup-2015/problem.pdf",
+          "kind": "problem",
+          "bytes": 448388,
+          "sha256": "c10d452e5be6a342db8aae52f8482e81cc748a01061957285f2468b8de6bbf55"
+        }
+      ],
+      "content_format": "structured_text",
+      "content_status": "complete",
+      "content_character_count": 3787,
+      "content_block_count": 83,
+      "content_blocks": [
+        {
+          "type": "heading",
+          "level": 1,
+          "text": "第三届泰迪杯全国大学生数据挖掘竞赛试题"
+        },
+        {
+          "type": "paragraph",
+          "text": "说明：1、参赛选手可从下述试题中任选一题作答，并在论文报告中标明"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、论文等级会综合考虑论文质量和难度系数"
+        },
+        {
+          "type": "paragraph",
+          "text": "试题一基于电商平台家电设备的消费者需求及产品数据挖掘分析（难度系数：1.0）"
+        },
+        {
+          "type": "paragraph",
+          "text": "试题来源："
+        },
+        {
+          "type": "paragraph",
+          "text": "背景："
+        },
+        {
+          "type": "paragraph",
+          "text": "随着互联网与移动互联网的快速发展，截止2014年6月，我国的网民规模达6.32亿，互联网普及率为46.9%，2015年中国网民的渗透率将接近50%。2014年天猫双十一的交易额达571亿，网上购物将成为人民生活的一部分。网民在电商平台上浏览和购物，产生了海量的数据，如何利用好这些碎片化、非结构化的数据，将直接影响到企业产品在电商平台上的发展，也是大数据在实际企业经营中的应用。对于用户在电商平台上留下的评论数据，运用文本分析方法，了解用户的需求、抱怨，购买原因以及产品的优点、缺点，对于改善家电设备产品及用户体验有着重要的意义。"
+        },
+        {
+          "type": "paragraph",
+          "text": "据观研天下行业分析：近年来我国家电设备销量增长迅速，以电热水器为例，2011年电热水器市场销量比2010年增长2.29%，销售额增长5.23%；2013年热水器零售量达到2842万台，零售额达到459亿元，2014年热水器整体规模向上，但增速较2013年有所回落，零售量达到2985万台，零售额达到504亿元。"
+        },
+        {
+          "type": "paragraph",
+          "text": "需求："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、分析用户对于热水器/净水器产品的个性化需求；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、分析现有电商热水器/净水器的产品劣势（用户抱怨点）及产品优势（用户赞点）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、分析各品牌的产品间的差异，进行差异化卖点提炼；"
+        },
+        {
+          "type": "paragraph",
+          "text": "4、分析用户购买的原因；"
+        },
+        {
+          "type": "paragraph",
+          "text": "5、对用户的购买行为进行分析挖掘（搜索关键字、购买时关注点、购买步骤、使用、"
+        },
+        {
+          "type": "paragraph",
+          "text": "评价）（此部分可选择来做）。"
+        },
+        {
+          "type": "paragraph",
+          "text": "提示："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、在电商平台进行评论数据抓取（可用火车头采集器进行评论爬虫）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、对评论数据进行预处理（处理掉水军及随意发表的评论数据）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、可分品类进行细化分析（热水器：电热热水器、燃气热水器；净水器：净水机、"
+        },
+        {
+          "type": "paragraph",
+          "text": "纯水机）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "4、对评论数据进行文本分析（好评、差评、中文分词、词频统计、情感分析、语义"
+        },
+        {
+          "type": "paragraph",
+          "text": "网络）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "5、可利用百度指数、淘宝指数等互联网工具对热水器和净水器的消费人群及搜索关"
+        },
+        {
+          "type": "paragraph",
+          "text": "注点进行分析；"
+        },
+        {
+          "type": "paragraph",
+          "text": "6、建议在国内外相关文献的基础上尽量选择新技术手段进行挖掘，比如基于深度学"
+        },
+        {
+          "type": "paragraph",
+          "text": "习理论模型完成情感分析，参见文献：《基于深度学习的微博情感分析》、《基于深"
+        },
+        {
+          "type": "paragraph",
+          "text": "度学习的文本情感分类研究》等。"
+        },
+        {
+          "type": "paragraph",
+          "text": "说明："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、附件一_电热水器及净水器评论数据集.zip是电热水器和净水器的评论数据，参赛"
+        },
+        {
+          "type": "paragraph",
+          "text": "者也可去电商平台进行数据爬虫，爬取最新的评论数据（若自行爬取的数据，提"
+        },
+        {
+          "type": "paragraph",
+          "text": "交论文成果时请一并提交）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、参赛者可以选择热水器或者净水器任一一个品类进行分析挖掘；"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、参赛者可以从以上需求选择部分或所有主题进行建模分析，也可提出自已的分析"
+        },
+        {
+          "type": "paragraph",
+          "text": "主题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "试题二基于数据挖掘技术的市财政收入分析预测模型（难度系数：0.8）"
+        },
+        {
+          "type": "paragraph",
+          "text": "试题来源："
+        },
+        {
+          "type": "paragraph",
+          "text": "背景："
+        },
+        {
+          "type": "paragraph",
+          "text": "在我国现行的分税制财政管理体制下，地方财政收入不仅是国家财政收入的重要组成部分，而且具有其相对独立的构成内容。地方财政收入是区域国民经济的综合反映，也是市场经济国家的政府进行宏观调控的基础。科学、合理地预测地方财政收人，对于克服年度地方预算收支规模确定的随意性和盲目性，正确处理地方财政与经济的相互关系具有十分重要的意义。"
+        },
+        {
+          "type": "paragraph",
+          "text": "广州市作为广东省的省会，改革开放的前沿城市，交通便利，拥有中国大陆三大国际航空枢纽机场之一的广州白云国际机场和中国第三大港口、港口货物吞吐量居世界港口第五位的广州港。广州号称“千年商埠”，历史上一直是中国最重要的商业中心之一，商业网点多、行业齐全、辐射面广、信息灵、流通渠道通顺，拥有商业网点10万多个，为中国十大城市之冠。广州市在实现经济快速发展，地区生产总值飞跃的同时，也意味着财政收入的增收。2013年，广州实现地区生产总值（GDP）15420.14亿元，增长11.6%。其中，第一产业增加值228.87亿元，增长2.7%；第二产业增加值5227.38亿元，增长9.2%；第三产业增加值9963.89亿元，增长13.3%。第一、二、三次产业增加值的比例为1.48∶33.90∶64.62。三次产业对经济增长的贡献率分别为0.4%、29.0%和70.6%。广州地方公共财政预算收入1141.79亿元，增长10.8%；如何做出下一年有效的财政收入预算，为下一年的政策提供指导依据，是一个具有重大意义的问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "需求需求：："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、梳理影响广州市财政收入关联指标的有关数据，分析、识别影响财政收入的关键影响因素；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、结合需求1的因素分析，利用相关的数据挖掘技术对广州市2015年的财政总收入及各个类别收入进行预测；"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、结合社会经济发展和广州市近几年的财政收入及支出等情况，从财政收入和支出预算的角度，向广州市财政局提出几点建议。"
+        },
+        {
+          "type": "paragraph",
+          "text": "提示："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、可在广州市统计信息网（http://www.gzstats.gov.cn/）下载相关数据；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、在税收方面，可进行细化分析，如增值税、营业税、企业所得税、个人所得税等；"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、在向广州市财政局提建议时，考虑经济因素和非经济因素；"
+        },
+        {
+          "type": "paragraph",
+          "text": "4、建议查找多方面的数据，进行综合分析。"
+        },
+        {
+          "type": "paragraph",
+          "text": "说明："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、附件二_相关资料.zip为财政收入影响因素的参考资料，参赛者也可自行查找相关资"
+        },
+        {
+          "type": "paragraph",
+          "text": "料。"
+        },
+        {
+          "type": "paragraph",
+          "text": "试题三城市供水处理混凝投药过程的建模与控制（难度系数：0.9）"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2015/p003-01.png",
+          "alt": "tipdm-cup-2015 第 3 页插图 1"
+        },
+        {
+          "type": "paragraph",
+          "text": "试题来源："
+        },
+        {
+          "type": "paragraph",
+          "text": "背景："
+        },
+        {
+          "type": "paragraph",
+          "text": "水是生命的源泉，是人类生活不可缺少的成分，然而随着工业发展迅速，人类活动范围的快速扩大，水资源受到的污染日益严重。因此，怎么样有效地对水进行净化处理，成为了当今国内外学者研究的热点问题。"
+        },
+        {
+          "type": "paragraph",
+          "text": "对水进行净化处理要经过混合、絮凝、沉淀、过滤和消毒五个阶段，絮凝沉淀是水处理的初始环节，是悬浮颗粒、胶体等杂质处理的必需工艺。影响絮凝效果的因素很多，包括原水流量、原水浊度、原水pH值、原水温度、混凝剂投加量和原水中藻类等等。投药控制就是综合考虑这些因素进行混凝剂最少最经济投加，而达到最优的絮凝效果。浊度为水的清亮程度，是水质指标的重要参数，单位为NTU。混凝就是用混凝剂把水中胶体粒子以及微小悬浮物的聚集过程，是凝聚和絮凝的总称，凝聚是胶体失去稳定性的过程，絮凝是脱稳胶体相互聚集，沉淀则是将混凝后的水中凝聚物实现下降、沉积，减少上层水中的凝聚物数量。通过混凝和沉淀就可以减少水中悬浮颗粒的数量和大小，也就能实现浊度降低，投药控制的目的是使沉淀池的出水浊度符合相关标准。此外由于混凝沉淀池是一个大容积对象，因此对于混凝剂投加与对应水絮凝沉淀后的浊度存在一段较长的时间差，造成控制滞后。图1展示了投药控制流程。"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2015/p003-06.png",
+          "alt": "tipdm-cup-2015 第 3 页插图 6"
+        },
+        {
+          "type": "image",
+          "src": "/problem-figures/tipdm-cup-2015/p003-07.png",
+          "alt": "tipdm-cup-2015 第 3 页插图 7"
+        },
+        {
+          "type": "paragraph",
+          "text": "图1投药控制流程"
+        },
+        {
+          "type": "paragraph",
+          "text": "水处理混凝投加过程是一个复杂的物理、化学反应过程，具有时滞和非线性特性。目前的混凝投药控制方法中总有一些不足之处，如烧杯实验法需要每天或每周进行频繁试验，耗时很多且对输出水质影响很大；流动电流法中的流动电流检测器在使用过程中会逐渐降低精度，且在高浊度水或某些污染较严重的水质和絮凝剂是有机阴离子高分子时不能适用；数学模型法因混凝过程复杂，难以建立高精度和高可靠性的过程模型导致控制不能适应控制情况的变化，所以总的来说目前的投药控制方法都是难以适应水质的变化，鲁棒性较差、抗干扰能力较弱。"
+        },
+        {
+          "type": "paragraph",
+          "text": "本案例的水厂在抽取原水后会进行化学预氧处理，达到除去微量有机污染、除藻、除臭味、控制氯化消毒副产物、氧化助凝和除去铁锰等目的。水厂选用混凝剂是PAC，添加混凝剂后的水在反应池进行絮凝，流入3号和4号沉淀池，取3号和4号沉淀池出水浊度的平均值作为沉淀池出水浊度，沉淀池出水浊度的合格标准为不大于1.10NTU。在历史数据中，存在药剂反应效果不好，沉淀池出水浊度不合格的数据。一般情况下，原水添加混凝剂反应到沉淀结束出水需要70min到120min。"
+        },
+        {
+          "type": "paragraph",
+          "text": "需求："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、根据历史原水水质数据、原水流量数据、混凝剂投加量和沉淀池出水浊度数据，"
+        },
+        {
+          "type": "paragraph",
+          "text": "求出原水添加混凝剂反应到沉淀结束出水需要的时间。"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、考虑需求1结果的滞后性，根据历史原水水质数据、原水流量数据和混凝剂投加"
+        },
+        {
+          "type": "paragraph",
+          "text": "量数据，建立数学模型，求出最佳混凝剂投药量。"
+        },
+        {
+          "type": "paragraph",
+          "text": "3、考虑需求1结果的滞后性，考虑增加沉淀池浊度作为输入参数，结合历史原水水"
+        },
+        {
+          "type": "paragraph",
+          "text": "质数据、原水流量数据和混凝剂投加量数据，建立数学模型，求出最佳混凝剂投"
+        },
+        {
+          "type": "paragraph",
+          "text": "药量；"
+        },
+        {
+          "type": "paragraph",
+          "text": "4、通常而言，温度也是影响化学反映速度的一个重要因素。原数据中并未包含温度"
+        },
+        {
+          "type": "paragraph",
+          "text": "数据。请做出相应的尝试引入温度数据，并分析其对最佳投药量的影响。"
+        },
+        {
+          "type": "paragraph",
+          "text": "提示："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、水处理过程的最终目标是通过对原水水质参数的分析，在线实时控制药剂的投加"
+        },
+        {
+          "type": "paragraph",
+          "text": "量，以适应原水水质的不断变化，使出水满足各项水质指标。即根据历史数据辨"
+        },
+        {
+          "type": "paragraph",
+          "text": "识建立进水流量、浊度、PH值、加药量和沉淀池出水浊度之间的数学模型，实时"
+        },
+        {
+          "type": "paragraph",
+          "text": "确定最佳混凝剂投药量。"
+        },
+        {
+          "type": "paragraph",
+          "text": "说明："
+        },
+        {
+          "type": "paragraph",
+          "text": "1、附件三_投药控制数据集.zip是某水厂投药控制系统实时采集的数据信息，数据均"
+        },
+        {
+          "type": "paragraph",
+          "text": "为瞬时测量值，取水量是原水的流速，供水量是出厂水的流速（沉淀池后还有部"
+        },
+        {
+          "type": "paragraph",
+          "text": "分工艺会造成水的损耗），取水量和供水量的单位是m3 /h（立方米每小时），PAC"
+        },
+        {
+          "type": "paragraph",
+          "text": "耗是混凝剂PAC的消耗，单位是mg/L（1L原水消耗PAC的量）；"
+        },
+        {
+          "type": "paragraph",
+          "text": "2、参赛者可以从以上需求选择部分或所有主题进行建模分析。"
+        }
+      ],
+      "source_pdf": {
+        "path": "datasets/raw/sources/full-problem-archives/extracted-v2/tipdm-cup-2015/tipdm-cup-2015.pdf",
+        "bytes": 448388,
+        "sha256": "c10d452e5be6a342db8aae52f8482e81cc748a01061957285f2468b8de6bbf55",
+        "page_count": 4
+      }
+    },
+    {
       "id": "comap-2015-icm-c",
       "code": "2015 ICM C",
       "title": "Managing Human Capital in Organizations",
@@ -34630,7 +38264,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Select a country from the United Nations list of the 48 Least Developed Countries (LDC) list (http://unctad.org/en/pages/aldc/Least%20Developed%20Countries/UN-list-ofLeast-Developed-Countries.aspx). Using your model and research from Task 1, create a 20 year sustainable development plan for your selected LDC country to move towards a more sustainable future. This plan should consist of programs, policies, and aid that can be provided by the ICM within a country based on their demographic, natural resources, economic, social and political conditions.",
+          "text": "Select a country from the United Nations list of the 48 Least Developed Countries (LDC) list (http://unctad.org/en/pages/aldc/Least%20Developed%20Countries/UN-list-of-Least-Developed-Countries.aspx). Using your model and research from Task 1, create a 20 year sustainable development plan for your selected LDC country to move towards a more sustainable future. This plan should consist of programs, policies, and aid that can be provided by the ICM within a country based on their demographic, natural resources, economic, social and political conditions.",
           "lead": "Task 2:"
         },
         {
@@ -34654,7 +38288,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Ecological footprint (http://www.footprintnetwork.org/en/index.php/GFN/page/footprint_basics_overvi ew/)"
+          "text": "Ecological footprint (http://www.footprintnetwork.org/en/index.php/GFN/page/footprint_basics_overview/)"
         },
         {
           "type": "paragraph",

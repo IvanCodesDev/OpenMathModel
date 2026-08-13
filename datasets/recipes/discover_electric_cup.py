@@ -29,9 +29,20 @@ MANIFEST = SOURCE_ROOT / "manifest.json"
 BASE = "https://shumo.neepu.edu.cn"
 USER_AGENT = "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)"
 
-# There was no edition in 2020.  These stable university-CMS article ids cover
-# every published edition from 2017 through 2026.
+# Stable university-CMS article ids for every edition the official archive
+# lists, across both of its index pages. The contest ran biennially until 2015
+# and annually afterwards, and there was no 2020 edition, so the year sequence
+# is deliberately uneven rather than incomplete.
 EDITIONS = {
+    2003: 1489,
+    2004: 1499,
+    2005: 1509,
+    2007: 1519,
+    2009: 1529,
+    2011: 1539,
+    2013: 1549,
+    2015: 1559,
+    2016: 1569,
     2017: 1579,
     2018: 1589,
     2019: 1599,
@@ -87,8 +98,9 @@ def parse_edition(year: int, article_id: int, body: bytes) -> list[dict[str, Any
             "archive_format": extension.lower(),
             "access_status": "interactive_verification_required",
         })
-    if [item["letter"] for item in records] != ["A", "B"]:
-        raise RuntimeError(f"Electric Cup {year}: expected A/B attachments, found {records}")
+    letters = [item["letter"] for item in records]
+    if letters != sorted(set(letters)) or not letters:
+        raise RuntimeError(f"Electric Cup {year}: unexpected attachment letters {letters}")
     return records
 
 
@@ -130,14 +142,11 @@ def discover(cache_dir: Path | None = None) -> dict[str, Any]:
 
 def verify() -> dict[str, Any]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    expected_ids = {
-        f"electric-cup-{year}-{letter.lower()}"
-        for year in EDITIONS
-        for letter in "AB"
-    }
-    actual_ids = {item["id"] for item in manifest["problems"]}
-    if actual_ids != expected_ids:
-        raise RuntimeError(f"Electric Cup ids differ: {sorted(actual_ids ^ expected_ids)}")
+    years = {item["year"] for item in manifest["problems"]}
+    if years != set(EDITIONS):
+        raise RuntimeError(f"Electric Cup years differ: {sorted(years ^ set(EDITIONS))}")
+    if len({item["id"] for item in manifest["problems"]}) != len(manifest["problems"]):
+        raise RuntimeError("Electric Cup manifest contains duplicate problem ids")
     if any(item["access_status"] != "interactive_verification_required" for item in manifest["problems"]):
         raise RuntimeError("Unexpected Electric Cup attachment access status")
     print("ELECTRIC_CUP_DISCOVERY_VERIFY_OK " + json.dumps(manifest["stats"], ensure_ascii=False))

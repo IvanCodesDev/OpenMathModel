@@ -49,6 +49,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   // 所以这些链接一律不渲染，而不是渲染成灰色按钮。
   const OFFICIAL_SOURCE_HOSTS = [
     "comap.org", "mcm.edu.cn", "apmcm.org", "cmathc.org.cn", "acge.org.cn", "mathorcup.org", "saikr.com",
+    "tipdm.org", "tjjmds.ai-learning.net",
   ];
   const isOfficialSourceUrl = value => {
     const raw = String(value || "").trim();
@@ -847,7 +848,17 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   // 保持同一个数组引用，下游的 map/find/length 调用无需改动。
   const problems = [];
   const papers = [];
-  const problemTabs = () => ["全部赛题", ...new Set(problems.map(problem => problem.category)), "收藏"];
+  // 页签顺序：国赛、美赛固定排最前（产品要求），其余分类按数据出现顺序跟在后面。
+  const problemTabs = () => {
+    const pinned = ["国赛", "美赛"];
+    const seen = [...new Set(problems.map(problem => problem.category))];
+    return [
+      "全部赛题",
+      ...pinned.filter(category => seen.includes(category)),
+      ...seen.filter(category => !pinned.includes(category)),
+      "收藏",
+    ];
+  };
   // 列表里放不下"含本地原题 PDF及 353 个随题附件"这种全句，压缩成"原题 PDF · 353 附件"；
   // 完整描述仍在详情页展示。
   const problemDataSummary = problem => {
@@ -1042,6 +1053,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       // 有序号就照原样显示，序号本身有意义；只有原文用圆点时才由这里补一个。
       const marker = String(block.marker || "").trim() || "•";
       return `<div class="problem-content-list-item"><span class="problem-list-marker" aria-hidden="true">${escapeHtml(marker)}</span><p>${escapeHtml(block.text).replace(/\n/g, "<br>")}</p></div>`;
+    }
+    if (block.type === "code") {
+      // 原题把附件的文件格式示例排在一个方框里，各列是靠空格对齐的，
+      // 拆成普通段落就读不出对应关系，所以整段按原样保留换行和空格。
+      return `<pre class="problem-content-code">${escapeHtml(block.text)}</pre>`;
     }
     if (block.type === "image") {
       return `<figure class="problem-content-figure"><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt)}" loading="lazy" data-problem-asset="${index}"></figure>`;

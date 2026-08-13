@@ -60,6 +60,120 @@
       "notes": "Two organiser-published bundles: the historical archive carries complete A/B/C statements and supporting data for 2020–2025, and the seventh edition adds 2026 A/B/C. The 2026 bundle was collected only after the contest closed on 2026-08-10, so no statement is mirrored while a contest is running."
     },
     {
+      "id": "tipdm_cup_official",
+      "name": "“泰迪杯”数据挖掘挑战赛",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "official",
+      "competition": "“泰迪杯”数据挖掘挑战赛",
+      "domains": [
+        "www.tipdm.org",
+        "tipdm.org"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "https://www.tipdm.org/tzjingsai/index.jhtml"
+        },
+        {
+          "kind": "problems",
+          "url": "https://www.tipdm.org/tzbstysj/index.jhtml"
+        },
+        {
+          "kind": "problems",
+          "url": "https://www.tipdm.org:10010/api/competition/public/list"
+        }
+      ],
+      "allowed_paths": [
+        "/tzjingsai/",
+        "/tzbstysj/",
+        "/u/cms/www/",
+        "/api/competition/public/",
+        "/api/competition/question/public/"
+      ],
+      "denied_paths": [
+        "/login",
+        "/gywm.jhtml",
+        "/api/team/",
+        "/api/order/",
+        "/api/payment/"
+      ],
+      "year_range": {
+        "from": 2015,
+        "to": 2023
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 4,
+        "timeout_seconds": 180
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "泰迪杯数据挖掘挑战赛组织委员会与广东泰迪智能科技股份有限公司",
+        "license_text_url": "https://www.tipdm.org/flsmjysqzc.jhtml",
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Statement PDFs are served directly from the organiser's own domain; each staged file is pinned by size and SHA-256."
+      },
+      "contact": "jingsai@tipdm.com",
+      "notes": "Collected two ways. Eleven statements are PDFs from the CMS: 2015 (one combined paper), 2016, 2019 and 2020 A/B/C, plus the separately announced 2020 Nandu special problem. From 2021 the contest runs on the organiser's BdRace platform (www.tipdm.org:10010), whose public API serves each problem as rich text; 21 problems across eight editions of the challenge and skills tracks are snapshotted from it, but the platform cuts 20 of those bodies off with a row of dots or an invitation to fetch the rest from a WeChat account, so only the 2023 challenge A statement meets the complete-statement bar and reaches the library. 2017 and 2018 are absent entirely because those detail pages now redirect to the site root. Every data set is hosted on pan.baidu.com rather than an organiser domain, so none is mirrored."
+    },
+    {
+      "id": "tjjmds_official",
+      "name": "全国大学生统计建模大赛",
+      "tier": "T1",
+      "enabled": true,
+      "official_status": "official",
+      "competition": "全国大学生统计建模大赛",
+      "plain_http_only": true,
+      "domains": [
+        "tjjmds.ai-learning.net"
+      ],
+      "entrypoints": [
+        {
+          "kind": "problems",
+          "url": "http://tjjmds.ai-learning.net/dstz.jhtml"
+        }
+      ],
+      "allowed_paths": [
+        "/dstz.jhtml",
+        "/dstz/"
+      ],
+      "denied_paths": [
+        "/login",
+        "/content-loginfindpsword.htm"
+      ],
+      "year_range": {
+        "from": 2017,
+        "to": 2026
+      },
+      "crawl_policy": {
+        "requests_per_minute": 10,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 60
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "中国统计教育学会",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Annual notices on the organiser's official site; snapshots are pinned by size and SHA-256."
+      },
+      "contact": "nc_smc@163.com",
+      "notes": "This contest sets no problems: every edition announces a theme (before 2021, topic categories with judging criteria) and teams write a paper on a title of their own choosing, so the theme section of the official notice is the entire published form of the assignment. Eight editions are collected, the fifth (2017) through the twelfth (2026) -- everything the current official site lists; earlier editions predate it. Award-winning papers are published as printed volumes and on CNKI, not on the site. The site serves plain HTTP only; its TLS port is closed, hence plain_http_only."
+    },
+    {
       "id": "electric_cup_official",
       "name": "中国电机工程学会杯全国大学生电工数学建模竞赛",
       "tier": "T1",
@@ -83,7 +197,7 @@
       ],
       "denied_paths": [],
       "year_range": {
-        "from": 2017,
+        "from": 2003,
         "to": 2026
       },
       "crawl_policy": {
@@ -105,7 +219,7 @@
         "notes": "Official notice metadata may be indexed. Problem archives remain internal and unpublished pending rights review."
       },
       "contact": "https://shumo.neepu.edu.cn/jszz/lxwm.htm",
-      "notes": "The official archive lists A/B problems for nine editions from 2017 through 2026 (no 2020 edition). All 18 attachment endpoints currently require interactive verification; the discovery recipe records their stable file ids and rejects verification HTML as archive content."
+      "notes": "The official archive spans both index pages and lists A/B problems for all eighteen editions from 2003 through 2026: biennial to 2015, annual afterwards, and no 2020 edition. All 36 attachment endpoints go through download.jsp, which answers with an interactive verification page rather than the archive, so no statement can be collected; the discovery recipe records the official titles and stable file ids and rejects verification HTML as archive content. Nothing from this source reaches the problem library."
     },
     {
       "id": "comap_mcm_icm",

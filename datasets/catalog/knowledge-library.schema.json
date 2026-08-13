@@ -54,9 +54,10 @@
           "type": "object",
           "required": ["type", "text"],
           "properties": {
-            "type": { "enum": ["paragraph", "list_item"] },
+            "type": { "enum": ["paragraph", "list_item", "code"] },
             "text": { "type": "string" },
-            "lead": { "type": "string" }
+            "lead": { "type": "string" },
+            "marker": { "type": "string" }
           },
           "additionalProperties": false
         },

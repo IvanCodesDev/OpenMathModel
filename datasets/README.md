@@ -56,6 +56,25 @@ python datasets/recipes/ingest_mathmodel_full_problems.py all
 python datasets/recipes/stage_huashu_cup_archive.py all
 python datasets/recipes/stage_mathorcup_archives.py all
 
+#    泰迪杯按题发布单个 PDF 而不是整届压缩包，逐份固定字节数与 SHA-256；
+#    2017、2018 详情页已失效，2021 年起迁至 BdRace 平台且题面需注册后下载，
+#    这两段缺口记录在来源注册表里，不从镜像补齐。
+python datasets/recipes/stage_tipdm_cup_statements.py all
+
+#    2021 年起泰迪杯迁到主办方自建平台，赛题以富文本经公开接口发布。
+#    快照全部 21 道并固定校验和；其中 20 道正文被平台截断（省略号或公众号引流），
+#    只有未截断的才会进入赛题库。
+python datasets/recipes/stage_tipdm_bdrace_statements.py all
+
+#    电工杯 18 届题面全部走 download.jsp 的人机验证，只能采集元数据；
+#    该脚本记录官方标题、通知页与稳定文件 id，并拒绝把验证页当作压缩包。
+python datasets/recipes/discover_electric_cup.py discover
+
+#    统计建模大赛不出赛题：每届只发布一个主题（2021 年前为选题类别与要求），
+#    参赛队自拟题目。官网通知的主题小节即该赛事发布的全部"题面"，
+#    逐届快照官网通知并固定校验和，入库时只取主题/选题小节。
+python datasets/recipes/stage_tjjmds_notices.py all
+
 # 6. 将官方站点快照与完整题面规范化为前端赛题库/优秀论文数据
 & "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   datasets/recipes/ingest_full_problem_archives.py all
@@ -76,6 +95,11 @@ python datasets/recipes/build_knowledge_library.py
 - `apps/web/public/problem-assets/<problem-id>/`：从 DOCX 提取并转换为浏览器可显示格式的题面插图。
 - `apps/web/public/problem-figures/<problem-id>/`：从 PDF 原题提取的内嵌插图，不使用整页截图替代正文。
 - `apps/web/public/problem-files/<problem-id>/`：可点击下载的原题 PDF，以及按赛题归档的随题数据附件包。
+- `datasets/raw/sources/full-problem-archives/tipdm-cup/manifest.json`：泰迪杯 4 届 11 份题面的固定字节数与 SHA-256。
+- `datasets/raw/sources/full-problem-archives/tipdm-cup-bdrace/manifest.json`：泰迪杯平台接口的 8 届 21 道快照，逐题标注正文是否完整。
+- PDF 之外的富文本题面由 `recipes/pdf_layout.py` 的同级模块 `recipes/html_layout.py` 转成同一套结构化块。
+- `datasets/raw/sources/full-problem-archives/electric-cup/manifest.json`：电工杯 18 届 36 道题的官方标题与附件 id；附件本身不可采集，不进入赛题库。
+- `datasets/raw/sources/full-problem-archives/tjjmds/manifest.json`：统计建模大赛 8 届官网通知快照与提取出的正文，各届主题在 recipe 中固定并逐次核对。
 - PDF 正文从文本层转换为标题、段落和列表等结构化块；CUMCM 在前端统一显示为“国赛”。
 - `apps/web/src/data/knowledge-library.json`：由 Recipe 生成、通过 Schema 校验的前端发布快照。
 

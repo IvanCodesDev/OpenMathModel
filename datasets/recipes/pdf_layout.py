@@ -20,6 +20,7 @@ so the frontend renderer stays unchanged.
 
 from __future__ import annotations
 
+import io
 import re
 import statistics
 import unicodedata
@@ -29,16 +30,30 @@ from pathlib import Path
 from typing import Any
 
 import pdfplumber
+from PIL import Image, ImageOps
 from pypdf import PdfReader
 
 from image_guard import looks_like_qr_code
 
 
+# Formats a browser decodes straight out of an <img>. Anything else has to be
+# re-encoded on the way out; see write_web_image.
+WEB_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+)
 # Mathematical Alphanumeric Symbols: how LaTeX-set PDFs encode formula variables.
 MATH_ALNUM_RE = re.compile(r"[\U0001D400-\U0001D7FF]")
 # Two rules this close together are one border drawn twice (stroke plus fill),
 # not two columns, so they collapse when a table's grid is reconstructed.
 GRID_TOLERANCE = 1.5
+# How far apart two copies of the same glyph may sit and still be one character
+# drawn twice. Measured offsets are 0.24pt; the nearest genuine repeat of a
+# character is one em away, which is ten times this even in the smallest body
+# size these statements use.
+OVERPRINT_TOLERANCE = 1.0
 # Symbol-font runs reach the PDF as the font's own byte codes offset into the
 # Private Use Area (0xF000 + code). This is the standard Adobe Symbol encoding;
 # only the codes that carry meaning outside the font are listed, so bracket
@@ -83,6 +98,56 @@ FRACTION_MAX_GAP = 5.0
 FRACTION_SPILL = 2.0
 # How far past a side's own baseline band a sub/superscript may sit.
 FRACTION_SIDE_SLACK = 4.0
+# A verbatim listing is set apart with a single-cell box. Word draws all four
+# sides as thin filled rectangles and emits the side rules one segment per text
+# line rather than as one stroke, so a side is tested for coverage rather than
+# looked up as a single rect.
+BOX_RULE_MAX_THICKNESS = 1.6
+BOX_MIN_WIDTH = 120.0
+BOX_MIN_HEIGHT = 24.0
+BOX_SIDE_COVERAGE = 0.85
+# Boxed prose fills its measure; a listing is ragged. Requiring most lines to
+# stop short keeps a boxed remark from being published as a code listing.
+BOX_RAGGED_SHARE = 0.6
+BOX_RAGGED_SLACK = 0.12
+# A listing is set smaller than the running text and runs to several lines. One
+# or two lines in the running face is a framed notice or a single table cell.
+BOX_SMALLER_BY = 0.6
+BOX_MIN_ROWS = 3
+# Inside a box the words are split at a tighter tolerance than prose can take,
+# because a listing separates its columns with ordinary spaces and a
+# proportional latin font sets one barely a quarter of an em wide.
+VERBATIM_WORD_EXTRACTION = {"extra_attrs": ["size", "fontname"], "use_text_flow": False,
+                            "x_tolerance": 1.2}
+# What separates a typed space from the gap Word opens automatically between a
+# CJK run and its latin neighbour. Measured on the statements: the automatic gap
+# runs 0.2-0.3em, a typed space 0.5em beside CJK and 0.25em between latin runs.
+VERBATIM_CJK_SPACE = 0.45
+VERBATIM_LATIN_SPACE = 0.12
+# pdfminer writes an unmapped glyph out as the empty string, or as "(cid:NN)"
+# when the font at least reports a code. Either way there is no character to
+# publish; see extract_formulas.
+UNDECODABLE_RE = re.compile(r"^(?:\(cid:\d+\))+$")
+# Only a maths font is rasterized. Across the corpus the unmapped glyphs come
+# from Cambria Math (147 of them, all Word equations) and from SimSun/SimHei
+# (25, all dingbats inside a drawn figure). Rendering the second kind crops a
+# slice out of the middle of a diagram and publishes it as though it were an
+# equation, so the font decides.
+MATH_FONT_RE = re.compile(r"math|mtextra|symbol|^cm(mi|sy|ex)|euclid|stix|xits", re.I)
+FORMULA_MIN_DAMAGED = 3
+FORMULA_DAMAGED_SHARE = 0.4
+# Damaged lines this close together belong to one equation and render as one
+# image: a stacked formula occupies a numerator, a rule and a denominator.
+FORMULA_GROUP_GAP = 24.0
+# A band wider than this is not one equation but a page the extractor cannot
+# read at all, and rendering it would republish the page as a screenshot.
+FORMULA_MAX_BAND = 220.0
+FORMULA_MIN_INK = 6.0
+FORMULA_RENDER_DPI = 220
+# Rendered rows this far apart still belong to one equation. A stacked fraction
+# leaves a few points between its parts; a neighbouring line of prose is a whole
+# line of leading away, which at this resolution is more than twice as far.
+FORMULA_ROW_GAP = 40
 # find_fraction_bars identifies the words a fraction owns and page_lines drops
 # them by (x0, top, text) key, so the two must tokenize a page the same way.
 # They did not: the default settings merge "供货量−接收量" into one word while
@@ -99,6 +164,11 @@ FRACTION_COMPOUND_RE = re.compile(r"[\s+\-−=×⋅∗/^_(),]")
 # (observed as BXSYMA+FangSong "!" runs inside the APMCM statements).
 JUNK_TOKEN_RE = re.compile(r"^[!\u0001-\u0008\u000b\u000c\u000e-\u001f]+$")
 PAGE_LABEL_RE = re.compile(r"^(?:[-–—\s]*\d{1,3}[-–—\s]*|page\s+\d{1,3}(?:\s+of\s+\d{1,3})?)$", re.I)
+# Whether text accumulated so far ends inside a link, and the characters a link
+# can stop on only because the line ran out -- no word ends with one of these.
+# "." and ":" are deliberately absent: a sentence may well end on a URL.
+URL_TAIL_RE = re.compile(r"(?:https?://|www\.)\S*$", re.I)
+URL_BREAK_CHARS = "-/_?&=~+%"
 COMAP_FOOTER_RE = re.compile(r"comap\.org|mathmodels\.org|©\s*\d{4}\s*by\s*COMAP", re.I)
 # A dash bullet must introduce words, not a number. "6 – 3" wrapping across a
 # line break otherwise reads as a marker: the score's second half opens a line,
@@ -153,12 +223,37 @@ def needs_space(left: str, right: str) -> bool:
     return left[-1] not in "([/“‘" and right[0] not in ",.!?;:)]”’%"
 
 
-def join_fragments(parts: list[str]) -> str:
+def _url_continues(output: str, part: str, glued: bool) -> bool:
+    """Whether ``part`` is the tail of a link ``output`` broke off mid-way.
+
+    A wrapped URL has to be rejoined exactly, but the generic rules do the two
+    things that corrupt one: they read a trailing hyphen as end-of-line
+    hyphenation and drop it, and they space two latin runs apart. The reference
+    lists came out carrying "…/tcad06mfloorplanning.pdf" and
+    "…/half_perimet er_wirelength", neither of which resolves.
+
+    Two signals say the break was inside the link rather than after it. A URL
+    that stops on a character no word ends with (a slash, a hyphen, a query
+    separator) was clearly cut, whatever the layout says. Otherwise it takes
+    ``glued``, which the paragraph builder sets when the previous line ran to
+    the right margin -- the mark of a wrap rather than of prose that simply
+    followed the link.
+    """
+    if not URL_TAIL_RE.search(output):
+        return False
+    if not part[:1] or part[0].isspace() or is_cjk(part[0]):
+        return False
+    return glued or output[-1] in URL_BREAK_CHARS
+
+
+def join_fragments(parts: list[str], glued: list[bool] | None = None) -> str:
     output = ""
-    for part in parts:
+    for index, part in enumerate(parts):
         if not part:
             continue
-        if output.endswith("-") and part[:1].isalpha():
+        if _url_continues(output, part, bool(glued and index < len(glued) and glued[index])):
+            output += part
+        elif output.endswith("-") and part[:1].isalpha() and not URL_TAIL_RE.search(output):
             output = output[:-1] + part
         else:
             output += (" " if needs_space(output, part) else "") + part
@@ -381,6 +476,28 @@ def find_fraction_bars(page: pdfplumber.page.Page,
     return bars
 
 
+def cluster_lines(words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group words into visual lines by vertical overlap.
+
+    Overlap rather than a fixed tolerance, so that sub- and superscripts (CO2,
+    footnote markers) stay on their own baseline's line.
+    """
+    buckets: list[list[dict[str, Any]]] = []
+    bounds: list[list[float]] = []
+    for word in sorted(words, key=lambda item: (item["top"], item["x0"])):
+        height = max(1.0, word["bottom"] - word["top"])
+        if buckets:
+            top, bottom = bounds[-1]
+            overlap = min(word["bottom"], bottom) - max(word["top"], top)
+            if overlap >= 0.35 * min(height, bottom - top):
+                buckets[-1].append(word)
+                bounds[-1] = [min(top, word["top"]), max(bottom, word["bottom"])]
+                continue
+        buckets.append([word])
+        bounds.append([word["top"], word["bottom"]])
+    return buckets
+
+
 def page_lines(page: pdfplumber.page.Page, page_number: int, exclude: list[tuple[float, ...]],
                fractions: list[dict[str, Any]] | None = None) -> list[Line]:
     """Group a page's words into visual lines, skipping regions owned by tables.
@@ -426,24 +543,8 @@ def page_lines(page: pdfplumber.page.Page, page_number: int, exclude: list[tuple
             "fontname": "",
         })
 
-    # Cluster by vertical overlap rather than by a fixed tolerance, so that
-    # sub/superscripts (CO2, footnote markers) stay on their own baseline's line.
-    buckets: list[list[dict[str, Any]]] = []
-    bounds: list[list[float]] = []
-    for word in sorted(kept, key=lambda item: (item["top"], item["x0"])):
-        height = max(1.0, word["bottom"] - word["top"])
-        if buckets:
-            top, bottom = bounds[-1]
-            overlap = min(word["bottom"], bottom) - max(word["top"], top)
-            if overlap >= 0.35 * min(height, bottom - top):
-                buckets[-1].append(word)
-                bounds[-1] = [min(top, word["top"]), max(bottom, word["bottom"])]
-                continue
-        buckets.append([word])
-        bounds.append([word["top"], word["bottom"]])
-
     lines: list[Line] = []
-    for bucket in buckets:
+    for bucket in cluster_lines(kept):
         bucket.sort(key=lambda item: item["x0"])
         sizes = Counter(round(item.get("size", 10.0), 1) for item in bucket)
         dominant = sizes.most_common(1)[0][0]
@@ -673,6 +774,344 @@ def extract_tables(page: pdfplumber.page.Page) -> list[dict[str, Any]]:
     return tables
 
 
+def _side_covered(verticals: list[dict[str, Any]], x: float, top: float, bottom: float) -> bool:
+    """Whether vertical rules near ``x`` run most of the way from ``top`` to ``bottom``."""
+    spans = sorted(
+        (max(rule["top"], top), min(rule["bottom"], bottom))
+        for rule in verticals
+        if abs((rule["x0"] + rule["x1"]) / 2 - x) <= GRID_TOLERANCE
+        and rule["bottom"] > top and rule["top"] < bottom
+    )
+    covered, reach = 0.0, top
+    for start, end in spans:
+        start = max(start, reach)
+        if end > start:
+            covered += end - start
+            reach = end
+    return covered >= (bottom - top) * BOX_SIDE_COVERAGE
+
+
+def _has_interior_rule(thin: list[dict[str, Any]], box: tuple[float, float, float, float]) -> bool:
+    """Whether any rule is drawn inside ``box`` rather than along its border."""
+    x0, top, x1, bottom = box
+    inset = GRID_TOLERANCE + 1.0
+    for rule in thin:
+        centre_x, centre_y = (rule["x0"] + rule["x1"]) / 2, (rule["top"] + rule["bottom"]) / 2
+        if not (x0 - inset <= centre_x <= x1 + inset and top - inset <= centre_y <= bottom + inset):
+            continue
+        if rule["bottom"] - rule["top"] <= BOX_RULE_MAX_THICKNESS and top + inset < centre_y < bottom - inset:
+            return True
+        if rule["x1"] - rule["x0"] <= BOX_RULE_MAX_THICKNESS and x0 + inset < centre_x < x1 - inset:
+            return True
+    return False
+
+
+def find_verbatim_boxes(page: pdfplumber.page.Page,
+                        exclude: list[tuple[float, ...]]) -> list[tuple[float, float, float, float]]:
+    """Locate single-cell boxes holding a listing rather than prose.
+
+    The statements set file-format samples inside a bordered box, and every line
+    of such a sample is short, so the paragraph builder starts a new block on
+    each one: the Huashu Cup VLSI statement published its two samples as 28
+    separate paragraphs. Read as one region they stay one block, and the box
+    also marks where column spacing has to be preserved.
+
+    Only a single cell qualifies. A ruled table is built from the same thin
+    rectangles, so without the interior-rule test its outer border reads as one
+    of these and the statements' answer templates would be republished as
+    listings.
+
+    ``extract_tables`` never claims a single cell -- it wants at least two rows
+    and two columns -- but a grid it examined and rejected would otherwise be
+    caught here and published twice, so anything overlapping ``exclude`` is
+    skipped.
+    """
+    try:
+        rects = list(page.rects)
+    except Exception:
+        return []
+    horizontals: list[dict[str, Any]] = []
+    verticals: list[dict[str, Any]] = []
+    for rect in rects:
+        width, height = rect["x1"] - rect["x0"], rect["bottom"] - rect["top"]
+        if height <= BOX_RULE_MAX_THICKNESS and width >= BOX_MIN_WIDTH:
+            horizontals.append(rect)
+        elif width <= BOX_RULE_MAX_THICKNESS and height > BOX_RULE_MAX_THICKNESS:
+            verticals.append(rect)
+    thin = [rect for rect in rects
+            if min(rect["x1"] - rect["x0"], rect["bottom"] - rect["top"]) <= BOX_RULE_MAX_THICKNESS]
+    horizontals.sort(key=lambda rect: rect["top"])
+    boxes: list[tuple[float, float, float, float]] = []
+    for index, upper in enumerate(horizontals):
+        for lower in horizontals[index + 1:]:
+            if (abs(upper["x0"] - lower["x0"]) > GRID_TOLERANCE
+                    or abs(upper["x1"] - lower["x1"]) > GRID_TOLERANCE):
+                continue
+            if lower["bottom"] - upper["top"] < BOX_MIN_HEIGHT:
+                continue
+            if not all(_side_covered(verticals, edge, upper["top"], lower["bottom"])
+                       for edge in (upper["x0"], upper["x1"])):
+                continue
+            box = (upper["x0"], upper["top"], upper["x1"], lower["bottom"])
+            if _has_interior_rule(thin, box):
+                break
+            overlaps = [(x0, top, x1, bottom) for x0, top, x1, bottom in list(exclude) + boxes
+                        if box[1] < bottom and top < box[3]]
+            if not overlaps:
+                boxes.append(box)
+            break
+    return boxes
+
+
+def _is_set_apart(page: pdfplumber.page.Page, words: list[dict[str, Any]]) -> bool:
+    """Whether the boxed text is set smaller than the running text around it."""
+    if not words:
+        return False
+    try:
+        page_sizes = [char["size"] for char in page.chars]
+    except Exception:
+        return False
+    if not page_sizes:
+        return False
+    inside = statistics.median(word.get("size", 10.0) for word in words)
+    return inside <= statistics.median(page_sizes) - BOX_SMALLER_BY
+
+
+def _verbatim_gap_is_space(left: str, right: str, gap: float, size: float) -> bool:
+    if gap <= 0:
+        return False
+    across_cjk = is_cjk(left[-1]) or is_cjk(right[0])
+    return gap >= size * (VERBATIM_CJK_SPACE if across_cjk else VERBATIM_LATIN_SPACE)
+
+
+def verbatim_block(page: pdfplumber.page.Page,
+                   box: tuple[float, float, float, float]) -> dict[str, Any] | None:
+    """Read one boxed region back as a block, keeping its line breaks and spacing.
+
+    Spacing is decided from the measured gap rather than from ``needs_space``,
+    which suppresses every space beside a CJK character. That is right for prose
+    -- Word opens the gap by itself and no space was typed -- but a listing
+    separates its columns with real spaces, so the comment line
+    "// 模块名称 类型 边角个数" was published as "//模块名称类型边角个数".
+
+    A box is claimed only when it is set smaller than the page around it and
+    runs to several lines. Boxes are also used to frame a notice in the running
+    face and to draw one cell of a table, and neither belongs in a listing:
+    COMAP's plagiarism warning and the APMCM answer-template cells both arrive
+    here otherwise.
+    """
+    x0, top, x1, bottom = box
+    try:
+        words = page.crop((x0, top, x1, bottom)).extract_words(**VERBATIM_WORD_EXTRACTION)
+    except Exception:
+        return None
+    if not _is_set_apart(page, words):
+        return None
+    rows: list[str] = []
+    ragged = 0
+    for bucket in cluster_lines(words):
+        bucket.sort(key=lambda item: item["x0"])
+        text = ""
+        previous: dict[str, Any] | None = None
+        for item in bucket:
+            token = _clean(item["text"])
+            if not token or JUNK_TOKEN_RE.match(token):
+                continue
+            if previous is not None and _verbatim_gap_is_space(
+                    text, token, item["x0"] - previous["x1"],
+                    max(item.get("size", 10.0), previous.get("size", 10.0))):
+                text += " "
+            text += token
+            previous = item
+        if not text.strip():
+            continue
+        rows.append(text.strip())
+        if previous is not None and previous["x1"] < x1 - (x1 - x0) * BOX_RAGGED_SLACK:
+            ragged += 1
+    if len(rows) < BOX_MIN_ROWS:
+        return None
+    if ragged < len(rows) * BOX_RAGGED_SHARE:
+        return {"type": "paragraph", "text": join_fragments(rows)}
+    return {"type": "code", "text": "\n".join(rows)}
+
+
+def _is_undecodable(char: dict[str, Any]) -> bool:
+    text = char["text"]
+    if text != "" and not UNDECODABLE_RE.match(text):
+        return False
+    return bool(MATH_FONT_RE.search(char.get("fontname", "").split("+")[-1]))
+
+
+def _dominant_ink_rows(ink: Image.Image) -> tuple[int, int] | None:
+    """Rows holding the heaviest run of ink, plus anything set tight against it.
+
+    The band handed over is bounded by whole lines, so it can still catch a
+    descender from the line above or an ascender from the one below. Those sit a
+    full line of leading away from the equation while a numerator sits a few
+    points from its rule, so keeping the heaviest run and its close neighbours
+    drops the strays without splitting a stacked formula.
+    """
+    data = list(ink.getdata())
+    width = ink.width
+    counts = [sum(1 for value in data[y * width:(y + 1) * width] if value)
+              for y in range(ink.height)]
+    runs: list[list[int]] = []
+    for y, count in enumerate(counts):
+        if count and runs and y - runs[-1][1] <= FORMULA_ROW_GAP:
+            runs[-1][1] = y
+            runs[-1][2] += count
+        elif count:
+            runs.append([y, y, count])
+    if not runs:
+        return None
+    best = max(runs, key=lambda run: run[2])
+    return best[0], best[1]
+
+
+def _render_band(page: pdfplumber.page.Page, top: float, bottom: float,
+                 destination: Path, stem: str) -> Path | None:
+    """Rasterize one horizontal band of the page, trimmed to its ink."""
+    x0, x1 = page.bbox[0], page.bbox[2]
+    top, bottom = max(top, page.bbox[1]), min(bottom, page.bbox[3])
+    if bottom - top < FORMULA_MIN_INK:
+        return None
+    try:
+        rendered = page.crop((x0, top, x1, bottom)).to_image(resolution=FORMULA_RENDER_DPI)
+        image = rendered.original.convert("RGB")
+    except Exception:
+        return None
+    ink = ImageOps.invert(image.convert("L")).point(lambda value: 255 if value > 24 else 0, "1")
+    rows = _dominant_ink_rows(ink)
+    if rows is None:
+        return None
+    columns = ink.crop((0, rows[0], ink.width, rows[1] + 1)).getbbox()
+    if columns is None:
+        return None
+    pad = max(2, round(FORMULA_RENDER_DPI / 36))
+    image = image.crop((max(0, columns[0] - pad), max(0, rows[0] - pad),
+                        min(image.width, columns[2] + pad), min(image.height, rows[1] + 1 + pad)))
+    if image.width < 16 or image.height < 8:
+        return None
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / f"{stem}.png"
+    image.save(target, "PNG")
+    return target
+
+
+def extract_formulas(page: pdfplumber.page.Page, problem_id: str, page_number: int,
+                     destination: Path) -> tuple[list[dict[str, Any]], list[tuple[float, ...]]]:
+    """Publish equations whose font carries no character map as rendered images.
+
+    Word writes an equation in a subset of Cambria Math, and when that subset
+    ships without a usable ToUnicode table every variable decodes to the empty
+    string. What survives is the punctuation, so the Huashu Cup VLSI statement
+    published its chip-sizing formula as the paragraph "=ℎ = _ _ ∗ 1+ _ _ 1".
+    Nothing in the text layer can recover it, but the glyphs are still drawn, so
+    the band is rendered and published as a figure instead.
+
+    The band is measured from the readable lines above and below rather than
+    from the equation's own boxes: pdfplumber reports those glyphs some twenty
+    points below where they actually sit, which is also why they arrive as a
+    line of their own instead of joining the sentence around them.
+    """
+    try:
+        chars = list(page.chars)
+    except Exception:
+        return [], []
+    if not any(_is_undecodable(char) for char in chars):
+        return [], []
+    lines: list[dict[str, Any]] = []
+    for bucket in cluster_lines(chars):
+        broken = sum(1 for char in bucket if _is_undecodable(char))
+        lines.append({
+            "bbox": (min(char["x0"] for char in bucket), min(char["top"] for char in bucket),
+                     max(char["x1"] for char in bucket), max(char["bottom"] for char in bucket)),
+            "damaged": broken >= FORMULA_MIN_DAMAGED and broken >= len(bucket) * FORMULA_DAMAGED_SHARE,
+        })
+    lines.sort(key=lambda item: item["bbox"][1])
+    if not any(item["damaged"] for item in lines):
+        return [], []
+
+    figures: list[dict[str, Any]] = []
+    consumed: list[tuple[float, ...]] = []
+    index = 0
+    published = 0
+    while index < len(lines):
+        if not lines[index]["damaged"]:
+            index += 1
+            continue
+        start = index
+        while (index + 1 < len(lines) and lines[index + 1]["damaged"]
+               and lines[index + 1]["bbox"][1] - lines[index]["bbox"][3] <= FORMULA_GROUP_GAP):
+            index += 1
+        group = lines[start:index + 1]
+        # The neighbours are taken in reading order rather than by comparing
+        # coordinates, because a damaged line's own box is exactly what cannot be
+        # trusted: pdfplumber places these glyphs some twenty points below where
+        # they are drawn, so the line that renders under the equation reports a
+        # box overlapping it.
+        above = lines[start - 1]["bbox"][3] + 1.0 if start else page.bbox[1]
+        below = lines[index + 1]["bbox"][1] - 1.0 if index + 1 < len(lines) else page.bbox[3]
+        consumed.extend(item["bbox"] for item in group)
+        index += 1
+        if below - above > FORMULA_MAX_BAND:
+            continue
+        published += 1
+        target = _render_band(page, above, below, destination,
+                              f"p{page_number:03d}-eq{published:02d}")
+        if target is None:
+            continue
+        figures.append({
+            "top": group[0]["bbox"][1],
+            "block": {
+                "type": "image",
+                "src": f"/problem-figures/{problem_id}/{target.name}",
+                "alt": f"{problem_id} 第 {page_number} 页公式 {published}",
+            },
+        })
+    return figures, consumed
+
+
+def _web_image_suffix(data: bytes) -> str | None:
+    for signature, suffix in WEB_IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return suffix
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def write_web_image(data: bytes, destination: Path, stem: str) -> Path | None:
+    """Write one embedded image in a format the browser will actually decode.
+
+    pypdf hands back whatever the PDF stored, and these archives embed JPEG 2000
+    figures -- 15 of them, across the Huashu Cup, APMCM, COMAP and CUMCM
+    statements. No mainstream browser decodes JPEG 2000, so those bytes have to
+    be re-encoded; renaming the file to ``.png`` and writing them through, which
+    is what this used to do, produces exactly the broken image the reader sees.
+
+    The format is decided by sniffing the payload rather than by trusting the
+    name pypdf assigned, so a mislabelled member cannot slip past. Alpha is kept
+    because these figures ship transparent backgrounds that must composite onto
+    the page rather than onto black.
+    """
+    suffix = _web_image_suffix(data)
+    if suffix is not None:
+        target = destination / f"{stem}{suffix}"
+        target.write_bytes(data)
+        return target
+    target = destination / f"{stem}.png"
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            transparent = image.mode in {"RGBA", "LA"} or "transparency" in image.info
+            image.convert("RGBA" if transparent else "RGB").save(target, "PNG")
+    except Exception:
+        target.unlink(missing_ok=True)
+        return None
+    return target
+
+
 def extract_figures(page: pdfplumber.page.Page, pypdf_page: Any, problem_id: str,
                     page_number: int, destination: Path) -> list[dict[str, Any]]:
     """Pair pdfplumber bounding boxes with pypdf image bytes by XObject name."""
@@ -697,12 +1136,10 @@ def extract_figures(page: pdfplumber.page.Page, pypdf_page: Any, problem_id: str
             continue
         if image["x1"] - image["x0"] < 24 or image["bottom"] - image["top"] < 24:
             continue
-        extension = Path(payload.name).suffix.lower()
-        if extension not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
-            extension = ".png"
         destination.mkdir(parents=True, exist_ok=True)
-        target = destination / f"p{page_number:03d}-{index:02d}{extension}"
-        target.write_bytes(payload.data)
+        target = write_web_image(payload.data, destination, f"p{page_number:03d}-{index:02d}")
+        if target is None:
+            continue
         if target.stat().st_size < 512:
             target.unlink()
             continue
@@ -727,6 +1164,7 @@ class _ParagraphBuilder:
         self.metrics = metrics
         self.blocks: list[dict[str, Any]] = []
         self._parts: list[str] = []
+        self._glued: list[bool] = []
         self._kind = "paragraph"
         self._lead: str | None = None
         self._marker: str | None = None
@@ -736,8 +1174,9 @@ class _ParagraphBuilder:
     def flush(self) -> None:
         if not self._parts:
             return
-        text = join_fragments(self._parts)
+        text = join_fragments(self._parts, self._glued)
         self._parts = []
+        self._glued = []
         lead, self._lead = self._lead, None
         marker, self._marker = self._marker, None
         kind, self._kind = self._kind, "paragraph"
@@ -775,7 +1214,14 @@ class _ParagraphBuilder:
 
     def add_block(self, block: dict[str, Any]) -> None:
         self.flush()
-        self.blocks.append(block)
+        previous = self.blocks[-1] if self.blocks else None
+        # A listing that runs past the bottom of a page is boxed once per page,
+        # so it arrives as two blocks with nothing between them. Anything else
+        # would have flushed a paragraph in between.
+        if block["type"] == "code" and previous is not None and previous["type"] == "code":
+            previous["text"] += "\n" + block["text"]
+        else:
+            self.blocks.append(block)
         self._previous = None
 
     def _starts_paragraph(self, line: Line) -> bool:
@@ -837,6 +1283,14 @@ class _ParagraphBuilder:
             return bool(following) and following[0][0] - x1 >= self.metrics.body_size * 0.5
         return False
 
+    def _wrapped_url(self, line: Line) -> bool:
+        """True when the previous line ended inside a URL because it ran out of room."""
+        if not self._parts or self._previous is None:
+            return False
+        if not URL_TAIL_RE.search(self._parts[-1]):
+            return False
+        return self._previous.x1 >= self.metrics.right_edge - self.metrics.short_line_slack
+
     def add_line(self, line: Line) -> None:
         if self._starts_paragraph(line):
             self.flush()
@@ -858,7 +1312,9 @@ class _ParagraphBuilder:
                     self._lead = label.group(0).strip()
                     text = text[label.end():]
             self._parts = [text]
+            self._glued = [False]
         else:
+            self._glued.append(self._wrapped_url(line))
             self._parts.append(line.text)
         self._previous = line
 
@@ -877,15 +1333,40 @@ def build_blocks(pdf_path: Path, problem_id: str, figure_root: Path | None,
         raw_pages: list[list[Line]] = []
         page_tables: list[list[dict[str, Any]]] = []
         page_figures: list[list[dict[str, Any]]] = []
-        for index, page in enumerate(wanted):
+        page_verbatim: list[list[tuple[float, dict[str, Any]]]] = []
+        for index, original in enumerate(wanted):
+            # Several statements fake bold by drawing the same glyph two to four
+            # times a quarter of a point apart. Word extraction interleaves the
+            # copies, so the Teddy Cup 2016 A title came out as
+            # "A题题题题电电电电商商商平平平平台台台台…". Dropping a glyph that
+            # repeats within a point of itself is safe: a genuine repeated
+            # character sits a full em away.
+            page = original.dedupe_chars(tolerance=OVERPRINT_TOLERANCE)
+            assets = with_assets and figure_root is not None
             tables = extract_tables(page) if with_assets else []
             page_tables.append(tables)
             boxes = [table["bbox"] for table in tables]
-            raw_pages.append(page_lines(page, index + 1, boxes, find_fraction_bars(page, boxes)))
+            listings: list[tuple[float, dict[str, Any]]] = []
+            claimed: list[tuple[float, ...]] = []
+            for box in find_verbatim_boxes(page, boxes) if with_assets else []:
+                block = verbatim_block(page, box)
+                # A box this rejected stays in the paragraph stream. Excluding it
+                # anyway would delete its text from the statement.
+                if block is None:
+                    continue
+                listings.append((box[1], block))
+                claimed.append(box)
+            page_verbatim.append(listings)
+            formulas, damaged = (
+                extract_formulas(page, problem_id, index + 1, figure_root / problem_id)
+                if assets else ([], [])
+            )
+            skip = boxes + claimed + damaged
+            raw_pages.append(page_lines(page, index + 1, skip, find_fraction_bars(page, skip)))
             pypdf_page = reader.pages[index] if index < len(reader.pages) else None
             page_figures.append(
-                extract_figures(page, pypdf_page, problem_id, index + 1, figure_root / problem_id)
-                if with_assets and figure_root is not None and pypdf_page is not None else []
+                (extract_figures(page, pypdf_page, problem_id, index + 1, figure_root / problem_id)
+                 if assets and pypdf_page is not None else []) + formulas
             )
 
     pages = drop_running_heads(raw_pages, page_height)
@@ -899,6 +1380,7 @@ def build_blocks(pdf_path: Path, problem_id: str, figure_root: Path | None,
         floats += [
             (table["bbox"][1], {"type": "table", "rows": table["rows"]}) for table in page_tables[index]
         ]
+        floats += page_verbatim[index]
         floats.sort(key=lambda item: item[0])
         cursor = 0
         for line in lines:

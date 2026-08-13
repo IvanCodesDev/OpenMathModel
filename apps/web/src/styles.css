@@ -4396,6 +4396,20 @@ html[data-theme="dark"] .problem-download-sep { color: #9c9b96; }
   white-space: nowrap;
 }
 
+/* 附件的文件格式示例在原题里就排在一个方框内，列靠空格对齐，
+   所以保留原样的换行与空格，并沿用表格那套边框语言把它和正文分开。 */
+.problem-content-code {
+  margin: 24px 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  border: 1px solid #deded9;
+  border-radius: 8px;
+  background: #f6f6f3;
+  color: #34342f;
+  font: 14px/1.9 "Cascadia Code", Consolas, monospace;
+  white-space: pre;
+}
+
 .problem-content-figure {
   margin: 30px auto 18px;
   text-align: center;
