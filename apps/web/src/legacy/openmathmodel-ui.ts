@@ -37,6 +37,11 @@ import {
   proxyTransparencyEnabled,
   recordLlmUsage,
 } from "../integration/llm-usage";
+import {
+  exportUsageCsv,
+  hydrateUsagePane,
+  persistUsageSettings,
+} from "../integration/usage-monitor";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
 import { renderMarkdown } from "../text/markdown";
 import {
@@ -1986,30 +1991,24 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
             <div class="settings-pane" data-settings-pane="usage">
               <div class="usage-overview">
-                <div class="usage-stat"><span>本月 Token</span><strong>2.84M</strong><small>较上月 +12.4%</small></div>
-                <div class="usage-stat"><span>Agent 任务</span><strong>186</strong><small>其中 42 个深度任务</small></div>
-                <div class="usage-stat"><span>预估费用</span><strong>¥ 96.40</strong><small>预算剩余 ¥ 103.60</small></div>
+                <div class="usage-stat"><span>本月 Token</span><strong data-usage-stat="tokens">–</strong><small data-usage-stat-note="tokens">正在加载用量…</small></div>
+                <div class="usage-stat"><span>Agent 任务</span><strong data-usage-stat="runs">–</strong><small data-usage-stat-note="runs"></small></div>
+                <div class="usage-stat"><span>预估费用</span><strong data-usage-stat="cost">–</strong><small data-usage-stat-note="cost"></small></div>
               </div>
               <div class="settings-section">
-                <div class="settings-section-heading usage-heading"><div><h3>本月用量</h3><p>2026年7月1日－7月31日</p></div><button type="button" class="secondary-small" data-settings-action="export-usage">${icon("download-simple")} 导出明细</button></div>
-                <div class="usage-budget"><div><span>¥ 96.40 / ¥ 200.00</span><b>48%</b></div><progress value="96.4" max="200"></progress></div>
-                <div class="usage-chart" aria-label="最近 14 天用量柱状图">
-                  ${[34,48,42,64,52,79,68,91,75,83,58,96,70,87].map((x,i)=>`<span style="--usage:${x}%" title="7月${i+14}日 · ${x}k Token"></span>`).join("")}
-                </div>
+                <div class="settings-section-heading usage-heading"><div><h3>本月用量</h3><p data-usage-range>——</p></div><button type="button" class="secondary-small" data-settings-action="export-usage">${icon("download-simple")} 导出明细</button></div>
+                <div class="usage-budget" data-usage-budget hidden><div><span data-usage-budget-label></span><b data-usage-budget-percent></b></div><progress data-usage-budget-progress value="0" max="100"></progress></div>
+                <div class="usage-chart" data-usage-chart aria-label="最近 14 天用量柱状图"></div>
               </div>
               <div class="settings-section">
                 <div class="settings-section-heading"><div><h3>模型用量分布</h3><p>费用为本月预估值。</p></div></div>
-                <div class="usage-table">
+                <div class="usage-table" data-usage-models>
                   <div class="usage-table-head"><span>模型</span><span>请求</span><span>Token</span><span>费用</span></div>
-                  <div><strong>Qwen3.7-Max</strong><span>96</span><span>1.42M</span><span>¥ 31.80</span></div>
-                  <div><strong>DeepSeek V3</strong><span>54</span><span>860K</span><span>¥ 18.60</span></div>
-                  <div><strong>GPT-4.1</strong><span>24</span><span>410K</span><span>¥ 40.20</span></div>
-                  <div><strong>本地模型</strong><span>12</span><span>150K</span><span>¥ 0.00</span></div>
                 </div>
               </div>
               <div class="settings-section">
                 <div class="settings-grid two">
-                  <label class="settings-field"><span>月度预算提醒</span><div class="field-with-unit"><input type="number" name="monthlyBudget" value="200"><b>元 / 月</b></div></label>
+                  <label class="settings-field"><span>月度预算提醒</span><div class="field-with-unit"><input type="number" name="monthlyBudget" value="" min="0" placeholder="未设置"><b>元 / 月</b></div></label>
                   <label class="settings-field"><span>提醒阈值</span><select name="budgetThreshold"><option>达到 80% 时提醒</option><option>达到 60% 时提醒</option><option>达到 100% 时提醒</option></select></label>
                 </div>
                 ${settingsToggle("hardBudgetLimit", "达到预算后暂停付费模型", "保留本地模型与免费额度，避免产生额外费用", false)}
@@ -2194,6 +2193,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         if (message) toast(t(message));
         // 接口池或开关可能变化，任务页的模型选择器同步刷新
         void hydrateModelPickers();
+      });
+      // 预算三项存服务端：暂停付费模型的闸门在服务端调用路径上校验。
+      void persistUsageSettings(values).then(message => {
+        if (message) toast(t(message));
       });
       $("[data-settings-save-state]", backdrop).textContent = t("已保存");
       toast(t("设置已保存"));
@@ -2396,7 +2399,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         openSettingsCenter();
         toast(t("已恢复默认设置"));
       }
-      if (action === "export-usage") toast("用量明细 CSV 已生成");
+      if (action === "export-usage") {
+        void withBusyButton(actionButton, t("正在导出…"), async () => {
+          toast(t(await exportUsageCsv()));
+        });
+      }
       if (action === "export-data") toast("数据导出申请已提交，完成后会通知你");
       if (action === "clear-cache") toast("本地缓存已清理，共释放 386 MB");
       if (action === "delete-account") toast("演示环境不会执行账户删除");
@@ -2465,6 +2472,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     void hydrateMaxConcurrency(backdrop);
     // 自定义 API 同理：表单、开关与已保存接口列表都以服务端为准回填。
     void hydrateLlmPanel(backdrop);
+    // 用量监控：统计卡、柱状图、模型分布与预算表单都来自服务端记录。
+    void hydrateUsagePane(backdrop);
     if (initialPane) {
       const nav = $(`[data-settings-nav="${initialPane}"]`, backdrop);
       if (nav) activatePane(nav);

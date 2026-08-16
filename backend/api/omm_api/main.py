@@ -15,7 +15,7 @@ from .config import Settings, get_settings
 from .db import Database
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
-from .routers import account, artifacts, auth, chat, events, projects, task_runs, workspace
+from .routers import account, artifacts, auth, chat, events, projects, task_runs, usage, workspace
 from .runner import RunnerThread, WorkflowAdvancer
 
 
@@ -92,6 +92,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.include_router(account.router, prefix="/api/account")
     app.include_router(chat.chat_router, prefix="/api/chat")
     app.include_router(chat.llm_router, prefix="/api/llm")
+    app.include_router(usage.router, prefix="/api/usage")
 
     @app.get("/api/health", tags=["ops"])
     def api_health() -> dict[str, str]:

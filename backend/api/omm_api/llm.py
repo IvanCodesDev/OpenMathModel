@@ -270,11 +270,16 @@ def _difficulty_from_text(text: str) -> Optional[int]:
     return int(match.group(1))
 
 
-def judge_difficulty(judge: LlmEndpoint, question: str) -> tuple[Optional[int], str, str]:
+def judge_difficulty(
+    judge: LlmEndpoint,
+    question: str,
+    on_usage: Optional[Callable[["ChatOutcome"], None]] = None,
+) -> tuple[Optional[int], str, str]:
     """让判定接口为问题难度打分 → (难度, 理由, 实际判定模型)。
 
     判定失败（超时、限流、输出不含 1-5）返回 (None, "", "")，由调用方退回
     规则估计；判定只是路由参考，绝不能因为它挂了就阻塞对话本身。
+    on_usage 在判定调用成功后收到 ChatOutcome（用量监控记账），异常不外抛。
     """
     prompt = (
         "你是模型路由器，需要评估用户问题的难度来选择合适的模型。难度为 1-5 的整数：\n"
@@ -292,6 +297,11 @@ def judge_difficulty(judge: LlmEndpoint, question: str) -> tuple[Optional[int], 
     except Exception as error:  # noqa: BLE001 - 判定失败退回规则估计
         logger.warning("llm route judge failed on %s: %s", judge.name, error)
         return None, "", ""
+    if on_usage is not None:
+        try:
+            on_usage(outcome)
+        except Exception:  # noqa: BLE001 - 用量记账绝不允许影响路由本身
+            logger.exception("llm route judge usage callback failed")
     difficulty = _difficulty_from_text(outcome.text)
     if difficulty is None:
         return None, "", ""
@@ -329,11 +339,15 @@ class RouteDecision:
         }
 
 
-def auto_route(config: LlmConfig, question: str) -> RouteDecision:
+def auto_route(
+    config: LlmConfig,
+    question: str,
+    on_usage: Optional[Callable[["ChatOutcome"], None]] = None,
+) -> RouteDecision:
     """Auto 模式入口：难度判定 + 按权重路由。
 
     候选池排除被中转站开关挡下的接口；回退链按能力从强到弱排（选中的在前），
-    保证降级后仍是「还能用的里面最强的」。
+    保证降级后仍是「还能用的里面最强的」。on_usage 透传给难度判定调用记账。
     """
     candidates = [
         endpoint
@@ -350,7 +364,7 @@ def auto_route(config: LlmConfig, question: str) -> RouteDecision:
         only = candidates[0]
         return RouteDecision(only, (only,), heuristic_difficulty(question), "仅一个接口可用")
     judge = min(candidates, key=endpoint_strength)
-    difficulty, reason, judge_model = judge_difficulty(judge, question)
+    difficulty, reason, judge_model = judge_difficulty(judge, question, on_usage=on_usage)
     if difficulty is None:
         difficulty = heuristic_difficulty(question)
         reason = "按问题长度与关键词估计"
@@ -817,10 +831,12 @@ class EngineLlmPort:
         config: LlmConfig,
         registry: Any,
         on_event: Optional[Callable[[dict[str, Any]], None]] = None,
+        on_usage: Optional[Callable[[ChatOutcome], None]] = None,
     ) -> None:
         self._config = config
         self._registry = registry
         self._on_event = on_event
+        self._on_usage = on_usage
 
     def _emit(self, payload: dict[str, Any]) -> None:
         if self._on_event is None:
@@ -837,6 +853,11 @@ class EngineLlmPort:
             self._config,
             [{"role": "user", "content": prompt}],
         )
+        if self._on_usage is not None:
+            try:
+                self._on_usage(outcome)
+            except Exception:  # noqa: BLE001 - 用量记账绝不允许影响任务执行
+                logger.exception("llm 用量记账回调失败")
         if outcome.reasoning:
             self._emit({
                 "kind": "thinking",

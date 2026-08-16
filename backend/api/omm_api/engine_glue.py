@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Optional
@@ -57,7 +58,7 @@ from .blobstore import ArtifactBlobStore, LocalContentStore
 from .config import get_settings
 from .events import append_event
 from .ids import new_id
-from .llm import EngineLlmPort, config_usable, parse_llm_config
+from .llm import EngineLlmPort, config_usable, is_third_party_host, parse_llm_config
 from .models import User
 from .orm import (
     ApprovalRequestRow,
@@ -68,6 +69,7 @@ from .orm import (
     TaskRunRow,
 )
 from .serialize import utcnow
+from .usage import budget_exhausted, is_free_endpoint, record_usage
 from .workflow import NODE_COMPLETED, STAGE_LABELS
 
 logger = logging.getLogger("omm.engine")
@@ -243,13 +245,39 @@ def _llm_wiring(session: Session, run: TaskRunRow) -> tuple[Optional[EngineLlmPo
     registry = _prompt_registry()
     if not config_usable(config) or registry is None:
         return None, {}
+    # 预算硬限制（设置中心「用量监控」）：达标后只留本地/免费接口；
+    # 一个不剩则整条链回落模拟节点，并在 run.log 留痕说明原因。
+    if budget_exhausted(session, user):
+        free = tuple(endpoint for endpoint in config.endpoints if is_free_endpoint(endpoint))
+        if not free:
+            append_event(
+                session,
+                run.id,
+                AgentEventType.run_log.value,
+                {
+                    "kind": "budget_limit",
+                    "message": "本月预估费用已达预算上限，付费模型已暂停，"
+                    "本次任务改用模拟节点推进；可在设置中心「用量监控」调整预算或关闭硬限制",
+                },
+            )
+            return None, {}
+        config = replace(config, endpoints=free)
     # 模型调用的过程事件（思考内容/调用摘要）进 run.log：与本次 advance 同事务
-    # 提交，SSE 把它们转发给工作台的执行轨迹逐条展示。
+    # 提交，SSE 把它们转发给工作台的执行轨迹逐条展示。每次成功调用同时记入
+    # llm_usage_records（用量监控），与本次 advance 同事务。
     port = EngineLlmPort(
         config,
         registry,
         on_event=lambda payload: append_event(
             session, run.id, AgentEventType.run_log.value, payload
+        ),
+        on_usage=lambda outcome: record_usage(
+            session,
+            user_id=user.id,
+            source="agent",
+            outcome=outcome,
+            third_party=is_third_party_host(outcome.endpoint.host),
+            run_id=run.id,
         ),
     )
     overrides = {

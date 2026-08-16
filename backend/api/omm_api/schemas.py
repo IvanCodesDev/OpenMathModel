@@ -196,6 +196,15 @@ class LlmTestRequest(LlmEndpointModel):
     allow_proxy: bool = True
 
 
+class UsageSettingsUpdateRequest(BaseModel):
+    """设置中心「用量监控」的三个预算项；硬限制的闸门在服务端执行。"""
+
+    #: None = 未设置预算（不提醒、硬限制不生效）。
+    monthly_budget_cny: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    budget_threshold_percent: int = Field(default=80, ge=1, le=100)
+    hard_limit: bool = False
+
+
 class ChatMessageModel(BaseModel):
     role: str
     content: str = Field(max_length=100_000)

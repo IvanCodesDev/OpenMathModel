@@ -38,6 +38,9 @@ class User(Base):
     # 设置中心「自定义 API」：已保存接口列表 + 主接口 + 三个行为开关（llm.parse_llm_config 解析）。
     # 密钥只落在本机后端数据库，不回传云端；None = 从未配置过。
     llm_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # 设置中心「用量监控」：月度预算 / 提醒阈值 / 硬限制（usage.usage_settings_of 解析）。
+    # 硬限制的闸门在服务端聊天与任务执行路径上，改浏览器缓存绕不过。
+    usage_settings: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

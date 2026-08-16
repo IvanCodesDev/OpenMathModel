@@ -73,6 +73,52 @@ export interface LlmTestResult {
   reply: string;
 }
 
+/** 设置中心「用量监控」的三个预算项；硬限制由服务端在调用路径上执行。 */
+export interface UsageSettings {
+  monthly_budget_cny: number | null;
+  budget_threshold_percent: number;
+  hard_limit: boolean;
+}
+
+export interface UsageDailyPoint {
+  date: string;
+  requests: number;
+  total_tokens: number;
+  estimated_cost_cny: number;
+}
+
+export interface UsageModelRow {
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_cny: number;
+}
+
+/** /api/usage/summary 的响应：合计、上月对比、Agent 任务数、14 天序列、模型分布与预算状态。 */
+export interface UsageSummary {
+  month: string;
+  range: { start: string; end: string };
+  totals: {
+    requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    estimated_cost_cny: number;
+  };
+  previous: { total_tokens: number; estimated_cost_cny: number };
+  agent_runs: { total: number; llm: number };
+  daily: UsageDailyPoint[];
+  models: UsageModelRow[];
+  budget: UsageSettings & {
+    used_cny: number;
+    remaining_cny: number | null;
+    used_percent: number;
+    alert: boolean;
+  };
+}
+
 export interface DeviceSession {
   id: string;
   device_label: string;
@@ -179,6 +225,15 @@ export const authApi = {
   },
   testLlmEndpoint(body: LlmEndpoint & { allow_proxy: boolean }) {
     return request<LlmTestResult>("/api/llm/test", { method: "POST", body });
+  },
+  getUsageSummary(month?: string) {
+    return request<UsageSummary>(`/api/usage/summary${month ? `?month=${encodeURIComponent(month)}` : ""}`);
+  },
+  getUsageSettings() {
+    return request<{ settings: UsageSettings }>("/api/usage/settings");
+  },
+  updateUsageSettings(body: UsageSettings) {
+    return request<{ settings: UsageSettings }>("/api/usage/settings", { method: "PUT", body });
   },
   uploadAvatar(image: Blob, filename: string) {
     const form = new FormData();

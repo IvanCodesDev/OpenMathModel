@@ -222,3 +222,30 @@ class ApprovalRequestRow(Base):
     resolution: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
     # 幂等：同 client_token 重复 approve 返回同一结果
     client_token: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+class LlmUsageRow(Base):
+    """一次成功的模型调用 = 一行（设置中心「用量监控」的数据源）。
+
+    user_id 不设外键：用量是历史事实，须在用户删除后仍可审计；
+    Agent 任务经项目归属找不到用户时按项目 owner 原值记录（如 local-dev）。
+    费用不落库：按 usage.PRICING 在读取时估算，调价无需回填数据。
+    """
+
+    __tablename__ = "llm_usage_records"
+    __table_args__ = (Index("ix_llm_usage_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: chat = 对话页；agent = 任务引擎节点；test = 测试连接；route = Auto 难度判定。
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    run_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    endpoint_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    host: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    third_party: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
