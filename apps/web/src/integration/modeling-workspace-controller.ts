@@ -1,7 +1,9 @@
 import type { ModelingWorkspaceView } from "@openmathmodel/contracts";
 import { mountComposerAttachments } from "../attachments/composer-attachments";
 import { currentLocale, t } from "../i18n/locale";
+import { configureConversation } from "./agent-chat";
 import { notifyRunStatusChange } from "../notifications/desktop-notifications";
+import { saveHistoryEnabled } from "../preferences/privacy-preferences";
 import { forgetLastTask, rememberLastTask } from "../tasks/last-task-record";
 import type { ScreenId } from "../types/screens";
 import {
@@ -10,6 +12,11 @@ import {
   WorkspaceApiError,
   type WorkspaceStepRun,
 } from "./modeling-workspace-api";
+import {
+  openAttachmentsDialog,
+  openTaskHeaderMenu,
+  renderHeaderAttachments,
+} from "./task-header-actions";
 import { mountTaskStartFlow } from "./task-start-controller";
 
 const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
@@ -239,8 +246,9 @@ function renderStatus(root: HTMLElement, screen: ScreenId, view: ModelingWorkspa
   root.dataset.integrationState = "ready";
   sessionStorage.setItem(ACTIVE_RUN_KEY, view.run_id);
   sessionStorage.setItem(ACTIVE_PROJECT_KEY, view.project_id);
-  // 每次真实渲染都刷新“最近使用的任务”，供「启动时恢复上次任务」下次开机读取。
-  rememberLastTask(view.run_id, view.project_id);
+  // 每次真实渲染都刷新“最近使用的任务”，供「启动时恢复上次任务」下次开机读取；
+  // 「保存任务历史」（数据与隐私）关闭时不留本机记录。
+  if (saveHistoryEnabled()) rememberLastTask(view.run_id, view.project_id);
 
   root.querySelectorAll<HTMLElement>('[data-bind="project-name"], .focused-task-name span, .task-toolbar h2')
     .forEach(element => replaceText(element, view.project_name));
@@ -404,12 +412,19 @@ function agentSummaryForScreen(screen: ScreenId, view: ModelingWorkspaceView): s
 }
 
 /**
- * 思考/规划阶段：任务刚创建、第一个执行步骤还没开始。此时不把六个步骤
- * 一次性砸出来，而是先显示一行「正在思考并规划…」，首步启动时再揭示计划。
+ * 思考/规划阶段：题意解析（问题分析页）真正完成之前都算规划中。此时不把
+ * 六个步骤一次性砸出来，而是只显示一行「正在思考并规划…」；首阶段落定
+ * （成功/失败）或后续阶段已启动时，说明计划已经产生，才揭示执行步骤。
+ * 运行离开 QUEUED/RUNNING（暂停、待审批、终态）时需要展示状态，同样揭示。
  */
 function isPlanningPhase(view: ModelingWorkspaceView): boolean {
   if (view.run_status === "QUEUED") return true;
-  return view.run_status === "RUNNING" && view.pages.every(page => page.status === "PENDING");
+  if (view.run_status !== "RUNNING") return false;
+  return view.pages.every(page => (
+    page.key === "running"
+      ? page.status === "PENDING" || page.status === "RUNNING"
+      : page.status === "PENDING"
+  ));
 }
 
 function createPlanningRow(): HTMLElement {
@@ -442,8 +457,6 @@ function mountStepTimeline(list: HTMLElement, view: ModelingWorkspaceView, nodes
     child.style.animationDelay = `${Math.min(index * 140, 980)}ms`;
   });
 }
-
-const TERMINAL_RUN_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 
 // ── 活动流：思考/工具/叙述交替的细粒度过程（数据 = run.log 等领域事件） ────
 
@@ -616,19 +629,9 @@ function ingestStreamEvent(
         return;
       }
       if (kind === "llm_call") {
-        const lines = [
-          `模型：${String(payload.model ?? "")}`,
-          `接口：${String(payload.endpoint ?? "")}`,
-          payload.prompt_tokens != null ? `输入 tokens：${String(payload.prompt_tokens)}` : "",
-          payload.completion_tokens != null ? `输出 tokens：${String(payload.completion_tokens)}` : "",
-        ].filter(Boolean);
-        streamRow(root, {
-          icon: "lightning",
-          title: `调用模型 ${String(payload.model ?? "")}`,
-          elapsedMs: Number(payload.elapsed_ms) || 0,
-          detail: lines.join("\n"),
-          mono: true,
-        });
+        // 对话页不显示模型/接口等信息（与聊天回复的既有政策一致）：llm_call 过程事件
+        // 不进活动流；用量透明度只体现在设置中心的本机用量记录。早退避免落入下方
+        // 通用 run.log 兜底把 payload（含模型名）原样展示出来。
         return;
       }
       // 其他 run.log（未来的工具调用等）：原样以等宽详情展示
@@ -669,36 +672,6 @@ function ingestStreamEvent(
   }
 }
 
-/** 输入框上方的整体运行状态条：spinner + 状态 · 当前阶段 + n/6，终态自动移除，不遮挡轨迹。 */
-function renderRunProgressStrip(root: HTMLElement, view: ModelingWorkspaceView): void {
-  const composer = root.querySelector<HTMLElement>(".chat-pane > .composer");
-  if (!composer) return;
-  const existing = composer.previousElementSibling;
-  let strip = existing instanceof HTMLElement && existing.classList.contains("run-progress-strip")
-    ? existing
-    : null;
-  if (TERMINAL_RUN_STATUSES.has(view.run_status) || isPlanningPhase(view)) {
-    strip?.remove();
-    return;
-  }
-  if (!strip) {
-    strip = document.createElement("div");
-    strip.className = "run-progress-strip";
-    strip.innerHTML = '<i class="ph ph-circle-notch run-progress-spinner" aria-hidden="true"></i><span class="run-progress-text"></span><span class="run-progress-count"></span>';
-    composer.insertAdjacentElement("beforebegin", strip);
-  }
-  const waiting = view.run_status === "WAITING_APPROVAL" || view.run_status === "PAUSED";
-  strip.classList.toggle("is-waiting", waiting);
-  const activeLabel = view.pages.find(page => page.key === view.active_page)?.label ?? "";
-  const doneCount = view.pages.filter(page => pageStatusForDisplay(view, page) === "SUCCEEDED").length;
-  const text = strip.querySelector<HTMLElement>(".run-progress-text");
-  if (text) {
-    text.textContent = `${STATUS_LABELS[view.run_status] ?? view.run_status}${activeLabel ? ` · ${activeLabel}` : ""}`;
-  }
-  const count = strip.querySelector<HTMLElement>(".run-progress-count");
-  if (count) count.textContent = `${doneCount}/${view.pages.length}`;
-}
-
 function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspaceView): void {
   const planning = isPlanningPhase(view);
 
@@ -719,6 +692,11 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
     ? [...stepsBlock.querySelectorAll<HTMLElement>(".activity-summary, .activity-list, [data-agent-summary], [data-agent-cta]")]
     : [];
   planParts.forEach(part => { part.hidden = Boolean(openingPending); });
+  // 「收起/查看执行步骤」折叠头在规划完成前没有可折叠的计划内容：
+  // 与步骤列表一起等到揭示时刻才出现（对话页与聚焦工作台两种布局都适用）。
+  root.querySelectorAll<HTMLElement>(".activity-summary").forEach(header => {
+    header.hidden = Boolean(openingPending) || planning;
+  });
 
   const timings = timingsByRoot.get(root) ?? new Map<string, PageTiming>();
   const list = root.querySelector<HTMLElement>(".focused-activity-list");
@@ -744,12 +722,6 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
         )
       )));
     }
-  }
-
-  if (openingPending) {
-    root.querySelector(".run-progress-strip")?.remove();
-  } else {
-    renderRunProgressStrip(root, view);
   }
 
   // 摘要区保持稳定的 title/paragraph 元素：文本未变时不重建，变化时打字机浮现，
@@ -913,6 +885,7 @@ function renderWorkspace(root: HTMLElement, screen: ScreenId, view: ModelingWork
     if (element instanceof HTMLButtonElement) element.disabled = false;
   });
   renderStatus(root, screen, view);
+  renderHeaderAttachments(root, view);
   renderAgent(root, screen, view);
   renderArtifacts(root, screen, view);
   decorateNavigation(root, view);
@@ -976,6 +949,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   const root = document.querySelector<HTMLElement>("[data-modeling-shell]");
   const runId = activeRunId();
   if (!root || !runId) {
+    // 演示态不携带任何运行身份：对话上下文一并解绑，避免残留上一任务。
+    configureConversation(null);
     if (root) root.dataset.integrationState = "demo";
     return;
   }
@@ -992,6 +967,7 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   let actionPending = false;
   let actionToken: string | undefined;
   let actionFingerprint: string | undefined;
+  let conversationConfigured = false;
 
   // ── 合并工作台（B 方案）：五个阶段面板同存于一个页面，阶段间跳转是软切换 ──
   const WORKSPACE_STAGE_SET = new Set<ScreenId>(["data", "model", "experiments", "editor", "complete"]);
@@ -1055,6 +1031,15 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         current: view.run_status,
       });
       currentView = view;
+      // 首个快照到手即绑定对话归属：agent-chat 按 run 隔离上下文并从本机记录
+      // 恢复历史；页面层随后把首条气泡换成该运行的真实题面并重建对话气泡。
+      if (!conversationConfigured) {
+        conversationConfigured = true;
+        configureConversation(view.run_id, view.goal);
+        document.dispatchEvent(new CustomEvent("omm:conversation-restore", {
+          detail: { runId: view.run_id, goal: view.goal },
+        }));
+      }
       if (view.latest_event_sequence !== null) {
         lastSequence = Math.max(lastSequence ?? 0, view.latest_event_sequence);
       }
@@ -1122,6 +1107,22 @@ export function mountModelingWorkspace(screen: ScreenId): void {
       event.preventDefault();
       event.stopPropagation();
       toggleRunningStep(runningStep);
+      return;
+    }
+
+    // 顶栏附件与「更多操作」：真实运行绑定后由这里接管，演示弹层不再出现。
+    const headerFiles = target?.closest<HTMLElement>('[data-action="files"]');
+    if (headerFiles && currentView) {
+      event.preventDefault();
+      event.stopPropagation();
+      openAttachmentsDialog(currentView);
+      return;
+    }
+    const headerMore = target?.closest<HTMLElement>('[data-action="more"]');
+    if (headerMore && currentView) {
+      event.preventDefault();
+      event.stopPropagation();
+      openTaskHeaderMenu(headerMore, currentView, () => void refresh(false));
       return;
     }
 
@@ -1282,7 +1283,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
 
   root.dataset.integrationState = "loading";
   root.querySelectorAll<HTMLElement>(
-    '[data-go], [data-agent-cta], [data-action="continue-paper"], [data-action="download-all"]',
+    '[data-go], [data-agent-cta], [data-action="continue-paper"], [data-action="download-all"], '
+    + '[data-action="files"], [data-action="more"]',
   ).forEach(element => {
     element.dataset.workspaceLoading = "true";
     if (element instanceof HTMLButtonElement) element.disabled = true;

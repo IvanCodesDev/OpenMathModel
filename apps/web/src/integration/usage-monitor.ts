@@ -8,6 +8,9 @@
  */
 
 import { ApiError, authApi, type UsageSettings, type UsageSummary } from "../auth/api";
+import { sendDesktopNotification } from "../notifications/desktop-notifications";
+import { notifyBudgetEnabled } from "../preferences/privacy-preferences";
+import { t } from "../i18n/locale";
 
 function esc(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, ch => (
@@ -187,6 +190,39 @@ export async function persistUsageSettings(values: Record<string, unknown>): Pro
     }
     return error instanceof Error ? `预算设置同步失败：${error.message}` : "预算设置同步失败，请稍后重试。";
   }
+}
+
+const BUDGET_ALERT_GUARD = "openmathmodel.budgetAlertNotified";
+
+/**
+ * 应用启动后调用一次：本月费用达到提醒阈值时提醒（隐私开关「预算与限额提醒」）。
+ *
+ * 桌面通知成功时返回 null；用户正看着页面（桌面通知被抑制）时返回文案，
+ * 由调用方以页内 toast 呈现。同一个月每个浏览器会话只提醒一次。
+ */
+export async function maybeNotifyBudgetAlert(): Promise<string | null> {
+  if (!notifyBudgetEnabled()) return null;
+  let summary: UsageSummary;
+  try {
+    summary = await authApi.getUsageSummary();
+  } catch {
+    return null; // 未登录或网络失败：不打扰
+  }
+  const budget = summary.budget;
+  if (!budget.alert || budget.monthly_budget_cny == null) return null;
+  try {
+    if (sessionStorage.getItem(BUDGET_ALERT_GUARD) === summary.month) return null;
+    sessionStorage.setItem(BUDGET_ALERT_GUARD, summary.month);
+  } catch {
+    // 会话存储不可用时退化为每次加载提醒一次
+  }
+  const message = `本月预估费用 ${formatCny(budget.used_cny)}，已达预算 ${formatCny(budget.monthly_budget_cny)} 的 ${budget.used_percent}%`;
+  const delivered = sendDesktopNotification({
+    title: t("预算与限额提醒"),
+    body: message,
+    tag: `omm-budget-${summary.month}`,
+  });
+  return delivered ? null : message;
 }
 
 /** 「导出明细」：下载当月调用明细 CSV。返回要提示用户的文案。 */

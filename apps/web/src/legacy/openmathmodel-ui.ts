@@ -13,7 +13,23 @@ import { hydrateAccountUi, initSecurityPane } from "../auth/account-security";
 import { applyLocale, currentLocale, t } from "../i18n/locale";
 import { hydrateMaxConcurrency, persistMaxConcurrency } from "../preferences/account-preferences";
 import { ApiError, authApi } from "../auth/api";
-import { sendConversationTurn } from "../integration/agent-chat";
+import { attachmentsOf } from "../attachments/composer-attachments";
+import { collectConversationAttachments } from "../attachments/conversation-context";
+import { OPENING_ANALYSIS_PROMPT, sendConversationTurn } from "../integration/agent-chat";
+import { CHAT_MODES, currentChatMode, saveChatMode } from "../integration/chat-mode";
+import {
+  addComposerReference,
+  clearComposerReferences,
+  composerReferenceBlock,
+  listComposerReferences,
+  methodReference,
+  mountReferenceChips,
+  paperReference,
+  problemReference,
+  resetComposerReferences,
+  restorePendingTaskReferences,
+} from "../integration/composer-references";
+import { loadConversationLog } from "../tasks/conversation-log";
 import {
   endpointHost,
   presetHost,
@@ -40,9 +56,17 @@ import {
 import {
   exportUsageCsv,
   hydrateUsagePane,
+  maybeNotifyBudgetAlert,
   persistUsageSettings,
 } from "../integration/usage-monitor";
+import {
+  hydratePrivacyPane,
+  persistPrivacySettings,
+  syncPrivacyGatesOnce,
+} from "../preferences/privacy-preferences";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
+import { mountSidebarSearch } from "../integration/sidebar-search";
+import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { renderMarkdown } from "../text/markdown";
 import {
   notificationsSupported,
@@ -264,7 +288,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         <div class="sidebar-search-row">
           <label class="global-search">
             ${icon("magnifying-glass")}
-            <input aria-label="全局搜索" placeholder="搜索任务">
+            <input type="search" name="sidebar-task-search" data-sidebar-search autocomplete="off" aria-label="全局搜索" placeholder="搜索任务">
           </label>
           <button class="search-filter" data-action="sidebar-filter" title="筛选">${icon("sliders-horizontal")}</button>
         </div>
@@ -305,13 +329,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     try { savedModel = localStorage.getItem("openmathmodelSelectedModel") || "auto"; } catch {}
     const selected = options.find(option => option.id === savedModel) || options[0];
     return `<div class="composer ${compact ? "chat-composer" : ""}">
-      <textarea aria-label="任务描述" placeholder="${placeholder}"></textarea>
+      <div class="composer-input-row"><textarea aria-label="任务描述" placeholder="${placeholder}"></textarea></div>
       <div class="composer-tools">
         <input class="file-input" type="file" multiple hidden>
         <div class="composer-tool-group">
           <button class="tool-button icon-tool" data-action="attach" title="添加文件（也可直接拖入或粘贴）">${icon("plus")}</button>
           <button class="tool-button" data-action="reference">${icon("at")}<span class="tool-label">添加上下文</span></button>
-          <button class="tool-button" data-action="mode">${icon("circles-three-plus")}<span class="tool-label">自动模式</span>${icon("caret-down")}</button>
+          <button class="tool-button" data-action="mode">${icon("circles-three-plus")}<span class="tool-label">${t(currentChatMode().label)}</span>${icon("caret-down")}</button>
         </div>
         <div class="composer-model-picker" data-model-picker>
           <button type="button" class="composer-model" data-action="model-picker" aria-haspopup="listbox" aria-expanded="false" title="选择模型">
@@ -580,7 +604,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   }
 
   function runningScreen() {
-    const prompt = sessionStorage.getItem("openmathmodelPrompt") || "请结合共享单车订单、站点与天气数据，完成需求预测、区域划分和调度优化。";
+    // 首屏气泡按运行隔离：优先读本运行的题面（发送链路按 run_id 写入）；真实
+    // 运行没有记录时留空，等控制器用工作台快照的 goal 回填——绝不回落到同标签
+    // 页里别的任务写下的全局 openmathmodelPrompt（数据隔离）。演示态维持原状。
+    const runIdParam = new URL(window.location.href).searchParams.get("run_id") ?? "";
+    const isRealRun = /^run_[0-9a-f]{32}$/.test(runIdParam);
+    const prompt = isRealRun
+      ? sessionStorage.getItem(`openmathmodel.taskGoal.${runIdParam}`) ?? ""
+      : sessionStorage.getItem("openmathmodelPrompt") || "请结合共享单车订单、站点与天气数据，完成需求预测、区域划分和调度优化。";
     const steps = [
       ["已读取题目与附件", "00:03", "已识别题面、订单、站点和天气数据。"],
       ["已完成问题拆解", "00:06", "任务拆解为需求预测、区域划分和调度优化。"],
@@ -926,10 +957,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
               <article class="paper-editor">
                 <div class="editor-toolbar">
                   <div class="editor-format-tools">
-                    <button data-command="undo" aria-label="撤销">${icon("arrow-u-up-left")}</button><button data-command="redo" aria-label="重做">${icon("arrow-u-up-right")}</button><span class="toolbar-divider"></span>
-                    <button>正文 ${icon("caret-down")}</button><button>宋体 ${icon("caret-down")}</button><button>五号 ${icon("caret-down")}</button><span class="toolbar-divider"></span>
-                    <button data-command="bold" aria-label="加粗"><strong>B</strong></button><button data-command="italic" aria-label="斜体"><i>I</i></button><button data-command="underline" aria-label="下划线"><u>U</u></button><button>${icon("text-t")}${icon("caret-down")}</button><span class="toolbar-divider"></span>
-                    <button>${icon("text-align-left")}${icon("caret-down")}</button><button>${icon("table")}</button><button data-action="image">${icon("image")}</button><button data-action="formula">ƒx</button><button data-action="cite">${icon("link")}</button><span class="toolbar-divider"></span><button data-action="cite">${icon("quotes")} 引用</button>
+                    <button data-command="undo" aria-label="撤销" title="撤销 (Ctrl+Z)">${icon("arrow-u-up-left")}</button><button data-command="redo" aria-label="重做" title="重做 (Ctrl+Y)">${icon("arrow-u-up-right")}</button><span class="toolbar-divider"></span>
+                    <button data-editor-menu="block" aria-label="段落样式" title="段落样式"><span data-editor-label="block">正文</span> ${icon("caret-down")}</button><button data-editor-menu="font" aria-label="字体" title="字体"><span data-editor-label="font">宋体</span> ${icon("caret-down")}</button><button data-editor-menu="size" aria-label="字号" title="字号"><span data-editor-label="size">五号</span> ${icon("caret-down")}</button><span class="toolbar-divider"></span>
+                    <button data-command="bold" aria-label="加粗" title="加粗 (Ctrl+B)"><strong>B</strong></button><button data-command="italic" aria-label="斜体" title="斜体 (Ctrl+I)"><i>I</i></button><button data-command="underline" aria-label="下划线" title="下划线 (Ctrl+U)"><u>U</u></button><button data-editor-menu="color" aria-label="文字颜色" title="文字颜色">${icon("text-t")}${icon("caret-down")}</button><span class="toolbar-divider"></span>
+                    <button data-editor-menu="align" aria-label="对齐方式" title="对齐方式">${icon("text-align-left")}${icon("caret-down")}</button><button data-action="insert-table" aria-label="插入表格" title="插入 3×3 表格">${icon("table")}</button><button data-action="image" aria-label="插入图片" title="插入本地图片">${icon("image")}</button><button data-action="formula" aria-label="插入公式" title="插入 LaTeX 公式">ƒx</button><button data-action="cite" aria-label="插入引用链接" title="插入来源引用">${icon("link")}</button><span class="toolbar-divider"></span><button data-action="cite" title="插入来源引用">${icon("quotes")} 引用</button>
                   </div>
                   <div class="paper-editor-inline-actions"><button data-action="editor-check">检查</button><button data-action="export-paper">导出</button><button class="primary" data-action="continue-paper">完成交付</button></div>
                 </div>
@@ -940,9 +971,18 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                   <h3>3.2 特征设计</h3><p>本文从时间、空间、天气和社会活动四个维度构建特征体系。时间维度包括小时、星期、节假日等；<mark>空间维度包括区域类型、POI 密度、周边地铁站距离等；</mark>天气维度包括温度、降水、风速等；社会活动维度包括大型活动、演出、赛事等。</p>
                   <button class="source-chip" contenteditable="false" data-action="source-detail">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
                   <h3>3.3 模型设定</h3><p>采用基于图卷积网络（GCN）的时空预测模型，结合区域间拓扑关系与动态特征，捕捉需求的时空相关性。</p><p>模型目标函数如下：</p>
-                  <div class="editor-formula"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
+                  <div class="editor-formula" data-tex="\\min\\;\\sum_{i=1}^{N}\\sum_{t=1}^{T}\\left(y_{it}-\\hat{y}_{it}\\right)^{2}+\\lambda\\lVert\\Theta\\rVert_{2}^{2}" contenteditable="false" title="点击编辑公式"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
                   <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>
                 </div>
+                <input type="file" accept="image/*" hidden data-editor-image-input>
+                <footer class="editor-statusbar">
+                  <span data-editor-wordcount>0 字</span>
+                  <div class="editor-statusbar-actions">
+                    <span data-editor-savestate>编辑内容自动保存到本机</span>
+                    <button type="button" data-action="paper-save-now" title="立即保存本机草稿 (Ctrl+S)">立即保存</button>
+                    <button type="button" data-action="paper-reset-draft" title="丢弃本机草稿，恢复打开时的正文">恢复初始正文</button>
+                  </div>
+                </footer>
               </article>
             </div>
           </section>
@@ -965,6 +1005,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       "收藏",
     ];
   };
+  // 右上角四个筛选不再是装饰按钮：选项由已加载的赛题数据现算。
+  // 比赛/问题类型/建模方向按数据出现顺序，年份新在前；value 为空代表「全部」不过滤。
+  const problemFilterGroups = () => [
+    { field: "competition", label: "比赛", allLabel: "全部比赛", options: [...new Set(problems.map(problem => problem.competition))].map(value => [value, value]) },
+    { field: "year", label: "年份", allLabel: "全部年份", options: [...new Set(problems.map(problem => String(problem.year)))].sort((a, b) => Number(b) - Number(a)).map(value => [value, `${value} 年`]) },
+    { field: "type", label: "问题类型", allLabel: "全部类型", options: [...new Set(problems.map(problem => problem.problem_type))].map(value => [value, value]) },
+    { field: "direction", label: "建模方向", allLabel: "全部方向", options: [...new Set(problems.flatMap(problem => problem.modeling_directions || []))].map(value => [value, value]) },
+  ];
   // 列表里放不下"含本地原题 PDF及 353 个随题附件"这种全句，压缩成"原题 PDF · 353 附件"；
   // 完整描述仍在详情页展示。
   const problemDataSummary = problem => {
@@ -1058,7 +1106,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       <section class="library-main resource-library problems-main">
         <div class="library-heading"><h1>赛题库</h1><p>浏览历年赛题、问题类型与建模方向。</p></div>
         <div class="library-tools resource-tools"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="problem-search" data-problem-search autocomplete="off" aria-label="搜索赛题" placeholder="搜索赛题、领域或关键词"></label>
-          <div class="filters">${["比赛","年份","问题类型","建模方向"].map(x=>`<button class="filter-button" data-action="filter">${x}${icon("caret-down")}</button>`).join("")}</div>
+          <div class="filters">${problemFilterGroups().map(({ field, label, allLabel, options }) => `<div class="problem-filter-select" data-problem-filter="${field}" data-select-menu>
+            <button type="button" class="filter-button" data-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="按${label}筛选赛题"><span data-select-label>${label}</span>${icon("caret-down")}</button>
+            <div class="settings-select-menu" role="listbox" aria-label="按${label}筛选赛题">
+              ${[["", allLabel], ...options].map(([value, text], index) => `<button type="button" role="option" data-select-option="${escapeHtml(value)}" aria-selected="${index === 0}"><span>${escapeHtml(text)}</span>${icon("check")}</button>`).join("")}
+            </div>
+          </div>`).join("")}</div>
         </div>
         <div class="resource-tabs" role="tablist" aria-label="赛题分类">
           ${problemTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="problem">${x==="收藏"?icon("star"):""}${escapeHtml(x)}</button>`).join("")}
@@ -1067,13 +1120,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           <table class="resource-table problem-resource-table">
             <thead><tr><th>题目</th><th>年份</th><th>问题类型</th><th>数据附件</th><th>收藏</th></tr></thead>
             <tbody data-problem-list>
-              ${problems.map((p,i)=>`<tr class="problem-item" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-resource-search="${escapeHtml([p.code,p.title,p.competition,p.category,p.year,p.problem_type,...p.keywords,...p.modeling_directions].join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看赛题：${escapeHtml(p.code)} ${escapeHtml(p.title)}">
+              ${problems.map((p,i)=>`<tr class="problem-item" data-resource-index="${i}" data-resource-category="${escapeHtml(p.category)}" data-problem-competition="${escapeHtml(p.competition)}" data-problem-year="${p.year}" data-problem-type="${escapeHtml(p.problem_type)}" data-problem-directions="${escapeHtml((p.modeling_directions || []).join("|"))}" data-resource-search="${escapeHtml([p.code,p.title,p.competition,p.category,p.year,p.problem_type,...p.keywords,...p.modeling_directions].join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="查看赛题：${escapeHtml(p.code)} ${escapeHtml(p.title)}">
                 <td><div class="resource-title-cell"><div class="problem-title-copy"><strong>${escapeHtml(p.title)}</strong><span>${escapeHtml(p.code)} · ${escapeHtml(p.competition)}</span></div></div></td>
                 <td class="problem-year-cell">${p.year}</td>
                 <td><span class="problem-type-badge">${escapeHtml(p.problem_type)}</span></td>
                 <td class="problem-data-cell">${escapeHtml(problemDataSummary(p))}</td>
                 <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(p.code)}">${icon("star")}</button></td>
               </tr>`).join("")}
+              <tr class="paper-empty-row" data-problem-empty hidden><td colspan="5">${icon("magnifying-glass")}<strong>没有符合条件的赛题</strong><span>调整筛选、分类或搜索词后再试。</span></td></tr>
             </tbody>
           </table>
         </div>
@@ -2198,6 +2252,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       void persistUsageSettings(values).then(message => {
         if (message) toast(t(message));
       });
+      // 数据与隐私九项同样存服务端：任务保留与文件缓存清理由服务端清扫执行。
+      void persistPrivacySettings(values).then(message => {
+        if (message) toast(t(message));
+      });
       $("[data-settings-save-state]", backdrop).textContent = t("已保存");
       toast(t("设置已保存"));
       setTimeout(closeSettings, 280);
@@ -2474,6 +2532,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     void hydrateLlmPanel(backdrop);
     // 用量监控：统计卡、柱状图、模型分布与预算表单都来自服务端记录。
     void hydrateUsagePane(backdrop);
+    // 数据与隐私：开关与保留策略以服务端为准回填（未登录保持本机显示）。
+    void hydratePrivacyPane(backdrop);
     if (initialPane) {
       const nav = $(`[data-settings-nav="${initialPane}"]`, backdrop);
       if (nav) activatePane(nav);
@@ -2499,6 +2559,101 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       menu.remove();
     });
     setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+  }
+
+  /**
+   * 「添加上下文」二级选择器：从赛题库 / 优秀论文 / 方法库挑一份资料。
+   * 任务页 → 变成 composer 引用 chip，随下一条消息进入模型上下文；
+   * 首页新任务 → 没有对话链路，改为把一句参考描述插入任务描述文本。
+   */
+  async function openReferencePicker(libraryLabel, composer) {
+    let entries = [];
+    if (libraryLabel === "方法库") {
+      entries = methodLibrary.map(method => ({
+        reference: methodReference(method),
+        meta: `${method.category} · ${method.subtitle}`,
+        haystack: `${method.name} ${method.subtitle} ${method.category}`.toLowerCase(),
+      }));
+    } else {
+      if (!problems.length) {
+        toast(t("正在加载知识库…"));
+        try {
+          await preloadKnowledgeLibrary();
+        } catch {
+          toast(t("知识库加载失败，请稍后重试"));
+          return;
+        }
+      }
+      entries = libraryLabel === "赛题库"
+        ? problems.map(problem => ({
+          reference: problemReference(problem),
+          meta: `${problem.competition} · ${problem.year} · ${problem.problem_type}`,
+          haystack: `${problem.code} ${problem.title} ${problem.competition} ${(problem.keywords || []).join(" ")}`.toLowerCase(),
+        }))
+        : papers.map(paper => ({
+          reference: paperReference(paper),
+          meta: [`${paper.competition} ${paper.year}`, paper.award, paper.institution].filter(Boolean).join(" · "),
+          haystack: `${paper.title} ${paper.problem_code} ${(paper.models || []).join(" ")} ${paper.institution || ""}`.toLowerCase(),
+        }));
+    }
+
+    $(".reference-picker")?.remove();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop reference-picker";
+    backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h2>${t("添加上下文引用")} · ${t(libraryLabel)}</h2>
+      <div class="reference-search">${icon("magnifying-glass")}<input type="search" placeholder="${t("搜索标题、关键词…")}" aria-label="${t("搜索引用条目")}"></div>
+      <div class="reference-picker-list" data-reference-list></div>
+    </div>`;
+    document.body.appendChild(backdrop);
+    const list = $("[data-reference-list]", backdrop);
+    const input = $("input", backdrop);
+
+    const renderList = keyword => {
+      const matches = keyword ? entries.filter(entry => entry.haystack.includes(keyword)) : entries;
+      const rows = matches.slice(0, 30).map(entry => `
+        <button type="button" data-reference-index="${entries.indexOf(entry)}">
+          <strong>${escapeHtml(entry.reference.title)}</strong>
+          <span>${escapeHtml(entry.meta)}</span>
+        </button>`);
+      list.innerHTML = rows.length
+        ? rows.join("") + (matches.length > 30 ? `<div class="reference-picker-empty">${t("仅显示前 30 条，继续输入关键词缩小范围")}</div>` : "")
+        : `<div class="reference-picker-empty">${t("没有匹配的条目")}</div>`;
+    };
+    renderList("");
+    input.addEventListener("input", () => renderList(input.value.trim().toLowerCase()));
+    input.focus();
+
+    const onKeydown = event => {
+      if (!document.body.contains(backdrop)) {
+        document.removeEventListener("keydown", onKeydown, true);
+        return;
+      }
+      if (event.key === "Escape") {
+        backdrop.remove();
+        document.removeEventListener("keydown", onKeydown, true);
+      }
+    };
+    document.addEventListener("keydown", onKeydown, true);
+
+    backdrop.addEventListener("click", event => {
+      if (event.target === backdrop) {
+        backdrop.remove();
+        return;
+      }
+      const row = event.target.closest("[data-reference-index]");
+      if (!row) return;
+      const entry = entries[Number(row.dataset.referenceIndex)];
+      if (!entry) return;
+      backdrop.remove();
+      // 统一交互：文本框上方出现引用 chip。首页的 chips 随任务创建交接到运行页
+      //（task-start-controller 按 run 写入，运行页对话挂载时取回）。
+      if (composer) mountReferenceChips(composer);
+      const result = addComposerReference(entry.reference);
+      if (result === "duplicate") toast(t("该资料已在引用列表中"));
+      else if (result === "full") toast(t("最多引用 4 份资料，先移除一份再添加"));
+      else toast(t("已添加引用"));
+    });
   }
 
   /** 已保存接口列表：从服务端配置渲染（null = 未登录/后端不可用）。 */
@@ -2796,10 +2951,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     if (stepsBlock) stepsBlock.dataset.openingState = "pending";
     scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
     void streamAssistantReply(
-      "请先对这个建模任务做开场分析：你对题目的理解、主要难点、以及接下来的执行思路，控制在两三段。",
+      OPENING_ANALYSIS_PROMPT,
       replyId,
       scroll,
-      { removeOnUnavailable: true },
+      { removeOnUnavailable: true, opening: true },
     ).finally(() => {
       // 回复彻底结束（成功、失败或静默移除）后才放行计划部分，并立即通知
       // 控制器重渲染，不必等下一次 SSE 刷新。
@@ -2808,18 +2963,86 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     });
   });
 
-  function appendConversationTurn(text) {
+  /**
+   * 重新进入任务（点最近任务、刷新、换标签页打开）：控制器拿到工作台快照后
+   * 广播运行身份与题面。这里做两件事，都只针对当前 run，不碰别的任务数据：
+   * 1. 首条用户气泡换成该运行的真实题面——模板兜底文案与同标签页上一个任务
+   *    留下的 openmathmodelPrompt 都不再出现（数据隔离）；
+   * 2. 按本机对话记录（「保存任务历史」管辖，按 run_id 隔离）重建开场分析与
+   *    此前的对话气泡，恢复离开前的对话现场。
+   */
+  document.addEventListener("omm:conversation-restore", event => {
+    const { runId, goal } = event.detail ?? {};
+    const scroll = $(".chat-scroll");
+    if (!runId || !scroll) return;
+    const firstBubble = $(".user-message .user-bubble", scroll);
+    if (firstBubble && goal) firstBubble.textContent = goal;
+    if (scroll.dataset.conversationRestored === runId) return;
+    scroll.dataset.conversationRestored = runId;
+    // 首页随任务创建交接过来的引用：挂回输入框上方的 chips，随首条消息进入上下文。
+    const composerHost = $(".chat-pane .composer");
+    if (composerHost) restorePendingTaskReferences(runId, composerHost);
+    const entries = loadConversationLog(runId);
+    if (entries.length === 0) return;
+    const stepsBlock = $(".assistant-block:not(.follow-up-reply)", scroll);
+    for (const entry of entries) {
+      if (entry.role === "assistant" && entry.opening) {
+        if (!stepsBlock || stepsBlock.querySelector(".opening-reply")) continue;
+        const host = document.createElement("div");
+        host.className = "opening-analysis opening-reply";
+        host.innerHTML = `<div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
+        const anchor = stepsBlock.querySelector(".assistant-id");
+        if (anchor) anchor.insertAdjacentElement("afterend", host);
+        else stepsBlock.prepend(host);
+        renderFormulas(host);
+        appendReplyActions(host, entry.text);
+        stepsBlock.dataset.openingState = "done";
+        // 已恢复的开场分析不再自动重发（规划阶段重进页面时防重复扣费）。
+        try { sessionStorage.setItem(`openmathmodelOpeningReply.${runId}`, "1"); } catch {}
+        continue;
+      }
+      if (entry.role === "user") {
+        const chips = entry.attachments?.length
+          ? `<div class="user-attachment-chips">${entry.attachments.map(name =>
+            `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
+          : "";
+        scroll.insertAdjacentHTML("beforeend", `<div class="user-message"><div class="user-bubble">${escapeHtml(entry.text)}${chips}</div></div>`);
+        continue;
+      }
+      const replyBlock = document.createElement("div");
+      replyBlock.className = "assistant-block follow-up-reply";
+      replyBlock.innerHTML = `
+        <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+        <div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
+      scroll.append(replyBlock);
+      renderFormulas($(".analysis-copy", replyBlock));
+      appendReplyActions(replyBlock, entry.text);
+    }
+    scroll.scrollTop = scroll.scrollHeight;
+  });
+
+  function appendConversationTurn(text, composer) {
     const scroll = $(".chat-scroll");
     if (!scroll) return;
+    // 随消息发送的附件（ADR-0010 批次三）与「添加上下文」引用：
+    // 气泡下方以纸夹/@ 徽标如实展示。
+    const store = composer ? attachmentsOf(composer) : undefined;
+    const attachmentNames = (store?.list() ?? []).map(item => item.file.name);
+    const referenceNames = listComposerReferences().map(reference => `@${reference.title}`);
+    const chipNames = [...attachmentNames, ...referenceNames];
+    const chips = chipNames.length
+      ? `<div class="user-attachment-chips">${chipNames.map(name =>
+        `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
+      : "";
     const replyId = `reply-${Date.now()}`;
     scroll.insertAdjacentHTML("beforeend", `
-      <div class="user-message"><div class="user-bubble">${escapeHtml(text)}</div></div>
+      <div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>
       <div class="assistant-block follow-up-reply" id="${replyId}">
         <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
         <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>
       </div>`);
     scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
-    void streamAssistantReply(text, replyId, scroll);
+    void streamAssistantReply(text, replyId, scroll, { attachments: store });
   }
 
   /**
@@ -2894,9 +3117,31 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     });
   }
 
+  /** 「发送请求前显示实际域名」：按当前模型选择解析本次对话将请求的接口域名。
+   *  指定接口/默认主接口时目标确定；Auto 多接口时由服务端难度判定，
+   *  实际域名以 meta 事件为准（返回 auto 标记先显示路由中）。 */
+  async function expectedChatTarget() {
+    let raw = "auto";
+    try {
+      raw = localStorage.getItem("openmathmodelSelectedModel") || "auto";
+    } catch {
+      // 存储不可用时按 Auto 处理，与发送通道的路由取值保持一致
+    }
+    const config = await fetchLlmConfig();
+    if (!config || config.endpoints.length === 0) return null;
+    if (raw.startsWith("endpoint-")) {
+      const endpoint = config.endpoints.find(item => item.id === raw.slice("endpoint-".length));
+      return endpoint ? { auto: false, host: endpointHost(endpoint.base_url) } : null;
+    }
+    if (raw === "auto" && config.endpoints.length > 1) return { auto: true, host: "" };
+    const active = config.endpoints.find(item => item.id === config.active_endpoint_id) || config.endpoints[0];
+    return active ? { auto: false, host: endpointHost(active.base_url) } : null;
+  }
+
   /** 真实模型回复：思考块 + Markdown 正文流式渲染到回复气泡。
-   *  对话页不暴露接口域名与模型名；「允许使用第三方中转站」开启时只把用量
-   *  写入本机记录（设置中心可查），关闭时连记录也不留。
+   *  对话页不暴露模型名；接口域名随「允许使用第三方中转站」开关：开启时在
+   *  发送前显示本次请求的实际域名（含中转/备用标记）并把用量写入本机记录
+   *  （设置中心可查），关闭时域名与记录都不留。
    *  options.removeOnUnavailable：未配置接口/未登录时整块静默移除
    *  （用于系统自动发起的开场分析，不该向用户弹配置提示）。 */
   async function streamAssistantReply(text, replyId, scroll, options = {}) {
@@ -2910,10 +3155,53 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         : `<p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p>`;
     };
     const transparency = proxyTransparencyEnabled();
+    // 「发送请求前显示实际域名」：开关开启时先显示预期目标，meta 到达后以实际为准
+    let transparencySettled = false;
+    const renderTransparency = html => {
+      let line = replyBlock.querySelector(".chat-transparency");
+      if (!line) {
+        line = document.createElement("p");
+        line.className = "chat-transparency";
+        copy.insertAdjacentElement("beforebegin", line);
+      }
+      line.innerHTML = `${icon("globe")}<span>${html}</span>`;
+    };
+    if (transparency) {
+      void expectedChatTarget().then(target => {
+        if (transparencySettled || !target) return;
+        renderTransparency(
+          target.auto
+            ? t("自动路由选择接口中…")
+            : `${t("请求发送至")} ${escapeHtml(target.host)}`,
+        );
+      });
+    }
     let thinking = null;
     let answerStarted = false;
     try {
+      // 附件先解析再发消息：浏览器没抽到文字的（图片/扫描件）现场走服务端
+      // 即席解析（含可选 VL），结果如实回写附件卡片；解析期间沿用「思考中…」占位。
+      const store = options.attachments;
+      const attachmentNames = store ? store.list().map(item => item.file.name) : [];
+      // 「添加上下文」引用与附件上下文并列进入请求正文；系统开场分析不携带引用。
+      const references = options.opening ? [] : [...listComposerReferences()];
+      const referenceBlock = references.length ? composerReferenceBlock() : "";
+      let attachmentContext = "";
+      if (store && store.list().length > 0) {
+        attachmentContext = (await collectConversationAttachments(store)).block;
+      }
+      const contextBlocks = [referenceBlock, attachmentContext].filter(Boolean).join("\n\n");
       const { text: reply, meta } = await sendConversationTurn(text, {
+        onMeta: current => {
+          // 实际域名以服务端 meta 为准：Auto 路由结果、备用切换都在这里如实反映
+          if (!transparency || !current.host) return;
+          transparencySettled = true;
+          const badges = [
+            current.third_party ? t("第三方中转站") : "",
+            current.fallback_used ? t("已切换备用接口") : "",
+          ].filter(Boolean).map(tag => ` · ${escapeHtml(tag)}`).join("");
+          renderTransparency(`${t("请求发送至")} ${escapeHtml(current.host)}${badges}`);
+        },
         onReasoning: (_piece, full) => {
           const stick = nearBottom();
           if (!thinking) {
@@ -2931,13 +3219,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           render(full);
           if (stick) scroll.scrollTo({ top: scroll.scrollHeight });
         },
+      }, {
+        attachmentContext: contextBlocks,
+        openingAnalysis: options.opening === true,
+        attachmentNames: [...attachmentNames, ...references.map(reference => `@${reference.title}`)],
       });
+      // 附件与引用内容已随本条消息进入上下文；成功后清空托盘与引用 chips，
+      // 失败路径保留以便重试。
+      store?.clear();
+      if (references.length) clearComposerReferences();
       thinking?.finish();
       render(reply);
       // 公式在全文到齐后一次性排版，流式期间保留 LaTeX 源码回退
       renderFormulas(copy);
-      // 对话页不显示域名/模型等接口信息；透明度只体现在本机用量记录里
-      // 「记录接口用量」：随开关开启才落本机记录
+      // 对话页不显示模型名；「记录接口用量」随开关开启才落本机记录
       if (transparency && (meta.host || meta.endpoint)) {
         recordLlmUsage({
           ts: Date.now(),
@@ -3119,6 +3414,446 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     drawer.addEventListener("change", sync);
   }
 
+  // ── 论文编辑器（业主指定实现）：工具栏真实命令、KaTeX 公式、本机草稿、结构检查与导出 ──
+  const PAPER_DRAFT_KEY = "openmathmodelPaperDraft.v1";
+  const PAPER_BLOCKS = { "正文": "p", "标题 1": "h1", "标题 2": "h2", "标题 3": "h3" };
+  const PAPER_FONTS = {
+    "宋体": '"Songti SC", SimSun, serif',
+    "黑体": '"Heiti SC", SimHei, "Microsoft YaHei", sans-serif',
+    "楷体": '"Kaiti SC", KaiTi, serif',
+    "仿宋": '"Fangsong SC", FangSong, serif',
+    "Times New Roman": '"Times New Roman", Times, serif',
+  };
+  // 中文字号按 pt 折算 px（三号 16pt / 四号 14pt / 小四 12pt / 五号 10.5pt / 小五 9pt）
+  const PAPER_SIZES = { "三号": "21px", "四号": "19px", "小四": "16px", "五号": "14px", "小五": "12px" };
+  const PAPER_COLORS = { "正文黑": "#171717", "深灰": "#525252", "强调红": "#a50c25", "批注绿": "#007004" };
+  const PAPER_ALIGNS = { "左对齐": "justifyLeft", "居中": "justifyCenter", "右对齐": "justifyRight", "两端对齐": "justifyFull" };
+  const PAPER_SOURCES = ["Run #04 · 结果表 2", "Run #04 · 核心指标对比图", "清洗数据 v2 · 字段说明"];
+
+  const paperPage = () => $(".workflow-editor .editor-page");
+
+  const paperWordCount = page => (page.innerText || "").replace(/\s+/g, "").length;
+
+  function refreshPaperStatus(page, savedText) {
+    const counter = $("[data-editor-wordcount]");
+    if (counter) counter.textContent = `${paperWordCount(page).toLocaleString()} 字`;
+    const state = $("[data-editor-savestate]");
+    if (state && savedText) state.textContent = savedText;
+  }
+
+  let paperAutosaveTimer = 0;
+  let paperDirty = false;
+  let paperInitialHtml = "";
+
+  function savePaperDraftNow(label = "草稿已保存到本机") {
+    const page = paperPage();
+    if (!page) return;
+    clearTimeout(paperAutosaveTimer);
+    paperDirty = false;
+    try { localStorage.setItem(PAPER_DRAFT_KEY, page.innerHTML); } catch {
+      // 存储不可用时仅本次会话生效
+    }
+    const now = new Date();
+    const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    refreshPaperStatus(page, `${label} ${stamp}`);
+  }
+
+  function schedulePaperAutosave() {
+    const page = paperPage();
+    if (!page) return;
+    // 逐键只改状态文案，字数与落盘放进防抖回调，避免每击键读一次 innerText
+    paperDirty = true;
+    const state = $("[data-editor-savestate]");
+    if (state) state.textContent = "正在编辑…";
+    clearTimeout(paperAutosaveTimer);
+    paperAutosaveTimer = window.setTimeout(() => savePaperDraftNow(), 700);
+  }
+
+  function resetPaperDraft() {
+    const page = paperPage();
+    if (!page || !paperInitialHtml) return;
+    modal("恢复初始正文", "<p>将丢弃本机草稿，恢复到本次打开时的初始正文。确认继续？</p>", () => {
+      page.innerHTML = paperInitialHtml;
+      try { localStorage.removeItem(PAPER_DRAFT_KEY); } catch {}
+      paperDirty = false;
+      renderFormulas(page);
+      refreshPaperStatus(page, "已恢复初始正文");
+      toast("已恢复初始正文");
+    });
+  }
+
+  function execPaperCommand(command, value = null, useCss = false) {
+    const page = paperPage();
+    if (!page) return;
+    page.focus();
+    try { document.execCommand("styleWithCSS", false, useCss); } catch {
+      // 老引擎不支持时退回默认标签写法
+    }
+    document.execCommand(command, false, value);
+    schedulePaperAutosave();
+  }
+
+  /** execCommand 的 fontSize 只有 1–7 档；先打 7 号标记再改成精确 px。 */
+  function applyPaperFontSize(px) {
+    const page = paperPage();
+    if (!page) return;
+    page.focus();
+    try { document.execCommand("styleWithCSS", false, false); } catch {}
+    document.execCommand("fontSize", false, "7");
+    $$('font[size="7"]', page).forEach(node => {
+      node.removeAttribute("size");
+      node.style.fontSize = px;
+    });
+    schedulePaperAutosave();
+  }
+
+  function insertPaperHtml(html) {
+    const page = paperPage();
+    if (!page) return;
+    page.focus();
+    // 光标不在正文里时落到文末，避免内容插错位置
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !page.contains(selection.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(page);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    document.execCommand("insertHTML", false, html);
+    schedulePaperAutosave();
+  }
+
+  function insertPaperFormula() {
+    if (!paperPage()) { toast("请先进入论文编辑页"); return; }
+    modal(
+      "插入公式（LaTeX）",
+      '<label>LaTeX 表达式</label><textarea data-formula-input rows="3" placeholder="例：\\min \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2 + \\lambda \\|\\Theta\\|_2^2"></textarea>',
+      backdrop => {
+        const tex = $("[data-formula-input]", backdrop)?.value.trim();
+        if (!tex) { toast("未输入公式"); return; }
+        insertPaperHtml(`<div class="editor-formula" data-tex="${escapeHtml(tex)}" contenteditable="false">${escapeHtml(tex)}</div><p><br></p>`);
+        renderFormulas(paperPage());
+        toast("公式已插入");
+      }
+    );
+  }
+
+  function insertPaperTable() {
+    if (!paperPage()) { toast("请先进入论文编辑页"); return; }
+    const bodyRow = "<tr><td><br></td><td><br></td><td><br></td></tr>";
+    insertPaperHtml(`<table class="editor-table"><thead><tr><th>列 1</th><th>列 2</th><th>列 3</th></tr></thead><tbody>${bodyRow}${bodyRow}</tbody></table><p><br></p>`);
+    toast("已插入 3×3 表格，可直接在单元格内编辑");
+  }
+
+  /** 已插入的公式点击即可改 LaTeX 并重新排版。 */
+  function editPaperFormula(node) {
+    modal(
+      "编辑公式（LaTeX）",
+      `<label>LaTeX 表达式</label><textarea data-formula-input rows="3">${escapeHtml(node.dataset.tex || "")}</textarea>`,
+      backdrop => {
+        const tex = $("[data-formula-input]", backdrop)?.value.trim();
+        if (!tex) { toast("公式内容不能为空"); return; }
+        node.dataset.tex = tex;
+        delete node.dataset.texDone;
+        node.textContent = tex;
+        renderFormulas(paperPage());
+        savePaperDraftNow("公式已更新并保存");
+      }
+    );
+  }
+
+  function insertPaperCitation(anchor) {
+    if (!paperPage()) { toast("请先进入论文编辑页"); return; }
+    popupMenu(anchor, PAPER_SOURCES, choice => {
+      insertPaperHtml(`<button class="source-chip" contenteditable="false" data-action="source-detail">来源：${escapeHtml(choice)}　${icon("arrow-square-out")}</button>`);
+      toast("已插入来源引用");
+    });
+  }
+
+  function runPaperCheck() {
+    const page = paperPage();
+    if (!page) { toast("当前页面没有可检查的论文正文"); return; }
+    const headings = $$("h2, h3", page).length;
+    const paragraphs = $$("p", page);
+    const emptyParagraphs = paragraphs.filter(node => !node.textContent.trim() && !node.querySelector("img")).length;
+    const formulas = $$(".editor-formula, [data-tex]", page).length;
+    const citations = $$(".source-chip", page).length;
+    const figures = $$("img, table", page).length;
+    const words = paperWordCount(page).toLocaleString();
+    const row = (ok, label, detail) => `<li class="${ok ? "ok" : "warn"}">${icon(ok ? "check-circle" : "warning-circle")}<div><strong>${label}</strong><span>${detail}</span></div></li>`;
+    modal("论文检查（本机结构检查）", `<ul class="editor-check-list">
+      ${row(headings > 0, "章节结构", headings > 0 ? `检测到 ${headings} 个章节标题` : "未检测到章节标题")}
+      ${row(formulas > 0, "公式", formulas > 0 ? `共 ${formulas} 处公式` : "正文未插入公式")}
+      ${row(citations > 0, "数据来源引用", citations > 0 ? `共 ${citations} 处来源标注` : "未标注结果来源")}
+      ${row(figures > 0, "图表", figures > 0 ? `共 ${figures} 处图片或表格` : "未检测到图片或表格")}
+      ${row(emptyParagraphs === 0, "空段落", emptyParagraphs === 0 ? "没有空段落" : `发现 ${emptyParagraphs} 个空段落`)}
+      ${row(true, "字数统计", `正文约 ${words} 字`)}
+    </ul><p class="editor-check-note">以上为本机结构检查；语义与表达质量请在左侧对话中让 Agent 审阅。</p>`);
+  }
+
+  function exportPaper(choice) {
+    const page = paperPage();
+    if (!page) { toast("当前页面没有可导出的论文正文"); return; }
+    const title = $("h1", page)?.textContent.trim() || "论文草稿";
+    const documentHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3{font-family:"Heiti SC",SimHei,"Microsoft YaHei",sans-serif;line-height:1.5}p{text-indent:2em;margin:0 0 18px}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px}img{max-width:100%}.editor-formula{text-align:center;margin:18px 0}.source-chip{border:1px solid #ccc;border-radius:6px;padding:4px 10px;background:#f5f5f5;font-size:12px}</style></head><body>${page.innerHTML}</body></html>`;
+    const download = (blob, filename) => {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    };
+    if (choice === "导出 Word (.doc)") {
+      download(new Blob(["\ufeff", documentHtml], { type: "application/msword" }), `${title}.doc`);
+      toast("已导出 Word 文档");
+    } else if (choice === "导出 LaTeX (.tex)") {
+      download(new Blob([paperToLatex(page, title)], { type: "application/x-tex;charset=utf-8" }), `${title}.tex`);
+      toast("已导出 LaTeX 源文件，可用 xelatex 直接编译");
+    } else if (choice === "导出 HTML") {
+      download(new Blob([documentHtml], { type: "text/html;charset=utf-8" }), `${title}.html`);
+      toast("已导出 HTML 文件");
+    } else {
+      const preview = window.open("", "_blank");
+      if (!preview) { toast("浏览器拦截了打印窗口，请允许弹出窗口后重试"); return; }
+      preview.document.write(documentHtml);
+      preview.document.close();
+      preview.focus();
+      setTimeout(() => preview.print(), 260);
+    }
+  }
+
+  /** LaTeX 文本转义（公式除外——公式保留原始 LaTeX）。 */
+  function latexEscape(text) {
+    return String(text)
+      .replace(/\\/g, "\\textbackslash{}")
+      .replace(/([%$#&_{}])/g, "\\$1")
+      .replace(/~/g, "\\textasciitilde{}")
+      .replace(/\^/g, "\\textasciicircum{}");
+  }
+
+  /** 行内节点 → LaTeX：加粗/斜体/下划线/上下标按语义映射，其余取文本。 */
+  function latexInline(node) {
+    if (node.nodeType === Node.TEXT_NODE) return latexEscape(node.textContent);
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const inner = [...node.childNodes].map(latexInline).join("");
+    switch (node.tagName) {
+      case "STRONG": case "B": return `\\textbf{${inner}}`;
+      case "EM": case "I": return `\\textit{${inner}}`;
+      case "U": return `\\underline{${inner}}`;
+      case "SUB": return `\\textsubscript{${inner}}`;
+      case "SUP": return `\\textsuperscript{${inner}}`;
+      case "BR": return "\\\\ ";
+      case "IMG": return "\\textit{（插图）}";
+      case "BUTTON": return "";
+      default: return inner;
+    }
+  }
+
+  /** 整篇正文 → 可编译的 .tex：标题、章节、公式、表格、来源注记逐块序列化。 */
+  function paperToLatex(page, title) {
+    const body = [];
+    [...page.children].forEach(node => {
+      if (node.matches("h1")) return;
+      if (node.matches("h2")) { body.push(`\\section*{${latexInline(node)}}`); return; }
+      if (node.matches("h3")) { body.push(`\\subsection*{${latexInline(node)}}`); return; }
+      if (node.matches(".editor-formula")) {
+        const tex = node.dataset.tex || latexEscape(node.textContent.trim());
+        body.push(`\\begin{equation}\n${tex}\n\\end{equation}`);
+        return;
+      }
+      if (node.matches("button.source-chip")) {
+        body.push(`\\noindent\\emph{${latexEscape(node.textContent.trim())}}`);
+        return;
+      }
+      if (node.matches("table")) {
+        const rows = [...node.querySelectorAll("tr")];
+        if (!rows.length) return;
+        const columnCount = Math.max(...rows.map(row => row.children.length));
+        const spec = Array(columnCount).fill("l").join(" ");
+        const lines = rows.map(row => `${[...row.children].map(cell => latexInline(cell)).join(" & ")} \\\\`);
+        body.push(`\\begin{table}[htbp]\n\\centering\n\\begin{tabular}{${spec}}\n\\toprule\n${lines[0]}\n\\midrule\n${lines.slice(1).join("\n")}\n\\bottomrule\n\\end{tabular}\n\\end{table}`);
+        return;
+      }
+      if (node.matches("img")) {
+        body.push(`% 插图：${latexEscape(node.getAttribute("alt") || "未命名")}（图片另存到 .tex 同目录后替换路径并取消注释）\n% \\includegraphics[width=0.8\\textwidth]{figure}`);
+        return;
+      }
+      const text = latexInline(node).trim();
+      if (text) body.push(text);
+    });
+    return [
+      "% 由 OpenMathModel 论文编辑器导出；公式保留原始 LaTeX，可直接用 xelatex 编译",
+      "\\documentclass[12pt]{article}",
+      "\\usepackage[UTF8]{ctex}",
+      "\\usepackage{amsmath, amssymb, graphicx, booktabs}",
+      "\\usepackage[margin=2.5cm]{geometry}",
+      `\\title{${latexEscape(title)}}`,
+      "\\date{}",
+      "\\begin{document}",
+      "\\maketitle",
+      "",
+      body.join("\n\n"),
+      "",
+      "\\end{document}",
+      "",
+    ].join("\n");
+  }
+
+  function refreshPaperToolbar() {
+    const page = paperPage();
+    if (!page) return;
+    const selection = window.getSelection();
+    if (!selection?.anchorNode || !page.contains(selection.anchorNode)) return;
+    ["bold", "italic", "underline"].forEach(command => {
+      const button = $(`.editor-format-tools [data-command="${command}"]`);
+      if (!button) return;
+      try { button.classList.toggle("active", document.queryCommandState(command)); } catch {
+        // queryCommandState 在个别引擎上会抛错，忽略即可
+      }
+    });
+    const blockLabel = $('[data-editor-label="block"]');
+    if (blockLabel) {
+      const value = String(document.queryCommandValue("formatBlock") || "").toLowerCase();
+      blockLabel.textContent = value === "h1" ? "标题 1" : value === "h2" ? "标题 2" : value === "h3" ? "标题 3" : "正文";
+    }
+  }
+
+  function bindPaperEditor() {
+    const page = paperPage();
+    if (!page || page.dataset.editorReady === "true") return;
+    page.dataset.editorReady = "true";
+
+    // 先记住初始正文，「恢复初始正文」以此为准
+    paperInitialHtml = page.innerHTML;
+
+    // 本机草稿：刷新或换页后不丢内容
+    try {
+      const saved = localStorage.getItem(PAPER_DRAFT_KEY);
+      if (saved && saved !== page.innerHTML) {
+        page.innerHTML = saved;
+        refreshPaperStatus(page, "已恢复本机草稿");
+      }
+    } catch {
+      // 存储不可用时使用初始正文
+    }
+    // 草稿里保存的公式带 data-tex-done 标记，重置后重新排版，确保 KaTeX 样式加载
+    $$("[data-tex]", page).forEach(node => { delete node.dataset.texDone; });
+    renderFormulas(page);
+    refreshPaperStatus(page);
+
+    page.addEventListener("input", schedulePaperAutosave);
+    document.addEventListener("selectionchange", () => window.requestAnimationFrame(refreshPaperToolbar));
+
+    // 粘贴净化：外部富文本（Word/网页）按纯文本入文，多段自动成段，杜绝脏样式
+    page.addEventListener("paste", event => {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (!text) return;
+      const paragraphs = text.replace(/\r\n/g, "\n").split(/\n+/).map(part => part.trim()).filter(Boolean);
+      if (paragraphs.length > 1) insertPaperHtml(paragraphs.map(part => `<p>${escapeHtml(part)}</p>`).join(""));
+      else document.execCommand("insertText", false, text);
+      schedulePaperAutosave();
+    });
+
+    // Ctrl/Cmd+S 立即保存本机草稿，拦截浏览器默认保存
+    page.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        savePaperDraftNow("已手动保存到本机");
+      }
+    });
+
+    // 公式点击即编辑（contenteditable=false 的节点吃不到 input 事件，单独接管）
+    page.addEventListener("click", event => {
+      const formula = event.target.closest?.(".editor-formula[data-tex]");
+      if (formula && page.contains(formula)) editPaperFormula(formula);
+    });
+
+    // 关页/切走前兜底落盘，防止 700ms 防抖窗口内丢稿
+    window.addEventListener("beforeunload", () => { if (paperDirty) savePaperDraftNow(); });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden" && paperDirty) savePaperDraftNow();
+    });
+
+    $$("[data-editor-menu]").forEach(button => button.addEventListener("click", () => {
+      const kind = button.dataset.editorMenu;
+      const label = $(`[data-editor-label="${kind}"]`);
+      if (kind === "block") {
+        popupMenu(button, Object.keys(PAPER_BLOCKS), choice => {
+          execPaperCommand("formatBlock", `<${PAPER_BLOCKS[choice]}>`);
+          if (label) label.textContent = choice;
+        });
+      }
+      if (kind === "font") {
+        popupMenu(button, Object.keys(PAPER_FONTS), choice => {
+          execPaperCommand("fontName", PAPER_FONTS[choice], true);
+          if (label) label.textContent = choice;
+        });
+      }
+      if (kind === "size") {
+        popupMenu(button, Object.keys(PAPER_SIZES), choice => {
+          applyPaperFontSize(PAPER_SIZES[choice]);
+          if (label) label.textContent = choice;
+        });
+      }
+      if (kind === "color") {
+        popupMenu(button, [...Object.keys(PAPER_COLORS), "清除格式"], choice => {
+          if (choice === "清除格式") execPaperCommand("removeFormat");
+          else execPaperCommand("foreColor", PAPER_COLORS[choice], true);
+        });
+      }
+      if (kind === "align") {
+        popupMenu(button, Object.keys(PAPER_ALIGNS), choice => execPaperCommand(PAPER_ALIGNS[choice]));
+      }
+    }));
+
+    // 图片：本地文件转 DataURL 插入，离线可用、不依赖后端
+    $("[data-editor-image-input]")?.addEventListener("change", event => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        insertPaperHtml(`<img src="${reader.result}" alt="${escapeHtml(file.name)}"><p><br></p>`);
+        toast("图片已插入");
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // 大纲：平滑滚动 + 高亮；未生成章节如实提示
+    const outlineLinks = $$(".paper-only-editor .outline a");
+    outlineLinks.forEach(link => link.addEventListener("click", event => {
+      event.preventDefault();
+      const anchor = $(link.getAttribute("href"), page);
+      outlineLinks.forEach(item => item.classList.toggle("active", item === link));
+      if (anchor) anchor.scrollIntoView({ behavior: "smooth", block: "start" });
+      else toast("该章节尚未生成，可在左侧对话中让 Agent 续写");
+    }));
+
+    // 滚动同步：正文滚到哪一章，大纲高亮跟到哪一章（rAF 节流）
+    if (outlineLinks.length) {
+      let outlineSpyPending = false;
+      page.addEventListener("scroll", () => {
+        if (outlineSpyPending) return;
+        outlineSpyPending = true;
+        window.requestAnimationFrame(() => {
+          outlineSpyPending = false;
+          const anchors = outlineLinks
+            .map(link => ({ link, node: $(link.getAttribute("href"), page) }))
+            .filter(item => item.node);
+          if (!anchors.length) return;
+          const threshold = page.getBoundingClientRect().top + 96;
+          let current = anchors[0];
+          anchors.forEach(item => {
+            if (item.node.getBoundingClientRect().top <= threshold) current = item;
+          });
+          outlineLinks.forEach(link => link.classList.toggle("active", link === current.link));
+        });
+      }, { passive: true });
+    }
+  }
+
   function bindCommon(screen) {
     bindResponsiveShell();
     document.addEventListener("click", event => {
@@ -3182,7 +3917,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         }
         return;
       }
-      if (action === "sidebar-filter") popupMenu(target, ["全部任务", "进行中", "已完成", "我创建的"]);
+      // sidebar-filter（搜索框旁的筛选按钮）由 integration/recent-tasks.ts 接管：真实筛选最近任务
       if (action === "settings") openSettingsCenter();
       if (action === "history") modal("任务历史", "<p>当前任务共保存 18 个关键节点，可随时回看题目分析、清洗方案、实验与论文版本。</p>");
       if (action === "task-doc") modal("任务文档", "<p>题目、附件、模型方案、实验记录和论文成果均已汇总到当前项目。</p>");
@@ -3212,12 +3947,24 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       }
       if (action === "download-data") toast("历史供需数据_2024Q4.xlsx 已加入下载队列");
       if (action === "continue-paper") { toast("正在生成第 4 章实证分析"); setTimeout(() => go("complete"), 520); }
-      if (action === "export-paper") popupMenu(target, ["导出 Word", "导出 PDF", "导出 LaTeX"]);
+      if (action === "export-paper") popupMenu(target, ["导出 Word (.doc)", "导出 LaTeX (.tex)", "导出 HTML", "打印 / PDF"], exportPaper);
       if (action === "source-detail") modal("引用来源", "<p>来源：Run #04 · 结果表 2。该结果已通过完整性和一致性校验。</p>");
       if (action === "fake-close") toast("这是演示界面，窗口保持打开");
       if (action === "attach") target.closest(".composer")?.querySelector(".file-input")?.click();
-      if (action === "reference") popupMenu(target, ["赛题库", "优秀论文", "方法库"]);
-      if (action === "mode") popupMenu(target, ["自动模式", "深度研究", "快速分析"]);
+      if (action === "reference") {
+        popupMenu(target, ["赛题库", "优秀论文", "方法库"], choice => {
+          void openReferencePicker(choice, target.closest(".composer"));
+        });
+      }
+      if (action === "mode") {
+        popupMenu(target, CHAT_MODES.map(mode => mode.label), label => {
+          const mode = CHAT_MODES.find(item => item.label === label);
+          if (!mode) return;
+          saveChatMode(mode.id);
+          $$('.composer [data-action="mode"] .tool-label').forEach(el => { el.textContent = t(mode.label); });
+          toast(`${t("已切换对话模式")}：${t(mode.label)}`);
+        });
+      }
       if (action === "model-picker") {
         const picker = target.closest("[data-model-picker]");
         const willOpen = !picker.classList.contains("open");
@@ -3255,14 +4002,16 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         return;
       }
       if (action === "send") {
-        const textarea = target.closest(".composer")?.querySelector("textarea");
+        const composer = target.closest(".composer");
+        const textarea = composer?.querySelector("textarea");
         const text = textarea?.value.trim();
         if (!text) { toast("请输入你的问题"); return; }
         if (screen === "new") {
           sessionStorage.setItem("openmathmodelPrompt", text);
           go("running");
         } else {
-          appendConversationTurn(text);
+          // 传入 composer 让对话轮拿到输入框的附件集合（ADR-0010 批次三）
+          appendConversationTurn(text, composer);
           textarea.value = "";
         }
       }
@@ -3292,17 +4041,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         $(".modeling-chat-pane textarea")?.focus();
         toast("可以在左侧继续补充调参要求");
       }
-      if (action === "editor-check") toast("AI 检查完成：章节结构、公式和引用均未发现严重问题");
-      if (action === "experiment-filter" || action === "filter") popupMenu(target, ["全部", "已完成", "进行中", "失败"]);
+      if (action === "editor-check") runPaperCheck();
+      if (action === "experiment-filter") popupMenu(target, ["全部", "已完成", "进行中", "失败"]);
       if (action === "page-size") popupMenu(target, ["15 条/页", "20 条/页", "50 条/页"]);
       if (action === "rerun") {
         target.disabled = true; target.textContent = "运行中 0%";
         let value = 0; const timer = setInterval(() => { value += 20; target.textContent = `运行中 ${value}%`; if (value >= 100) { clearInterval(timer); target.disabled = false; target.innerHTML = `${icon("arrow-clockwise")} 重新运行`; toast("实验重新运行完成"); } }, 240);
       }
       if (action === "compare") { target.classList.toggle("primary"); target.innerHTML = target.classList.contains("primary") ? `${icon("check")} 已加入对比` : `${icon("plus")} 加入对比`; }
-      if (action === "formula") { document.execCommand("insertText", false, "  ∑ᵢ xᵢ = b  "); toast("已插入公式"); }
-      if (action === "image") toast("图片插入面板已打开");
-      if (action === "cite") toast("已打开引用资料列表");
+      if (action === "formula") insertPaperFormula();
+      if (action === "image") { if (paperPage()) $("[data-editor-image-input]")?.click(); else toast("请先进入论文编辑页"); }
+      if (action === "cite") insertPaperCitation(target);
+      if (action === "insert-table") insertPaperTable();
+      if (action === "paper-save-now") savePaperDraftNow("已手动保存到本机");
+      if (action === "paper-reset-draft") resetPaperDraft();
       if (action === "ai-edit") { target.closest(".ai-prompt").textContent = "Agent 正在检查本章逻辑与表达……"; setTimeout(() => toast("检查完成：未发现严重问题"), 700); }
       if (action === "full-case") modal("完整案例", "<p>案例包含题目解析、变量定义、模型建立、求解流程、敏感性分析和可复现代码。</p>");
       if (action === "bookmark") { target.classList.toggle("blue"); target.innerHTML = target.classList.contains("blue") ? `${icon("star-fill")} 已收藏` : `${icon("star")} 收藏`; }
@@ -3407,7 +4159,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (action === "copy-task") { sessionStorage.setItem("copiedTask", "1"); toast("已复制为新任务"); setTimeout(() => go("new"), 450); }
     });
 
-    $$("[data-command]").forEach(button => button.addEventListener("click", () => document.execCommand(button.dataset.command, false)));
+    $$("[data-command]").forEach(button => button.addEventListener("click", () => {
+      document.execCommand(button.dataset.command, false);
+      schedulePaperAutosave();
+      refreshPaperToolbar();
+    }));
+    bindPaperEditor();
     $$(".composer textarea").forEach(textarea => textarea.addEventListener("keydown", event => {
       if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
@@ -3475,6 +4232,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       const paperYearOptions = paperYearSelect ? $$("[data-select-option]", paperYearSelect) : [];
       const paperGroupFilters = kind === "paper" ? $$('[data-paper-group-filter]') : [];
       const paperReset = kind === "paper" ? $("[data-paper-filter-reset]") : null;
+      const problemFilterSelects = kind === "problem" ? $$("[data-problem-filter]") : [];
       let currentPage = 1;
       // 页码窗口以当前页为中心，最多 5 个；两端各留首页/末页和省略号，
       // 这样 2 页时就只出 "1 2"，20 页时也不会把按钮铺满一行。
@@ -3510,6 +4268,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         const selected = tabs.find(tab => tab.classList.contains("active"))?.dataset.resourceTab || "";
         const selectedYear = paperYearOptions.find(option => option.getAttribute("aria-selected") === "true")?.dataset.selectOption || "";
         const selectedGroup = paperGroupFilters.find(button => button.classList.contains("active"))?.dataset.paperGroupFilter || "";
+        // 赛题库四个下拉的当前选中值；空值（「全部」）不参与过滤
+        const problemFilters = problemFilterSelects.map(wrapper => ({
+          field: wrapper.dataset.problemFilter,
+          value: $$("[data-select-option]", wrapper).find(option => option.getAttribute("aria-selected") === "true")?.dataset.selectOption || "",
+        })).filter(({ value }) => value);
         const matches = [];
         rows.forEach(row => {
           const matchesSearch = !query || row.dataset.resourceSearch.toLowerCase().includes(query);
@@ -3517,7 +4280,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             || (selected === "收藏" ? row.dataset.saved === "true" : row.dataset.resourceCategory === selected);
           const matchesYear = kind !== "paper" || !selectedYear || row.dataset.paperYear === selectedYear;
           const matchesGroup = kind !== "paper" || !selectedGroup || row.dataset.paperGroup === selectedGroup;
-          if (matchesSearch && matchesCategory && matchesYear && matchesGroup) matches.push(row);
+          const matchesProblemFilters = problemFilters.every(({ field, value }) => {
+            if (field === "competition") return row.dataset.problemCompetition === value;
+            if (field === "year") return row.dataset.problemYear === value;
+            if (field === "type") return row.dataset.problemType === value;
+            return (row.dataset.problemDirections || "").split("|").includes(value);
+          });
+          if (matchesSearch && matchesCategory && matchesYear && matchesGroup && matchesProblemFilters) matches.push(row);
           row.hidden = true;
         });
         const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
@@ -3527,7 +4296,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         if (copy) copy.textContent = `共 ${matches.length} ${kind === "problem" ? "题" : "篇"} · 第 ${currentPage}/${pageCount} 页`;
         const resultCopy = kind === "paper" ? $("[data-paper-result-copy]") : null;
         if (resultCopy) resultCopy.textContent = `${matches.length} 篇`;
-        const emptyRow = kind === "paper" ? $("[data-paper-empty]") : null;
+        const emptyRow = kind === "paper" ? $("[data-paper-empty]") : $("[data-problem-empty]");
         if (emptyRow) emptyRow.hidden = matches.length > 0;
         renderPagination(pageCount);
       };
@@ -3543,6 +4312,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         currentPage = 1;
         applyResourceFilters();
       });
+      problemFilterSelects.forEach(wrapper => bindSelectMenu(wrapper, () => {
+        currentPage = 1;
+        applyResourceFilters();
+      }));
       paperGroupFilters.forEach(button => button.addEventListener("click", () => {
         paperGroupFilters.forEach(item => item.classList.toggle("active", item === button));
         currentPage = 1;
@@ -3898,8 +4671,20 @@ export function activateScreen(screen: ScreenId): void {
   initCharts(screen);
   if (screen === "paperDetail") void initPaperPdfReader();
   void hydrateAccountUi();
+  // 侧栏「最近任务」换成真实任务记录；未登录保持模板演示条目。
+  void hydrateRecentTasks();
+  // 隐私开关并入本机（每会话一次），换浏览器后通知/历史闸门立即正确。
+  void syncPrivacyGatesOnce();
+  // 预算达到提醒阈值时提醒一次；正看着页面时以页内提示呈现。
+  void maybeNotifyBudgetAlert().then(message => {
+    if (message) toast(t(message));
+  });
   mountModelingWorkspace(screen);
+  // 侧栏「搜索任务」：document 级委托只挂一次，跨页面重渲染仍生效。
+  mountSidebarSearch();
   if (workspaceStageContent[screen]) bindWorkspaceStageNav();
+  // 「添加上下文」引用随页面重建复位（chips 宿主已随旧 DOM 销毁）。
+  resetComposerReferences();
   // 放在工作台挂载之后：恢复对话草稿要等 composer 渲染完成。
   mountTaskAutosave(screen);
   // 模型选择器换成真实接口池（Auto + 已保存接口），未配置时保持演示选项。

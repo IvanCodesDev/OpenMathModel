@@ -80,6 +80,19 @@ export interface UsageSettings {
   hard_limit: boolean;
 }
 
+/** 设置中心「数据与隐私」九个面板项；保留与缓存清理由服务端清扫执行。 */
+export interface PrivacySettings {
+  save_history: boolean;
+  local_first: boolean;
+  model_training: boolean;
+  retention: "forever" | "days_90" | "days_30" | "on_complete";
+  file_cache: "days_30" | "days_7" | "on_close";
+  notify_task_done: boolean;
+  notify_budget: boolean;
+  notify_security: boolean;
+  email_digest: boolean;
+}
+
 export interface UsageDailyPoint {
   date: string;
   requests: number;
@@ -234,6 +247,12 @@ export const authApi = {
   },
   updateUsageSettings(body: UsageSettings) {
     return request<{ settings: UsageSettings }>("/api/usage/settings", { method: "PUT", body });
+  },
+  getPrivacySettings() {
+    return request<{ settings: PrivacySettings }>("/api/account/privacy-settings");
+  },
+  updatePrivacySettings(body: PrivacySettings) {
+    return request<{ settings: PrivacySettings }>("/api/account/privacy-settings", { method: "PUT", body });
   },
   uploadAvatar(image: Blob, filename: string) {
     const form = new FormData();

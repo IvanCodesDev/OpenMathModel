@@ -92,6 +92,45 @@ export const modelingWorkspaceApi = {
     });
   },
 
+  /** 项目列表；默认只含未归档，archived=true 时只看已归档。 */
+  listProjects(
+    options: { archived?: boolean; limit?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<{ items: Project[]; total: number }> {
+    const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
+    if (options.archived) params.set("archived", "true");
+    return request<{ items: Project[]; total: number }>(`/api/v1/projects?${params}`, { signal });
+  },
+
+  /** 当前用户的运行列表（创建时间倒序），侧栏「最近任务」的数据源。 */
+  listTaskRuns(limit = 20, signal?: AbortSignal): Promise<{ items: TaskRun[]; total: number }> {
+    return request<{ items: TaskRun[]; total: number }>(`/api/v1/task-runs?limit=${limit}`, {
+      signal,
+    });
+  },
+
+  /** 项目维护：重命名与归档/取消归档（侧栏「最近任务」的操作菜单）。 */
+  updateProject(
+    projectId: string,
+    input: { name?: string; archived?: boolean },
+    signal?: AbortSignal,
+  ): Promise<Project> {
+    return request<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** 删除项目及其全部运行与产物；不可恢复，仅隐藏请用归档。 */
+  deleteProject(projectId: string, signal?: AbortSignal): Promise<void> {
+    return request<void>(`/api/v1/projects/${encodeURIComponent(projectId)}`, {
+      method: "DELETE",
+      signal,
+    });
+  },
+
   createTaskRun(
     input: CreateTaskRunInput,
     idempotencyKey: string,

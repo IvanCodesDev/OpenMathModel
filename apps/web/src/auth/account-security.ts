@@ -13,6 +13,7 @@ import {
   type UserInfo,
 } from "./api";
 import { openAuthDialog } from "./auth-dialog";
+import { notifySecurityChange } from "../notifications/desktop-notifications";
 
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>"']/g, character => (
@@ -408,6 +409,7 @@ function openChangePasswordDialog(reload: () => void): void {
       await authApi.changePassword({ current_password: current, new_password: next });
       backdrop.remove();
       showToast("密码已修改，其他设备已退出登录");
+      notifySecurityChange("账户密码刚被修改，其他设备已全部退出登录。");
       reload();
     });
   });
@@ -449,6 +451,7 @@ function openEnableTwoFactorDialog(reload: () => void): void {
         modalBody.innerHTML = `<h2>双重验证已启用</h2>${recoveryCodesHtml(recovery_codes)}`;
         bindCopyCodes(backdrop, recovery_codes);
         showToast("双重验证已启用");
+        notifySecurityChange("账户已启用双重验证。");
         reload();
       });
     });
@@ -486,6 +489,7 @@ function openManageTwoFactorDialog(reload: () => void): void {
       invalidateMe();
       backdrop.remove();
       showToast("双重验证已关闭");
+      notifySecurityChange("账户的双重验证刚被关闭；若非本人操作请立即修改密码。");
       reload();
     });
   });
@@ -603,6 +607,7 @@ export function initSecurityPane(backdrop: HTMLElement): void {
       openConfirmDialog("退出设备", `确定要退出「${label}」吗？该设备需要重新登录。`, "退出设备", async () => {
         await authApi.revokeSession(sessionId);
         showToast("该设备已退出登录");
+        notifySecurityChange(`登录设备「${label}」已被退出。`);
         reload();
       });
     }
@@ -610,6 +615,7 @@ export function initSecurityPane(backdrop: HTMLElement): void {
       openConfirmDialog("退出其他设备", "除当前设备外的所有登录会话都会退出。", "全部退出", async () => {
         const result = await authApi.revokeOtherSessions();
         showToast(`已退出 ${result.revoked_sessions} 台设备`);
+        notifySecurityChange(`已退出其他 ${result.revoked_sessions} 台登录设备。`);
         reload();
       });
     }

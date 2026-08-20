@@ -3542,39 +3542,11 @@ html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; }
 html[data-reduce-motion="on"] .stream-in,
 html[data-reduce-motion="on"] .stream-item.is-waiting .stream-row > i { animation: none; }
 
-/* 输入框上方的整体运行状态条 */
-.run-progress-strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 4px 8px;
-  padding: 0 4px;
-  color: #6d6d67;
-  font-size: 12.5px;
-}
-.run-progress-spinner {
-  font-size: 14px !important;
-  color: #55554f;
-  animation: run-progress-spin 1.1s linear infinite;
-}
-.run-progress-strip.is-waiting .run-progress-spinner { animation-play-state: paused; opacity: 0.55; }
-.run-progress-count {
-  margin-left: auto;
-  color: #b0b0aa;
-  font-variant-numeric: tabular-nums;
-}
-@keyframes run-progress-spin {
-  to { transform: rotate(360deg); }
-}
-
 html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .activity-list::before { background: #3a3a37; }
 html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step { color: #d0d0ca; }
 html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step .step-dot { background: #1e1e1c; }
 html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .step-details { border-color: #3a3a37; background: #262624; color: #a8a8a1; }
 html[data-theme="dark"] .step-attempt { background: #2e2e2c; color: #a3a39c; }
-html[data-theme="dark"] .run-progress-strip { color: #a3a39c; }
-html[data-theme="dark"] .run-progress-spinner { color: #cfcfc9; }
-html[data-reduce-motion="on"] .run-progress-spinner,
 html[data-reduce-motion="on"] [data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="RUNNING"] .step-dot i,
 html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focused-step-dot i { animation: none; }
 
@@ -4285,3 +4257,1012 @@ html[data-theme="dark"] .sidebar-drawer-toggle {
 html[data-theme="dark"] .modeling-pane-switch { background: #2b2b29; }
 html[data-theme="dark"] .modeling-pane-switch button { background: transparent; color: #9a9a94; }
 html[data-theme="dark"] .modeling-pane-switch button.active { background: #3a3a37; color: #f1f1ee; }
+
+/* ─────────────────────────────────────────────────────────────
+   revision 34 — 2026-08-20 右侧正文区对齐 astryx ai-chat 模板（业主指定）。
+
+   参照物：`npx @astryxdesign/cli template ai-chat` 的 Artifact 文档面板 +
+   @astryxdesign/theme-neutral 令牌（值取自 theme.css，非目测）。
+   范围：仅 .focused-stage-pane（建模工作台右栏五个阶段面板）；
+   左栏 Agent 区、顶栏、分隔条一律不动。布局与 DOM 槽位不变，只换皮肤。
+   令牌化：浅色为默认值，html[data-theme="dark"] 只翻转变量。
+   业主复验调优：文章列从固定 720px 改为随容器伸缩（720→980），
+   避免宽面板下分页面显空；表格与列表正文提一档字号。
+   ───────────────────────────────────────────────────────────── */
+
+.focused-stage-pane {
+  /* astryx neutral 令牌（light） */
+  --ax-font-body: "Figtree Variable", Figtree, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --ax-font-code: ui-monospace, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --ax-text-primary: #171717;
+  --ax-text-secondary: #525252;
+  --ax-text-disabled: #a3a3a3;
+  --ax-surface: #ffffff;
+  --ax-muted: #f1f1f1;
+  --ax-code-bg: #fafafa;
+  --ax-border: rgba(0, 0, 0, .08);
+  --ax-border-strong: #d4d4d4;
+  --ax-accent: #262626;
+  --ax-on-accent: #ffffff;
+  --ax-neutral: rgba(0, 0, 0, .06);
+  --ax-hover: rgba(0, 0, 0, .05);
+  --ax-pressed: rgba(0, 0, 0, .10);
+  --ax-success: #007004;
+  --ax-success-bg: #c5e5c0;
+  --ax-success-text: #0c5700;
+  --ax-gray-bg: #e5e5e5;
+  --ax-gray-text: #262626;
+  --ax-radius-inner: 6px;
+  --ax-radius-element: 10px;
+  --ax-radius-container: 12px;
+  /* 文章列宽：astryx 模板为 720 定宽；宽面板下按容器 88% 伸展、980 封顶 */
+  --ax-article: clamp(720px, 88cqw, 980px);
+  /* 面板两侧留白随容器缓增 */
+  --ax-pad-inline: clamp(24px, 4cqw, 44px);
+  font-family: var(--ax-font-body);
+}
+
+html[data-theme="dark"] .focused-stage-pane {
+  --ax-text-primary: #fafafa;
+  --ax-text-secondary: #a3a3a3;
+  --ax-text-disabled: #525252;
+  --ax-surface: #262626;
+  --ax-muted: #1b1b1b;
+  --ax-code-bg: #1b1b1b;
+  --ax-border: rgba(255, 255, 255, .10);
+  --ax-border-strong: #525252;
+  --ax-accent: #ebebeb;
+  --ax-on-accent: #171717;
+  --ax-neutral: rgba(255, 255, 255, .10);
+  --ax-hover: rgba(255, 255, 255, .05);
+  --ax-pressed: rgba(255, 255, 255, .10);
+  --ax-success: #9fe59b;
+  --ax-success-bg: rgba(132, 201, 128, .24);
+  --ax-success-text: #9fe59b;
+  --ax-gray-bg: rgba(255, 255, 255, .10);
+  --ax-gray-text: #e5e5e5;
+}
+
+/* ── 文档卡片（Card variant="transparent" 的贴合译法：白面 + 发丝线 + container 圆角） ── */
+.focused-stage-pane .focused-workspace-panel.active {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-container);
+  background: var(--ax-surface);
+  color: var(--ax-text-primary);
+  scrollbar-width: thin;
+  scrollbar-color: var(--ax-border-strong) transparent;
+}
+
+/* ── 页签条 = Toolbar（dividers=bottom）：幽灵分段按钮，元素圆角，覆盖层悬停 ── */
+.focused-stage-pane .focused-workspace-tabs {
+  top: 1px;
+  right: 1px;
+  left: 1px;
+  height: 52px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--ax-border);
+  border-radius: calc(var(--ax-radius-container) - 1px) calc(var(--ax-radius-container) - 1px) 0 0;
+  background: var(--ax-surface);
+}
+
+.focused-stage-pane .focused-workspace-tabs button,
+.focused-stage-pane .focused-workspace-tabs button:hover,
+.focused-stage-pane .focused-workspace-tabs button.active,
+.focused-stage-pane .focused-workspace-tabs button.active:hover {
+  position: static;
+  width: auto;
+  min-width: max-content;
+  height: 32px;
+  padding: 0 12px;
+  flex: 0 0 auto;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-secondary);
+  background: transparent;
+  box-shadow: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.focused-stage-pane .focused-workspace-tabs button:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+.focused-stage-pane .focused-workspace-tabs button:active {
+  background: var(--ax-pressed);
+}
+
+.focused-stage-pane .focused-workspace-tabs button.active,
+.focused-stage-pane .focused-workspace-tabs button.active:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-muted);
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-workspace-tabs button i,
+.focused-stage-pane .focused-workspace-tabs button.active i {
+  color: inherit;
+  font-size: 16px;
+}
+
+/* ── 面板留白与居中文章列（articleBody 的自适应版：720 起步随容器伸展） ── */
+.focused-stage-pane .data-report-workspace .focused-workspace-panel.active,
+.focused-stage-pane .model-plan-workspace .focused-workspace-panel.active {
+  padding: 76px var(--ax-pad-inline) 32px;
+}
+
+.focused-stage-pane .data-report-workspace .focused-workspace-panel.active > *,
+.focused-stage-pane .model-plan-workspace .focused-workspace-panel.active > * {
+  width: 100%;
+  max-width: min(100%, var(--ax-article));
+  margin-inline: auto;
+}
+
+.focused-stage-pane .experiment-report-workspace .focused-workspace-panel.active,
+.focused-stage-pane .final-delivery-workspace .focused-workspace-panel.active {
+  padding: 52px 0 0;
+}
+
+.focused-stage-pane .experiment-report-workspace .focused-report-card {
+  max-width: calc(var(--ax-article) + 2 * var(--ax-pad-inline));
+  margin-inline: auto;
+  padding: 24px var(--ax-pad-inline) 32px;
+}
+
+.focused-stage-pane .experiment-report-workspace .focused-template {
+  max-width: calc(var(--ax-article) + 2 * var(--ax-pad-inline));
+  margin-inline: auto;
+  padding: 24px var(--ax-pad-inline) 32px;
+}
+
+.focused-stage-pane .focused-workspace-panel.active > .result-detail-document {
+  max-width: calc(var(--ax-article) + 2 * var(--ax-pad-inline));
+  margin-inline: auto;
+  padding: 32px var(--ax-pad-inline) 28px;
+}
+
+/* ── 文档标题区 = 文章 Heading level 1（24/600/1.3333）+ supporting 副题 ── */
+.focused-stage-pane .focused-document-heading h1,
+.focused-stage-pane .focused-template-heading h1 {
+  margin: 0 0 6px;
+  color: var(--ax-text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3333;
+  letter-spacing: 0;
+}
+
+.focused-stage-pane .focused-document-heading p,
+.focused-stage-pane .focused-template-heading p {
+  margin: 0;
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+  line-height: 1.6667;
+}
+
+/* 标题行动作 = 幽灵 sm 按钮（28px、元素圆角、覆盖层悬停） */
+.focused-stage-pane .focused-document-heading button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-secondary);
+  background: transparent;
+  font-size: 16px;
+}
+
+.focused-stage-pane .focused-document-heading button:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+.focused-stage-pane .focused-document-heading > div:last-child { gap: 4px; }
+
+.focused-stage-pane .focused-template-heading button {
+  min-height: 28px;
+  padding: 0 10px;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-secondary);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-template-heading button:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+/* 状态徽标 = Badge（success / neutral 子色，胶囊圆角） */
+.focused-stage-pane .focused-template-status {
+  min-height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9999px;
+  color: var(--ax-success-text);
+  background: var(--ax-success-bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-template-status.neutral {
+  border: 0;
+  color: var(--ax-gray-text);
+  background: var(--ax-gray-bg);
+}
+
+/* ── 结论条 = ClickableCard variant="muted"（无边框、muted 面、元素圆角） ── */
+.focused-stage-pane .focused-conclusion-strip,
+.focused-stage-pane .focused-report-conclusion {
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-primary);
+  background: var(--ax-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.focused-stage-pane .focused-conclusion-strip > i,
+.focused-stage-pane .focused-report-conclusion > i {
+  margin-right: 10px;
+  color: var(--ax-success);
+  font-size: 18px;
+}
+
+/* ── 指标条：label 12 secondary / 值 24 semibold / 发丝分隔 ── */
+.focused-stage-pane .focused-metrics article span {
+  color: var(--ax-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.focused-stage-pane .focused-metrics article strong {
+  color: var(--ax-text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.focused-stage-pane .focused-metrics article small {
+  color: var(--ax-text-disabled);
+  font-size: 12px;
+}
+
+.focused-stage-pane .focused-metrics article:not(:last-child)::after { background: var(--ax-border); }
+.focused-stage-pane .focused-template-metrics { border-block: 1px solid var(--ax-border); }
+
+/* ── 章节标题层级：文章 h2（17/650）与卡片 h4（14/700） ── */
+.focused-stage-pane .focused-section h2 {
+  margin: 0 0 14px;
+  color: var(--ax-text-primary);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.4118;
+}
+
+.focused-stage-pane .focused-section h2 span {
+  color: var(--ax-text-disabled);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.focused-stage-pane .focused-template-section-title h2,
+.focused-stage-pane .focused-template-card h2,
+.focused-stage-pane .focused-chart-heading h2,
+.focused-stage-pane .focused-experiment-notes h2 {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4286;
+}
+
+.focused-stage-pane .focused-template-section-title span {
+  color: var(--ax-text-secondary);
+  font-size: 12px;
+}
+
+/* ── 表格 = Markdown 表：发丝外框 + 行分隔，表头 12/600 secondary ── */
+.focused-stage-pane .focused-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-element);
+  background: var(--ax-surface);
+  scrollbar-width: thin;
+  scrollbar-color: var(--ax-border-strong) transparent;
+}
+
+/* 720px 文章列里 6 列预览表放不下时横向滚动，不做省略号截断 */
+.focused-stage-pane .preview-data-table { min-width: 640px; }
+.focused-stage-pane .preview-data-table td { text-overflow: clip; }
+
+/* 问题清单是叙述性内容：换行完整呈现，不吞字 */
+.focused-stage-pane .issue-table td {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.5;
+}
+
+.focused-stage-pane .focused-table th {
+  color: var(--ax-text-secondary);
+  background: transparent;
+  border-bottom: 1px solid var(--ax-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-table td {
+  color: var(--ax-text-primary);
+  border-bottom: 1px solid var(--ax-border);
+  font-size: 14px;
+}
+
+.focused-stage-pane .focused-table tbody tr:last-child td { border-bottom: 0; }
+
+.focused-stage-pane .focused-table strong,
+.focused-stage-pane .focused-template-table strong {
+  color: var(--ax-text-primary);
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-table-footer,
+.focused-stage-pane .focused-template-footer {
+  color: var(--ax-text-secondary);
+  font-size: 12px;
+}
+
+/* 分页 = 幽灵 28px 方钮；当前页 = accent 实底 */
+.focused-stage-pane .focused-table-footer nav button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ax-radius-inner);
+  color: var(--ax-text-secondary);
+  background: transparent;
+  font-size: 13px;
+}
+
+.focused-stage-pane .focused-table-footer nav button:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+.focused-stage-pane .focused-table-footer nav button.active {
+  color: var(--ax-on-accent);
+  background: var(--ax-accent);
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-table-footer nav button:disabled { color: var(--ax-text-disabled); }
+
+/* ── 开关：accent 实底（暗色自动翻转），描边灰关态 ── */
+.focused-stage-pane .focused-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--ax-border-strong);
+  transition: background-color .125s ease;
+}
+
+.focused-stage-pane .focused-toggle span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
+  transition: transform .125s ease;
+  transform: translateX(0);
+}
+
+.focused-stage-pane .focused-toggle.is-on { background: var(--ax-accent); }
+.focused-stage-pane .focused-toggle.is-on span { transform: translateX(16px); }
+html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { background: #171717; }
+
+/* ── 方案列表 = SelectableCard：发丝框、选中 accent 双线、code-bg 悬停面 ── */
+.focused-stage-pane .focused-plan-row {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-element);
+  background: var(--ax-surface);
+}
+
+.focused-stage-pane .focused-plan-row:hover {
+  border-color: var(--ax-border-strong);
+  background: var(--ax-code-bg);
+}
+
+.focused-stage-pane .focused-plan-row.selected {
+  border-color: var(--ax-accent);
+  background: var(--ax-surface);
+  box-shadow: inset 0 0 0 1px var(--ax-accent);
+}
+
+.focused-stage-pane .focused-plan-row:focus-visible {
+  outline: 2px solid var(--ax-accent);
+  outline-offset: 2px;
+}
+
+.focused-stage-pane .focused-plan-row strong {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-plan-row strong small {
+  color: var(--ax-text-secondary);
+  font-weight: 500;
+}
+
+.focused-stage-pane .focused-plan-row > span:not(.plan-radio) {
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+}
+
+.focused-stage-pane .plan-radio {
+  border: 1.5px solid var(--ax-border-strong);
+  background: var(--ax-surface);
+}
+
+.focused-stage-pane .focused-plan-row.selected .plan-radio {
+  border: 5px solid var(--ax-accent);
+  background: var(--ax-surface);
+}
+
+/* 方案详情 = MetadataList：标签列 13/600 secondary，正文 14/1.65，行间发丝线 */
+.focused-stage-pane .focused-plan-detail > div { border-top: 1px solid var(--ax-border); }
+.focused-stage-pane .focused-plan-detail > div:first-child { border-top: 0; }
+
+.focused-stage-pane .focused-plan-detail h2 {
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.focused-stage-pane .focused-plan-detail p,
+.focused-stage-pane .focused-plan-detail ul {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* ── 规则卡 / 步骤卡 / 模板卡：发丝框 + 元素圆角 ── */
+.focused-stage-pane .focused-rule-list article,
+.focused-stage-pane .focused-template-steps article {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-element);
+  background: var(--ax-surface);
+}
+
+.focused-stage-pane .focused-rule-list b,
+.focused-stage-pane .focused-template-steps b {
+  color: var(--ax-text-disabled);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.focused-stage-pane .focused-rule-list strong,
+.focused-stage-pane .focused-template-steps strong {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .focused-rule-list span,
+.focused-stage-pane .focused-template-steps span {
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+}
+
+.focused-stage-pane .focused-rule-list em,
+.focused-stage-pane .focused-template-steps em {
+  color: var(--ax-success);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.focused-stage-pane .focused-template-card {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-container);
+  background: var(--ax-surface);
+}
+
+.focused-stage-pane .focused-template-card dl div {
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+}
+
+.focused-stage-pane .focused-template-card dd {
+  color: var(--ax-text-primary);
+  font-weight: 500;
+}
+
+.focused-stage-pane .focused-template-card ul,
+.focused-stage-pane .focused-template-card p {
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+}
+
+.focused-stage-pane .focused-template-callout {
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  background: var(--ax-muted);
+  font-size: 13px;
+}
+
+.focused-stage-pane .focused-template-callout strong { color: var(--ax-text-primary); font-weight: 600; }
+.focused-stage-pane .focused-template-callout span { color: var(--ax-text-secondary); }
+
+/* 代码块 = CodeBlock：code-bg 面 + 发丝框 + 等宽栈 */
+.focused-stage-pane .focused-template-code {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-primary);
+  background: var(--ax-code-bg);
+  font-family: var(--ax-font-code);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.focused-stage-pane .focused-template-code span { color: #737373; }
+
+.focused-stage-pane .focused-log-summary span {
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-secondary);
+  background: var(--ax-muted);
+}
+
+/* ── 实验报告 ── */
+.focused-stage-pane .focused-report-card h1 {
+  color: var(--ax-text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3333;
+}
+
+.focused-stage-pane .focused-chart-heading > div span {
+  color: var(--ax-text-secondary);
+  font-size: 12px;
+}
+
+.focused-stage-pane .legend-dot.baseline { background: var(--ax-border-strong); }
+.focused-stage-pane .legend-dot.current { background: var(--ax-accent); }
+
+.focused-stage-pane .focused-experiment-notes li {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.focused-stage-pane .focused-experiment-notes li > i { color: var(--ax-success); }
+
+.focused-stage-pane .focused-experiment-notes p {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.focused-stage-pane .focused-run-meta {
+  padding-top: 12px;
+  border-top: 1px solid var(--ax-border);
+  color: var(--ax-text-secondary);
+  font-size: 12px;
+}
+
+/* ── 成果文档（实验四页签 + 任务完成四页签共用模板） ── */
+.focused-stage-pane .stage-document > h1 {
+  color: var(--ax-text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3333;
+}
+
+.focused-stage-pane .complete-kicker {
+  color: var(--ax-success);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.focused-stage-pane .complete-kicker i {
+  color: var(--ax-success);
+  font-size: 20px !important;
+}
+
+.focused-stage-pane .complete-project-name {
+  color: var(--ax-text-primary);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.focused-stage-pane .result-summary .summary-row { border-bottom: 1px solid var(--ax-border); }
+.focused-stage-pane .result-summary .summary-row:last-of-type { border-bottom: 0; }
+
+.focused-stage-pane .focused-workspace .summary-row > span:first-child {
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .summary-row > :last-child:not(:first-child),
+.focused-stage-pane .summary-row ul {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.focused-stage-pane .deliverable-section h2 {
+  color: var(--ax-text-primary);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.4118;
+}
+
+.focused-stage-pane .deliverables { border-top: 1px solid var(--ax-border); }
+
+.focused-stage-pane .deliverable-head {
+  color: var(--ax-text-secondary);
+  border-bottom: 1px solid var(--ax-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .deliverable {
+  color: var(--ax-text-secondary);
+  border-bottom: 1px solid var(--ax-border);
+  font-size: 13px;
+}
+
+.focused-stage-pane .deliverable-name {
+  color: var(--ax-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.focused-stage-pane .deliverable-name i {
+  color: var(--ax-text-secondary);
+  font-size: 18px;
+}
+
+.focused-stage-pane .deliverable .open-file {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-secondary);
+  background: transparent;
+  font-size: 16px;
+}
+
+.focused-stage-pane .deliverable .open-file:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+/* 操作行 = Button：中性 32px（radius-element），主操作 accent 实底 */
+.focused-stage-pane .stage-actions button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-primary);
+  background: var(--ax-neutral);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background-color .125s ease;
+}
+
+.focused-stage-pane .stage-actions button:hover {
+  background-image: linear-gradient(var(--ax-hover), var(--ax-hover));
+}
+
+.focused-stage-pane .stage-actions button.primary {
+  color: var(--ax-on-accent);
+  background-color: var(--ax-accent);
+}
+
+/* ── 论文编辑器：工作台镶边对齐令牌，纸面排版保持文档隐喻 ── */
+.focused-stage-pane .paper-only-editor .outline {
+  border-right: 1px solid var(--ax-border);
+  background: var(--ax-code-bg);
+}
+
+.focused-stage-pane .paper-only-editor .outline-heading h3 {
+  color: var(--ax-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .paper-only-editor .outline a {
+  border-radius: var(--ax-radius-inner);
+  color: var(--ax-text-secondary);
+  font-size: 13px;
+}
+
+.focused-stage-pane .paper-only-editor .outline a:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+.focused-stage-pane .paper-only-editor .outline a.active {
+  color: var(--ax-text-primary);
+  background: var(--ax-muted);
+  font-weight: 600;
+}
+
+.focused-stage-pane .paper-only-editor .outline .outline-status.done { color: var(--ax-success); }
+
+.focused-stage-pane .paper-only-editor .editor-toolbar { border-bottom: 1px solid var(--ax-border); }
+
+.focused-stage-pane .paper-only-editor .editor-format-tools button {
+  border: 0;
+  border-radius: var(--ax-radius-inner);
+  color: var(--ax-text-secondary);
+  background: transparent;
+  font-size: 13px;
+}
+
+.focused-stage-pane .paper-only-editor .editor-format-tools button:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-hover);
+}
+
+.focused-stage-pane .paper-only-editor .toolbar-divider { background: var(--ax-border); }
+
+.focused-stage-pane .paper-editor-inline-actions { border-left: 1px solid var(--ax-border); }
+
+.focused-stage-pane .paper-only-editor .paper-editor-inline-actions button {
+  height: 30px;
+  border: 0;
+  border-radius: var(--ax-radius-element);
+  color: var(--ax-text-primary);
+  background: var(--ax-neutral);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.focused-stage-pane .paper-only-editor .paper-editor-inline-actions button:hover {
+  background-image: linear-gradient(var(--ax-hover), var(--ax-hover));
+}
+
+.focused-stage-pane .paper-only-editor .paper-editor-inline-actions button.primary {
+  color: var(--ax-on-accent);
+  background-color: var(--ax-accent);
+  border-color: transparent;
+}
+
+.focused-stage-pane .paper-only-editor .source-chip {
+  border: 0;
+  border-radius: var(--ax-radius-inner);
+  color: var(--ax-text-secondary);
+  background: var(--ax-muted);
+  font-size: 12px;
+}
+
+.focused-stage-pane .paper-only-editor .source-chip:hover {
+  color: var(--ax-text-primary);
+  background: var(--ax-pressed);
+}
+
+/* ── 移动端（≤820px）：页签回到文档流的既有约定必须保持（revision 33） ── */
+@media (max-width: 820px) {
+  .focused-stage-pane .focused-workspace .focused-workspace-tabs {
+    position: relative;
+    top: auto;
+    right: auto;
+    left: auto;
+    height: auto;
+    min-height: 44px;
+    flex: 0 0 auto;
+    border-radius: var(--ax-radius-container) var(--ax-radius-container) 0 0;
+  }
+
+  .focused-stage-pane .data-report-workspace .focused-workspace-panel.active,
+  .focused-stage-pane .model-plan-workspace .focused-workspace-panel.active {
+    padding: 20px 16px 24px;
+  }
+
+  .focused-stage-pane .experiment-report-workspace .focused-workspace-panel.active,
+  .focused-stage-pane .final-delivery-workspace .focused-workspace-panel.active {
+    padding: 0;
+  }
+
+  .focused-stage-pane .experiment-report-workspace .focused-report-card,
+  .focused-stage-pane .experiment-report-workspace .focused-template {
+    padding-inline: 16px;
+  }
+}
+
+/* ── 论文编辑器实现配套（业主指定）：去蓝色样式 + 真实编辑功能的界面件 ── */
+
+/* 1. 蓝色样式移除：mark 高亮、可编辑区焦点框、选区一律中性化 */
+.workflow-editor mark {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.paper-only-editor .editor-page:focus,
+.paper-only-editor .editor-page:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.paper-only-editor .editor-page ::selection,
+.paper-only-editor .editor-page::selection {
+  background: rgba(38, 38, 38, .16);
+  color: inherit;
+}
+
+html[data-theme="dark"] .paper-only-editor .editor-page ::selection {
+  background: rgba(255, 255, 255, .28);
+}
+
+/* 2. 工具栏激活态（B/I/U 随光标反映真实格式状态） */
+.focused-stage-pane .paper-only-editor .editor-format-tools button.active {
+  color: var(--ax-text-primary);
+  background: var(--ax-muted);
+}
+
+/* 3. 状态栏：字数统计 + 本机草稿保存状态 + 快捷动作 */
+.paper-only-editor .editor-statusbar {
+  min-height: 34px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--ax-border, rgba(0, 0, 0, .08));
+  color: var(--ax-text-secondary, #525252);
+  background: var(--ax-surface, #fff);
+  font-size: 12px;
+}
+
+.paper-only-editor .editor-statusbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.paper-only-editor .editor-statusbar button {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--ax-radius-inner, 6px);
+  color: var(--ax-text-secondary, #525252);
+  background: transparent;
+  font-size: 12px;
+}
+
+.paper-only-editor .editor-statusbar button:hover {
+  color: var(--ax-text-primary, #171717);
+  background: var(--ax-hover, rgba(0, 0, 0, .05));
+}
+
+/* 3.1 公式可点击编辑：给出手势与悬停提示 */
+.editor-page .editor-formula[data-tex] {
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background-color .125s ease;
+}
+
+.editor-page .editor-formula[data-tex]:hover {
+  background: rgba(0, 0, 0, .04);
+}
+
+html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
+  background: rgba(255, 255, 255, .08);
+}
+
+/* 4. 插入的表格与图片在纸面里的形态 */
+.editor-page .editor-table {
+  width: 100%;
+  margin: 0 0 24px;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.editor-page .editor-table th,
+.editor-page .editor-table td {
+  border: 1px solid #d4d4d4;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.editor-page .editor-table th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.editor-page img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 24px;
+  border-radius: 6px;
+}
+
+/* 5. 检查结果清单（模态框内，脱离右栏令牌作用域，用字面色） */
+.editor-check-list {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.editor-check-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.editor-check-list li i {
+  margin-top: 1px;
+  font-size: 18px;
+}
+
+.editor-check-list li.ok i { color: #007004; }
+.editor-check-list li.warn i { color: #745b00; }
+
+.editor-check-list li div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.editor-check-list li strong { font-size: 14px; }
+
+.editor-check-list li span {
+  color: #525252;
+  font-size: 13px;
+}
+
+.editor-check-note {
+  margin: 14px 0 0;
+  color: #525252;
+  font-size: 12px;
+}
+
+html[data-theme="dark"] .editor-check-list li span,
+html[data-theme="dark"] .editor-check-note { color: #a3a3a3; }
+html[data-theme="dark"] .editor-check-list li.ok i { color: #9fe59b; }
+html[data-theme="dark"] .editor-check-list li.warn i { color: #fdcf4f; }
+html[data-theme="dark"] .editor-page .editor-table th { background: #1b1b1b; }
+html[data-theme="dark"] .editor-page .editor-table th,
+html[data-theme="dark"] .editor-page .editor-table td { border-color: #525252; }

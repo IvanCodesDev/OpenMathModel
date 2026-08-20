@@ -8,6 +8,8 @@ import { restoreLastTaskOnStartup } from "./tasks/restore-last-task";
 // 代码里同时使用了 regular 与 fill 两种字重，两份样式都必须引入。
 import "@phosphor-icons/web/regular";
 import "@phosphor-icons/web/fill";
+// 建模工作台右侧文档区的西文/数字字体（astryx neutral 主题基线）；同样随包自托管。
+import "@fontsource-variable/figtree";
 import "./styles.css";
 import "./workflow-refresh.css";
 import "./attachments/attachments.css";

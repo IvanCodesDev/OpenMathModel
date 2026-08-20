@@ -6,6 +6,7 @@
  */
 
 import { t } from "../i18n/locale";
+import { notifySecurityEnabled, notifyTaskDoneEnabled } from "../preferences/privacy-preferences";
 
 const SETTINGS_KEY = "openmathmodelSettings";
 
@@ -120,5 +121,19 @@ export function notifyRunStatusChange(input: {
 
   const notice = notices[current];
   if (!notice) return;
+  // 「数据与隐私」的任务完成通知开关：只约束完成/失败提醒；
+  // 等待确认是流程卡点，仍由总的桌面通知开关控制。
+  if ((current === "COMPLETED" || current === "FAILED") && !notifyTaskDoneEnabled()) return;
   sendDesktopNotification({ ...notice, tag: `omm-run-${runId}-${current}`, url });
+}
+
+/** 账户安全事件提醒（密码、双重验证、登录设备变化）；隐私开关关闭时静默。 */
+export function notifySecurityChange(body: string): void {
+  if (!notifySecurityEnabled()) return;
+  sendDesktopNotification({
+    title: t("账户安全提醒"),
+    body,
+    tag: `omm-security-${Date.now()}`,
+    ignoreFocus: true,
+  });
 }

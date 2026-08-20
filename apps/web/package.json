@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
   "dependencies": {
+    "@fontsource-variable/figtree": "^5.3.0",
     "@openmathmodel/contracts": "0.1.0",
     "@phosphor-icons/web": "^2.1.2",
     "chart.js": "^4.5.1",

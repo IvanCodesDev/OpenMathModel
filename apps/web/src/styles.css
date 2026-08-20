@@ -139,6 +139,15 @@ i[class^="ph"], i[class*=" ph"] { font-size: 19px; line-height: 1; }
   outline: 0;
   background: transparent;
   font-size: 14px;
+  /* 与 .search-box input 同理：type="search" 语义正确且不弹密码自动填充，抹掉原生外观 */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.global-search input::-webkit-search-cancel-button,
+.global-search input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .global-search kbd {
@@ -190,7 +199,36 @@ i[class^="ph"], i[class*=" ph"] { font-size: 19px; line-height: 1; }
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+  /* 真实任务列表：占满导航与底部账户行之间的全部剩余空间，条目多时区内滚动。
+     flex-basis 取 0，列表长短完全不参与侧栏空间分配——上方导航与留白永远保持
+     原有比例，不会被长列表挤压 */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* 极简滚动条：只留中间滑块，无箭头按钮与轨道盒。Firefox 走标准属性 */
+  scrollbar-width: thin;
+  scrollbar-color: #d6d6d2 transparent;
 }
+
+/* Chromium/WebKit：标准属性会启用带箭头的系统（Fluent）滚动条并屏蔽
+   ::-webkit 定制，这里撤销标准属性、交还给 ::-webkit 规则（无按钮）。 */
+@supports selector(::-webkit-scrollbar) {
+  .recent,
+  html[data-theme="dark"] .recent {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}
+
+.recent::-webkit-scrollbar { width: 6px; }
+.recent::-webkit-scrollbar-track { background: transparent; }
+.recent::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 999px; }
+.recent::-webkit-scrollbar-thumb:hover { background: #bdbdb8; }
+.recent::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+html[data-theme="dark"] .recent { scrollbar-color: #454540 transparent; }
+html[data-theme="dark"] .recent::-webkit-scrollbar-thumb { background: #454540; }
+html[data-theme="dark"] .recent::-webkit-scrollbar-thumb:hover { background: #5a5a54; }
 
 .recent-title {
   color: #888;
@@ -838,7 +876,9 @@ html[data-theme="dark"] .compare-name { color: var(--ink); }
 /* Modal, menu, toast */
 .menu {
   position: fixed;
-  z-index: 100;
+  /* 挂在 body 上的浮动菜单会从设置弹层（180）、安全对话框（220）等层内打开，
+     必须压过全部对话框层级；取值与同类的 .recent-menu 一致 */
+  z-index: 260;
   width: 180px;
   padding: 6px;
   border: 1px solid #ddd;
@@ -956,11 +996,82 @@ button:hover { background: #f2f2ef; border-color: #d9d9d5; }
 }
 
 .sidebar-search-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 4px 0 10px;
 }
+
+/* 侧栏「搜索任务」结果面板：真实 Project/TaskRun 命中列表，锚定在搜索行下方 */
+.sidebar-search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #e0e0dc;
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(32, 32, 30, .14);
+}
+
+.sidebar-search-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.sidebar-search-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-search-item span {
+  font-size: 12px;
+  color: #8a8a85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-search-item:hover,
+.sidebar-search-item.is-active { background: #f2f2ef; }
+
+.sidebar-search-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  font-size: 12.5px;
+  color: #8a8a85;
+}
+
+.sidebar-search-empty strong { font-size: 13px; font-weight: 600; color: #55554f; }
+
+.app-shell.sidebar-collapsed .sidebar-search-results { display: none; }
+
+html[data-theme="dark"] .sidebar-search-results {
+  border-color: #444440;
+  background: #222220;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .45);
+}
+html[data-theme="dark"] .sidebar-search-item strong { color: #d3d2cd; }
+html[data-theme="dark"] .sidebar-search-item span { color: #8f8f8a; }
+html[data-theme="dark"] .sidebar-search-item:hover,
+html[data-theme="dark"] .sidebar-search-item.is-active { background: #30302e; }
+html[data-theme="dark"] .sidebar-search-empty { color: #8f8f8a; }
+html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
 
 .global-search {
   height: 38px;
@@ -1569,6 +1680,18 @@ button:hover { background: #f2f2ef; border-color: #d9d9d5; }
 }
 /* 无思考内容时的等待占位：同一款 shimmer */
 .thinking-plain { margin: 0; }
+/* 「允许使用第三方中转站」透明度行：发送前展示本次请求的实际域名（不含模型名） */
+.chat-transparency {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: color-mix(in srgb, #a1a1a1 82%, transparent);
+}
+.chat-transparency i { font-size: 14px; line-height: 1; }
+html[data-theme="dark"] .chat-transparency { color: #737373; }
 html[data-theme="dark"] .thinking-label { color: #737373; }
 html[data-theme="dark"] .thinking-verb { color: #a3a3a3; }
 html[data-theme="dark"] .thinking-chevron { color: #737373; }
@@ -2663,6 +2786,54 @@ html[data-theme="dark"] .usage-chart {
   min-width: 92px;
   height: 42px;
   gap: 14px;
+}
+
+/* 赛题库筛选下拉：闭合态与原筛选按钮同观感，弹层复用设置中心下拉样式 */
+.problem-filter-select {
+  position: relative;
+  display: flex;
+}
+
+.problem-filter-select .filter-button {
+  max-width: 210px;
+}
+
+.problem-filter-select .filter-button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.problem-filter-select .filter-button i {
+  flex: 0 0 auto;
+  transition: transform .15s ease;
+}
+
+.problem-filter-select.open .filter-button i {
+  transform: rotate(180deg);
+}
+
+.problem-filter-select .settings-select-menu {
+  left: auto;
+  right: 0;
+  width: max-content;
+  min-width: 100%;
+  max-width: 320px;
+  /* 选项多时仍可滚动，但与论文页年份下拉一致：不显示滚动条 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.problem-filter-select .settings-select-menu::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.problem-filter-select.open .settings-select-menu {
+  display: grid;
+  gap: 2px;
+  animation: settings-menu-in .12s ease-out;
 }
 
 .resource-tabs {
@@ -6247,7 +6418,7 @@ html[data-theme="dark"] .settings-footer .primary {
   padding: 0 7px;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 5px;
   border: 0;
   border-radius: 8px;
@@ -7017,3 +7188,385 @@ html[data-theme="dark"] .secret-box button { background: #262624; }
 html[data-theme="dark"] .dialog-error { background: rgba(196, 84, 62, 0.12); border-color: rgba(196, 84, 62, 0.35); color: #e0836f; }
 html[data-theme="dark"] .modal-actions button.danger { border-color: rgba(196, 84, 62, 0.4); color: #e0836f; }
 html[data-theme="dark"] .modal-actions button.danger:hover { background: rgba(196, 84, 62, 0.12); }
+
+/* ─────────────────────────────────────────────────────────────
+   「我的项目」列表页视觉精修
+   对齐产品的极简·中性·精致设计语言:阶段标签按状态着色、表格数字列
+   对齐与表头收敛、卡片描边归中性、行操作按钮 hover 才浮现。除
+   .stage-pill 为全局状态语义外,其余以 body[data-screen="projects"]
+   限定,不影响其他页面。
+   ───────────────────────────────────────────────────────────── */
+
+.stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f0f0ed;
+  color: #5c5c57;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.stage-pill::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.stage-pill[data-stage="数据处理"] { background: #eaf2fd; color: #1461c9; }
+.stage-pill[data-stage="实验验证"] { background: #fbf1df; color: #97620f; }
+.stage-pill[data-stage="论文撰写"] { background: #e7f4ec; color: #167a44; }
+
+html[data-theme="dark"] .stage-pill { background: #2a2a28; color: #b6b6b0; }
+html[data-theme="dark"] .stage-pill[data-stage="数据处理"] { background: rgba(20, 115, 230, .16); color: #79acf1; }
+html[data-theme="dark"] .stage-pill[data-stage="实验验证"] { background: rgba(217, 138, 26, .17); color: #e2a856; }
+html[data-theme="dark"] .stage-pill[data-stage="论文撰写"] { background: rgba(32, 173, 99, .17); color: #63cc8d; }
+
+/* 卡片:描边归中性灰,叠加克制的浮起阴影 */
+body[data-screen="projects"] .project-card {
+  border-color: #e6e6e2;
+  box-shadow: 0 1px 2px rgba(20, 20, 18, .03), 0 6px 20px rgba(20, 20, 18, .02);
+}
+
+/* 表头:标签化收敛 */
+body[data-screen="projects"] .project-table th {
+  color: #8b8b86;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .02em;
+}
+
+/* 正文行:字色更清晰 */
+body[data-screen="projects"] .project-table td { color: #55554f; }
+body[data-screen="projects"] .project-name strong { font-weight: 600; }
+body[data-screen="projects"] .table-doc > i { color: #b2b2ab; }
+
+/* 数字列(文件/实验/论文)右对齐 + 等宽数字;操作列居中收窄 */
+body[data-screen="projects"] .project-table th:nth-child(4),
+body[data-screen="projects"] .project-table th:nth-child(5),
+body[data-screen="projects"] .project-table th:nth-child(6),
+body[data-screen="projects"] .project-table td:nth-child(4),
+body[data-screen="projects"] .project-table td:nth-child(5),
+body[data-screen="projects"] .project-table td:nth-child(6) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+body[data-screen="projects"] .project-table td:nth-child(4),
+body[data-screen="projects"] .project-table td:nth-child(5),
+body[data-screen="projects"] .project-table td:nth-child(6) {
+  color: #3a3a35;
+}
+
+body[data-screen="projects"] .project-table th:last-child,
+body[data-screen="projects"] .project-table td:last-child {
+  width: 64px;
+  text-align: center;
+}
+
+/* 行操作按钮:hover 才浮现底色 */
+body[data-screen="projects"] .row-menu-button {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #a0a09a;
+}
+
+body[data-screen="projects"] .row-menu-button:hover {
+  background: #eeeeea;
+  color: #333330;
+}
+
+html[data-theme="dark"] body[data-screen="projects"] .project-card { border-color: #33332f; }
+html[data-theme="dark"] body[data-screen="projects"] .project-table td { color: #b6b6b0; }
+html[data-theme="dark"] body[data-screen="projects"] .project-table td:nth-child(4),
+html[data-theme="dark"] body[data-screen="projects"] .project-table td:nth-child(5),
+html[data-theme="dark"] body[data-screen="projects"] .project-table td:nth-child(6) { color: #e2e2dc; }
+html[data-theme="dark"] body[data-screen="projects"] .row-menu-button:hover { background: #2c2c2a; color: #e8e8e4; }
+
+/* ── 侧栏「最近任务」真实数据：行内操作按钮与浮动菜单 ─────────────
+   行沿用 .recent-link 的高度、字号与悬停背景；菜单借用模型选择器
+   （.agent-model-menu）的边框、圆角与阴影 token，保持同一套视觉语言。 */
+
+.recent-link .recent-action {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8a8a86;
+  cursor: pointer;
+}
+
+.recent-link.has-action:hover { padding-right: 30px; }
+.recent-link.has-action:hover .recent-action { display: flex; }
+.recent-action:hover { background: #ececea; color: #333330; }
+.recent-action i { font-size: 14px !important; }
+
+.recent-empty {
+  padding: 5px 9px;
+  font-size: 12.5px;
+  color: #9a9a95;
+}
+
+.recent-menu {
+  position: fixed;
+  z-index: 260;
+  min-width: 138px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #dededa;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(25, 25, 22, .15);
+}
+
+.recent-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: transparent;
+  font-size: 13px;
+  color: #3f3f3b;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recent-menu button i { font-size: 15px !important; }
+.recent-menu button:hover { background: #f4f4f1; }
+.recent-menu button.danger { color: #c03d20; }
+.recent-menu button.danger:hover { background: #fbeeea; }
+
+/* 搜索框旁筛选按钮：应用了非默认筛选时点亮 + 角标红点（复用 unread-dot 色） */
+.search-filter.is-filtering {
+  position: relative;
+  color: #1f1f1d;
+  background: #ecece8;
+}
+.search-filter.is-filtering::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef5252;
+}
+
+/* 筛选菜单：当前项右侧对勾，文字与勾两端对齐 */
+.recent-filter-menu button { justify-content: space-between; }
+.recent-filter-menu button.is-current { color: #1f1f1d; font-weight: 600; }
+
+html[data-theme="dark"] .recent-action:hover { background: #30302e; color: #f4f4f1; }
+html[data-theme="dark"] .recent-empty { color: #8a897f; }
+html[data-theme="dark"] .recent-menu {
+  border-color: #444440;
+  background: #222220;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, .48);
+}
+html[data-theme="dark"] .recent-menu button { color: #d3d2cd; }
+html[data-theme="dark"] .recent-menu button:hover { background: #30302e; }
+html[data-theme="dark"] .recent-menu button.danger { color: #e0684a; }
+html[data-theme="dark"] .recent-menu button.danger:hover { background: #3a2723; }
+html[data-theme="dark"] .search-filter.is-filtering { color: #f4f4f1; background: #30302e; }
+html[data-theme="dark"] .recent-filter-menu button.is-current { color: #f4f4f1; }
+
+/* ── composer「添加上下文」引用：chips 行与二级选择器 ─────────────
+   chips 挂在 composer 自有槽位（textarea 与工具行之间），选择器复用
+   .modal-backdrop/.modal 的既有视觉语言。 */
+
+/* 输入行：引用盒子在左、文字起点在其右；无引用时行内只有 textarea。 */
+.composer-input-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.composer-input-row textarea { min-width: 0; height: 100%; }
+
+.composer-context-chips {
+  flex: 0 1 auto;
+  max-width: 52%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  /* 与 textarea 首行同高（15px × 1.6 = 24px）：盒子在行框内垂直居中，不错位 */
+  min-height: 24px;
+  align-items: center;
+}
+
+.composer-context-chips[hidden] { display: none; }
+
+/* 引用盒子：克制的石板蓝，区别于纯黑灰又不抢主体；定高 24px 与文字行齐平。 */
+.composer-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid #d4dfe9;
+  border-radius: 7px;
+  background: #eef3f8;
+  font-size: 12px;
+  color: #35526b;
+}
+
+.composer-context-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-context-chip i { font-size: 13px !important; color: #5c80a4; }
+
+.composer-context-chip button {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: #7d99b5;
+}
+
+.composer-context-chip button:hover { color: #35526b; background: transparent; }
+
+.reference-picker .modal {
+  width: min(720px, 94vw);
+  padding: 26px 26px 22px;
+}
+
+.reference-picker .modal h2 { margin: 0 0 16px; font-size: 19px; }
+
+/* 独立搜索行：不复用 .search-box（label 会被 .modal label/input 的
+   display:block 与 width:100% 劫持，输入框会溢出边框）。 */
+.reference-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 14px;
+  margin: 0 0 14px;
+  border: 1px solid #ddd;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.reference-search i { font-size: 16px !important; color: #8a8a86; }
+
+.reference-picker .modal .reference-search input {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  outline: none;
+  font-size: 14px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.reference-picker-list {
+  max-height: 56vh;
+  min-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 与侧栏「最近任务」同款极简滚动条：只留滑块 */
+  scrollbar-width: thin;
+  scrollbar-color: #d6d6d2 transparent;
+}
+
+/* 同 .recent：Chromium/WebKit 撤销标准属性，交还 ::-webkit 无按钮定制。 */
+@supports selector(::-webkit-scrollbar) {
+  .reference-picker-list,
+  html[data-theme="dark"] .reference-picker-list {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}
+
+.reference-picker-list::-webkit-scrollbar { width: 6px; }
+.reference-picker-list::-webkit-scrollbar-track { background: transparent; }
+.reference-picker-list::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 999px; }
+.reference-picker-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+html[data-theme="dark"] .reference-picker-list { scrollbar-color: #454540 transparent; }
+html[data-theme="dark"] .reference-picker-list::-webkit-scrollbar-thumb { background: #454540; }
+
+.reference-picker-list button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+  padding: 11px 13px;
+  cursor: pointer;
+}
+
+.reference-picker-list button:hover { background: #f4f4f1; }
+.reference-picker-list strong { font-size: 14px; line-height: 1.45; color: #22221f; font-weight: 550; }
+.reference-picker-list span { font-size: 12.5px; line-height: 1.5; color: #8a8a86; }
+
+.reference-picker-empty {
+  padding: 16px 13px;
+  color: #8a8a86;
+  font-size: 12.5px;
+}
+
+html[data-theme="dark"] .composer-context-chip {
+  background: #242b32;
+  border-color: #39434d;
+  color: #a9c2d9;
+}
+html[data-theme="dark"] .composer-context-chip i { color: #7f9cb8; }
+html[data-theme="dark"] .composer-context-chip button { color: #7f9cb8; }
+html[data-theme="dark"] .composer-context-chip button:hover { color: #cfe0ef; }
+html[data-theme="dark"] .reference-search {
+  background: transparent;
+  border-color: #3a3a38;
+}
+html[data-theme="dark"] .reference-picker .modal .reference-search input { color: #efefec; }
+html[data-theme="dark"] .reference-picker-list button:hover { background: #2c2c2a; }
+html[data-theme="dark"] .reference-picker-list strong { color: #e8e8e4; }
+html[data-theme="dark"] .reference-picker-list span { color: #8a897f; }
+html[data-theme="dark"] .reference-picker-empty { color: #8a897f; }
