@@ -80,8 +80,9 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 统一入口诊断时可分别启动两个进程：
 
 ```powershell
-# 终端 A：API
-.venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --port 8000
+# 终端 A：API（--timeout-graceful-shutdown 必带：页面的 SSE 长连接永不排空，
+# 不设上限时 --reload 的优雅停机会无限等待，表现为改代码后 API 失联）
+.venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --timeout-graceful-shutdown 5 --port 8000
 
 # 终端 B：Web
 npm run dev:web

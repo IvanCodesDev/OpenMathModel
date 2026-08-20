@@ -82,7 +82,27 @@ project_id? / run_request_token?
 - `empty` 文件正常但没有文字（扫描版 PDF 落在这里）；
 - `unsupported` 缺少可选依赖或格式不支持；`failed` 文件损坏或抽取出错。
 
-浏览器解不动的（旧版 `.doc`/`.xls`/`.ppt`、RTF、图片 OCR、超限文件）在卡片上显示为“等待服务端解析”而不是失败。服务端的可选依赖：`legacy-docs` 附加项提供 `.doc`/`.xls`/RTF，`ocr` 附加项加上系统 Tesseract 才能识别图片；缺失时接口如实返回 `unsupported` 并说明原因。
+浏览器解不动的（旧版 `.doc`/`.xls`/`.ppt`、RTF、图片 OCR、超限文件）在卡片上显示为“等待服务端解析”而不是失败。服务端的可选依赖：`legacy-docs` 附加项提供 `.doc`/`.xls`/RTF，`ocr` 附加项加上系统 Tesseract 才能识别图片，`vl` 附加项（`paddleocr[doc-parser]`）启用 PaddleOCR-VL 视觉文档解析——扫描件 PDF 与图片优先走它，输出逐页 Markdown（公式→LaTeX、表格→表格标记，`engine="paddleocr-vl"`）；缺失时接口如实返回 `unsupported`/`empty` 并说明原因。
+
+### 2.4 图片计数与单模态提醒（ADR-0010 批次一）
+
+正文抽取只拿得到文字层，文档里的图对纯文本模型是不可见的。两侧解析因此都统计**图片数**并如实展示：
+
+- 服务端 `Extraction.images` / 接口字段 `images`（`artifact_texts.images` 缓存列）：PDF 按页扫 `/Resources//XObject` 数 `/Image` 并按间接引用去重（Form 不递归，近似值）；docx/pptx 数 `word/media/*`、`ppt/media/*`（精确）；独立图片附件恒为 1；其余格式与计数失败为 `null`。计数绝不拖垮正文抽取。
+- 浏览器侧 `ParseOutcome.images`：PDF 为字节扫描 `/Subtype /Image` 的近似值（压缩对象流内的字典扫不到，卡片显示「约 N 张图」），OOXML 按 media 条目精确计数；随草稿进入任务参数（`TaskAttachmentDraft.images`）。
+- **单模态提醒**：附件含图且生效模型判定为纯文本时，composer 附件托盘内显示提醒行（`integration/model-modality.ts` 按模型名模式分类；`auto`/`endpoint-<id>` 经 llm-config 解析主接口模型；未登录、未配置或模态 unknown 一律沉默——宁可漏报不可误报）。
+
+后续批次（视觉解析后端、消息桥 image 内容块）见 [ADR-0010](../adr/0010-attachment-modality-awareness.md)。
+
+### 2.5 对话附件：即席解析并入消息（ADR-0010 批次三）
+
+任务页对话区输入框的附件走独立于 §2.2 的轻量链路——**不建产物、不落库**：对话历史本就只保存在页面内存，随消息提供的附件保持同样的隐私姿态。
+
+- 服务端 `POST /api/v1/artifacts/parse`（需登录）：multipart 单文件，同步返回 `AttachmentParseResult`（与 `ArtifactText` 同一套 status/engine/characters/images/text 语义）；超过大小上限返回 `unsupported` 并说明原因。抽取链路与产物正文完全相同，含可选 OCR/VL，图片与扫描件因此能转成 Markdown+LaTeX。
+- 发送消息时 `attachments/conversation-context.ts` 把附件折算成上下文块并入用户消息（单附件 8000 字、合计 20000 字预算）：浏览器已抽到文字的直接用；解不动的（图片/扫描件/旧格式/自动解析被关）现场调即席解析，权威结果如实回写附件卡片。
+- `agent-chat.ts` 的 `sendConversationTurn({ attachmentContext })` 只把上下文块并入请求内容，不进气泡展示；用户气泡下方以纸夹徽标展示附件名。发送成功后清空托盘，失败保留以便重试。
+- §2.4 的单模态提醒在对话框内同样生效。首页新建任务的附件仍走 §2.2 上传建产物链路，两条链路互不影响。
+- **任务附件同样进入对话**：`attachments/task-attachment-context.ts` 读取工作台 `artifacts` 中无 `producer_node` 的 READY 产物，取 `GET /artifacts/{id}/text` 权威正文（与随消息附件同预算），按解析就绪进度逐轮并入运行页对话（含开场分析）；发送成功才标记已注入，未就绪的附件在上下文中如实标注「仍在本机解析中」。图片/扫描件的解析全部发生在本机 API 进程（可选 VL），不出网。
 
 ## 3. 工作台契约
 
@@ -632,6 +652,26 @@ GET /api/health
 - 对话回复 Markdown 渲染（`text/markdown.ts`，零依赖）：转义优先的受限子集——标题/列表/引用/表格/分隔线/粗斜体/行内代码/代码块/http(s) 链接；`$…$`、`$$…$$`、`\(…\)`、`\[…\]` 公式输出为 `data-tex` 节点（行内加 `data-tex-inline`），复用方法库的 KaTeX 懒加载器在全文到齐后排版，加载前保留 LaTeX 源码回退；「$5 和 $10」这类金额不会误判为公式，`javascript:` 链接保持纯文本。流式期间逐增量重渲染，未闭合代码块随增量增长。配套 `markdown.test.mjs` 10 个用例（XSS 转义、注入路径、表格、流式半截代码块等）。
 
 当日执行并通过：`pytest backend/api/tests/test_llm_*.py test_task_runs_llm_nodes.py`、`node --test`（词典 5 项）、`npm run check` 与 `npm run build --workspace @openmathmodel/web`。真实接口对 ainb.plus 网关探针验证连通（假密钥返回上游 401 信封）；DeepSeek 官方等真实密钥实测留给浏览器验收。
+
+### 2026-08-20 执行步骤揭示时机：规划真正完成后才显示
+
+产品反馈驱动：此前「首个步骤一启动」就揭示六个执行步骤，而题意解析几乎在任务创建后立即启动，体感等于“随便发点什么都马上弹出全部步骤”。本次把揭示时机推迟到规划真正完成：
+
+- `isPlanningPhase`（`modeling-workspace-controller.ts`）判定窗口延长——`QUEUED`，或 `RUNNING` 且问题分析页仍为 `PENDING/RUNNING` 且后续页面均未启动，都属于规划阶段；问题分析页落定（成功/失败）或任一后续阶段启动才视为规划完成。运行离开 `QUEUED/RUNNING`（暂停、待审批、失败、终态）时需要展示状态行，同样揭示。
+- 规划阶段「收起/查看执行步骤」折叠头与步骤列表一起等待揭示（新增 `.activity-summary` 的规划期隐藏，两种布局通用；`[hidden]` 的 `!important` 还原规则此前已存在）。此期间用户看到的是：开场分析（若已配置接口）→「正在思考并规划执行步骤…」扫光行 + 活动流的「深度思考 · 题意解析」过程行；规划完成后六个阶段仍按 140ms 级联揭示，SSE 刷新与中途进页不重播。
+- 附带修复：此前若首个快照到达时题意解析已在运行（常态时序），`omm:run-planning` 不会广播、开场分析整体被跳过且步骤立即可见；判定窗口延长后该竞态消除，开场分析可靠触发（sessionStorage 按 run 防重不变）。
+- 不动契约、后端与页面结构：判定完全基于既有 `ModelingWorkspaceView.pages[].status` 语义（问题分析页在 `PROBLEM_ANALYSIS` 推进到后续节点时由投影算法翻为 `SUCCEEDED`）。
+
+### 2026-08-20（追加）输入框附件托盘折叠样式
+
+附件托盘（`composer-attachments` 模块自有槽位，覆盖首页/确认页/对话页所有 `.composer`）加可伸缩折叠，动效语言参考 aicss.dev To-do List、按产品黑白灰体系以原生 DOM 重写：
+
+- 折叠头：回形针图标 + 「附件」 + 计数徽标；悬停图标交叉淡出为箭头，收起时箭头旋转 -90°，`aria-expanded` 随动；点击收展，收展为 `grid-template-rows 1fr ↔ 0fr` + 透明度过渡。
+- 计数徽标「已解析/总数」（已解析 = phase 非 parsing/uploading）：逐字符槽位滚动更新（旧字上移、新字滚入，350ms），内容为纯数字斜杠，语言中立不进词典；徽标带 `aria-label`。
+- 新附件按加入顺序级联入场（50ms 步进）；解析进度等重渲染不重播动画（已入场 id 集合防重）。收起状态下新增附件自动展开；清空后回到展开态。
+- 单模态提醒行（ADR-0010）与错误状态行保持在折叠区外，收起时不会藏住需要知情的内容。
+- 修正 `.composer-attachments[hidden]`：托盘是作者级 `display:flex`，会压过 UA 的 `[hidden]`，此前托盘为空时留白不可见，现在有常驻折叠头必须显式还原 `display:none`。
+- 全部动效尊重 `prefers-reduced-motion`；暗色主题按 `html[data-theme="dark"]` 补齐配色。
 
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 

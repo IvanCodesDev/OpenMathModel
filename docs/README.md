@@ -72,6 +72,8 @@
 | [0007 Agent 工作台投影](./adr/0007-agent-workspace-projection.md) | Accepted | 当前运行快照、动作和 Artifact 映射合同 |
 | [0008 界面本地化](./adr/0008-interface-localization.md) | Accepted | 以 DOM 适配层翻译界面文案；真实数据与用户内容不参与翻译 |
 | [0009 合并建模工作台](./adr/0009-merged-modeling-workspace.md) | Accepted | 五个阶段路由渲染同一工作台，面板软切换；URL 保留为面板别名 |
+| [0010 附件图片计数与模型模态感知](./adr/0010-attachment-modality-awareness.md) | Accepted | 附件解析统计图片数并如实展示；纯文本模型配图片附件时发送前提醒；视觉解析与对话附件按批次落地 |
+| [0011 编排选型：状态机与有界循环](./adr/0011-orchestration-state-machine-and-bounded-loops.md) | Accepted | 运行拓扑唯一由显式状态机定义，P4 用节点注册表替换模拟节点；循环分层有界并事件化；不引入通用图编排 |
 
 ## 当前文档与历史记录的边界
 

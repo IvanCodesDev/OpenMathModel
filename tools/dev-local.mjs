@@ -252,6 +252,10 @@ async function main() {
           binding.host,
           "--port",
           String(binding.port),
+          // 页面的 SSE 长连接永不排空；不设上限时优雅停机会无限等待，
+          // 表现为重载/退出后 API 失联（端口被旧进程占死）。
+          "--timeout-graceful-shutdown",
+          "5",
         ],
         {},
         { zeroExitIsError: true },
