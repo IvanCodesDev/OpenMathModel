@@ -6,6 +6,15 @@
  * 页面内存里随请求携带，服务端无状态、不落库（本机留存策略归「数据与隐私」）。
  */
 
+import { collectTaskAttachmentContext } from "../attachments/task-attachment-context";
+import {
+  appendConversationEntries,
+  loadConversationLog,
+  type ConversationLogEntry,
+} from "../tasks/conversation-log";
+import { saveHistoryEnabled } from "../preferences/privacy-preferences";
+import { currentChatMode } from "./chat-mode";
+
 /** Auto 模式的路由判定结果：难度 1-5 与判定用的模型（空 = 规则估计）。 */
 export interface ChatRouteMeta {
   mode?: string;
@@ -58,7 +67,50 @@ function trimHistory(): void {
   }
 }
 
+/** 系统自动发起的开场分析指令：恢复对话时用同一文案重建模型上下文。 */
+export const OPENING_ANALYSIS_PROMPT =
+  "请先对这个建模任务做开场分析：你对题目的理解、主要难点、以及接下来的执行思路，控制在两三段。";
+
+/** 当前对话绑定的运行与题面；null = 演示/无运行页面（沿用旧 sessionStorage 键）。 */
+let scopeRunId: string | null = null;
+let scopeGoal = "";
+
+function goalPrefixed(goal: string, text: string): string {
+  return goal ? `【当前建模任务】${goal}\n\n${text}` : text;
+}
+
+/**
+ * 绑定当前对话所属的运行：切到另一个任务时清空上下文并从本机对话记录
+ * （tasks/conversation-log，按 run_id 隔离）重建；同一运行内重复调用只
+ * 更新题面。这是「点最近任务进来不串上一个任务数据」的关键闸门。
+ */
+export function configureConversation(runId: string | null, goal = ""): void {
+  if (scopeRunId === runId) {
+    scopeGoal = goal || scopeGoal;
+    return;
+  }
+  scopeRunId = runId;
+  scopeGoal = goal;
+  history.length = 0;
+  if (!runId) return;
+  for (const entry of loadConversationLog(runId)) {
+    if (entry.role === "assistant" && entry.opening) {
+      // 开场分析在记录里只有回复：按原始指令补出用户轮，保持 user/assistant 交替。
+      history.push({ role: "user", content: goalPrefixed(history.length === 0 ? scopeGoal : "", OPENING_ANALYSIS_PROMPT) });
+      history.push({ role: "assistant", content: entry.text });
+    } else if (entry.role === "user") {
+      history.push({ role: "user", content: goalPrefixed(history.length === 0 ? scopeGoal : "", entry.text) });
+    } else {
+      history.push({ role: "assistant", content: entry.text });
+    }
+  }
+  trimHistory();
+}
+
 function taskGoal(): string {
+  // 已绑定运行时只认该运行的题面；全局 sessionStorage 键是同标签页上一个
+  // 任务留下的，读它会把别的任务的题目串进当前对话。
+  if (scopeRunId !== null) return scopeGoal;
   try {
     return sessionStorage.getItem("openmathmodelPrompt")?.trim() ?? "";
   } catch {
@@ -114,6 +166,15 @@ function parseSseChunk(buffer: string): { events: Array<Record<string, unknown>>
   return { events, rest };
 }
 
+export interface ChatTurnOptions {
+  /** 随消息发送的附件上下文块（ADR-0010 批次三）；只进请求内容，不进气泡展示。 */
+  attachmentContext?: string;
+  /** 本轮是系统自动发起的开场分析：本机记录只保留回复，不留用户气泡。 */
+  openingAnalysis?: boolean;
+  /** 随消息发送的附件名：进入本机对话记录，恢复时重建纸夹徽标。 */
+  attachmentNames?: string[];
+}
+
 /**
  * 发送一轮对话并返回完整回复。首轮把任务目标并入用户消息作为背景，
  * 保持 user/assistant 交替（Anthropic 协议要求严格交替）。
@@ -121,9 +182,22 @@ function parseSseChunk(buffer: string): { events: Array<Record<string, unknown>>
 export async function sendConversationTurn(
   text: string,
   handlers: ChatHandlers = {},
+  options: ChatTurnOptions = {},
 ): Promise<{ text: string; reasoning: string; meta: ChatMeta }> {
   const goal = history.length === 0 ? taskGoal() : "";
-  const content = goal ? `【当前建模任务】${goal}\n\n${text}` : text;
+  // 任务附件（首页上传的项目产物）与随消息附件（对话框托盘）是互补的两条来源：
+  // 前者按解析就绪进度逐轮并入，后者由调用方通过 attachmentContext 传入。
+  const taskAttachments = await collectTaskAttachmentContext();
+  const parts: string[] = [];
+  if (goal) parts.push(`【当前建模任务】${goal}`);
+  if (taskAttachments) parts.push(taskAttachments.block);
+  if (options.attachmentContext) parts.push(options.attachmentContext);
+  // 对话模式（深度研究/快速分析）的风格指令随每条消息注入；开场分析
+  // 有自己的长度约束，不叠加。
+  const mode = currentChatMode();
+  if (mode.instruction && !options.openingAnalysis) parts.push(mode.instruction);
+  parts.push(text);
+  const content = parts.join("\n\n");
   history.push({ role: "user", content });
   trimHistory();
 
@@ -202,10 +276,29 @@ export async function sendConversationTurn(
   // 思考过程只用于展示，不进对话历史（回传会浪费上下文且各家协议不认）
   history.push({ role: "assistant", content: full });
   trimHistory();
+  // 发送成功才把任务附件标记为已注入；失败路径保留，下一轮重新并入。
+  taskAttachments?.commit();
+  // 本机对话记录（按 run 隔离）：重新进入任务时恢复气泡与上下文。
+  // 「保存任务历史」（数据与隐私）关闭时不落盘。
+  if (scopeRunId && saveHistoryEnabled()) {
+    const entries: ConversationLogEntry[] = options.openingAnalysis
+      ? [{ role: "assistant", text: full, opening: true }]
+      : [
+        {
+          role: "user",
+          text,
+          ...(options.attachmentNames?.length ? { attachments: options.attachmentNames } : {}),
+        },
+        { role: "assistant", text: full },
+      ];
+    appendConversationEntries(scopeRunId, entries);
+  }
   return { text: full, reasoning, meta };
 }
 
-/** 切换任务/页面时清空上下文（当前按页面刷新自然重置，预留给控制器调用）。 */
+/** 切换任务/页面时清空上下文与运行绑定（预留给控制器调用）。 */
 export function resetConversation(): void {
   history.length = 0;
+  scopeRunId = null;
+  scopeGoal = "";
 }

@@ -6,6 +6,7 @@
  * 结构、工具栏顺序和发送按钮。
  */
 
+import { modalityNotice, resolveSelectedModality } from "../integration/model-modality";
 import { ACCEPT_ATTRIBUTE } from "./formats";
 import { MAX_FILE_COUNT, formatBytes } from "./limits";
 import type { ParseStatus } from "./parse";
@@ -151,9 +152,76 @@ function buildTray(): HTMLElement {
   tray.className = "composer-attachments";
   tray.dataset.composerAttachments = "";
   tray.hidden = true;
-  tray.innerHTML = '<div class="composer-attachment-list" data-composer-attachment-list></div>'
+  // 折叠头 + 可收展列表（动效语言参考 aicss.dev To-do List，按产品黑白灰体系重写）；
+  // 单模态提醒与错误行留在折叠区外，收起时也不会藏住需要知情的内容。
+  tray.innerHTML = '<button type="button" class="composer-attachments-head" data-composer-attachments-toggle aria-expanded="true">'
+    + '<span class="composer-attachments-head-icon" aria-hidden="true">'
+    + '<i class="ph ph-paperclip composer-attachments-clip"></i>'
+    + '<i class="ph ph-caret-down composer-attachments-chevron"></i>'
+    + '</span>'
+    + '<span class="composer-attachments-title">附件</span>'
+    + '<span class="composer-attachments-count" data-composer-attachment-count></span>'
+    + '</button>'
+    + '<div class="composer-attachments-collapsible" data-composer-attachment-collapsible>'
+    + '<div class="composer-attachments-inner">'
+    + '<div class="composer-attachment-list" data-composer-attachment-list></div>'
+    + '</div></div>'
+    + '<p class="composer-attachment-modality" data-composer-attachment-modality role="status" hidden></p>'
     + '<p class="composer-attachment-status" data-composer-attachment-status role="status" hidden></p>';
   return tray;
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+/**
+ * 计数徽标「已解析/总数」：逐字符槽位滚动更新——旧字上移、新字滚入。
+ * 内容是纯数字与斜杠，语言中立，无需进翻译词典。
+ */
+function renderRollingCount(host: HTMLElement, value: string): void {
+  const previous = host.dataset.count ?? "";
+  if (previous === value) return;
+  host.dataset.count = value;
+  host.setAttribute("aria-label", value);
+  const chars = value.split("");
+  if (prefersReducedMotion() || chars.length !== host.childElementCount) {
+    host.replaceChildren(...chars.map(char => {
+      const slot = document.createElement("span");
+      slot.className = "composer-attachments-digit";
+      slot.dataset.char = char;
+      slot.textContent = char;
+      return slot;
+    }));
+    return;
+  }
+  chars.forEach((char, index) => {
+    const slot = host.children[index];
+    if (!(slot instanceof HTMLElement) || slot.dataset.char === char) return;
+    const from = slot.dataset.char ?? "";
+    slot.dataset.char = char;
+    const column = document.createElement("span");
+    column.className = "composer-attachments-roll";
+    column.append(
+      Object.assign(document.createElement("span"), { textContent: from }),
+      Object.assign(document.createElement("span"), { textContent: char }),
+    );
+    slot.replaceChildren(column);
+    // 双 rAF：先让初始位置渲染一帧，再加类触发位移过渡
+    requestAnimationFrame(() => requestAnimationFrame(() => column.classList.add("is-up")));
+    window.setTimeout(() => {
+      if (slot.dataset.char === char) slot.textContent = char;
+    }, 380);
+  });
+}
+
+/** 与 task-start-controller / agent-chat 共用的模型选择器存储键。 */
+function selectedModelValue(): string {
+  try {
+    return localStorage.getItem("openmathmodelSelectedModel") || "auto";
+  } catch {
+    return "auto";
+  }
 }
 
 /** 拖到窗口任意位置都别让浏览器直接打开文件，否则用户会丢掉正在写的任务描述。 */
@@ -183,16 +251,74 @@ function mountOne(composer: HTMLElement): void {
   composer.append(buildDropzone());
 
   const list = tray.querySelector<HTMLElement>("[data-composer-attachment-list]");
+  const modalityHint = tray.querySelector<HTMLElement>("[data-composer-attachment-modality]");
   const status = tray.querySelector<HTMLElement>("[data-composer-attachment-status]");
+  const head = tray.querySelector<HTMLButtonElement>("[data-composer-attachments-toggle]");
+  const countHost = tray.querySelector<HTMLElement>("[data-composer-attachment-count]");
   const fileInput = composer.querySelector<HTMLInputElement>("input[type=\"file\"]");
   if (fileInput) fileInput.accept = ACCEPT_ATTRIBUTE;
 
+  let collapsed = false;
+  const setCollapsed = (next: boolean): void => {
+    collapsed = next;
+    tray.classList.toggle("is-collapsed", next);
+    head?.setAttribute("aria-expanded", String(!next));
+  };
+  head?.addEventListener("click", event => {
+    event.preventDefault();
+    setCollapsed(!collapsed);
+  });
+
+  // 单模态提醒（ADR-0010）：附件含图且生效模型判定为纯文本时，在托盘内提示
+  // 「图片不会被模型看到」。解析是异步的，用序号丢弃过期结果。
+  let modalityEvaluation = 0;
+  const updateModalityHint = (): void => {
+    if (!modalityHint) return;
+    const images = store.list().reduce((sum, item) => sum + (item.parse?.images ?? 0), 0);
+    const evaluation = ++modalityEvaluation;
+    if (images <= 0) {
+      modalityHint.hidden = true;
+      modalityHint.textContent = "";
+      return;
+    }
+    void resolveSelectedModality(selectedModelValue()).then(effective => {
+      if (evaluation !== modalityEvaluation) return;
+      const message = modalityNotice(images, effective);
+      modalityHint.hidden = !message;
+      modalityHint.textContent = message;
+    });
+  };
+
+  // 已入场过的附件不重播入场动画：解析进度等 SSE 般的重渲染只该更新内容。
+  const enteredIds = new Set<string>();
+  let knownCount = 0;
   const render = (): void => {
     const attachments = store.list();
     // 聊天页的输入框是定高绝对定位的，挂上附件后要靠这个类切成自适应高度。
     composer.classList.toggle("has-attachments", attachments.length > 0);
     tray.hidden = attachments.length === 0 && (status?.hidden ?? true);
-    list?.replaceChildren(...attachments.map(buildCard));
+    // 收起状态下新增附件自动展开，否则拖入文件后界面毫无动静像没生效。
+    if (attachments.length > knownCount && collapsed) setCollapsed(false);
+    knownCount = attachments.length;
+    if (attachments.length === 0) {
+      enteredIds.clear();
+      if (collapsed) setCollapsed(false);
+    }
+    let enterIndex = 0;
+    list?.replaceChildren(...attachments.map(attachment => {
+      const card = buildCard(attachment);
+      if (!enteredIds.has(attachment.id)) {
+        enteredIds.add(attachment.id);
+        card.classList.add("composer-attachment-enter");
+        card.style.setProperty("--enter-index", String(enterIndex++));
+      }
+      return card;
+    }));
+    if (countHost) {
+      const settled = attachments.filter(item => item.phase !== "parsing" && item.phase !== "uploading").length;
+      renderRollingCount(countHost, `${settled}/${attachments.length}`);
+    }
+    updateModalityHint();
   };
 
   const report = (message: string, kind: "status" | "error"): void => {
@@ -268,6 +394,9 @@ function mountOne(composer: HTMLElement): void {
     report("", "status");
     render();
   });
+
+  // 模型选择器与附件同在 composer 里：点击后下一拍重估提醒，切换模型立即反映。
+  composer.addEventListener("click", () => window.setTimeout(updateModalityHint, 0));
 }
 
 /** 每次切屏调用：为当前页面里新渲染出来的输入框补挂附件能力。 */
@@ -280,4 +409,9 @@ export function mountComposerAttachments(): void {
 export function attachmentsWithin(root: ParentNode): AttachmentStore | undefined {
   const composer = root.querySelector(".composer");
   return composer ? registry.get(composer) : undefined;
+}
+
+/** 直接以 composer 元素取附件集合（对话发送处理器手里已有该元素）。 */
+export function attachmentsOf(composer: Element): AttachmentStore | undefined {
+  return registry.get(composer);
 }

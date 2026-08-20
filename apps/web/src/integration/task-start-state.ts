@@ -21,6 +21,8 @@ export interface TaskAttachmentDraft {
   parse_status?: TaskAttachmentParseStatus;
   /** 浏览器抽取到的字符数（不是摘要长度） */
   characters?: number;
+  /** 检测到的图片数（近似值，ADR-0010）；权威计数以服务端解析为准 */
+  images?: number;
   /** 正文摘要；完整正文以服务端对上传产物的解析为准 */
   excerpt?: string;
   artifact_id?: string;
@@ -84,6 +86,9 @@ export function parseTaskDraft(raw: string | null): TaskDraft | null {
       const characters = typeof item.characters === "number" && Number.isSafeInteger(item.characters) && item.characters >= 0
         ? item.characters
         : 0;
+      const images = typeof item.images === "number" && Number.isSafeInteger(item.images) && item.images > 0
+        ? item.images
+        : 0;
       const excerpt = boundedString(item.excerpt, MAX_ATTACHMENT_EXCERPT);
       const artifactId = boundedString(item.artifact_id, 64);
       return [{
@@ -94,6 +99,7 @@ export function parseTaskDraft(raw: string | null): TaskDraft | null {
         ...(format ? { format } : {}),
         ...(status ? { parse_status: status } : {}),
         ...(characters ? { characters } : {}),
+        ...(images ? { images } : {}),
         ...(excerpt ? { excerpt } : {}),
         ...(ARTIFACT_ID_PATTERN.test(artifactId) ? { artifact_id: artifactId } : {}),
       }];

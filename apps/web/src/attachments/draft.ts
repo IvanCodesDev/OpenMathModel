@@ -26,6 +26,7 @@ export function toDraftAttachments(attachments: readonly Attachment[]): TaskAtta
       format: descriptor.label,
       ...(parse ? { parse_status: parse.status } : {}),
       ...(parse?.characters ? { characters: parse.characters } : {}),
+      ...(parse?.images ? { images: parse.images } : {}),
       ...(excerpt ? { excerpt } : {}),
       ...(attachment.artifactId ? { artifact_id: attachment.artifactId } : {}),
     };

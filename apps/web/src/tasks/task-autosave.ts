@@ -9,6 +9,7 @@
  * 开关状态每个周期重新读取，设置中心里改动后无需刷新即可生效。
  */
 
+import { saveHistoryEnabled } from "../preferences/privacy-preferences";
 import { autoSaveEnabled } from "../preferences/task-preferences";
 import type { ScreenId } from "../types/screens";
 
@@ -116,7 +117,8 @@ function restoreChatDrafts(): void {
 }
 
 function tick(): void {
-  if (!autoSaveEnabled()) return;
+  // 「保存任务历史」（数据与隐私）关闭时，对话与正文草稿一并停止落盘。
+  if (!autoSaveEnabled() || !saveHistoryEnabled()) return;
   saveChatDrafts();
   savePaper();
 }
@@ -131,7 +133,7 @@ export function mountTaskAutosave(screen: ScreenId): void {
   lastPaperHtml = undefined;
   if (!AUTOSAVE_SCREENS.has(screen)) return;
 
-  if (autoSaveEnabled()) {
+  if (autoSaveEnabled() && saveHistoryEnabled()) {
     restoreChatDrafts();
     restorePaper();
   }

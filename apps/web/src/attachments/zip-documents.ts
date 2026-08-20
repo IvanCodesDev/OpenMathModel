@@ -279,6 +279,18 @@ export interface ArchiveEntry {
   size: number;
 }
 
+/** 统计指定前缀下的条目数（如 word/media/）：filter 恒 false，零解压成本。 */
+export function countArchiveEntries(bytes: Uint8Array, prefix: string): number {
+  let count = 0;
+  unzipSync(bytes, {
+    filter: file => {
+      if (file.name.startsWith(prefix) && !file.name.endsWith("/")) count += 1;
+      return false;
+    },
+  });
+  return count;
+}
+
 /** 只读中央目录列出条目：filter 返回 false 就不会真的解压，代价接近于零。 */
 export function listArchiveEntries(bytes: Uint8Array): ArchiveEntry[] {
   const entries: ArchiveEntry[] = [];

@@ -49,6 +49,22 @@ test("parses a saved draft and rejects unsafe remote identifiers", () => {
   assert.equal(parseTaskDraft("{"), null);
 });
 
+test("keeps a positive image count and drops junk values (ADR-0010)", () => {
+  const draft = parseTaskDraft(JSON.stringify({
+    version: 1,
+    description: "读题",
+    attachments: [
+      { name: "题目.pdf", size: 1, type: "application/pdf", last_modified: 0, images: 3 },
+      { name: "附件.docx", size: 1, type: "", last_modified: 0, images: 0 },
+      { name: "怪值.docx", size: 1, type: "", last_modified: 0, images: "three" },
+    ],
+  }));
+  assert.ok(draft);
+  assert.equal(draft.attachments[0].images, 3);
+  assert.equal(draft.attachments[1].images, undefined);
+  assert.equal(draft.attachments[2].images, undefined);
+});
+
 test("builds the canonical run-aware workspace URL", () => {
   assert.equal(
     buildRunningUrl(`run_${"a".repeat(32)}`, `proj_${"b".repeat(32)}`),

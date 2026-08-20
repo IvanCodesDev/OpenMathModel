@@ -16,6 +16,7 @@ import {
 import { extractPdfText } from "./pdf-document";
 import { decodeBytes, tidyText } from "./text-decode";
 import {
+  countArchiveEntries,
   extractArchiveEntries,
   extractDocxText,
   extractOpenDocumentText,
@@ -40,6 +41,12 @@ export interface ParseOutcome {
   metrics: ParseMetric[];
   /** 展示给用户的一句话说明：排队原因、截断提示或失败原因 */
   notice?: string;
+  /**
+   * 检测到的图片数（ADR-0010）：docx/pptx 按 media 条目精确计数，PDF 为字节扫描
+   * 近似值，独立图片附件恒为 1。纯文本模型看不到这些图，单模态提醒据此触发；
+   * 权威计数以服务端解析为准。
+   */
+  images?: number;
 }
 
 /** 压缩包内自动展开的单个条目体积上限。 */
@@ -49,6 +56,22 @@ const SCANNED_PDF_CHARS_PER_PAGE = 12;
 
 function countLines(text: string): number {
   return text ? text.split("\n").length : 0;
+}
+
+/**
+ * PDF 内嵌图片的近似计数：扫未压缩对象字典里的 /Subtype /Image。
+ * 压缩对象流（PDF 1.5+ ObjStm）里的字典扫不到会漏计，因此只标注「约」；
+ * 权威计数由服务端 pypdf 按页扫 XObject 得出。
+ */
+function countPdfImagesApprox(bytes: Uint8Array): number {
+  const source = new TextDecoder("latin1").decode(bytes);
+  return source.match(/\/Subtype\s*\/Image\b/g)?.length ?? 0;
+}
+
+/** 图片数写成卡片指标；0 张不占位。 */
+function imageMetric(images: number, approximate: boolean): ParseMetric[] {
+  if (images <= 0) return [];
+  return [{ label: "图片", value: approximate ? `约 ${images} 张图` : `${images} 张图` }];
 }
 
 interface NotebookCell {
@@ -112,7 +135,7 @@ function extractArchive(bytes: Uint8Array): { text: string; metrics: ParseMetric
 async function runParser(
   file: File,
   descriptor: FormatDescriptor,
-): Promise<{ text: string; metrics: ParseMetric[]; notice?: string; status?: ParseStatus }> {
+): Promise<{ text: string; metrics: ParseMetric[]; notice?: string; status?: ParseStatus; images?: number }> {
   if (descriptor.route === "text" || descriptor.route === "notebook") {
     const text = decodeBytes(new Uint8Array(await file.arrayBuffer()));
     const extension = fileExtension(file.name);
@@ -127,13 +150,15 @@ async function runParser(
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (descriptor.route === "pdf") {
     const pdf = await extractPdfText(bytes);
-    const metrics: ParseMetric[] = [{ label: "页", value: `${pdf.pages} 页` }];
+    const images = countPdfImagesApprox(bytes);
+    const metrics: ParseMetric[] = [{ label: "页", value: `${pdf.pages} 页` }, ...imageMetric(images, true)];
     if (pdf.text.length < pdf.extractedPages * SCANNED_PDF_CHARS_PER_PAGE) {
       return {
         text: pdf.text,
         metrics,
         status: "server-pending",
         notice: "疑似扫描件，浏览器抽不到文字层，已排队交由服务端 OCR",
+        images,
       };
     }
     return {
@@ -143,6 +168,7 @@ async function runParser(
       notice: pdf.extractedPages < pdf.pages
         ? `浏览器只抽取了前 ${pdf.extractedPages} 页，完整正文以服务端解析为准`
         : undefined,
+      images,
     };
   }
 
@@ -155,13 +181,29 @@ async function runParser(
   const unit = descriptor.route === "ooxml-slides" ? "页幻灯片"
     : descriptor.route === "ooxml-sheet" ? "个工作表"
       : "个段落";
-  return { text: extraction.text, metrics: [{ label: "结构", value: `${extraction.segments} ${unit}` }] };
+  const images = descriptor.route === "ooxml-word" ? countArchiveEntries(bytes, "word/media/")
+    : descriptor.route === "ooxml-slides" ? countArchiveEntries(bytes, "ppt/media/")
+      : 0;
+  return {
+    text: extraction.text,
+    metrics: [{ label: "结构", value: `${extraction.segments} ${unit}` }, ...imageMetric(images, false)],
+    images,
+  };
 }
 
 export async function parseAttachment(file: File): Promise<ParseOutcome> {
   const descriptor = describeFormat(file.name, file.type);
   if (descriptor.route === "server") {
-    return { status: "server-pending", text: "", characters: 0, metrics: [], notice: descriptor.serverReason };
+    // 独立图片附件本身就是一张图：单模态提醒需要这个计数，即使解析在服务端。
+    const images = descriptor.artifactKind === "figure" ? 1 : undefined;
+    return {
+      status: "server-pending",
+      text: "",
+      characters: 0,
+      metrics: [],
+      notice: descriptor.serverReason,
+      ...(images ? { images } : {}),
+    };
   }
   if (file.size > MAX_CLIENT_PARSE_BYTES) {
     return {
@@ -177,8 +219,16 @@ export async function parseAttachment(file: File): Promise<ParseOutcome> {
     const result = await runParser(file, descriptor);
     const truncated = result.text.length > MAX_EXTRACTED_CHARS;
     const text = truncated ? result.text.slice(0, MAX_EXTRACTED_CHARS) : result.text;
+    const images = result.images ? { images: result.images } : {};
     if (result.status === "server-pending") {
-      return { status: "server-pending", text, characters: text.length, metrics: result.metrics, notice: result.notice };
+      return {
+        status: "server-pending",
+        text,
+        characters: text.length,
+        metrics: result.metrics,
+        notice: result.notice,
+        ...images,
+      };
     }
     if (!text) {
       return {
@@ -187,6 +237,7 @@ export async function parseAttachment(file: File): Promise<ParseOutcome> {
         characters: 0,
         metrics: result.metrics,
         notice: result.notice ?? "没有抽取到文字内容，已排队交由服务端复核",
+        ...images,
       };
     }
     return {
@@ -197,6 +248,7 @@ export async function parseAttachment(file: File): Promise<ParseOutcome> {
       notice: truncated
         ? `内容较长，浏览器只保留了前 ${MAX_EXTRACTED_CHARS.toLocaleString("zh-CN")} 字，完整正文以服务端解析为准`
         : result.notice,
+      ...images,
     };
   } catch (error) {
     return {

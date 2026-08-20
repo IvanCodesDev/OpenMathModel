@@ -8,6 +8,7 @@ import { uploadAttachments } from "../attachments/upload";
 import { fetchMe, invalidateMe } from "../auth/api";
 import { openAuthDialog } from "../auth/auth-dialog";
 import type { ScreenId } from "../types/screens";
+import { persistPendingTaskReferences } from "./composer-references";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
   buildRunningUrl,
@@ -185,6 +186,10 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   sessionStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
   sessionStorage.setItem(ACTIVE_RUN_KEY, run.id);
   sessionStorage.setItem(LEGACY_PROMPT_KEY, draft.description);
+  // 运行页首屏气泡按 run 隔离取题面；全局键只服务演示态兜底。
+  sessionStorage.setItem(`openmathmodel.taskGoal.${run.id}`, draft.description);
+  // 首页挂着的知识库引用 chips 随任务交接到运行页（按 run 存取，一次性消费）。
+  persistPendingTaskReferences(run.id);
   sessionStorage.removeItem(DRAFT_KEY);
   return { status: "created", url: buildRunningUrl(run.id, projectId) };
 }
@@ -410,13 +415,19 @@ const PARSE_STATE_TEXT: Record<NonNullable<TaskAttachmentDraft["parse_status"]>,
 };
 
 function attachmentState(attachment: TaskAttachmentDraft): string {
+  // 图片计数始终展示：纯文本模型看不到图（ADR-0010），用户在确认页也该知道。
+  const imageSuffix = attachment.images ? ` · ${attachment.images.toLocaleString("zh-CN")} 张图` : "";
   if (attachment.artifact_id) {
-    return attachment.characters ? `已上传 · ${attachment.characters.toLocaleString("zh-CN")} 字` : "已上传";
+    const base = attachment.characters
+      ? `已上传 · ${attachment.characters.toLocaleString("zh-CN")} 字`
+      : "已上传";
+    return base + imageSuffix;
   }
-  if (!attachment.parse_status) return "已保存元数据";
-  return attachment.characters
+  if (!attachment.parse_status) return `已保存元数据${imageSuffix}`;
+  const base = attachment.characters
     ? `${PARSE_STATE_TEXT[attachment.parse_status]} · ${attachment.characters.toLocaleString("zh-CN")} 字`
     : PARSE_STATE_TEXT[attachment.parse_status];
+  return base + imageSuffix;
 }
 
 function renderAttachments(root: HTMLElement, attachments: TaskAttachmentDraft[]): void {
