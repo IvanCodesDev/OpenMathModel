@@ -149,6 +149,40 @@ def test_workspace_view_exposes_artifacts_and_completed_page(client, validate_co
     }
 
 
+def test_workspace_view_includes_project_uploads_as_run_attachments(
+    client, validate_contract
+) -> None:
+    """首页上传的附件（项目级、run_id 为空）要出现在运行的工作台视图里。
+
+    顶栏回形针计数、附件弹窗与任务附件上下文（ADR-0010）都以本视图为数据源；
+    上传发生在任务创建之前，天然没有 run_id。
+    """
+    project = create_project(client, "附件随任务可见")
+    upload = client.post(
+        f"{API}/projects/{project['id']}/artifacts",
+        files={"file": ("题目.pdf", b"%PDF-1.4 demo", "application/pdf")},
+        data={"kind": "other"},
+    )
+    assert upload.status_code == 201, upload.text
+    artifact_id = upload.json()["id"]
+    run = create_run(client, project["id"], auto_start=False)
+
+    payload = _workspace(client, run["id"])
+    validate_contract("modeling-workspace-view.schema.json", payload)
+    attachment = next(item for item in payload["artifacts"] if item["id"] == artifact_id)
+
+    assert attachment["name"] == "题目.pdf"
+    assert attachment["producer_node"] is None
+    assert attachment["download_url"] == f"/api/v1/artifacts/{artifact_id}/download"
+    # 上传不属于任何执行阶段：不得混进阶段页面的产物分组；
+    # 「最终成果」页汇总全部文件（含输入附件），保持既有语义。
+    assert all(
+        artifact_id not in page["artifact_ids"]
+        for page in payload["pages"]
+        if page["key"] != "complete"
+    )
+
+
 def test_workspace_view_keeps_non_ready_artifact_non_downloadable(
     client, app, validate_contract
 ) -> None:

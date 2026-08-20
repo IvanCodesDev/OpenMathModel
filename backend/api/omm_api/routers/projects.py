@@ -16,13 +16,14 @@ from omm_contracts import (
     ProjectMode,
 )
 
-from ..api_models import ArtifactList, ProjectList
+from ..api_models import ArtifactList, ProjectList, ProjectUpdateInput
 from ..db import get_session
 from ..deps import AuthContext, get_auth_context
 from ..errors import ApiError, NotFoundError
 from ..events import append_event
 from ..ids import new_id
 from ..orm import ArtifactRow, ProjectRow, TaskRunRow
+from ..privacy import purge_project
 from ..serialize import artifact_to_contract, project_to_contract, utcnow
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
@@ -65,16 +66,21 @@ def create_project(
 def list_projects(
     ctx: AuthContext = Depends(get_auth_context),
     session: Session = Depends(get_session),
+    archived: bool = Query(default=False, description="true 时只返回已归档项目"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ProjectList:
-    owned = ProjectRow.owner == ctx.user.id
+    # 归档状态不进 Project 载荷：默认列表 = 未归档，archived=true = 只看归档。
+    conditions = [
+        ProjectRow.owner == ctx.user.id,
+        ProjectRow.archived_at.is_not(None) if archived else ProjectRow.archived_at.is_(None),
+    ]
     total = session.execute(
-        select(func.count()).select_from(ProjectRow).where(owned)
+        select(func.count()).select_from(ProjectRow).where(*conditions)
     ).scalar_one()
     rows = session.execute(
         select(ProjectRow)
-        .where(owned)
+        .where(*conditions)
         .order_by(ProjectRow.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -89,6 +95,45 @@ def get_project(
     session: Session = Depends(get_session),
 ) -> Project:
     return project_to_contract(get_owned_project(session, ctx, project_id))
+
+
+@router.patch("/{project_id}", response_model=Project)
+def update_project(
+    project_id: str,
+    payload: ProjectUpdateInput,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> Project:
+    """项目维护（侧栏「最近任务」）：重命名与归档/取消归档，可同时提交。"""
+    row = get_owned_project(session, ctx, project_id)
+    changed = False
+    if payload.name is not None and payload.name != row.name:
+        row.name = payload.name
+        changed = True
+    if payload.archived is not None:
+        target = utcnow() if payload.archived else None
+        if bool(row.archived_at) != payload.archived:
+            row.archived_at = target
+            changed = True
+    if changed:
+        row.updated_at = utcnow()
+        session.flush()
+    return project_to_contract(row)
+
+
+@router.delete("/{project_id}", status_code=204)
+def delete_project(
+    project_id: str,
+    request: Request,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> None:
+    """删除项目及其全部运行、事件、审批与产物；内容对象无引用后回收。
+
+    用量记录是审计历史，保留不动。删除不可恢复——仅隐藏请用归档。
+    """
+    row = get_owned_project(session, ctx, project_id)
+    purge_project(session, row, request.app.state.blobs)
 
 
 @router.post("/{project_id}/artifacts", response_model=Artifact, status_code=201)

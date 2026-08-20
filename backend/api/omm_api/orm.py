@@ -33,6 +33,9 @@ class ProjectRow(Base):
     mode: Mapped[Optional[str]] = mapped_column(String(50))
     competition_policy: Mapped[Optional[str]] = mapped_column(String(100))
     workspace_uri: Mapped[Optional[str]] = mapped_column(String(500))
+    # 归档时间：非空 = 已归档，默认列表不再返回（侧栏「最近任务」的归档语义）。
+    # 状态不进 v1 Project 载荷：归档与否由列表查询的 archived 过滤参数表达。
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -136,6 +139,8 @@ class ArtifactTextRow(Base):
     engine: Mapped[str] = mapped_column(String(40), nullable=False)
     characters: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     segments: Mapped[Optional[int]] = mapped_column(Integer)
+    # 文档内嵌图片数（近似值，ADR-0010）；None = 该格式不统计或计数失败。
+    images: Mapped[Optional[int]] = mapped_column(Integer)
     detail: Mapped[Optional[str]] = mapped_column(String(500))
     text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

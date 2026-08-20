@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from omm_contracts import (
     AgentEvent,
@@ -19,6 +19,14 @@ from omm_contracts import (
 class ProjectList(BaseModel):
     items: list[Project]
     total: int
+
+
+class ProjectUpdateInput(BaseModel):
+    """项目维护输入（侧栏「最近任务」的重命名与归档）；两项都可省略。"""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    #: true = 归档（从默认列表消失），false = 取消归档；None = 不改动。
+    archived: Optional[bool] = None
 
 
 class TaskRunList(BaseModel):
@@ -58,5 +66,25 @@ class ArtifactText(BaseModel):
     engine: str
     characters: int
     segments: Optional[int] = None
+    #: 文档内嵌图片数（近似值，ADR-0010）；null = 该格式不统计或计数失败。
+    images: Optional[int] = None
+    detail: Optional[str] = None
+    text: str
+
+
+class AttachmentParseResult(BaseModel):
+    """对话附件的即席解析结果（ADR-0010 批次三）。
+
+    与 ``ArtifactText`` 同一套状态语义，但不落库、不建产物：对话历史保存在页面
+    内存、服务端无状态，附件解析也保持同样的隐私姿态。
+    """
+
+    name: str
+    media_type: str
+    status: Literal["ready", "partial", "empty", "unsupported", "failed"]
+    engine: str
+    characters: int
+    segments: Optional[int] = None
+    images: Optional[int] = None
     detail: Optional[str] = None
     text: str

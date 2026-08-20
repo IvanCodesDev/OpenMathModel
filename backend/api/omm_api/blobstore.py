@@ -28,6 +28,9 @@ class ArtifactBlobStore(Protocol):
 
     def exists(self, sha256: str) -> bool: ...
 
+    def delete(self, sha256: str) -> bool:
+        """删除内容对象；对象不存在时返回 False（幂等）。"""
+
 
 class LocalContentStore:
     def __init__(self, root: Path) -> None:
@@ -62,6 +65,14 @@ class LocalContentStore:
 
     def exists(self, sha256: str) -> bool:
         return self._path(sha256).exists()
+
+    def delete(self, sha256: str) -> bool:
+        """删除内容对象（保留清扫在库内无引用时调用）；目录结构原样保留。"""
+        try:
+            self._path(sha256).unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
 
 def local_content_digest(uri: str | None, registered_sha256: str | None) -> str | None:

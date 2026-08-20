@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -134,6 +134,20 @@ class PreferencesUpdateRequest(BaseModel):
     """高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。"""
 
     max_concurrent_runs: int = Field(ge=1, le=MAX_CONCURRENT_RUNS_CEILING)
+
+
+class PrivacySettingsUpdateRequest(BaseModel):
+    """设置中心「数据与隐私」九个面板项；保留与缓存策略由服务端清扫执行。"""
+
+    save_history: bool = True
+    local_first: bool = True
+    model_training: bool = False
+    retention: Literal["forever", "days_90", "days_30", "on_complete"] = "forever"
+    file_cache: Literal["days_30", "days_7", "on_close"] = "days_30"
+    notify_task_done: bool = True
+    notify_budget: bool = True
+    notify_security: bool = True
+    email_digest: bool = False
 
 
 # ── 自定义模型接口（设置中心「自定义 API」） ─────────────────────

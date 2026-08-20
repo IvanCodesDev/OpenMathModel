@@ -98,6 +98,9 @@ def small_limit_client(tmp_path):
     settings = Settings(
         database_url=f"sqlite:///{(tmp_path / 'avatar-limit.db').as_posix()}",
         runner_enabled=False,
+        # 开发机装有真实 paddle 栈：预热线程会加载 1.8GB 模型并与
+        # test_artifact_text 的假模块注入用例竞态，测试一律关闭。
+        vl_warmup_enabled=False,
         smtp_host="",
         email_dev_mode=True,
         artifacts_dir=tmp_path / "artifacts",

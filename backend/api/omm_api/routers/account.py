@@ -10,12 +10,14 @@ from ..db import get_db
 from ..deps import AuthContext, get_auth_context
 from ..errors import ApiError
 from ..models import AuthSession, RecoveryCode, User, new_id, utcnow
+from ..privacy import privacy_settings_of
 from ..schemas import (
     CodeRequest,
     LlmConfigUpdateRequest,
     PasswordChangeRequest,
     PasswordRequest,
     PreferencesUpdateRequest,
+    PrivacySettingsUpdateRequest,
     ProfileUpdateRequest,
     llm_config_payload,
     preferences_payload,
@@ -108,6 +110,27 @@ def update_preferences(
     ctx.user.max_concurrent_runs = body.max_concurrent_runs
     db.commit()
     return {"preferences": preferences_payload(ctx.user)}
+
+
+# ── 数据与隐私（设置中心「数据与隐私」） ─────────────────────────
+
+
+@router.get("/privacy-settings")
+def get_privacy_settings(ctx: AuthContext = Depends(get_auth_context)):
+    return {"settings": privacy_settings_of(ctx.user)}
+
+
+@router.put("/privacy-settings")
+def update_privacy_settings(
+    body: PrivacySettingsUpdateRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """整体替换保存九个面板项。设置存服务端而不是浏览器：任务保留与文件
+    缓存清理由服务端后台清扫按此执行，换浏览器/清缓存后设置照常生效。"""
+    ctx.user.privacy_settings = body.model_dump()
+    db.commit()
+    return {"settings": privacy_settings_of(ctx.user)}
 
 
 # ── 自定义模型接口配置（设置中心「自定义 API」） ──────────────────

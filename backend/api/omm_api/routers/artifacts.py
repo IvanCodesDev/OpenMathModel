@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from omm_contracts import ArtifactStatus
 
-from ..api_models import ArtifactText
+from ..api_models import ArtifactText, AttachmentParseResult
 from ..blobstore import local_content_digest
 from ..db import get_session
 from ..deps import AuthContext, get_auth_context
@@ -19,6 +20,51 @@ from ..orm import ArtifactRow, ArtifactTextRow, ProjectRow
 from ..serialize import utcnow
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
+
+
+@router.post("/parse", response_model=AttachmentParseResult)
+async def parse_attachment_adhoc(
+    request: Request,
+    file: UploadFile = File(...),
+    _ctx: AuthContext = Depends(get_auth_context),
+) -> AttachmentParseResult:
+    """对话附件的即席解析（ADR-0010 批次三）：不落库、不建产物。
+
+    对话历史保存在页面内存、服务端无状态；随消息提供的附件也保持同样姿态——
+    解析一次、返回文本、什么都不留。抽取链路与产物正文完全相同（含可选 VL），
+    图片和扫描件因此也能转成模型可读的 Markdown。
+    """
+
+    content = await file.read()
+    name = file.filename or "attachment"
+    media_type = file.content_type or "application/octet-stream"
+    settings = request.app.state.settings
+    if len(content) > settings.attachment_text_max_bytes:
+        return AttachmentParseResult(
+            name=name,
+            media_type=media_type,
+            status="unsupported",
+            engine="none",
+            characters=0,
+            text="",
+            detail=f"文件超过正文抽取上限 {settings.attachment_text_max_bytes} 字节",
+        )
+    # 抽取必须离开事件循环：VL/OCR 是同步重活（首载可达数十秒），在 async 端点里
+    # 直跑会冻结整个 API（健康检查、对话、SSE 全部停摆）。
+    extraction = await run_in_threadpool(
+        extract_text, content, name, media_type, ocr_languages=settings.ocr_languages
+    )
+    return AttachmentParseResult(
+        name=name,
+        media_type=media_type,
+        status=extraction.status,
+        engine=extraction.engine,
+        characters=extraction.characters,
+        segments=extraction.segments,
+        images=extraction.images,
+        detail=extraction.detail,
+        text=extraction.text,
+    )
 
 
 def _get_owned_artifact(session: Session, ctx: AuthContext, artifact_id: str) -> ArtifactRow:
@@ -101,6 +147,7 @@ def read_artifact_text(
             engine=cached.engine,
             characters=cached.characters,
             segments=cached.segments,
+            images=cached.images,
             detail=cached.detail,
             text=cached.text,
         )
@@ -111,6 +158,7 @@ def read_artifact_text(
         extraction_status, engine, text = "unsupported", "none", ""
         detail = f"文件超过正文抽取上限 {settings.attachment_text_max_bytes} 字节，仅保留原文件"
         segments = None
+        images = None
     else:
         extraction = extract_text(
             _load_content(request, row),
@@ -119,7 +167,7 @@ def read_artifact_text(
             ocr_languages=settings.ocr_languages,
         )
         extraction_status, engine, text = extraction.status, extraction.engine, extraction.text
-        detail, segments = extraction.detail, extraction.segments
+        detail, segments, images = extraction.detail, extraction.segments, extraction.images
 
     if cached is None:
         cached = ArtifactTextRow(artifact_id=artifact_id, created_at=utcnow())
@@ -128,6 +176,7 @@ def read_artifact_text(
     cached.engine = engine
     cached.characters = len(text)
     cached.segments = segments
+    cached.images = images
     cached.detail = detail[:500] if detail else None
     cached.text = text
     cached.created_at = utcnow()
@@ -141,6 +190,7 @@ def read_artifact_text(
         engine=engine,
         characters=len(text),
         segments=segments,
+        images=images,
         detail=cached.detail,
         text=text,
     )

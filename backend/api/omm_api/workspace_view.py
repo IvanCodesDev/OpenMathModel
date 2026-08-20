@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from omm_contracts import ModelingWorkspaceView
@@ -275,12 +275,14 @@ def build_modeling_workspace_view(
     )
     latest_steps = _latest_steps(steps)
     step_nodes = {step.id: step.node for step in steps}
+    # 项目级上传（run_id 为空）= 用户随任务提交的附件：当前产品流程一个任务
+    # 对应一个项目，它们属于本次运行的输入，顶栏附件与对话上下文都要能看到。
     artifact_rows = list(
         session.execute(
             select(ArtifactRow)
             .where(
-                ArtifactRow.run_id == run.id,
                 ArtifactRow.project_id == run.project_id,
+                or_(ArtifactRow.run_id == run.id, ArtifactRow.run_id.is_(None)),
             )
             .order_by(ArtifactRow.created_at.asc(), ArtifactRow.id.asc())
         ).scalars()

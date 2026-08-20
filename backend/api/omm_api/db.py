@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import Request
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.schema import CreateColumn
@@ -47,12 +47,25 @@ class Database:
     def __init__(self, database_url: str) -> None:
         if database_url.startswith("sqlite"):
             db_path = database_url.split("///", 1)[-1]
-            if db_path and db_path != ":memory:":
+            is_file_db = bool(db_path) and db_path != ":memory:"
+            if is_file_db:
                 Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            # FastAPI 线程池与后台推进线程都会使用连接
+            # FastAPI 线程池与后台推进线程都会使用连接。timeout 提高 SQLite 的
+            # 忙等待上限：RunnerThread 高频提交事件/用量行时，默认 5 秒会让并发的
+            # 请求以 "database is locked" 失败（页面表现为对话 500）。
             self.engine = create_engine(
-                database_url, connect_args={"check_same_thread": False}
+                database_url, connect_args={"check_same_thread": False, "timeout": 30.0}
             )
+            if is_file_db:
+                # WAL 让写入不再阻塞读取（默认回滚日志是写全库锁）：请求处理、
+                # RunnerThread 与 SSE 轮询并发访问同一个 dev.db 时必须开启。
+                @event.listens_for(self.engine, "connect")
+                def _sqlite_pragmas(dbapi_connection, _record):  # noqa: ANN001
+                    cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=30000")
+                    cursor.close()
         else:
             self.engine = create_engine(database_url, pool_pre_ping=True)
         self.session_factory = sessionmaker(

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import threading
 import zipfile
 
 import pytest
@@ -16,6 +17,19 @@ from omm_api.doc_text import extract_text
 from conftest import API, create_project
 
 pytest.importorskip("pypdf")
+
+
+@pytest.fixture(autouse=True)
+def _vl_disabled_by_default(monkeypatch):
+    """开发机可能真装了 paddle 栈；测试默认强制 VL 不可用保证确定性。
+
+    需要 VL 路径的用例经 _install_fake_paddleocr 显式复位并注入假模块。
+    """
+
+    import omm_api.doc_text as doc_text
+
+    monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
+    monkeypatch.setattr(doc_text, "_VL_UNAVAILABLE", "测试默认禁用")
 
 
 def _zip(parts: dict[str, str]) -> bytes:
@@ -154,6 +168,31 @@ def test_plain_text_falls_back_to_gb18030():
     assert "东站" in result.text
 
 
+def test_docx_counts_embedded_media_images():
+    document = _zip({
+        "[Content_Types].xml": "<Types/>",
+        "word/document.xml": (
+            '<?xml version="1.0"?><w:document xmlns:w="http://x"><w:body>'
+            "<w:p><w:r><w:t>需求曲线见图1与图2</w:t></w:r></w:p></w:body></w:document>"
+        ),
+        "word/media/image1.png": "fake-png-bytes",
+        "word/media/image2.jpeg": "fake-jpeg-bytes",
+    })
+    result = extract_text(document, "题目.docx", "")
+    assert result.status == "ready"
+    # 正文抽得出来，但纯文本模型看不到这两张图——计数是单模态提醒的数据底座。
+    assert result.images == 2
+
+
+def test_image_attachment_reports_single_image_when_ocr_is_unavailable(monkeypatch):
+    import omm_api.doc_text as doc_text
+
+    monkeypatch.setattr(doc_text.shutil, "which", lambda _name: None)
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
+    assert result.status == "unsupported"
+    assert result.images == 1
+
+
 def test_archive_lists_entries_and_expands_text_members():
     result = extract_text(_zip({"附件/站点.csv": "id,name\n1,东站\n"}), "附件.zip", "")
     assert result.status == "ready"
@@ -173,6 +212,8 @@ def test_pdf_without_text_layer_reports_empty_instead_of_failing():
     result = extract_text(buffer.getvalue(), "扫描件.pdf", "application/pdf")
     assert result.status == "empty"
     assert "OCR" in (result.detail or "")
+    # 空白页没有 XObject：计数应得出确定的 0 而不是放弃（None）。
+    assert result.images == 0
 
 
 def test_unknown_and_corrupted_inputs_degrade_without_raising():
@@ -180,6 +221,108 @@ def test_unknown_and_corrupted_inputs_degrade_without_raising():
     broken = extract_text(b"not-a-zip-at-all", "题目.docx", "")
     assert broken.status == "failed"
     assert "压缩包" in (broken.detail or "")
+
+
+# ── PaddleOCR-VL 可选后端（假模块注入，不依赖真实 paddle 栈）──────────
+
+
+def _install_fake_paddleocr(monkeypatch, pages: list[str]) -> None:
+    import sys
+    import types
+
+    import omm_api.doc_text as doc_text
+
+    def _result(text: str):
+        return types.SimpleNamespace(markdown={"markdown_texts": text})
+
+    module = types.ModuleType("paddleocr")
+    module.PaddleOCRVL = lambda: types.SimpleNamespace(
+        predict=lambda _path: [_result(text) for text in pages],
+    )
+    monkeypatch.setitem(sys.modules, "paddleocr", module)
+    # 惰性单例复位，避免其他用例触发的可用性判定串场；teardown 时自动还原。
+    monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
+    monkeypatch.setattr(doc_text, "_VL_UNAVAILABLE", None)
+
+
+def test_scanned_pdf_upgrades_to_paddleocr_vl_markdown(monkeypatch):
+    from pypdf import PdfWriter
+
+    _install_fake_paddleocr(monkeypatch, ["# 题目\n$E=mc^2$", "|站点|需求|\n|---|---|"])
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+
+    result = extract_text(buffer.getvalue(), "扫描件.pdf", "application/pdf")
+    assert result.status == "ready"
+    assert result.engine == "paddleocr-vl"
+    assert "$E=mc^2$" in result.text
+    assert result.images == 0
+
+
+def test_image_prefers_paddleocr_vl_over_tesseract(monkeypatch):
+    _install_fake_paddleocr(monkeypatch, ["流程图：输入 → 模型 → 输出"])
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
+    assert result.status == "ready"
+    assert result.engine == "paddleocr-vl"
+    assert result.images == 1
+
+
+def test_warmup_vl_preloads_the_lazy_singleton(monkeypatch):
+    import omm_api.doc_text as doc_text
+
+    _install_fake_paddleocr(monkeypatch, ["预热"])
+    doc_text.warmup_vl()
+    # 预热即加载：随后的图片解析直接复用单例，不再付冷启动成本。
+    assert doc_text._VL_PIPELINE is not None
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
+    assert result.engine == "paddleocr-vl"
+
+
+def test_warmup_vl_is_a_noop_when_the_backend_is_unavailable():
+    import omm_api.doc_text as doc_text
+
+    # autouse fixture 已把 VL 置为不可用；预热不得抛异常、不得改变不可用状态。
+    doc_text.warmup_vl()
+    assert doc_text._VL_PIPELINE is None
+
+
+def test_vl_init_and_predict_run_on_the_same_dedicated_thread(monkeypatch):
+    """paddle 动态图模式是线程局部状态：模型在哪个线程创建就只能在哪个线程推理，
+    跨线程 predict 以「static graph mode」RuntimeError 失败（2026-08-20 实测）。
+    契约：预热初始化与请求推理必须发生在同一条专用线程上，且不在调用方线程。"""
+
+    import sys
+    import types
+
+    import omm_api.doc_text as doc_text
+
+    seen: dict[str, int] = {}
+
+    def _result(text: str):
+        return types.SimpleNamespace(markdown={"markdown_texts": text})
+
+    class _Pipeline:
+        def __init__(self) -> None:
+            seen["init"] = threading.get_ident()
+
+        def predict(self, _path: str):
+            seen["predict"] = threading.get_ident()
+            return [_result("同线程推理")]
+
+    module = types.ModuleType("paddleocr")
+    module.PaddleOCRVL = _Pipeline
+    monkeypatch.setitem(sys.modules, "paddleocr", module)
+    monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
+    monkeypatch.setattr(doc_text, "_VL_UNAVAILABLE", None)
+
+    doc_text.warmup_vl()
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
+    assert result.engine == "paddleocr-vl"
+    assert result.text == "同线程推理"
+    assert seen["init"] == seen["predict"]
+    assert seen["init"] != threading.get_ident()
 
 
 def test_legacy_binary_formats_report_a_reason_rather_than_crashing():
@@ -210,6 +353,7 @@ def test_text_endpoint_extracts_uploads_and_caches_the_result(client):
     assert payload["text"] == "需求预测与调度优化"
     assert payload["characters"] == len("需求预测与调度优化")
     assert payload["name"] == "题目.docx"
+    assert payload["images"] == 0
 
     # 第二次读命中缓存：即便底层内容对象被移走也仍能返回同一份正文。
     digest = artifact["sha256"]
@@ -218,6 +362,7 @@ def test_text_endpoint_extracts_uploads_and_caches_the_result(client):
     cached = client.get(f"{API}/artifacts/{artifact['id']}/text")
     assert cached.status_code == 200
     assert cached.json()["text"] == payload["text"]
+    assert cached.json()["images"] == 0
 
 
 def test_text_endpoint_refresh_reruns_extraction(client):
@@ -251,3 +396,41 @@ def test_text_endpoint_skips_files_above_the_extraction_limit(client, app):
     assert payload["status"] == "unsupported"
     assert payload["text"] == ""
     assert "上限" in payload["detail"]
+
+
+# ── 对话附件即席解析（ADR-0010 批次三：不落库、不建产物）─────────────
+
+
+def test_adhoc_parse_extracts_text_without_persisting(client):
+    response = client.post(
+        f"{API}/artifacts/parse",
+        files={"file": ("追问.txt", "补充约束：预算不超过 100 万".encode("utf-8"), "text/plain")},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert "预算" in payload["text"]
+    assert payload["name"] == "追问.txt"
+
+
+def test_adhoc_parse_degrades_honestly_for_images_without_ocr(client, monkeypatch):
+    import omm_api.doc_text as doc_text
+
+    monkeypatch.setattr(doc_text.shutil, "which", lambda _name: None)
+    response = client.post(
+        f"{API}/artifacts/parse",
+        files={"file": ("流程图.png", b"\x89PNG fake", "image/png")},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unsupported"
+    assert payload["images"] == 1
+
+
+def test_adhoc_parse_requires_login(second_client):
+    response = second_client.post(
+        f"{API}/artifacts/parse",
+        files={"file": ("匿名.txt", b"anonymous", "text/plain")},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTH_REQUIRED"

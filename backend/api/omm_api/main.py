@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -13,8 +14,10 @@ from . import engine_glue
 from .blobstore import LocalContentStore
 from .config import Settings, get_settings
 from .db import Database
+from .doc_text import warmup_vl
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
+from .privacy import RetentionThread
 from .routers import account, artifacts, auth, chat, events, projects, task_runs, usage, workspace
 from .runner import RunnerThread, WorkflowAdvancer
 
@@ -32,11 +35,23 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             runner = RunnerThread(db, resolved)
             runner.start()
         app.state.runner = runner
+        # 「数据与隐私」的任务保留与文件缓存清扫（首轮延后一个周期）。
+        sweeper: Optional[RetentionThread] = None
+        if resolved.retention_sweep_enabled:
+            sweeper = RetentionThread(db, resolved, app.state.blobs)
+            sweeper.start()
+        app.state.retention = sweeper
+        # PaddleOCR-VL 预热：守护线程后台加载，不阻塞启动；停机时无需等待
+        # （只写模块级单例，进程退出即弃）。--reload 重启后自动重新预热。
+        if resolved.vl_warmup_enabled:
+            threading.Thread(target=warmup_vl, name="omm-vl-warmup", daemon=True).start()
         try:
             yield
         finally:
             if runner is not None:
                 runner.stop()
+            if sweeper is not None:
+                sweeper.stop()
             db.dispose()
 
     app = FastAPI(

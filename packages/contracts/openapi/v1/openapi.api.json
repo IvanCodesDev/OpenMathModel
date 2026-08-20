@@ -602,6 +602,17 @@
             "title": "Engine",
             "type": "string"
           },
+          "images": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Images"
+          },
           "media_type": {
             "title": "Media Type",
             "type": "string"
@@ -647,6 +658,99 @@
           "text"
         ],
         "title": "ArtifactText",
+        "type": "object"
+      },
+      "AttachmentParseResult": {
+        "description": "对话附件的即席解析结果（ADR-0010 批次三）。\n\n与 ``ArtifactText`` 同一套状态语义，但不落库、不建产物：对话历史保存在页面\n内存、服务端无状态，附件解析也保持同样的隐私姿态。",
+        "properties": {
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "images": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Images"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "segments": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segments"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "empty",
+              "unsupported",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "media_type",
+          "status",
+          "engine",
+          "characters",
+          "text"
+        ],
+        "title": "AttachmentParseResult",
+        "type": "object"
+      },
+      "Body_parse_attachment_adhoc_api_v1_artifacts_parse_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_parse_attachment_adhoc_api_v1_artifacts_parse_post",
         "type": "object"
       },
       "Body_upload_avatar_api_account_avatar_post": {
@@ -1646,6 +1750,69 @@
         "title": "PreferencesUpdateRequest",
         "type": "object"
       },
+      "PrivacySettingsUpdateRequest": {
+        "description": "设置中心「数据与隐私」九个面板项；保留与缓存策略由服务端清扫执行。",
+        "properties": {
+          "email_digest": {
+            "default": false,
+            "title": "Email Digest",
+            "type": "boolean"
+          },
+          "file_cache": {
+            "default": "days_30",
+            "enum": [
+              "days_30",
+              "days_7",
+              "on_close"
+            ],
+            "title": "File Cache",
+            "type": "string"
+          },
+          "local_first": {
+            "default": true,
+            "title": "Local First",
+            "type": "boolean"
+          },
+          "model_training": {
+            "default": false,
+            "title": "Model Training",
+            "type": "boolean"
+          },
+          "notify_budget": {
+            "default": true,
+            "title": "Notify Budget",
+            "type": "boolean"
+          },
+          "notify_security": {
+            "default": true,
+            "title": "Notify Security",
+            "type": "boolean"
+          },
+          "notify_task_done": {
+            "default": true,
+            "title": "Notify Task Done",
+            "type": "boolean"
+          },
+          "retention": {
+            "default": "forever",
+            "enum": [
+              "forever",
+              "days_90",
+              "days_30",
+              "on_complete"
+            ],
+            "title": "Retention",
+            "type": "string"
+          },
+          "save_history": {
+            "default": true,
+            "title": "Save History",
+            "type": "boolean"
+          }
+        },
+        "title": "PrivacySettingsUpdateRequest",
+        "type": "object"
+      },
       "ProfileUpdateRequest": {
         "properties": {
           "email": {
@@ -1790,6 +1957,37 @@
           "total"
         ],
         "title": "ProjectList",
+        "type": "object"
+      },
+      "ProjectUpdateInput": {
+        "description": "项目维护输入（侧栏「最近任务」的重命名与归档）；两项都可省略。",
+        "properties": {
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "ProjectUpdateInput",
         "type": "object"
       },
       "RegisterRequest": {
@@ -2307,6 +2505,38 @@
         ],
         "title": "Type",
         "type": "string"
+      },
+      "UsageSettingsUpdateRequest": {
+        "description": "设置中心「用量监控」的三个预算项；硬限制的闸门在服务端执行。",
+        "properties": {
+          "budget_threshold_percent": {
+            "default": 80,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Budget Threshold Percent",
+            "type": "integer"
+          },
+          "hard_limit": {
+            "default": false,
+            "title": "Hard Limit",
+            "type": "boolean"
+          },
+          "monthly_budget_cny": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Budget Cny"
+          }
+        },
+        "title": "UsageSettingsUpdateRequest",
+        "type": "object"
       },
       "ValidationError": {
         "properties": {
@@ -2848,6 +3078,63 @@
         ]
       }
     },
+    "/api/account/privacy-settings": {
+      "get": {
+        "operationId": "get_privacy_settings_api_account_privacy_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Privacy Settings",
+        "tags": [
+          "account"
+        ]
+      },
+      "put": {
+        "description": "整体替换保存九个面板项。设置存服务端而不是浏览器：任务保留与文件\n缓存清理由服务端后台清扫按此执行，换浏览器/清缓存后设置照常生效。",
+        "operationId": "update_privacy_settings_api_account_privacy_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivacySettingsUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Privacy Settings",
+        "tags": [
+          "account"
+        ]
+      }
+    },
     "/api/account/profile": {
       "patch": {
         "operationId": "update_profile_api_account_profile_patch",
@@ -3267,6 +3554,205 @@
         ]
       }
     },
+    "/api/usage/export": {
+      "get": {
+        "description": "导出当月调用明细 CSV（带 BOM，Excel 可直接打开）。",
+        "operationId": "export_usage_api_usage_export_get",
+        "parameters": [
+          {
+            "description": "YYYY-MM，缺省为当前月",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "YYYY-MM，缺省为当前月",
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Usage",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/usage/settings": {
+      "get": {
+        "operationId": "get_usage_settings_api_usage_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Usage Settings",
+        "tags": [
+          "usage"
+        ]
+      },
+      "put": {
+        "description": "整体替换保存三个预算项。预算与硬限制存服务端而不是浏览器：\n暂停付费模型的闸门在聊天与任务执行路径上校验，改本机缓存绕不过。",
+        "operationId": "update_usage_settings_api_usage_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageSettingsUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Usage Settings",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/usage/summary": {
+      "get": {
+        "description": "月度用量汇总：合计、上月对比、Agent 任务数、近 14 天序列、模型分布与预算状态。",
+        "operationId": "get_usage_summary_api_usage_summary_get",
+        "parameters": [
+          {
+            "description": "YYYY-MM，缺省为当前月",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "YYYY-MM，缺省为当前月",
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Usage Summary",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/v1/artifacts/parse": {
+      "post": {
+        "description": "对话附件的即席解析（ADR-0010 批次三）：不落库、不建产物。\n\n对话历史保存在页面内存、服务端无状态；随消息提供的附件也保持同样姿态——\n解析一次、返回文本、什么都不留。抽取链路与产物正文完全相同（含可选 VL），\n图片和扫描件因此也能转成模型可读的 Markdown。",
+        "operationId": "parse_attachment_adhoc_api_v1_artifacts_parse_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_parse_attachment_adhoc_api_v1_artifacts_parse_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentParseResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Parse Attachment Adhoc",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/download": {
       "get": {
         "operationId": "download_artifact_api_v1_artifacts__artifact_id__download_get",
@@ -3365,6 +3851,18 @@
         "operationId": "list_projects_api_v1_projects_get",
         "parameters": [
           {
+            "description": "true 时只返回已归档项目",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "true 时只返回已归档项目",
+              "title": "Archived",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
@@ -3456,6 +3954,40 @@
       }
     },
     "/api/v1/projects/{project_id}": {
+      "delete": {
+        "description": "删除项目及其全部运行、事件、审批与产物；内容对象无引用后回收。\n\n用量记录是审计历史，保留不动。删除不可恢复——仅隐藏请用归档。",
+        "operationId": "delete_project_api_v1_projects__project_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Project",
+        "tags": [
+          "projects"
+        ]
+      },
       "get": {
         "operationId": "get_project_api_v1_projects__project_id__get",
         "parameters": [
@@ -3492,6 +4024,57 @@
           }
         },
         "summary": "Get Project",
+        "tags": [
+          "projects"
+        ]
+      },
+      "patch": {
+        "description": "项目维护（侧栏「最近任务」）：重命名与归档/取消归档，可同时提交。",
+        "operationId": "update_project_api_v1_projects__project_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectUpdateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project",
         "tags": [
           "projects"
         ]

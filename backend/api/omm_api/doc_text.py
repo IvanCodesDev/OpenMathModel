@@ -14,13 +14,23 @@ from __future__ import annotations
 
 import codecs
 import io
+import logging
+import os
+import queue
 import re
 import shutil
 import struct
+import tempfile
+import threading
+import time
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable, Iterable, Optional
+
+logger = logging.getLogger("omm.doc_text")
 
 # 单个附件保留的正文上限：够覆盖整篇赛题与论文，又不至于把一行数据库记录撑爆。
 MAX_TEXT_CHARS = 400_000
@@ -43,6 +53,9 @@ class Extraction:
     text: str = ""
     segments: Optional[int] = None
     detail: Optional[str] = None
+    #: 文档内嵌图片数（去重后的近似值）；None = 该格式不统计。纯文本模型看不到
+    #: 图片，这个数字是前端「单模态提醒」与后续视觉解析（ADR-0010）的数据底座。
+    images: Optional[int] = None
 
     @property
     def characters(self) -> int:
@@ -57,6 +70,7 @@ class Extraction:
             text=self.text[:MAX_TEXT_CHARS],
             segments=self.segments,
             detail=f"正文超过 {MAX_TEXT_CHARS} 字，已截断保存",
+            images=self.images,
         )
 
 
@@ -135,6 +149,12 @@ def _read(archive: zipfile.ZipFile, name: str) -> Optional[bytes]:
         return None
 
 
+def _media_count(archive: zipfile.ZipFile, prefix: str) -> int:
+    """OOXML 的插图统一存放在 media/ 部件下，数条目即得内嵌图片数。"""
+
+    return sum(1 for name in archive.namelist() if name.startswith(prefix) and not name.endswith("/"))
+
+
 DOCX_BREAKS = frozenset({"tab", "br", "cr"})
 DOCX_SKIP = frozenset({"pPr", "rPr", "sectPr", "tblPr", "trPr", "tcPr", "tabs"})
 
@@ -149,8 +169,9 @@ def _extract_docx(data: bytes) -> Extraction:
             payload = _read(archive, extra)
             if payload:
                 parts.append(payload)
+        images = _media_count(archive, "word/media/")
     lines = [line for part in parts for line in _paragraphs(part, "p", "t", DOCX_BREAKS, DOCX_SKIP)]
-    return Extraction("ready", "docx", _tidy("\n".join(lines)), segments=len(lines))
+    return Extraction("ready", "docx", _tidy("\n".join(lines)), segments=len(lines), images=images)
 
 
 PPTX_SKIP = frozenset({"pPr", "rPr", "endParaRPr", "defRPr", "lstStyle"})
@@ -180,7 +201,8 @@ def _extract_pptx(data: bytes) -> Extraction:
                 if spoken:
                     block.append("备注：" + " ".join(spoken))
             pages.append("\n".join(block))
-    return Extraction("ready", "pptx", _tidy("\n\n".join(pages)), segments=len(slides))
+        images = _media_count(archive, "ppt/media/")
+    return Extraction("ready", "pptx", _tidy("\n\n".join(pages)), segments=len(slides), images=images)
 
 
 def _column_index(reference: str) -> int:
@@ -337,6 +359,40 @@ def _extract_opendocument(data: bytes) -> Extraction:
     return Extraction("ready", "odf", _tidy("\n".join(lines)), segments=len(lines))
 
 
+def _pdf_image_count(reader: object, page_limit: int) -> Optional[int]:
+    """按页扫 /Resources//XObject 统计 /Image，按间接引用去重（页眉 logo 会跨页复用）。
+
+    只统计顶层 XObject，Form 内嵌套的图不递归——这是给单模态提醒（ADR-0010）用的
+    近似值，不是渲染。任何结构异常都放弃计数，绝不拖垮正文抽取。
+    """
+
+    try:
+        pages = reader.pages  # type: ignore[attr-defined]
+        seen: set[tuple[int, int]] = set()
+        anonymous = 0
+        for index in range(page_limit):
+            resources = pages[index].get("/Resources")
+            if resources is None:
+                continue
+            xobjects = resources.get_object().get("/XObject")
+            if xobjects is None:
+                continue
+            for value in xobjects.get_object().values():
+                target = value.get_object()
+                if target.get("/Subtype") != "/Image":
+                    continue
+                reference = getattr(target, "indirect_reference", None) or (
+                    value if hasattr(value, "idnum") else None
+                )
+                if reference is not None:
+                    seen.add((reference.idnum, reference.generation))
+                else:
+                    anonymous += 1
+        return len(seen) + anonymous
+    except Exception:
+        return None
+
+
 def _extract_pdf(data: bytes) -> Extraction:
     try:
         from pypdf import PdfReader
@@ -354,16 +410,28 @@ def _extract_pdf(data: bytes) -> Extraction:
     read = min(total, MAX_PDF_PAGES)
     pages = [reader.pages[index].extract_text() or "" for index in range(read)]
     text = _tidy("\n\n".join(pages))
+    images = _pdf_image_count(reader, read)
     if not text:
-        return Extraction(
-            "empty",
-            "pdf",
-            segments=total,
-            detail="PDF 没有文字层（多半是扫描件），需要在服务端启用 OCR 后重试",
+        # 扫描件：文字层为空时优先走 PaddleOCR-VL（公式→LaTeX、表格→表格标记）。
+        parsed = _vl_parse(data, ".pdf")
+        if parsed:
+            return Extraction(
+                "ready",
+                "paddleocr-vl",
+                parsed,
+                segments=total,
+                detail="扫描件经 PaddleOCR-VL 解析为 Markdown（公式为 LaTeX）",
+                images=images,
+            )
+        detail = (
+            "PaddleOCR-VL 没有从扫描件中识别出内容"
+            if parsed == ""
+            else "PDF 没有文字层（多半是扫描件），需要在服务端启用 OCR（Tesseract 或 vl 附加项）后重试"
         )
+        return Extraction("empty", "pdf", segments=total, detail=detail, images=images)
     if read < total:
-        return Extraction("partial", "pdf", text, segments=total, detail=f"仅抽取了前 {read} 页")
-    return Extraction("ready", "pdf", text, segments=total)
+        return Extraction("partial", "pdf", text, segments=total, detail=f"仅抽取了前 {read} 页", images=images)
+    return Extraction("ready", "pdf", text, segments=total, images=images)
 
 
 def _extract_plain(data: bytes) -> Extraction:
@@ -371,6 +439,140 @@ def _extract_plain(data: bytes) -> Extraction:
     if not text:
         return Extraction("empty", "text", detail="文件里没有可读文字")
     return Extraction("ready", "text", text, segments=text.count("\n") + 1)
+
+
+# ── PaddleOCR-VL 可选视觉解析后端（ADR-0010 批次二）─────────────────
+#
+# 0.9B 文档解析 VLM：扫描件与图片解析成 Markdown（公式→LaTeX、表格→表格标记），
+# 对纯文本模型几乎无损。惰性单例：首次调用加载模型（可能下载权重），之后复用；
+# 开发链在 API 进程内直跑，生产隔离随独立 Worker 接线迁移到执行面。
+
+_VL_PIPELINE: Optional[object] = None
+_VL_UNAVAILABLE: Optional[str] = None
+#: paddle 动态图模式是线程局部状态：模型在哪个线程创建就只能在哪个线程推理，
+#: 跨线程 predict 会以「int(Tensor) is not supported in static graph mode」的
+#: RuntimeError 失败（2026-08-20 实测）。因此初始化与全部推理都固定在同一条
+#: 专用工作线程上；单工作线程同时天然串行化了并发解析（旧 _VL_LOCK 的职责）。
+#:
+#: 刻意不用 concurrent.futures.ThreadPoolExecutor：它的工作线程非守护且注册了
+#: atexit join——若线程恰好阻塞（如向已死的 stderr 管道写日志），整个进程退出
+#: 会被永久挂住，uvicorn --reload 的重启因此堵死（2026-08-20 py-spy 实证）。
+_VL_QUEUE: "queue.SimpleQueue[tuple[Callable[[], object], dict, threading.Event]]" = (
+    queue.SimpleQueue()
+)
+_VL_WORKER: Optional[threading.Thread] = None
+_VL_WORKER_LOCK = threading.Lock()
+
+
+def _vl_worker_loop() -> None:
+    while True:
+        func, box, done = _VL_QUEUE.get()
+        try:
+            box["value"] = func()
+        except BaseException as error:  # noqa: BLE001 异常原样带回调用线程
+            box["error"] = error
+        finally:
+            done.set()
+
+
+def _vl_call(func: Callable[[], object]) -> object:
+    """把调用投递到 VL 专用守护线程执行并等待结果；工作线程按需惰性拉起。"""
+
+    global _VL_WORKER
+    with _VL_WORKER_LOCK:
+        if _VL_WORKER is None or not _VL_WORKER.is_alive():
+            _VL_WORKER = threading.Thread(target=_vl_worker_loop, name="omm-vl", daemon=True)
+            _VL_WORKER.start()
+    box: dict = {}
+    done = threading.Event()
+    _VL_QUEUE.put((func, box, done))
+    done.wait()
+    if "error" in box:
+        raise box["error"]  # type: ignore[misc]
+    return box.get("value")
+
+
+def _vl_pipeline() -> Optional[object]:
+    """构建/返回惰性单例。只允许在 VL 专用工作线程内调用。"""
+
+    global _VL_PIPELINE, _VL_UNAVAILABLE
+    if _VL_PIPELINE is not None or _VL_UNAVAILABLE is not None:
+        return _VL_PIPELINE
+    try:
+        from paddleocr import PaddleOCRVL
+    except ModuleNotFoundError:
+        _VL_UNAVAILABLE = "未安装 paddleocr[doc-parser]"
+        return None
+    except Exception as error:  # paddle 栈在个别环境上导入即崩，如实降级
+        _VL_UNAVAILABLE = f"paddleocr 导入失败：{type(error).__name__}"
+        logger.warning("%s", _VL_UNAVAILABLE, exc_info=True)
+        return None
+    try:
+        _VL_PIPELINE = PaddleOCRVL()
+    except Exception as error:
+        _VL_UNAVAILABLE = f"PaddleOCR-VL 初始化失败：{type(error).__name__}"
+        logger.warning("%s", _VL_UNAVAILABLE, exc_info=True)
+        return None
+    return _VL_PIPELINE
+
+
+def _vl_text(path: str) -> Optional[str]:
+    """专用工作线程内的完整解析：建管线 → predict → 抽取逐页 Markdown。
+
+    推理结果也在本线程内取尽（paddleocr 的 predict 返回已物化的列表），
+    绝不把惰性对象带出线程。
+    """
+
+    pipeline = _vl_pipeline()
+    if pipeline is None:
+        return None
+    results = pipeline.predict(path)  # type: ignore[attr-defined]
+    pages: list[str] = []
+    for result in results:
+        markdown = getattr(result, "markdown", None)
+        text = markdown.get("markdown_texts", "") if isinstance(markdown, Mapping) else ""
+        if isinstance(text, str) and text.strip():
+            pages.append(text)
+    return _tidy("\n\n".join(pages))
+
+
+def warmup_vl() -> None:
+    """预热 VL 惰性单例：把约 90 秒的模型冷加载从首个用户请求挪到进程启动。
+
+    设计给启动期的守护线程调用；加载发生在 VL 专用工作线程上（与后续推理
+    同一线程），请求撞上预热未完成时在队列里排队等待而不是重复加载。
+    未安装 vl 附加项时等同一次空操作。
+    """
+
+    started = time.monotonic()
+    if _vl_call(_vl_pipeline) is None:
+        logger.info("PaddleOCR-VL 预热跳过：%s", _VL_UNAVAILABLE)
+    else:
+        logger.info("PaddleOCR-VL 预热完成，耗时 %.1f 秒", time.monotonic() - started)
+
+
+def _vl_parse(data: bytes, suffix: str) -> Optional[str]:
+    """把图片/PDF 字节交给 PaddleOCR-VL，返回逐页 Markdown 合并文本。
+
+    返回 None = 后端不可用或本次解析失败（调用方走既有降级路径）；
+    返回 ""   = 后端跑了但没有识别出内容。predict 只收路径，先落临时文件。
+    """
+
+    handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        handle.write(data)
+        handle.close()
+        result = _vl_call(partial(_vl_text, handle.name))
+        return result if result is None else str(result)
+    except Exception:
+        # 静默降级曾让「跨线程推理失败」隐身数日；失败原因必须落日志。
+        logger.warning("PaddleOCR-VL 解析失败", exc_info=True)
+        return None
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
 
 
 def _extract_rtf(data: bytes) -> Extraction:
@@ -507,23 +709,36 @@ def _extract_xls(data: bytes) -> Extraction:
 
 
 def _extract_image(data: bytes, languages: str) -> Extraction:
+    # 优先 PaddleOCR-VL：对公式、表格、图表远强于逐字 OCR；不可用再回落 Tesseract。
+    parsed = _vl_parse(data, ".png")
+    if parsed:
+        return Extraction("ready", "paddleocr-vl", parsed, segments=parsed.count("\n") + 1, images=1)
+    if parsed == "":
+        return Extraction("empty", "paddleocr-vl", detail="PaddleOCR-VL 没有识别出内容", images=1)
+
     if shutil.which("tesseract") is None:
         return Extraction(
             "unsupported",
             "ocr",
-            detail="服务端未安装 Tesseract OCR，图片附件暂时只登记不转文字",
+            detail="服务端未安装 Tesseract OCR，图片附件暂时只登记不转文字（可安装 ocr 或 vl 附加项启用识别）",
+            images=1,
         )
     try:
         import pytesseract
         from PIL import Image
     except ModuleNotFoundError:
-        return Extraction("unsupported", "ocr", detail="服务端未安装 pytesseract/Pillow，图片附件暂时只登记不转文字")
+        return Extraction(
+            "unsupported",
+            "ocr",
+            detail="服务端未安装 pytesseract/Pillow，图片附件暂时只登记不转文字",
+            images=1,
+        )
 
     with Image.open(io.BytesIO(data)) as image:
         text = _tidy(pytesseract.image_to_string(image, lang=languages))
     if not text:
-        return Extraction("empty", "ocr", detail="OCR 没有识别出文字")
-    return Extraction("ready", "ocr", text, segments=text.count("\n") + 1)
+        return Extraction("empty", "ocr", detail="OCR 没有识别出文字", images=1)
+    return Extraction("ready", "ocr", text, segments=text.count("\n") + 1, images=1)
 
 
 def _extract_archive(data: bytes, languages: str) -> Extraction:

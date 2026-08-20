@@ -41,6 +41,9 @@ class User(Base):
     # 设置中心「用量监控」：月度预算 / 提醒阈值 / 硬限制（usage.usage_settings_of 解析）。
     # 硬限制的闸门在服务端聊天与任务执行路径上，改浏览器缓存绕不过。
     usage_settings: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # 设置中心「数据与隐私」：开关与保留策略（privacy.privacy_settings_of 解析）。
+    # 任务保留与文件缓存清理由服务端后台清扫执行，改浏览器缓存绕不过。
+    privacy_settings: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
