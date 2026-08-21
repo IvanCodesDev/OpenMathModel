@@ -7231,6 +7231,20 @@ html[data-theme="dark"] .stage-pill[data-stage="数据处理"] { background: rgb
 html[data-theme="dark"] .stage-pill[data-stage="实验验证"] { background: rgba(217, 138, 26, .17); color: #e2a856; }
 html[data-theme="dark"] .stage-pill[data-stage="论文撰写"] { background: rgba(32, 173, 99, .17); color: #63cc8d; }
 
+/* 真实数据补充的阶段值（问题分析/建模方案/结果验证/已完成/已失败）；
+   未开始、已创建、已取消与未知节点走上面的中性底色。 */
+.stage-pill[data-stage="问题分析"] { background: #f1ecfb; color: #6d49c4; }
+.stage-pill[data-stage="建模方案"] { background: #e6f4f4; color: #0f766e; }
+.stage-pill[data-stage="结果验证"] { background: #fdeff5; color: #b0326e; }
+.stage-pill[data-stage="已完成"] { background: #e7f4ec; color: #167a44; }
+.stage-pill[data-stage="已失败"] { background: #fbeeea; color: #c03d20; }
+
+html[data-theme="dark"] .stage-pill[data-stage="问题分析"] { background: rgba(124, 87, 205, .18); color: #b39df1; }
+html[data-theme="dark"] .stage-pill[data-stage="建模方案"] { background: rgba(20, 148, 138, .16); color: #6cc9c0; }
+html[data-theme="dark"] .stage-pill[data-stage="结果验证"] { background: rgba(196, 84, 130, .16); color: #e28ab4; }
+html[data-theme="dark"] .stage-pill[data-stage="已完成"] { background: rgba(32, 173, 99, .17); color: #63cc8d; }
+html[data-theme="dark"] .stage-pill[data-stage="已失败"] { background: rgba(196, 84, 62, .16); color: #e0836f; }
+
 /* 卡片:描边归中性灰,叠加克制的浮起阴影 */
 body[data-screen="projects"] .project-card {
   border-color: #e6e6e2;
@@ -7297,6 +7311,78 @@ html[data-theme="dark"] body[data-screen="projects"] .project-table td:nth-child
 html[data-theme="dark"] body[data-screen="projects"] .project-table td:nth-child(5),
 html[data-theme="dark"] body[data-screen="projects"] .project-table td:nth-child(6) { color: #e2e2dc; }
 html[data-theme="dark"] body[data-screen="projects"] .row-menu-button:hover { background: #2c2c2a; color: #e8e8e4; }
+
+/* 真实清单的空态行与分页省略号（结构与资源库分页一致） */
+body[data-screen="projects"] .projects-empty-row td {
+  padding: 48px 16px;
+  text-align: center !important;
+  color: #8b8b86;
+  font-size: 13px;
+}
+
+body[data-screen="projects"] .project-footer .page-gap {
+  padding: 0 4px;
+  color: #b2b2ab;
+  font-size: 12px;
+}
+
+html[data-theme="dark"] body[data-screen="projects"] .projects-empty-row td { color: #8f8f88; }
+
+/* 「运行历史」对话框：历次运行为按钮行，阶段徽章沿用表格 stage-pill 配色 */
+.recent-dialog .run-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 4px 0 8px;
+}
+
+.recent-dialog .run-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recent-dialog .run-history-row:hover { background: #f4f4f1; }
+.recent-dialog .run-history-row .stage-pill { flex: none; }
+.recent-dialog .run-history-row > i { color: #b2b2ab; flex: none; }
+
+.recent-dialog .run-history-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-dialog .run-history-main strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-dialog .run-history-main span { font-size: 12px; color: #8b8b86; }
+
+.recent-dialog .run-history-hint {
+  padding: 14px 4px;
+  font-size: 13px;
+  color: #8b8b86;
+  text-align: center;
+}
+
+html[data-theme="dark"] .recent-dialog .run-history-row:hover { background: #2c2c2a; }
+html[data-theme="dark"] .recent-dialog .run-history-main span { color: #8f8f88; }
+html[data-theme="dark"] .recent-dialog .run-history-hint { color: #8f8f88; }
 
 /* ── 侧栏「最近任务」真实数据：行内操作按钮与浮动菜单 ─────────────
    行沿用 .recent-link 的高度、字号与悬停背景；菜单借用模型选择器

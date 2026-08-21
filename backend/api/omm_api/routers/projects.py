@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from omm_contracts import (
@@ -24,9 +24,44 @@ from ..events import append_event
 from ..ids import new_id
 from ..orm import ArtifactRow, ProjectRow, TaskRunRow
 from ..privacy import purge_project
-from ..serialize import artifact_to_contract, project_to_contract, utcnow
+from ..serialize import artifact_to_contract, iso_z, project_to_contract, utcnow
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
+
+# 与契约 task-run.status 的终态子集一致：active 桶 = 存在运行且不在此集合。
+TERMINAL_RUN_STATUSES = ("COMPLETED", "FAILED", "CANCELLED")
+
+
+def latest_run_subquery():
+    """「项目 → 最新一次运行」轻量投影（按创建时间取最近，同刻按 id 收敛）。
+
+    行号窗口函数一次算出每个项目的最新运行，列表聚合与 q/state 过滤共用，
+    避免按项目逐个查询（切片②的服务端聚合承诺）。
+    """
+    rank = (
+        func.row_number()
+        .over(
+            partition_by=TaskRunRow.project_id,
+            order_by=(TaskRunRow.created_at.desc(), TaskRunRow.id.desc()),
+        )
+        .label("rank")
+    )
+    ranked = select(
+        TaskRunRow.project_id.label("project_id"),
+        TaskRunRow.id.label("run_id"),
+        TaskRunRow.status.label("run_status"),
+        TaskRunRow.current_node.label("run_node"),
+        TaskRunRow.goal.label("run_goal"),
+        TaskRunRow.updated_at.label("run_updated_at"),
+        rank,
+    ).subquery()
+    return select(ranked).where(ranked.c.rank == 1).subquery()
+
+
+def contains_pattern(term: str) -> str:
+    """LIKE 模糊包含模式；转义用户输入里的通配符。"""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def get_owned_project(
@@ -67,6 +102,19 @@ def list_projects(
     ctx: AuthContext = Depends(get_auth_context),
     session: Session = Depends(get_session),
     archived: bool = Query(default=False, description="true 时只返回已归档项目"),
+    include: Optional[Literal["stats"]] = Query(
+        default=None,
+        description="stats = 每项附带最新运行投影与产物计数（服务端一次聚合，客户端不再 N+1）",
+    ),
+    q: Optional[str] = Query(
+        default=None,
+        max_length=200,
+        description="按项目名或最新运行目标模糊搜索（大小写不敏感）",
+    ),
+    state: Optional[Literal["active", "done"]] = Query(
+        default=None,
+        description="按最新运行归桶：active = 有运行且未到终态；done = 最新运行已完成",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ProjectList:
@@ -75,17 +123,75 @@ def list_projects(
         ProjectRow.owner == ctx.user.id,
         ProjectRow.archived_at.is_not(None) if archived else ProjectRow.archived_at.is_(None),
     ]
+    with_stats = include == "stats"
+    search = (q or "").strip()
+    # stats、搜索与状态桶都依赖「项目 → 最新运行」联结；纯列表保持原有单表查询。
+    latest_run = (
+        latest_run_subquery() if with_stats or search or state is not None else None
+    )
+
+    query = select(ProjectRow)
+    if latest_run is not None:
+        query = query.outerjoin(latest_run, latest_run.c.project_id == ProjectRow.id)
+    if with_stats:
+        artifact_counts = (
+            select(ArtifactRow.project_id.label("project_id"), func.count().label("n"))
+            .group_by(ArtifactRow.project_id)
+            .subquery()
+        )
+        query = query.outerjoin(
+            artifact_counts, artifact_counts.c.project_id == ProjectRow.id
+        ).add_columns(
+            latest_run.c.run_id,
+            latest_run.c.run_status,
+            latest_run.c.run_node,
+            latest_run.c.run_goal,
+            latest_run.c.run_updated_at,
+            func.coalesce(artifact_counts.c.n, 0).label("artifact_count"),
+        )
+    query = query.where(*conditions)
+    if search:
+        pattern = contains_pattern(search)
+        query = query.where(
+            or_(
+                ProjectRow.name.ilike(pattern, escape="\\"),
+                latest_run.c.run_goal.ilike(pattern, escape="\\"),
+            )
+        )
+    if state == "active":
+        query = query.where(
+            latest_run.c.run_id.is_not(None),
+            latest_run.c.run_status.not_in(TERMINAL_RUN_STATUSES),
+        )
+    elif state == "done":
+        query = query.where(latest_run.c.run_status == "COMPLETED")
+
     total = session.execute(
-        select(func.count()).select_from(ProjectRow).where(*conditions)
+        select(func.count()).select_from(query.subquery())
     ).scalar_one()
     rows = session.execute(
-        select(ProjectRow)
-        .where(*conditions)
-        .order_by(ProjectRow.created_at.desc())
+        query.order_by(ProjectRow.created_at.desc(), ProjectRow.id.desc())
         .limit(limit)
         .offset(offset)
-    ).scalars()
-    return ProjectList(items=[project_to_contract(r) for r in rows], total=total)
+    ).all()
+
+    items: list[Project] = []
+    for row in rows:
+        stats: Optional[dict[str, Any]] = None
+        if with_stats:
+            latest: Optional[dict[str, Any]] = None
+            if row.run_id is not None:
+                latest = {
+                    "id": row.run_id,
+                    "status": row.run_status,
+                    # 契约要求非空节点名；历史行可能为空，按初始节点兜底。
+                    "current_node": row.run_node or "CREATED",
+                    "goal": row.run_goal,
+                    "updated_at": iso_z(row.run_updated_at),
+                }
+            stats = {"latest_run": latest, "artifact_count": row.artifact_count}
+        items.append(project_to_contract(row[0], stats=stats))
+    return ProjectList(items=items, total=total)
 
 
 @router.get("/{project_id}", response_model=Project)

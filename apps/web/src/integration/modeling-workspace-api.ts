@@ -94,17 +94,37 @@ export const modelingWorkspaceApi = {
 
   /** 项目列表；默认只含未归档，archived=true 时只看已归档。 */
   listProjects(
-    options: { archived?: boolean; limit?: number } = {},
+    options: {
+      archived?: boolean;
+      limit?: number;
+      offset?: number;
+      /** stats = 每项附带最新运行投影与产物计数（服务端一次聚合，切片②）。 */
+      include?: "stats";
+      /** 按项目名或最新运行目标模糊搜索（大小写不敏感）。 */
+      q?: string;
+      /** 按最新运行归桶：active = 未到终态；done = 已完成。 */
+      state?: "active" | "done";
+    } = {},
     signal?: AbortSignal,
   ): Promise<{ items: Project[]; total: number }> {
     const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
     if (options.archived) params.set("archived", "true");
+    if (options.offset) params.set("offset", String(options.offset));
+    if (options.include) params.set("include", options.include);
+    if (options.q) params.set("q", options.q);
+    if (options.state) params.set("state", options.state);
     return request<{ items: Project[]; total: number }>(`/api/v1/projects?${params}`, { signal });
   },
 
-  /** 当前用户的运行列表（创建时间倒序），侧栏「最近任务」的数据源。 */
-  listTaskRuns(limit = 20, signal?: AbortSignal): Promise<{ items: TaskRun[]; total: number }> {
-    return request<{ items: TaskRun[]; total: number }>(`/api/v1/task-runs?limit=${limit}`, {
+  /** 当前用户的运行列表（创建时间倒序）；传 projectId 只看单个项目（运行历史）。 */
+  listTaskRuns(
+    limit = 20,
+    projectId?: string,
+    signal?: AbortSignal,
+  ): Promise<{ items: TaskRun[]; total: number }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (projectId) params.set("project_id", projectId);
+    return request<{ items: TaskRun[]; total: number }>(`/api/v1/task-runs?${params}`, {
       signal,
     });
   },
