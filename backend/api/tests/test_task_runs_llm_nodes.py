@@ -21,6 +21,7 @@ from conftest import (
 from omm_api import llm as llm_module
 
 ANALYSIS_OUTPUT = {
+    "title": "共享单车调度优化",
     "problem_type": "优化",
     "objectives": ["给出调度方案"],
     "constraints": ["车辆容量有限"],
@@ -156,6 +157,36 @@ def test_llm_process_events_land_in_run_log(client, monkeypatch):
     assert calls[0]["model"] == "gpt-test"
     assert calls[0]["endpoint"] == "测试网关"
     assert calls[0]["prompt_tokens"] == 10
+
+
+def test_analysis_title_renames_auto_named_project(client, monkeypatch):
+    """最近任务的名字来自实际讨论的问题：分析产出 title 后替换首句截取的默认名。"""
+    _configure_llm(client, monkeypatch)
+    # 项目名与首页 deriveProjectName("请帮我完成这道建模题。附件是题目原文") 的结果一致
+    project = create_project(client, name="完成这道建模题")
+    run = create_run(client, project["id"], goal="请帮我完成这道建模题。附件是题目原文")
+
+    wait_until(client, run["id"], pending_approval(client, run["id"]))
+
+    renamed = client.get(f"/api/v1/projects/{project['id']}").json()
+    assert renamed["name"] == ANALYSIS_OUTPUT["title"], "自动名应替换为分析出的实际问题标题"
+
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    renames = [entry for entry in logs if entry.get("kind") == "task_renamed"]
+    assert renames and renames[0]["to"] == ANALYSIS_OUTPUT["title"], "重命名要留 run.log 痕迹"
+
+
+def test_analysis_title_keeps_user_named_project(client, monkeypatch):
+    """用户手动起的项目名是显式意图：分析产出 title 也不覆盖。"""
+    _configure_llm(client, monkeypatch)
+    project = create_project(client, name="我的毕业设计")
+    run = create_run(client, project["id"], goal="请帮我完成这道建模题")
+
+    wait_until(client, run["id"], pending_approval(client, run["id"]))
+
+    kept = client.get(f"/api/v1/projects/{project['id']}").json()
+    assert kept["name"] == "我的毕业设计"
 
 
 def test_model_output_validation_failure_gets_one_repair_attempt(client, monkeypatch):

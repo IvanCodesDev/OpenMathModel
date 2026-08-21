@@ -22,6 +22,7 @@ from omm_agent_skills import (
 )
 
 ANALYSIS_OK = {
+    "title": "门店选址优化",
     "problem_type": "优化",
     "objectives": ["确定最优布局"],
     "constraints": ["预算不超过 100 万"],

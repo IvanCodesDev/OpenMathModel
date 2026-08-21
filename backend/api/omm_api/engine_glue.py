@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -207,14 +208,53 @@ SIM_NODES = {state: SimStageNode(state) for state in TaskState if state.name in 
 # ── 真实 LLM 节点（设置中心「自定义 API」已配置时启用） ────────────────────
 
 
+#: 附件摘要总量与单附件正文上限：控制进入提示词的 token 规模
+_ATTACHMENT_SUMMARY_LIMIT = 4000
+_ATTACHMENT_EXCERPT_LIMIT = 1200
+
+
+def _attachments_summary(params: dict[str, Any]) -> str:
+    """运行参数里的附件元数据（含前端解析的正文摘要）→ 提示词附件摘要段。
+
+    真实题面常在附件里而不在首句指令里；把 excerpt 交给问题分析节点，
+    分析产出（含 title）才反映实际要解决的问题。
+    """
+    entries = params.get("attachment_metadata")
+    if not isinstance(entries, list):
+        return ""
+    parts: list[str] = []
+    used = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        excerpt = re.sub(r"\s+", " ", str(entry.get("excerpt") or "")).strip()
+        piece = (
+            f"《{name}》：{excerpt[:_ATTACHMENT_EXCERPT_LIMIT]}"
+            if excerpt
+            else f"《{name}》（正文尚未提取，仅有文件元数据）"
+        )
+        if used + len(piece) > _ATTACHMENT_SUMMARY_LIMIT:
+            parts.append("（其余附件从略）")
+            break
+        parts.append(piece)
+        used += len(piece)
+    return "\n".join(parts)
+
+
 class _GoalProblemAnalysisNode(ProblemAnalysisNode):
     """把运行输入的 goal 映射成提示词需要的 problem_statement。"""
 
     def build_variables(self, ctx: Any) -> dict[str, Any]:
         statement = ctx.inputs.get("problem_statement") or ctx.inputs.get("goal") or ""
+        summary = str(ctx.inputs.get("attachments_summary") or "").strip()
+        if not summary:
+            summary = _attachments_summary(dict(ctx.inputs.get("params") or {}))
         return {
             "problem_statement": str(statement),
-            "attachments_summary": str(ctx.inputs.get("attachments_summary") or "无"),
+            "attachments_summary": summary or "无",
         }
 
 
@@ -326,6 +366,53 @@ def _project_node(session: Session, run: TaskRunRow, to_node: str, reason: str) 
     )
 
 
+_GOAL_NAME_PREFIX = re.compile(r"^(?:请帮我|请|帮我|我想(?:要)?)")
+_GOAL_NAME_SPLIT = re.compile(r"[。！？!?；;\n]")
+
+
+def derive_name_from_goal(goal: str) -> str:
+    """复刻 apps/web task-start-state.ts 的 deriveProjectName：识别「仍是自动名」。
+
+    两端算法必须一致，才能判断项目名是否还是创建时从首句截取的默认值；
+    不一致时的后果是安全的——只会跳过自动重命名，绝不覆盖用户手动改的名。
+    """
+    compact = re.sub(r"\s+", " ", goal.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    compact = _GOAL_NAME_PREFIX.sub("", compact).strip()
+    first = _GOAL_NAME_SPLIT.split(compact, maxsplit=1)[0].strip() or "未命名建模任务"
+    characters = list(first)
+    return "".join(characters[:24]) + "…" if len(characters) > 24 else first
+
+
+def _maybe_rename_project(session: Session, run: TaskRunRow, outputs: dict[str, Any]) -> None:
+    """问题分析产出 title 后，把「最近任务」的名字换成实际讨论的问题。
+
+    仅当项目名仍等于按 goal 自动截取的默认名时才替换：名字对不上说明用户
+    已手动命名，视为显式意图不覆盖。sim 节点的 outputs 没有 title，自然跳过。
+    """
+    title = re.sub(r"\s+", " ", str(outputs.get("title") or "")).strip()[:60]
+    if not title:
+        return
+    project = session.get(ProjectRow, run.project_id)
+    if project is None or project.name == title:
+        return
+    if project.name != derive_name_from_goal(run.goal or ""):
+        return
+    previous = project.name
+    project.name = title
+    project.updated_at = utcnow()
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_log.value,
+        {
+            "kind": "task_renamed",
+            "message": f"已按题意将任务命名为「{title}」",
+            "from": previous,
+            "to": title,
+        },
+    )
+
+
 def _input_hash(run: TaskRunRow, node: str, attempt: int) -> str:
     canonical = json.dumps(
         {"run_id": run.id, "node": node, "attempt": attempt, "params": run.params or {}},
@@ -396,6 +483,8 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 AgentEventType.step_succeeded.value,
                 {"node": step.node, "attempt": step.attempt},
             )
+            if step.node == TaskState.PROBLEM_ANALYSIS.value:
+                _maybe_rename_project(session, run, dict(payload.get("outputs") or {}))
         return
 
     if kind is EventType.STEP_FAILED:

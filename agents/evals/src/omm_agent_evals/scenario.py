@@ -38,6 +38,7 @@ from omm_worker import WorkerConfig, WorkerRuntime
 PROBLEM_STATEMENT = "某物流公司需要根据历史运量预测下季度运量并优化车辆配置……"
 
 CANNED_ANALYSIS = {
+    "title": "运量预测与车辆配置优化",
     "problem_type": "预测+优化",
     "objectives": ["预测下季度运量", "给出车辆配置方案"],
     "constraints": ["车辆总数不超过 50", "预算上限 200 万"],
