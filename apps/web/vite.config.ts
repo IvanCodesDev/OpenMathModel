@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
@@ -75,75 +75,81 @@ function parseRange(rangeHeader: string | undefined, size: number): { start: num
   return { start, end: Math.min(end, size - 1) };
 }
 
-async function relayRemotePaper(
-  req: IncomingMessage,
-  res: ServerResponse,
-  year: string,
-  problemGroup: string,
-  filename: string,
-): Promise<void> {
+// raw.githubusercontent.com 在部分代理/运营商网络下会超时或被劫持，浏览器直连拿到的
+// 残缺字节流会让 pdf.js 把论文渲染成乱码页。因此中转优先走 jsDelivr 的同提交字节镜像，
+// 下载成功即写入本地缓存，此后该论文的所有请求（含 Range 分段）都由磁盘原样提供。
+function paperUpstreamUrls(year: string, problemGroup: string, filename: string): string[] {
   const sourceDirectories = [problemGroup];
   if (year === "2021") sourceDirectories.push("获数模之星提名奖（12篇）");
-
-  for (const sourceDirectory of sourceDirectories) {
+  return sourceDirectories.flatMap(sourceDirectory => {
     const sourcePath = [
       "国赛论文",
       `${year}年优秀论文`,
       sourceDirectory,
       filename,
     ].map(segment => encodeURIComponent(segment)).join("/");
-    const sourceUrl = `https://raw.githubusercontent.com/zhanwen/MathModel/${paperSourceRevision}/${sourcePath}`;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const upstream = await fetch(sourceUrl, {
-          headers: req.headers.range ? { Range: req.headers.range } : undefined,
-          method: req.method,
-          redirect: "follow",
-          signal: AbortSignal.timeout(30000),
-        });
-        if (upstream.status === 404) break;
-        if (!upstream.ok || (req.method !== "HEAD" && !upstream.body)) {
-          if (attempt < 2 && (upstream.status === 429 || upstream.status >= 500)) {
-            await new Promise(resolveDelay => setTimeout(resolveDelay, 350 * (attempt + 1)));
-            continue;
-          }
-          break;
-        }
+    return [
+      `https://cdn.jsdelivr.net/gh/zhanwen/MathModel@${paperSourceRevision}/${sourcePath}`,
+      `https://raw.githubusercontent.com/zhanwen/MathModel/${paperSourceRevision}/${sourcePath}`,
+    ];
+  });
+}
 
-        const headers: Record<string, string> = {
-          "Accept-Ranges": upstream.headers.get("accept-ranges") ?? "bytes",
-          "Cache-Control": "public, max-age=3600",
-          "Content-Type": "application/pdf",
-        };
-        for (const name of ["content-length", "content-range"] as const) {
-          const value = upstream.headers.get(name);
-          if (value) headers[name] = value;
-        }
-        res.writeHead(upstream.status, headers);
-        if (req.method === "HEAD" || !upstream.body) {
-          res.end();
-          return;
-        }
-
-        const reader = upstream.body.getReader();
-        res.on("close", () => void reader.cancel());
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!res.write(value)) {
-            await new Promise<void>(resolveDrain => res.once("drain", resolveDrain));
-          }
-        }
-        res.end();
-        return;
-      } catch {
-        if (attempt < 2) {
-          await new Promise(resolveDelay => setTimeout(resolveDelay, 350 * (attempt + 1)));
-        }
+async function fetchPaperBytes(sourceUrl: string): Promise<Buffer | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const upstream = await fetch(sourceUrl, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(60000),
+      });
+      if (upstream.status === 404) return null;
+      if (!upstream.ok) {
+        if (upstream.status !== 429 && upstream.status < 500) return null;
+        await new Promise(resolveDelay => setTimeout(resolveDelay, 350 * (attempt + 1)));
+        continue;
       }
+      const body = Buffer.from(await upstream.arrayBuffer());
+      // 上游被劫持时常见返回 HTML 报错页；魔数不符就丢弃，坏字节绝不落缓存。
+      if (body.subarray(0, 5).toString("latin1") !== "%PDF-") return null;
+      return body;
+    } catch {
+      await new Promise(resolveDelay => setTimeout(resolveDelay, 350 * (attempt + 1)));
     }
   }
-  res.writeHead(502).end();
+  return null;
+}
+
+const paperDownloads = new Map<string, Promise<void>>();
+
+function downloadPaperToCache(
+  year: string,
+  problemGroup: string,
+  filename: string,
+  filePath: string,
+): Promise<void> {
+  const inFlight = paperDownloads.get(filePath);
+  if (inFlight) return inFlight;
+  const task = (async () => {
+    for (const sourceUrl of paperUpstreamUrls(year, problemGroup, filename)) {
+      const body = await fetchPaperBytes(sourceUrl);
+      if (!body) continue;
+      await mkdir(dirname(filePath), { recursive: true });
+      const temporaryPath = `${filePath}.download-${process.pid}-${Date.now()}`;
+      await writeFile(temporaryPath, body);
+      try {
+        await rename(temporaryPath, filePath);
+      } catch (error) {
+        // Windows 上并发落盘可能在 rename 处冲突；已有完整文件时以先写入者为准。
+        await unlink(temporaryPath).catch(() => undefined);
+        const existing = await stat(filePath).catch(() => null);
+        if (!existing?.isFile()) throw error;
+      }
+      return;
+    }
+    throw new Error(`论文上游镜像均不可用：${year}/${problemGroup}/${filename}`);
+  })().finally(() => paperDownloads.delete(filePath));
+  paperDownloads.set(filePath, task);
+  return task;
 }
 
 async function serveCachedPaper(
@@ -187,8 +193,11 @@ async function serveCachedPaper(
   }
 
   try {
-    const info = await stat(filePath);
-    if (!info.isFile()) throw new Error("Not a file");
+    let info = await stat(filePath).catch(() => null);
+    if (!info?.isFile()) {
+      await downloadPaperToCache(year, problemGroup.toUpperCase(), filename, filePath);
+      info = await stat(filePath);
+    }
     const range = parseRange(req.headers.range, info.size);
     if (!range) {
       res.writeHead(416, { "Content-Range": `bytes */${info.size}` }).end();
@@ -210,9 +219,8 @@ async function serveCachedPaper(
     const stream = createReadStream(filePath, range);
     stream.on("error", error => res.destroy(error));
     stream.pipe(res);
-    return;
   } catch {
-    await relayRemotePaper(req, res, year, problemGroup.toUpperCase(), filename);
+    res.writeHead(502).end();
   }
 }
 
