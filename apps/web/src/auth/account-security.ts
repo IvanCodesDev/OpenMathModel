@@ -167,7 +167,7 @@ function securityPaneHtml(state: PaneState): string {
         ${avatarInner(user)}
         <span class="account-avatar-overlay" aria-hidden="true">${icon("camera")}</span>
       </button>
-      <div><h3>${escapeHtml(user.name)}</h3><p>${escapeHtml(user.email)} · ${escapeHtml(user.plan)}</p></div>
+      <div><h3>${escapeHtml(user.name)}</h3><p>${escapeHtml(user.email)}</p></div>
       <div class="account-identity-actions">
         ${user.avatar_url ? '<button type="button" class="danger-text" data-sec-action="remove-avatar">移除头像</button>' : ""}
         <button type="button" class="secondary-small" data-sec-action="edit-profile">编辑资料</button>
@@ -241,17 +241,15 @@ function hydrateAccountCard(backdrop: HTMLElement, me: MeResponse | null): void 
   if (!card) return;
   const avatar = card.querySelector<HTMLElement>(".avatar");
   const name = card.querySelector<HTMLElement>("strong");
-  const plan = card.querySelector<HTMLElement>("span:not(.avatar):not(.settings-plan)");
-  const badge = card.querySelector<HTMLElement>(".settings-plan");
+  const detail = card.querySelector<HTMLElement>("span:not(.avatar)");
   paintAvatar(avatar, me?.user ?? null);
   if (me) {
     if (name) name.textContent = me.user.name;
-    if (plan) plan.textContent = me.user.plan;
-    if (badge) badge.style.display = "";
+    // 产品永久免费，不展示套餐；该行固定为工作区文案。
+    if (detail) detail.textContent = "个人工作区";
   } else {
     if (name) name.textContent = "未登录";
-    if (plan) plan.textContent = "登录后同步账户";
-    if (badge) badge.style.display = "none";
+    if (detail) detail.textContent = "登录后同步账户";
   }
 }
 
@@ -651,7 +649,8 @@ export async function hydrateAccountUi(): Promise<void> {
 
   if (me) {
     if (name) name.textContent = me.user.name;
-    if (detail) detail.textContent = me.user.email;
+    // 用户条常驻所有页面，不展示邮箱（截屏/共享隐私）；完整邮箱在 设置中心 → 账户。
+    if (detail) detail.textContent = "个人工作区";
     profileRow.classList.remove("profile-row-guest");
     profileRow.removeAttribute("title");
   } else {
