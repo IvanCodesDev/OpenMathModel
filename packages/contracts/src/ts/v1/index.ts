@@ -9,6 +9,7 @@ export type { ApprovalRequest } from "./approval-request";
 export type { Artifact } from "./artifact";
 export type { ErrorEnvelope } from "./error";
 export type { ModelingWorkspaceView } from "./modeling-workspace-view";
+export type { PaperExport } from "./paper-export";
 export type { Project } from "./project";
 export type { StepRun } from "./step-run";
 export type { TaskRun } from "./task-run";

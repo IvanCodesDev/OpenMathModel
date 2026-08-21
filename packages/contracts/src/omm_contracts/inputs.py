@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import ProjectMode
+from .enums import PaperExportFormat, ProjectMode
 
 
 class InputModel(BaseModel):
@@ -41,6 +41,19 @@ class CreateTaskRunInput(InputModel):
     budget: Optional[BudgetInput] = None
     params: Optional[dict[str, Any]] = None
     auto_start: bool = True
+
+
+class CreatePaperExportInput(InputModel):
+    """与 openapi CreatePaperExportInput 一致（ADR-0012 阶段 A）。
+
+    source_tex 的 2MB 上限按字符数在此约束；服务端另按 UTF-8 字节数复核。
+    """
+
+    project_id: str
+    run_id: Optional[str] = None
+    format: PaperExportFormat
+    title: str = Field(min_length=1, max_length=300)
+    source_tex: str = Field(min_length=1, max_length=2 * 1024 * 1024)
 
 
 class TaskRunAction(str, Enum):

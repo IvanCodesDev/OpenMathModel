@@ -20,6 +20,7 @@ tags:
   - name: task-runs
   - name: events
   - name: artifacts
+  - name: paper-exports
 paths:
   /v1/projects:
     get:
@@ -27,6 +28,22 @@ paths:
       operationId: listProjects
       summary: 项目列表
       parameters:
+        - name: archived
+          in: query
+          description: true 时只返回已归档项目；默认只返回未归档项目。
+          schema: { type: boolean, default: false }
+        - name: include
+          in: query
+          description: include=stats 时每项附带 stats（最新运行投影 + 产物计数），服务端一次聚合。
+          schema: { type: string, enum: [stats] }
+        - name: q
+          in: query
+          description: 按项目名或最新运行目标模糊搜索（大小写不敏感）。
+          schema: { type: string, maxLength: 200 }
+        - name: state
+          in: query
+          description: 按最新运行归桶：active = 有运行且未到终态；done = 最新运行已完成。可与 archived 组合。
+          schema: { type: string, enum: [active, done] }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
       responses:
@@ -249,6 +266,48 @@ paths:
                 $ref: "#/components/schemas/AgentEventList"
         default:
           $ref: "#/components/responses/Error"
+  /v1/paper-exports:
+    post:
+      tags: [paper-exports]
+      operationId: createPaperExport
+      summary: 提交论文导出（ADR-0012 阶段 A：客户端直传 .tex，服务端编译）
+      description: |
+        需 Idempotency-Key。format=pdf 排队由 Tectonic 编译，未安装编译器时任务落
+        UNSUPPORTED（诚实降级）；format=tex 只落源产物并立即 READY。
+        tex 源与 PDF 均为 kind=paper 的 Artifact，PDF 的 inputs 指向 tex 源；
+        下载沿用 /v1/artifacts/{artifact_id}/download。带 run_id 的导出完成时
+        沿 run 事件流追加 paper.export.finished 事件，无 run_id 时客户端轮询 GET。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaperExportInput"
+      responses:
+        "202":
+          description: 已受理，返回导出任务当前状态
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/paper-export.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/paper-exports/{export_id}:
+    get:
+      tags: [paper-exports]
+      operationId: getPaperExport
+      summary: 导出任务状态（归属校验）
+      parameters:
+        - $ref: "#/components/parameters/ExportId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "../schemas/v1/paper-export.schema.json"
+        default:
+          $ref: "#/components/responses/Error"
 components:
   parameters:
     ProjectId:
@@ -258,6 +317,11 @@ components:
       schema: { type: string }
     RunId:
       name: run_id
+      in: path
+      required: true
+      schema: { type: string }
+    ExportId:
+      name: export_id
       in: path
       required: true
       schema: { type: string }
@@ -308,6 +372,23 @@ components:
           type: boolean
           default: true
           description: 创建后立即开始推进（MVP 由内嵌 worker 驱动）。
+    CreatePaperExportInput:
+      type: object
+      required: [project_id, format, title, source_tex]
+      properties:
+        project_id: { type: string }
+        run_id:
+          type: [string, "null"]
+          description: 可选，关联工作台运行；须与 project_id 同属一个项目。
+        format:
+          type: string
+          enum: [pdf, tex]
+        title: { type: string, minLength: 1, maxLength: 300 }
+        source_tex:
+          type: string
+          minLength: 1
+          maxLength: 2097152
+          description: 完整 .tex 文档；服务端另按字节数校验 2MB 上限。
     TaskRunActionInput:
       type: object
       required: [action]

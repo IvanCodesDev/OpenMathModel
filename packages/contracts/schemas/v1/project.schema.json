@@ -30,16 +30,59 @@
     },
     "description": { "type": ["string", "null"], "maxLength": 2000 },
     "created_at": { "$ref": "#/$defs/timestamp" },
-    "updated_at": { "$ref": "#/$defs/timestamp" }
+    "updated_at": { "$ref": "#/$defs/timestamp" },
+    "stats": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/project_stats" }],
+      "description": "列表统计投影：仅 GET /v1/projects?include=stats 计算并返回对象，其余端点为 null 或缺省。服务端一次聚合，客户端不再按项目逐个拉取运行与产物。"
+    }
   },
   "required": ["id", "name", "owner", "mode", "created_at", "updated_at"],
   "additionalProperties": false,
   "$defs": {
     "project_id": { "type": "string", "pattern": "^proj_[0-9a-f]{32}$" },
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-f]{32}$" },
     "timestamp": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
       "description": "UTC ISO-8601，统一以 Z 结尾。"
+    },
+    "project_stats": {
+      "type": "object",
+      "properties": {
+        "latest_run": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "properties": {
+                "id": { "$ref": "#/$defs/run_id" },
+                "status": {
+                  "type": "string",
+                  "enum": ["QUEUED", "RUNNING", "WAITING_APPROVAL", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]
+                },
+                "current_node": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]*$",
+                  "maxLength": 100,
+                  "description": "领域阶段节点，随 workflow_version 演进；消费方必须容忍未知节点名。"
+                },
+                "goal": { "type": "string", "minLength": 1, "maxLength": 4000 },
+                "updated_at": { "$ref": "#/$defs/timestamp" }
+              },
+              "required": ["id", "status", "current_node", "goal", "updated_at"],
+              "additionalProperties": false
+            }
+          ],
+          "description": "该项目最新一次运行的轻量投影（按创建时间取最近）；从未发起运行时为 null。"
+        },
+        "artifact_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "项目产物总条数（运行产出与手动上传都计入）。"
+        }
+      },
+      "required": ["latest_run", "artifact_count"],
+      "additionalProperties": false
     }
   }
 }

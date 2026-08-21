@@ -1,0 +1,15 @@
+{
+  "id": "proj_ffeeddccbbaa99887766554433221100",
+  "name": "带统计但未运行的项目",
+  "owner": "local-dev",
+  "mode": "collaboration",
+  "competition_policy": null,
+  "workspace_uri": null,
+  "description": "include=stats 且项目从未发起运行：latest_run 为 null，产物计数为 0。",
+  "created_at": "2026-08-20T00:00:00Z",
+  "updated_at": "2026-08-20T00:00:00Z",
+  "stats": {
+    "latest_run": null,
+    "artifact_count": 0
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "pex_aabbccddeeff00112233445566778899",
+  "project_id": "proj_0123456789abcdef0123456789abcdef",
+  "run_id": "run_ffeeddccbbaa99887766554433221100",
+  "format": "pdf",
+  "status": "READY",
+  "artifact_id": "art_99887766554433221100ffeeddccbbaa",
+  "source_artifact_id": "art_00112233445566778899aabbccddeeff",
+  "detail": null,
+  "created_at": "2026-08-21T02:30:00.000000Z",
+  "started_at": "2026-08-21T02:30:01.000000Z",
+  "ended_at": "2026-08-21T02:30:42.500000Z"
+}

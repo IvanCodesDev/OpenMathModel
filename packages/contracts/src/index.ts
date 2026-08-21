@@ -80,6 +80,17 @@ export const ARTIFACT_KINDS = [
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 export type ArtifactStatus = "PENDING" | "READY" | "STALE" | "DELETED";
+
+export const PAPER_EXPORT_STATUSES = [
+  "QUEUED",
+  "RUNNING",
+  "READY",
+  "FAILED",
+  "UNSUPPORTED",
+] as const;
+export type PaperExportStatus = (typeof PAPER_EXPORT_STATUSES)[number];
+export type PaperExportFormat = "pdf" | "tex";
+
 export type ApprovalStatus = "PENDING" | "RESOLVED" | "EXPIRED" | "CANCELLED";
 export type ApprovalDecisionType =
   | "confirm_plan"
@@ -114,6 +125,24 @@ export interface RunFailure {
   message: string;
 }
 
+/** 项目最新一次运行的轻量投影（stats 专用，非完整 TaskRun）。 */
+export interface ProjectLatestRun {
+  id: string;
+  status: TaskRunStatus | (string & {});
+  /** 领域阶段节点，随 workflow_version 演进；消费方必须容忍未知节点名。 */
+  current_node: string;
+  goal: string;
+  updated_at: string;
+}
+
+/** 列表统计投影：GET /v1/projects?include=stats 时服务端一次聚合。 */
+export interface ProjectStats {
+  /** 最新一次运行（按创建时间取最近）；从未发起运行时为 null。 */
+  latest_run: ProjectLatestRun | null;
+  /** 项目产物总条数（运行产出与手动上传都计入）。 */
+  artifact_count: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -125,6 +154,8 @@ export interface Project {
   description?: string | null;
   created_at: string;
   updated_at: string;
+  /** 仅 include=stats 时为对象；其余端点为 null 或缺省。 */
+  stats?: ProjectStats | null;
 }
 
 export interface TaskRun {
@@ -215,6 +246,25 @@ export interface ApprovalRequest {
   created_at: string;
 }
 
+/** 论文导出任务（ADR-0012 阶段 A）：.tex 源与 PDF 均为 kind=paper 的 Artifact。 */
+export interface PaperExport {
+  id: string;
+  project_id: string;
+  run_id?: string | null;
+  format: PaperExportFormat | (string & {});
+  /** UNSUPPORTED = 服务端未安装编译器，诚实降级。 */
+  status: PaperExportStatus | (string & {});
+  /** 交付产物：format=pdf 为编译出的 PDF，format=tex 为 tex 源产物。 */
+  artifact_id?: string | null;
+  /** 受理时落库的 .tex 源产物；编译失败仍可下载排查。 */
+  source_artifact_id?: string | null;
+  /** FAILED 时为编译日志尾部；UNSUPPORTED 时为启用途径说明。 */
+  detail?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+}
+
 export interface ErrorBody {
   code: string;
   message: string;
@@ -249,6 +299,16 @@ export interface TaskRunActionInput {
   comment?: string | null;
   /** 客户端幂等令牌；同令牌重复提交返回同一结果。 */
   client_token?: string | null;
+}
+
+export interface CreatePaperExportInput {
+  project_id: string;
+  /** 可选，关联工作台运行；须与 project_id 同属一个项目。 */
+  run_id?: string | null;
+  format: PaperExportFormat;
+  title: string;
+  /** 完整 .tex 文档，≤ 2MB。 */
+  source_tex: string;
 }
 
 // ---- 响应包装 ----

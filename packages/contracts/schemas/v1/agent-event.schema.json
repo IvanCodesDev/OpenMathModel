@@ -26,7 +26,8 @@
         "step.failed",
         "approval.requested",
         "approval.resolved",
-        "artifact.published"
+        "artifact.published",
+        "paper.export.finished"
       ]
     },
     "payload": {

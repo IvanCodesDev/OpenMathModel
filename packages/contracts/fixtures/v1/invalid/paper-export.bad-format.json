@@ -1,0 +1,13 @@
+{
+  "id": "pex_5f0e1d2c3b4a59687766554433221100",
+  "project_id": "proj_0123456789abcdef0123456789abcdef",
+  "run_id": null,
+  "format": "docx",
+  "status": "QUEUED",
+  "artifact_id": null,
+  "source_artifact_id": null,
+  "detail": null,
+  "created_at": "2026-08-21T02:30:00.000000Z",
+  "started_at": null,
+  "ended_at": null
+}

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, constr
+from pydantic import BaseModel, ConfigDict, Field, RootModel, conint, constr
 
 
 class Mode(Enum):
@@ -24,11 +24,56 @@ class ProjectId(RootModel[constr(pattern=r"^proj_[0-9a-f]{32}$")]):
     root: constr(pattern=r"^proj_[0-9a-f]{32}$")
 
 
+class RunId(RootModel[constr(pattern=r"^run_[0-9a-f]{32}$")]):
+    root: constr(pattern=r"^run_[0-9a-f]{32}$")
+
+
 class Timestamp(
     RootModel[constr(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$")]
 ):
     root: constr(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$") = Field(
         ..., description="UTC ISO-8601，统一以 Z 结尾。"
+    )
+
+
+class Status(Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    PAUSED = "PAUSED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class LatestRun(BaseModel):
+    """
+    该项目最新一次运行的轻量投影（按创建时间取最近）；从未发起运行时为 null。
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: RunId
+    status: Status
+    current_node: constr(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=100) = Field(
+        ...,
+        description="领域阶段节点，随 workflow_version 演进；消费方必须容忍未知节点名。",
+    )
+    goal: constr(min_length=1, max_length=4000)
+    updated_at: Timestamp
+
+
+class ProjectStats(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    latest_run: LatestRun | None = Field(
+        ...,
+        description="该项目最新一次运行的轻量投影（按创建时间取最近）；从未发起运行时为 null。",
+    )
+    artifact_count: conint(ge=0) = Field(
+        ..., description="项目产物总条数（运行产出与手动上传都计入）。"
     )
 
 
@@ -56,3 +101,7 @@ class Project(BaseModel):
     description: constr(max_length=2000) | None = None
     created_at: Timestamp
     updated_at: Timestamp
+    stats: ProjectStats | None = Field(
+        None,
+        description="列表统计投影：仅 GET /v1/projects?include=stats 计算并返回对象，其余端点为 null 或缺省。服务端一次聚合，客户端不再按项目逐个拉取运行与产物。",
+    )

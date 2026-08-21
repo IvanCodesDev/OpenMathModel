@@ -6,8 +6,9 @@ from .approval_request import ApprovalRequest
 from .artifact import Artifact
 from .error import ErrorEnvelope
 from .modeling_workspace_view import ModelingWorkspaceView
+from .paper_export import PaperExport
 from .project import Project
 from .step_run import StepRun
 from .task_run import TaskRun
 
-__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "ErrorEnvelope", "ModelingWorkspaceView", "Project", "StepRun", "TaskRun"]
+__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "ErrorEnvelope", "ModelingWorkspaceView", "PaperExport", "Project", "StepRun", "TaskRun"]

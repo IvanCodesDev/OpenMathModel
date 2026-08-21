@@ -20,6 +20,7 @@ class Type(Enum):
     approval_requested = "approval.requested"
     approval_resolved = "approval.resolved"
     artifact_published = "artifact.published"
+    paper_export_finished = "paper.export.finished"
 
 
 class Timestamp(

@@ -12,6 +12,8 @@ from .v1.approval_request import DecisionType as ApprovalDecisionType
 from .v1.approval_request import Status as ApprovalStatus
 from .v1.artifact import Kind as ArtifactKind
 from .v1.artifact import Status as ArtifactStatus
+from .v1.paper_export import Format as PaperExportFormat
+from .v1.paper_export import Status as PaperExportStatus
 from .v1.project import Mode as ProjectMode
 from .v1.step_run import Status as StepRunStatus
 from .v1.task_run import FailureClass
@@ -28,6 +30,8 @@ __all__ = [
     "ArtifactKind",
     "ArtifactStatus",
     "FailureClass",
+    "PaperExportFormat",
+    "PaperExportStatus",
     "ProjectMode",
     "StepRunStatus",
     "TaskRunStatus",

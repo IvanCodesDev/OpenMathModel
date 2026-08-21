@@ -27,7 +27,8 @@ export interface AgentEvent {
     | "step.failed"
     | "approval.requested"
     | "approval.resolved"
-    | "artifact.published";
+    | "artifact.published"
+    | "paper.export.finished";
   /**
    * 按 type 解释的载荷。消费方必须容忍未知字段。
    */

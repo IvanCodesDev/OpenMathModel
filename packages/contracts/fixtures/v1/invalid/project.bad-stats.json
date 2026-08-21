@@ -1,0 +1,12 @@
+{
+  "id": "proj_00112233445566778899aabbccddeeff",
+  "name": "统计字段非法的项目",
+  "owner": "local-dev",
+  "mode": "learning",
+  "created_at": "2026-08-20T00:00:00Z",
+  "updated_at": "2026-08-20T00:00:00Z",
+  "stats": {
+    "latest_run": null,
+    "artifact_count": -1
+  }
+}
