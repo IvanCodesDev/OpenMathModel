@@ -13,6 +13,16 @@ const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/;
 const MAX_ENTRY_CHARS = 20_000;
 const MAX_ENTRIES = 80;
 
+/** 回复执行轨迹的一行（已落定状态）：恢复对话时按原样重建过程区。 */
+export interface ConversationTraceRow {
+  icon: string;
+  title: string;
+  suffix?: string;
+  detail?: string;
+  /** 已落定的耗时文本（如 "12.3s"）；恢复时直接展示，不再走秒。 */
+  elapsed?: string;
+}
+
 export interface ConversationLogEntry {
   role: "user" | "assistant";
   text: string;
@@ -20,6 +30,29 @@ export interface ConversationLogEntry {
   opening?: boolean;
   /** 随消息发送的附件名，恢复时重建气泡下的纸夹徽标。 */
   attachments?: string[];
+  /** 回复的执行轨迹（读取上下文/附件解析/难度路由/生成计时等真实过程）。 */
+  trace?: ConversationTraceRow[];
+}
+
+/** 轨迹落盘上限：行数与字段长度都收口，控制 localStorage 占用。 */
+const MAX_TRACE_ROWS = 8;
+const MAX_TRACE_FIELD_CHARS = 600;
+
+function sanitizeTrace(value: unknown): ConversationTraceRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: ConversationTraceRow[] = [];
+  for (const item of value.slice(0, MAX_TRACE_ROWS)) {
+    const row = item as Partial<ConversationTraceRow>;
+    if (typeof row?.icon !== "string" || typeof row?.title !== "string" || !row.title) continue;
+    rows.push({
+      icon: row.icon.slice(0, 40),
+      title: row.title.slice(0, 120),
+      ...(typeof row.suffix === "string" && row.suffix ? { suffix: row.suffix.slice(0, 40) } : {}),
+      ...(typeof row.detail === "string" && row.detail ? { detail: row.detail.slice(0, MAX_TRACE_FIELD_CHARS) } : {}),
+      ...(typeof row.elapsed === "string" && row.elapsed ? { elapsed: row.elapsed.slice(0, 20) } : {}),
+    });
+  }
+  return rows;
 }
 
 function keyFor(runId: string): string {
@@ -38,17 +71,19 @@ export function parseConversationLog(raw: string | null): ConversationLogEntry[]
   if (!Array.isArray(entries)) return [];
   const result: ConversationLogEntry[] = [];
   for (const item of entries) {
-    const entry = item as { role?: unknown; text?: unknown; opening?: unknown; attachments?: unknown };
+    const entry = item as { role?: unknown; text?: unknown; opening?: unknown; attachments?: unknown; trace?: unknown };
     if (entry?.role !== "user" && entry?.role !== "assistant") continue;
     if (typeof entry.text !== "string" || !entry.text) continue;
     const attachments = Array.isArray(entry.attachments)
       ? entry.attachments.filter((name): name is string => typeof name === "string")
       : [];
+    const trace = sanitizeTrace(entry.trace);
     result.push({
       role: entry.role,
       text: entry.text,
       ...(entry.opening === true ? { opening: true } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(trace.length > 0 ? { trace } : {}),
     });
   }
   return result;
@@ -74,6 +109,24 @@ export function appendConversationEntries(runId: string, entries: ConversationLo
     localStorage.setItem(keyFor(runId), JSON.stringify({ entries: merged, saved_at: Date.now() }));
   } catch {
     // 存储满或被禁用：本轮不落盘，对话仍在页面内存里继续。
+  }
+}
+
+/**
+ * 把执行轨迹补写到最近一条对话回复上：轨迹在回复完成后才最终落定
+ * （生成耗时等），晚于回复本身的落盘。用回复文本校验目标条目，
+ * 防止「保存任务历史」中途开关造成的错位。
+ */
+export function attachTraceToLastReply(runId: string, replyText: string, trace: ConversationTraceRow[]): void {
+  if (!RUN_ID_PATTERN.test(runId) || trace.length === 0) return;
+  const entries = loadConversationLog(runId);
+  const last = [...entries].reverse().find(entry => entry.role === "assistant" && !entry.opening);
+  if (!last || last.text !== replyText.slice(0, MAX_ENTRY_CHARS)) return;
+  last.trace = sanitizeTrace(trace);
+  try {
+    localStorage.setItem(keyFor(runId), JSON.stringify({ entries, saved_at: Date.now() }));
+  } catch {
+    // 存储满或被禁用：轨迹不落盘，页面内展示不受影响。
   }
 }
 

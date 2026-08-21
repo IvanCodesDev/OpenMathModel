@@ -10,8 +10,9 @@ import {
   modelingWorkspaceApi,
   WORKSPACE_EVENT_TYPES,
   WorkspaceApiError,
-  type WorkspaceStepRun,
 } from "./modeling-workspace-api";
+import { hydrateRecentTasks } from "./recent-tasks";
+import { hideTaskTodos, renderTaskTodos, type TaskTodoItem } from "./task-todo-panel";
 import {
   openAttachmentsDialog,
   openTaskHeaderMenu,
@@ -47,16 +48,6 @@ const STATUS_LABELS: Record<string, string> = {
   FAILED: "执行失败",
   CANCELLED: "已取消",
 };
-const PAGE_STATUS_LABELS: Record<string, string> = {
-  PENDING: "待开始",
-  RUNNING: "进行中",
-  WAITING_APPROVAL: "待确认",
-  PAUSED: "已暂停",
-  SUCCEEDED: "完成",
-  FAILED: "失败",
-  CANCELLED: "已取消",
-};
-
 let activeCleanup: (() => void) | undefined;
 
 function activeRunId(): string | null {
@@ -119,20 +110,6 @@ function setStreamingText(element: HTMLElement, text: string): void {
   streamingTexts.set(element, { text, timer });
 }
 
-/** 执行步骤计数徽标（n/6），数值变化时轻微弹跳。 */
-function setStepsCount(root: HTMLElement, done: number, total: number): void {
-  const value = `${done}/${total}`;
-  root.querySelectorAll<HTMLElement>("[data-steps-count]").forEach(element => {
-    if (!element.hidden && element.textContent === value) return;
-    element.hidden = false;
-    element.textContent = value;
-    if (prefersReducedMotion()) return;
-    element.classList.remove("count-pop");
-    void element.offsetWidth;
-    element.classList.add("count-pop");
-  });
-}
-
 function pageStatusForDisplay(
   view: ModelingWorkspaceView,
   page: ModelingWorkspaceView["pages"][number],
@@ -144,63 +121,10 @@ function pageStatusForDisplay(
   return page.status;
 }
 
-// ── 执行轨迹：动作图标、真实耗时与尝试次数（数据来自 /steps 控制面接口） ──
-
-/** 与 backend/api/omm_api/workspace_view.py 的 PAGE_SPECS 保持一致。 */
-const PAGE_NODES: Record<string, readonly string[]> = {
-  running: ["CREATED", "PROBLEM_ANALYSIS"],
-  data: ["DATA_PREPARATION"],
-  model: ["MODEL_PLANNING"],
-  experiments: ["EXPERIMENTING", "VALIDATING"],
-  editor: ["PAPER_WRITING"],
-  complete: ["COMPLETED"],
-};
-
-/** 每个阶段一个动作图标（Phosphor 线性系）：分析/数据/方案/实验/写作/交付。 */
-const PAGE_ICONS: Record<string, string> = {
-  running: "magnifying-glass",
-  data: "database",
-  model: "tree-structure",
-  experiments: "flask",
-  editor: "pen-nib",
-  complete: "flag-checkered",
-};
-
-interface PageTiming {
-  startedAtMs: number | null;
-  endedAtMs: number | null;
-  attempts: number;
-  failureMessage: string | null;
-}
-
-type PageTimings = Map<string, PageTiming>;
-
-const timingsByRoot = new WeakMap<HTMLElement, PageTimings>();
-
 function parseIso(value: string | null | undefined): number | null {
   if (!value) return null;
   const ms = new Date(value).getTime();
   return Number.isNaN(ms) ? null : ms;
-}
-
-/** 步骤记录 → 按页面聚合的耗时：起点取首次开始，终点在全部落定后取最晚结束。 */
-function aggregateStepTimings(steps: WorkspaceStepRun[]): PageTimings {
-  const timings: PageTimings = new Map();
-  for (const [pageKey, nodes] of Object.entries(PAGE_NODES)) {
-    const related = steps.filter(step => nodes.includes(step.node));
-    if (!related.length) continue;
-    const startTimes = related.map(step => parseIso(step.started_at)).filter((v): v is number => v !== null);
-    const hasLive = related.some(step => step.status === "RUNNING");
-    const endTimes = related.map(step => parseIso(step.ended_at)).filter((v): v is number => v !== null);
-    const failure = related.filter(step => step.status === "FAILED").at(-1);
-    timings.set(pageKey, {
-      startedAtMs: startTimes.length ? Math.min(...startTimes) : null,
-      endedAtMs: !hasLive && endTimes.length ? Math.max(...endTimes) : null,
-      attempts: Math.max(...related.map(step => step.attempt), 1),
-      failureMessage: failure?.failure_message ?? null,
-    });
-  }
-  return timings;
 }
 
 /** 耗时展示：10 秒内一位小数，一分钟内整秒，更长用分+秒。 */
@@ -211,27 +135,6 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(clamped / 60_000);
   const seconds = Math.round((clamped % 60_000) / 1000);
   return `${minutes}m ${seconds}s`;
-}
-
-/** 状态/耗时单元格：完成与失败显示总耗时，进行中挂 data-elapsed-since 实时走秒。 */
-function fillElapsedCell(
-  cell: HTMLElement,
-  displayStatus: ModelingWorkspaceView["pages"][number]["status"],
-  timing: PageTiming | undefined,
-): void {
-  const done = displayStatus === "SUCCEEDED";
-  const failed = displayStatus === "FAILED";
-  const active = ["RUNNING", "WAITING_APPROVAL", "PAUSED"].includes(displayStatus);
-  if ((done || failed) && timing?.startedAtMs !== null && timing?.startedAtMs !== undefined && timing.endedAtMs !== null) {
-    cell.textContent = formatElapsed(timing.endedAtMs - timing.startedAtMs);
-    return;
-  }
-  if (active && timing?.startedAtMs) {
-    cell.dataset.elapsedSince = String(timing.startedAtMs);
-    cell.textContent = formatElapsed(Date.now() - timing.startedAtMs);
-    return;
-  }
-  cell.textContent = PAGE_STATUS_LABELS[displayStatus] ?? displayStatus;
 }
 
 function renderStatus(root: HTMLElement, screen: ScreenId, view: ModelingWorkspaceView): void {
@@ -267,108 +170,6 @@ function renderStatus(root: HTMLElement, screen: ScreenId, view: ModelingWorkspa
     root.querySelectorAll<HTMLElement>(`[data-workspace-page="${page.key}"], [data-focused-stage="${page.key}"]`)
       .forEach(element => { element.dataset.stageStatus = pageStatusForDisplay(view, page); });
   });
-}
-
-/** 行首图标：完成=黑底白钩（已定稿的完成态语言），其余显示阶段动作图标；
- *  进行中的动作图标带呼吸脉冲，待开始为浅灰。 */
-function stepIconHtml(
-  pageKey: string,
-  displayStatus: ModelingWorkspaceView["pages"][number]["status"],
-): string {
-  if (displayStatus === "SUCCEEDED") return '<i class="ph-fill ph-check-circle" aria-hidden="true"></i>';
-  if (displayStatus === "FAILED") return '<i class="ph-fill ph-x-circle" aria-hidden="true"></i>';
-  const icon = PAGE_ICONS[pageKey] ?? "circle-dashed";
-  return `<i class="ph ph-${icon}" aria-hidden="true"></i>`;
-}
-
-/** 尝试次数徽标：重试过的阶段标注「第 n 次尝试」。 */
-function attemptBadge(timing: PageTiming | undefined): HTMLElement | null {
-  if (!timing || timing.attempts <= 1) return null;
-  const badge = document.createElement("span");
-  badge.className = "step-attempt";
-  badge.textContent = `第 ${timing.attempts} 次尝试`;
-  return badge;
-}
-
-function createStepRow(
-  page: ModelingWorkspaceView["pages"][number],
-  displayStatus: ModelingWorkspaceView["pages"][number]["status"],
-  screen: ScreenId,
-  timing: PageTiming | undefined,
-): HTMLDivElement {
-  const row = document.createElement("div");
-  const done = displayStatus === "SUCCEEDED";
-  const active = ["RUNNING", "WAITING_APPROVAL", "PAUSED", "FAILED"].includes(displayStatus);
-  const isViewedPage = page.key === screen;
-  row.className = `focused-step${active ? " current" : ""}`;
-  row.dataset.stagePage = page.key;
-  row.dataset.stageStatus = displayStatus;
-
-  const dot = document.createElement("span");
-  dot.className = `focused-step-dot${done ? " done" : ""}`;
-  dot.innerHTML = stepIconHtml(page.key, displayStatus);
-  const label = document.createElement("span");
-  // 时间线行永远显示阶段名；动作文案（current_step/summary）归摘要区，避免同一句话重复三处。
-  label.textContent = page.label;
-  const badge = attemptBadge(timing);
-  const status = document.createElement("time");
-  fillElapsedCell(status, displayStatus, timing);
-  const chevron = document.createElement("i");
-  chevron.setAttribute("aria-hidden", "true");
-  if (isViewedPage) {
-    // 当前正在查看的页面：只标注，不提供跳转。
-    row.setAttribute("aria-current", "page");
-    chevron.className = `ph ph-caret-${active ? "up" : "down"} chev`;
-  } else {
-    // 时间线兼作阶段导航：纯导航跳转（复用统一的 [data-go] 处理，携带运行身份），
-    // 不触发任何 /actions，符合 ADR-0007 的错页语义。
-    row.dataset.go = page.key;
-    row.tabIndex = 0;
-    row.setAttribute("role", "link");
-    row.setAttribute("aria-label", `前往${page.label}`);
-    chevron.className = "ph ph-caret-right chev";
-  }
-  if (badge) row.append(dot, label, badge, status, chevron);
-  else row.append(dot, label, status, chevron);
-  return row;
-}
-
-function createRunningStepNodes(
-  page: ModelingWorkspaceView["pages"][number],
-  currentStep: string,
-  displayStatus: ModelingWorkspaceView["pages"][number]["status"],
-  timing: PageTiming | undefined,
-): Node[] {
-  const done = displayStatus === "SUCCEEDED";
-  const active = ["RUNNING", "WAITING_APPROVAL", "PAUSED", "FAILED"].includes(displayStatus);
-  const row = document.createElement("div");
-  row.className = `progress-step${active ? " open" : ""}`;
-  row.tabIndex = 0;
-  row.dataset.stagePage = page.key;
-  row.dataset.stageStatus = displayStatus;
-  row.setAttribute("aria-expanded", String(active));
-
-  const dot = document.createElement("span");
-  dot.className = `step-dot${done ? " done" : ""}`;
-  dot.innerHTML = stepIconHtml(page.key, displayStatus);
-  const label = document.createElement("span");
-  // 行标签固定为阶段名；当前动作放进行下详情（summary 只在下方摘要区出现一次）。
-  label.textContent = page.label;
-  const badge = attemptBadge(timing);
-  const status = document.createElement("span");
-  status.className = "step-time";
-  fillElapsedCell(status, displayStatus, timing);
-  const chevron = document.createElement("i");
-  chevron.className = "ph ph-caret-down chev";
-  chevron.setAttribute("aria-hidden", "true");
-  if (badge) row.append(dot, label, badge, status, chevron);
-  else row.append(dot, label, status, chevron);
-
-  const details = document.createElement("div");
-  details.className = "step-details";
-  const failure = displayStatus === "FAILED" && timing?.failureMessage ? `失败原因：${timing.failureMessage}` : "";
-  details.textContent = failure || (active ? currentStep : `${page.label}阶段${done ? "已完成" : "等待执行"}。`);
-  return [row, details];
 }
 
 function actionForScreen(
@@ -412,9 +213,9 @@ function agentSummaryForScreen(screen: ScreenId, view: ModelingWorkspaceView): s
 }
 
 /**
- * 思考/规划阶段：题意解析（问题分析页）真正完成之前都算规划中。此时不把
- * 六个步骤一次性砸出来，而是只显示一行「正在思考并规划…」；首阶段落定
- * （成功/失败）或后续阶段已启动时，说明计划已经产生，才揭示执行步骤。
+ * 思考/规划阶段：题意解析（问题分析页）真正完成之前都算规划中。此时执行
+ * 计划面板只显示「正在思考并规划…」的思考态；首阶段落定（成功/失败）或
+ * 后续阶段已启动时，说明计划已经产生，面板才揭示计划列表。
  * 运行离开 QUEUED/RUNNING（暂停、待审批、终态）时需要展示状态，同样揭示。
  */
 function isPlanningPhase(view: ModelingWorkspaceView): boolean {
@@ -425,37 +226,6 @@ function isPlanningPhase(view: ModelingWorkspaceView): boolean {
       ? page.status === "PENDING" || page.status === "RUNNING"
       : page.status === "PENDING"
   ));
-}
-
-function createPlanningRow(): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "step-planning";
-  row.innerHTML = '<span class="thinking-label thinking-shimmer">正在思考并规划执行步骤…</span>';
-  return row;
-}
-
-/**
- * 步骤时间线（ADR-0007 §3 的快照投影）：规划阶段显示思考态；「规划 → 揭示」
- * 的转变只发生一次——步骤按序级联浮现，之后的 SSE 刷新与重新进页不重播动画。
- */
-function mountStepTimeline(list: HTMLElement, view: ModelingWorkspaceView, nodes: () => Node[]): void {
-  if (isPlanningPhase(view)) {
-    if (list.dataset.planPhase !== "planning") {
-      list.dataset.planPhase = "planning";
-      list.replaceChildren(createPlanningRow());
-    }
-    return;
-  }
-  const revealNow = list.dataset.planPhase === "planning";
-  list.dataset.planPhase = "revealed";
-  list.replaceChildren(...nodes());
-  if (!revealNow || prefersReducedMotion()) return;
-  // 揭示节奏放缓：一行行浮现而不是同时砸出
-  Array.from(list.children).forEach((child, index) => {
-    if (!(child instanceof HTMLElement)) return;
-    child.classList.add("step-reveal");
-    child.style.animationDelay = `${Math.min(index * 140, 980)}ms`;
-  });
 }
 
 // ── 活动流：思考/工具/叙述交替的细粒度过程（数据 = run.log 等领域事件） ────
@@ -483,26 +253,74 @@ function streamState(root: HTMLElement): AgentStreamState {
   return state;
 }
 
-/** 活动流挂在摘要叙述之后：时间线（计划）→ 摘要 → 逐条过程。 */
-function ensureStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElement | null {
+/** 首条 Agent 消息是否已「封口」：开场分析结束且计划相位到达 revealed
+ *  （root.dataset.planPhase 由 renderAgent 维护）。封口后新的运行事件不再
+ *  挤回首气泡，而是按时间顺序流向对话末尾（见 resolveStreamHost）。 */
+function firstAssistantMessage(root: HTMLElement, scroll: HTMLElement): { block: HTMLElement | null; sealed: boolean } {
+  const block = scroll.querySelector<HTMLElement>(".assistant-block:not(.follow-up-reply)");
+  if (!block) return { block: null, sealed: false };
+  const pending = block.dataset.openingState === "pending";
+  return { block, sealed: !pending && root.dataset.planPhase === "revealed" };
+}
+
+/** 对话末尾的执行轨迹块：与首条 Agent 消息同构（署名 + 可展开折叠头 + 活动流）。
+ *  尾部已是轨迹块则继续续写；被用户消息或对话回复隔断后，新事件另起一块，
+ *  保证执行过程与对话在页面上严格按发生顺序交替。 */
+function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLElement | null {
+  const tail = scroll.lastElementChild;
+  if (tail instanceof HTMLElement && tail.classList.contains("agent-activity-block")) {
+    return tail.querySelector<HTMLElement>(".agent-stream");
+  }
+  const block = document.createElement("div");
+  block.className = "assistant-block follow-up-reply agent-activity-block";
+  const identity = identitySource.querySelector<HTMLElement>(".assistant-id");
+  if (identity) block.append(identity.cloneNode(true));
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "activity-summary";
+  header.dataset.action = "toggle-activity";
+  header.setAttribute("aria-expanded", "true");
+  header.innerHTML = `<i class="ph ph-eye-slash" aria-hidden="true"></i> ${t("收起执行步骤")} <i class="ph ph-caret-up" aria-hidden="true"></i>`;
+  const host = document.createElement("div");
+  host.className = "agent-stream";
+  block.append(header, host);
+  scroll.append(block);
+  return host;
+}
+
+/** 解析本条过程行的落点：
+ *  - 聚焦布局（无对话流）或首条消息未封口：锚定在摘要之后——开场分析结束前
+ *    保持隐藏，揭示时与计划一起放行（先思考 → 再计划 → 后过程）；
+ *  - 首条消息封口后：写入对话末尾的执行轨迹块，与后续对话按时间交替。 */
+function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElement | null {
+  const scroll = root.querySelector<HTMLElement>(".chat-scroll");
+  if (scroll) {
+    const { block, sealed } = firstAssistantMessage(root, scroll);
+    if (block && sealed) return tailTraceHost(scroll, block);
+  }
   if (state.host?.isConnected) return state.host;
   const anchor = root.querySelector<HTMLElement>("[data-agent-summary]");
   if (!anchor) return null;
   const host = document.createElement("div");
   host.className = "agent-stream";
+  // 开场分析尚未落定时不显示过程行：renderAgent 在揭示时统一放行
+  if (anchor.closest<HTMLElement>(".assistant-block")?.dataset.openingState === "pending") {
+    host.hidden = true;
+  }
   anchor.insertAdjacentElement("afterend", host);
   state.host = host;
   return host;
 }
 
 function streamAppend(root: HTMLElement, node: HTMLElement): void {
+  const host = resolveStreamHost(root, streamState(root));
+  if (!host) return;
   const scroll = root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
   const stick = scroll
     ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120
     : false;
   node.classList.add("stream-in");
-  const state = streamState(root);
-  state.host?.append(node);
+  host.append(node);
   if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
 }
 
@@ -602,7 +420,6 @@ function ingestStreamEvent(
   const state = streamState(root);
   if (!Number.isFinite(sequence) || state.seen.has(sequence)) return;
   state.seen.add(sequence);
-  if (!ensureStreamHost(root, state)) return;
   const payload = event.payload ?? {};
   const eventMs = parseIso(event.created_at ?? null);
 
@@ -682,47 +499,38 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
     document.dispatchEvent(new CustomEvent("omm:run-planning", { detail: { runId: view.run_id } }));
   }
 
-  // 时序：先思考、后计划——同一条 Agent 消息内依次出现。开场分析（真实模型
-  // 回复）结束前，计划部分（折叠开关/步骤列表/阶段摘要/CTA）完全不出现，
-  // 不做占位；结束后一次性展开并播放级联。页面层在回复落定时把
-  // data-opening-state 置为 done 并广播 omm:opening-analysis-done。
+  // 时序：先思考、后回应。开场分析（真实模型回复）结束前，首气泡内的摘要、
+  // CTA 与已到达的执行过程行一起保持隐藏，结束后按「思考 → 摘要 → 过程」的
+  // 顺序放行。页面层在回复落定时把 data-opening-state 置为 done 并广播
+  // omm:opening-analysis-done。
   const stepsBlock = root.querySelector<HTMLElement>(".chat-scroll .assistant-block:not(.follow-up-reply)");
   const openingPending = stepsBlock?.dataset.openingState === "pending";
   const planParts = stepsBlock
-    ? [...stepsBlock.querySelectorAll<HTMLElement>(".activity-summary, .activity-list, [data-agent-summary], [data-agent-cta]")]
+    ? [...stepsBlock.querySelectorAll<HTMLElement>("[data-agent-summary], [data-agent-cta], .agent-stream")]
     : [];
   planParts.forEach(part => { part.hidden = Boolean(openingPending); });
-  // 「收起/查看执行步骤」折叠头在规划完成前没有可折叠的计划内容：
-  // 与步骤列表一起等到揭示时刻才出现（对话页与聚焦工作台两种布局都适用）。
-  root.querySelectorAll<HTMLElement>(".activity-summary").forEach(header => {
-    header.hidden = Boolean(openingPending) || planning;
-  });
 
-  const timings = timingsByRoot.get(root) ?? new Map<string, PageTiming>();
-  const list = root.querySelector<HTMLElement>(".focused-activity-list");
-  const runningList = root.querySelector<HTMLElement>(".activity-list[data-agent-steps]");
-  if (openingPending) {
-    // 等待期间不构建时间线：保持 planning 标记，放行时才播放揭示级联
-    [list, runningList].forEach(host => {
-      if (host && host.dataset.planPhase !== "planning") host.dataset.planPhase = "planning";
-    });
-  } else {
-    if (list) {
-      mountStepTimeline(list, view, () => view.pages.map(page => (
-        createStepRow(page, pageStatusForDisplay(view, page), screen, timings.get(page.key))
-      )));
-    }
-    if (runningList) {
-      mountStepTimeline(runningList, view, () => view.pages.flatMap(page => (
-        createRunningStepNodes(
-          page,
-          view.agent.current_step,
-          pageStatusForDisplay(view, page),
-          timings.get(page.key),
-        )
-      )));
-    }
-  }
+  // 计划相位（planning → revealed）：执行计划面板的揭示时机与活动流的
+  // 首气泡封口判定共用这一标记；运行中途刷新时首次渲染即 revealed，不重播动画。
+  root.dataset.planPhase = planning || openingPending ? "planning" : "revealed";
+
+  // 阶段计划不再画进聊天消息：输入框上方的可折叠「执行计划」面板承载，
+  // 阶段数量与名称完全来自服务端 pages 投影。
+  renderTaskTodos(root, {
+    runId: view.run_id,
+    planning: planning || Boolean(openingPending),
+    items: view.pages.map(page => {
+      const display = pageStatusForDisplay(view, page);
+      const status: TaskTodoItem["status"] = display === "SUCCEEDED"
+        ? "done"
+        : display === "FAILED"
+          ? "failed"
+          : display === "RUNNING" || display === "WAITING_APPROVAL" || display === "PAUSED"
+            ? "active"
+            : "pending";
+      return { key: page.key, label: page.label, status };
+    }),
+  });
 
   // 摘要区保持稳定的 title/paragraph 元素：文本未变时不重建，变化时打字机浮现，
   // 避免每次 SSE 刷新都重放动画。
@@ -750,9 +558,6 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
   };
   renderCopy(root.querySelector<HTMLElement>(".focused-agent-copy"));
   renderCopy(root.querySelector<HTMLElement>(".modeling-agent-copy[data-agent-summary]"));
-
-  const doneCount = view.pages.filter(page => pageStatusForDisplay(view, page) === "SUCCEEDED").length;
-  setStepsCount(root, doneCount, view.pages.length);
 
   // 页面可能同时存在演示 CTA（真实运行时被 CSS 隐藏）与真实模式 CTA（data-live-only），
   // 统一写入同一后端动作，点击处理按就近的 [data-agent-cta] 生效。
@@ -1015,13 +820,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
 
   const refresh = async (showError = true): Promise<void> => {
     try {
-      // 步骤耗时与快照并行拉取；steps 失败不拦渲染（老后端/瞬时错误回落状态标签）
-      const [view, steps] = await Promise.all([
-        modelingWorkspaceApi.get(runId, abortController.signal),
-        modelingWorkspaceApi.steps(runId, abortController.signal).catch(() => null),
-      ]);
+      const view = await modelingWorkspaceApi.get(runId, abortController.signal);
       if (disposed) return;
-      if (steps) timingsByRoot.set(root, aggregateStepTimings(steps.items));
       // 首屏快照没有“上一个状态”，此时不提醒：用户刚打开页面，不该被历史状态打扰。
       notifyRunStatusChange({
         runId: view.run_id,
@@ -1030,6 +830,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         previous: currentView?.run_status,
         current: view.run_status,
       });
+      // 问题分析产出实际题目后服务端会自动重命名项目：侧栏「最近任务」跟着换名
+      if (currentView && currentView.project_name !== view.project_name) {
+        void hydrateRecentTasks();
+      }
       currentView = view;
       // 首个快照到手即绑定对话归属：agent-chat 按 run 隔离上下文并从本机记录
       // 恢复历史；页面层随后把首条气泡换成该运行的真实题面并重建对话气泡。
@@ -1052,6 +856,7 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         sessionStorage.removeItem(ACTIVE_RUN_KEY);
         sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
         forgetLastTask(runId);
+        hideTaskTodos(root);
       }
       if (showError) renderError(root, error);
     }
@@ -1095,21 +900,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     });
   };
 
-  const toggleRunningStep = (row: HTMLElement): void => {
-    row.classList.toggle("open");
-    row.setAttribute("aria-expanded", String(row.classList.contains("open")));
-  };
-
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
-    const runningStep = target?.closest<HTMLElement>(".activity-list[data-agent-steps] .progress-step");
-    if (runningStep) {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleRunningStep(runningStep);
-      return;
-    }
-
     // 顶栏附件与「更多操作」：真实运行绑定后由这里接管，演示弹层不再出现。
     const headerFiles = target?.closest<HTMLElement>('[data-action="files"]');
     if (headerFiles && currentView) {
@@ -1238,13 +1030,7 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (!['Enter', ' '].includes(event.key)) return;
     const target = event.target instanceof Element ? event.target : null;
-    const row = target?.closest<HTMLElement>(".activity-list[data-agent-steps] .progress-step");
-    if (row) {
-      event.preventDefault();
-      toggleRunningStep(row);
-      return;
-    }
-    // 时间线阶段行的键盘导航（与点击同语义：纯导航，带运行身份）。
+    // 演示时间线阶段行的键盘导航（与点击同语义：纯导航，带运行身份）。
     const stepLink = target?.closest<HTMLElement>(".focused-activity-list [data-go]");
     const go = stepLink?.dataset.go as keyof typeof ROUTE_BY_GO | undefined;
     if (go && ROUTE_BY_GO[go] && currentView) {

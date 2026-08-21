@@ -15,7 +15,7 @@ import { hydrateMaxConcurrency, persistMaxConcurrency } from "../preferences/acc
 import { ApiError, authApi } from "../auth/api";
 import { attachmentsOf } from "../attachments/composer-attachments";
 import { collectConversationAttachments } from "../attachments/conversation-context";
-import { OPENING_ANALYSIS_PROMPT, sendConversationTurn } from "../integration/agent-chat";
+import { OPENING_ANALYSIS_PROMPT, conversationSnapshot, sendConversationTurn } from "../integration/agent-chat";
 import { CHAT_MODES, currentChatMode, saveChatMode } from "../integration/chat-mode";
 import {
   addComposerReference,
@@ -29,7 +29,7 @@ import {
   resetComposerReferences,
   restorePendingTaskReferences,
 } from "../integration/composer-references";
-import { loadConversationLog } from "../tasks/conversation-log";
+import { attachTraceToLastReply, loadConversationLog } from "../tasks/conversation-log";
 import {
   endpointHost,
   presetHost,
@@ -62,11 +62,13 @@ import {
 import {
   hydratePrivacyPane,
   persistPrivacySettings,
+  saveHistoryEnabled,
   syncPrivacyGatesOnce,
 } from "../preferences/privacy-preferences";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
 import { mountSidebarSearch } from "../integration/sidebar-search";
 import { hydrateRecentTasks } from "../integration/recent-tasks";
+import { hydrateProjectsPage } from "../integration/projects-page";
 import { renderMarkdown } from "../text/markdown";
 import {
   notificationsSupported,
@@ -535,6 +537,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
   function focusedAgentPane(active) {
     const stage = FOCUSED_STAGE_DEMO[active];
+    // 与 runningScreen 同一判定：真实运行不预渲染演示步骤/摘要/附件，
+    // 步骤区以 boot 思考态占位等控制器接管，避免假内容闪现后被清换。
+    const isRealRun = /^run_[0-9a-f]{32}$/.test(new URL(window.location.href).searchParams.get("run_id") ?? "");
     const steps = [
       ["已读取题目与附件", "00:03"],
       ["已完成问题拆解", "00:06"],
@@ -546,17 +551,21 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       <button type="button" class="focused-attachment" data-action="download-data"><span class="attachment-file-icon xls">X.</span><span><strong>历史供需数据_2024Q4.xlsx</strong><small>24.7 MB</small></span>${icon("download-simple")}</button>
       <button type="button" class="focused-attachment" data-action="download-data"><span class="attachment-file-icon csv">csv</span><span><strong>字段说明草稿.csv</strong><small>8.3 KB</small></span>${icon("download-simple")}</button>
     </section>`;
+    const demoSteps = `${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
+          <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>`;
+    // 真实运行：步骤时间线与演示附件不再渲染（阶段计划归输入框上方的执行计划
+    // 面板），只保留摘要与 CTA 槽位给控制器填充。
+    const demoTimeline = `<button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
+        <div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
+          ${demoSteps}
+        </div>`;
     return `<section class="chat-pane focused-agent-chat">
       <div class="focused-agent-head"><div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div></div>
       <div class="focused-agent-scroll">
-        <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
-        <div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
-          ${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
-          <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>
-        </div>
-        <div class="focused-agent-copy" data-agent-summary>${stage.copy}</div>
-        ${attachments}
-        <button class="focused-stage-cta" type="button" data-go="${stage.next}" data-agent-cta>${stage.button}</button>
+        ${isRealRun ? "" : demoTimeline}
+        <div class="focused-agent-copy" data-agent-summary>${isRealRun ? "" : stage.copy}</div>
+        ${isRealRun ? "" : attachments}
+        <button class="focused-stage-cta" type="button" data-go="${stage.next}" data-agent-cta${isRealRun ? " hidden" : ""}>${isRealRun ? "" : stage.button}</button>
       </div>
       ${composer("继续描述任务，/ 快速调用，@ 添加上下文", true)}
     </section>`;
@@ -618,22 +627,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       ["已完成数据结构分析", "00:12", "已检查字段完整性、时间粒度与异常值。"],
       ["已完成候选模型比较", "00:18", "已比较 XGBoost、Prophet 和 LSTM 的适配度。"]
     ];
-    return shell(`
-      <section class="running-main" data-modeling-shell data-workspace-page="running">
-        <section class="chat-pane running-chat-pane">
-          <header class="task-toolbar">
-            <a class="back" href="${routes.new}" aria-label="返回首页" title="返回首页">${icon("arrow-left")}</a>
-            <div><h2 data-bind="project-name">城市共享单车调度优化</h2><p>2026 国赛 A 题　·　自动模式</p></div>
-            <div class="task-toolbar-actions">
-              <span class="run-status complete"><b></b> 规划完成</span>
-              <button type="button" data-action="files" aria-label="查看 3 个附件">${icon("paperclip")} 3</button>
-              <button type="button" data-action="more" aria-label="更多操作">${icon("dots-three")}</button>
-            </div>
-          </header>
-          <div class="chat-scroll">
-            <div class="user-message"><div class="user-bubble">${escapeHtml(prompt)}</div></div>
-            <div class="assistant-block">
-              <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+    // 真实运行不预渲染任何演示内容：阶段计划由输入框上方的「执行计划」面板
+    // （task-todo-panel）承载，气泡里只保留摘要槽位，由控制器填充真实数据。
+    const demoAssistantBlock = `
               <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
               <div class="activity-list" data-agent-steps>
                 ${steps.map(step => progressStep(true, step[0], step[1], step[2], true)).join("")}
@@ -648,7 +644,26 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                 <div class="plan-time"><span class="muted">预计运行时间</span><strong>2.5 ~ 3.5 小时</strong></div>
                 <button type="button" class="next-step-link" data-go="data" data-agent-cta>进入数据准备 ${icon("arrow-right")}</button>
               </div>
-              <details class="alternatives" data-demo-only><summary>查看备选路线</summary><p>Prophet + 层次聚类 + 线性规划；LSTM + K-means + 启发式调度。</p></details>
+              <details class="alternatives" data-demo-only><summary>查看备选路线</summary><p>Prophet + 层次聚类 + 线性规划；LSTM + K-means + 启发式调度。</p></details>`;
+    const liveAssistantBlock = `
+              <div class="analysis-copy modeling-agent-copy" data-agent-summary></div>`;
+    return shell(`
+      <section class="running-main" data-modeling-shell data-workspace-page="running">
+        <section class="chat-pane running-chat-pane">
+          <header class="task-toolbar">
+            <a class="back" href="${routes.new}" aria-label="返回首页" title="返回首页">${icon("arrow-left")}</a>
+            <div><h2 data-bind="project-name">${isRealRun ? "" : "城市共享单车调度优化"}</h2><p${isRealRun ? " hidden" : ""}>2026 国赛 A 题　·　自动模式</p></div>
+            <div class="task-toolbar-actions">
+              <span class="run-status${isRealRun ? "" : " complete"}"><b></b> ${isRealRun ? "加载中…" : "规划完成"}</span>
+              <button type="button" data-action="files" aria-label="查看 3 个附件"${isRealRun ? ' style="display:none"' : ""}>${icon("paperclip")} 3</button>
+              <button type="button" data-action="more" aria-label="更多操作">${icon("dots-three")}</button>
+            </div>
+          </header>
+          <div class="chat-scroll">
+            <div class="user-message"><div class="user-bubble">${escapeHtml(prompt)}</div></div>
+            <div class="assistant-block">
+              <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+              ${isRealRun ? liveAssistantBlock : demoAssistantBlock}
               <button type="button" class="running-live-cta" data-agent-cta data-live-only>Agent 正在执行</button>
             </div>
           </div>
@@ -1056,8 +1071,25 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       return "";
     }
   };
+  // raw.githubusercontent.com 在部分网络/代理下会超时或被劫持，pdf.js 拿到残缺字节流
+  // 会把论文渲染成乱码页；jsDelivr 提供同一提交的字节级镜像，作为直连 raw 前的兜底源。
+  const jsDelivrPaperPdfUrl = paper => {
+    const source = String(paper?.full_text_url || "").trim();
+    if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
+    try {
+      const url = new URL(source);
+      if (url.hostname.toLowerCase() !== "github.com") return "";
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length < 6 || parts[2] !== "blob") return "";
+      const [owner, repository, , revision, ...pathParts] = parts;
+      return `https://cdn.jsdelivr.net/gh/${owner}/${repository}@${revision}/${pathParts.join("/")}`;
+    } catch {
+      return "";
+    }
+  };
   const paperPdfSources = paper => [...new Set([
     localPaperPdfUrl(paper),
+    jsDelivrPaperPdfUrl(paper),
     remotePaperPdfUrl(paper),
   ].filter(Boolean))];
   const paperPdfUrl = paper => paperPdfSources(paper)[0] || "";
@@ -2000,8 +2032,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           </nav>
           <div class="settings-account-card">
             <span class="avatar">I</span>
-            <div><strong>Ivan</strong><span>个人专业版</span></div>
-            <span class="settings-plan">PRO</span>
+            <div><strong>Ivan</strong><span>个人工作区</span></div>
           </div>
         </aside>
 
@@ -3011,9 +3042,23 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       }
       const replyBlock = document.createElement("div");
       replyBlock.className = "assistant-block follow-up-reply";
+      // 有轨迹的历史回复按原样重建折叠头与过程区（本次改造前的旧记录没有
+      // 轨迹字段，保持纯文本形态）；行内耗时用落盘的最终值，不再走秒。
+      const traceMarkup = entry.trace?.length
+        ? `<button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
+        <div class="agent-stream reply-trace"></div>`
+        : "";
       replyBlock.innerHTML = `
         <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+        ${traceMarkup}
         <div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
+      entry.trace?.forEach(row => appendReplyTraceRow(replyBlock, {
+        icon: row.icon,
+        title: row.title,
+        suffix: row.suffix ?? "",
+        detail: row.detail ?? "",
+        elapsed: row.elapsed ?? "",
+      }));
       scroll.append(replyBlock);
       renderFormulas($(".analysis-copy", replyBlock));
       appendReplyActions(replyBlock, entry.text);
@@ -3035,10 +3080,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
       : "";
     const replyId = `reply-${Date.now()}`;
+    // 每条回复与首条 Agent 消息同构：「收起/查看执行步骤」折叠头 + 执行过程区
+    // （.reply-trace，本轮真实发生的上下文读取/附件解析/难度路由/生成计时）
+    // → 思考块 → 正文。过程行由 streamAssistantReply 按实际发生顺序写入。
     scroll.insertAdjacentHTML("beforeend", `
       <div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>
       <div class="assistant-block follow-up-reply" id="${replyId}">
         <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+        <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
+        <div class="agent-stream reply-trace"></div>
         <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>
       </div>`);
     scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
@@ -3096,6 +3146,88 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         header.classList.add("is-clickable");
         open = false;
         applyOpen();
+      },
+    };
+  }
+
+  /** 回复轨迹的耗时文本：与工作台时间线同一节奏（<10s 一位小数，<60s 整秒，更长分+秒）。 */
+  function formatTraceElapsed(ms) {
+    const clamped = Math.max(0, ms);
+    if (clamped < 10_000) return `${(clamped / 1000).toFixed(1)}s`;
+    if (clamped < 60_000) return `${Math.round(clamped / 1000)}s`;
+    const minutes = Math.floor(clamped / 60_000);
+    const seconds = Math.round((clamped % 60_000) / 1000);
+    return `${minutes}m ${seconds}s`;
+  }
+
+  /**
+   * 回复内的执行过程行：与工作台执行轨迹同构（stream-item 结构与交互），
+   * 承载本轮真实发生的过程（上下文读取、附件解析、Auto 难度路由、生成计时），
+   * 出现在思考块与正文之前。标签与后缀分节点写入，便于语言切换逐段翻译。
+   * waiting=true 时本地走秒，settle() 落定图标与最终耗时；before 指定插入
+   * 位置以保持与服务端实际发生顺序一致。返回 {element, settle}。
+   */
+  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", waiting = false, before = null }) {
+    const trace = $(".reply-trace", replyBlock);
+    if (!trace) return null;
+    const item = document.createElement("div");
+    item.className = `stream-item stream-in${waiting ? " is-waiting" : ""}`;
+    item.innerHTML = `
+      <div class="stream-row">
+        ${icon(iconName)}
+        <span class="stream-title"><span>${escapeHtml(title)}</span>${suffix ? `<span>${escapeHtml(suffix)}</span>` : ""}</span>
+        <time class="stream-elapsed">${escapeHtml(elapsed)}</time>
+      </div>`;
+    if (detail) {
+      const row = $(".stream-row", item);
+      row.classList.add("is-expandable");
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.setAttribute("aria-expanded", "false");
+      row.insertAdjacentHTML("beforeend", icon("caret-down", "stream-chevron"));
+      const detailHost = document.createElement("div");
+      detailHost.className = "stream-detail";
+      detailHost.hidden = true;
+      const pre = document.createElement("pre");
+      pre.textContent = detail;
+      detailHost.append(pre);
+      item.append(detailHost);
+      const toggleDetail = () => {
+        detailHost.hidden = !detailHost.hidden;
+        row.setAttribute("aria-expanded", String(!detailHost.hidden));
+      };
+      row.addEventListener("click", toggleDetail);
+      row.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggleDetail();
+        }
+      });
+    }
+    if (before && before.parentElement === trace) trace.insertBefore(item, before);
+    else trace.append(item);
+    const timeCell = $(".stream-elapsed", item);
+    const titleLabel = $(".stream-title > span", item);
+    let ticker = null;
+    const startedAt = Date.now();
+    if (waiting) {
+      timeCell.textContent = formatTraceElapsed(0);
+      ticker = window.setInterval(() => {
+        timeCell.textContent = formatTraceElapsed(Date.now() - startedAt);
+      }, 1000);
+    }
+    return {
+      element: item,
+      settle({ title: settledTitle = "", elapsedMs = null, failed = false } = {}) {
+        if (ticker !== null) {
+          window.clearInterval(ticker);
+          ticker = null;
+        }
+        item.classList.remove("is-waiting");
+        if (settledTitle) titleLabel.textContent = settledTitle;
+        timeCell.textContent = formatTraceElapsed(elapsedMs ?? Date.now() - startedAt);
+        const iconEl = $(".stream-row > i", item);
+        if (iconEl) iconEl.className = failed ? "ph-fill ph-x-circle" : "ph-fill ph-check-circle";
       },
     };
   }
@@ -3178,6 +3310,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
     let thinking = null;
     let answerStarted = false;
+    // 生成计时行提升到 try 外：失败路径也要把它落定为中断态
+    let generatingRow = null;
+    let startedGeneratingAt = Date.now();
     try {
       // 附件先解析再发消息：浏览器没抽到文字的（图片/扫描件）现场走服务端
       // 即席解析（含可选 VL），结果如实回写附件卡片；解析期间沿用「思考中…」占位。
@@ -3191,8 +3326,56 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         attachmentContext = (await collectConversationAttachments(store)).block;
       }
       const contextBlocks = [referenceBlock, attachmentContext].filter(Boolean).join("\n\n");
+      // ── 执行轨迹：每条回复都由真实过程行组成（与首条 Agent 消息同构）。
+      //    traceLog 收集落定后的行，回复完成后随对话记录落盘，恢复时原样重建。
+      const traceLog = [];
+      // 行①：读取任务与对话上下文（题面、对话模式、历史轮数都是本轮真实输入）
+      if (!options.opening) {
+        const snapshot = conversationSnapshot();
+        const mode = currentChatMode();
+        const contextDetail = [
+          snapshot.goal ? `任务：${snapshot.goal.slice(0, 160)}` : "任务：未绑定运行",
+          `模式：${mode.label}`,
+          `历史：${Math.floor(snapshot.turns / 2)} 轮对话`,
+        ].join("\n");
+        appendReplyTraceRow(replyBlock, {
+          icon: "book-open-text",
+          title: "已读取任务与对话上下文",
+          detail: contextDetail,
+        });
+        traceLog.push({ icon: "book-open-text", title: "已读取任务与对话上下文", detail: contextDetail });
+      }
+      // 行②：附件/引用解析完成并注入上下文（真实动作，解析在上面刚发生）
+      if (attachmentNames.length || references.length) {
+        const contextNames = [...attachmentNames, ...references.map(reference => `@${reference.title}`)];
+        const row = {
+          icon: "paperclip",
+          title: attachmentNames.length ? "已解析并注入附件" : "已添加上下文引用",
+          suffix: ` ×${contextNames.length}`,
+          detail: contextNames.join("\n"),
+        };
+        appendReplyTraceRow(replyBlock, row);
+        traceLog.push(row);
+      }
+      // 生成回复行实时走秒；难度判定行到达时插到它前面（服务端先判定后生成）
+      generatingRow = options.opening
+        ? null
+        : appendReplyTraceRow(replyBlock, { icon: "circle-notch", title: "正在生成回复", waiting: true });
+      startedGeneratingAt = Date.now();
       const { text: reply, meta } = await sendConversationTurn(text, {
         onMeta: current => {
+          // 行③：Auto 路由真实发生的难度判定（详情 = 判定理由；继承/短路轮
+          // judged=false 不出现，不制造噪音）。服务端先判定后生成，插在生成行之前。
+          if (current.route?.judged && typeof current.route.difficulty === "number") {
+            const row = {
+              icon: "gauge",
+              title: "已判定问题难度",
+              suffix: ` ${current.route.difficulty}/5`,
+              detail: current.route.reason || "",
+            };
+            appendReplyTraceRow(replyBlock, { ...row, before: generatingRow?.element ?? null });
+            traceLog.push(row);
+          }
           // 实际域名以服务端 meta 为准：Auto 路由结果、备用切换都在这里如实反映
           if (!transparency || !current.host) return;
           transparencySettled = true;
@@ -3229,6 +3412,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       store?.clear();
       if (references.length) clearComposerReferences();
       thinking?.finish();
+      // 生成行落定：优先用服务端整程耗时（meta.elapsed_ms），本地走秒兜底
+      if (generatingRow) {
+        const generateElapsedMs = typeof meta.elapsed_ms === "number"
+          ? meta.elapsed_ms
+          : Date.now() - startedGeneratingAt;
+        generatingRow.settle({ title: "已生成回复", elapsedMs: generateElapsedMs });
+        traceLog.push({ icon: "check-circle", title: "已生成回复", elapsed: formatTraceElapsed(generateElapsedMs) });
+      }
       render(reply);
       // 公式在全文到齐后一次性排版，流式期间保留 LaTeX 源码回退
       renderFormulas(copy);
@@ -3248,8 +3439,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         });
       }
       appendReplyActions(replyBlock, reply);
+      // 轨迹随本机对话记录落盘（「保存任务历史」开启且绑定真实运行）：恢复对话时原样重建
+      const traceScope = conversationSnapshot();
+      if (!options.opening && traceScope.runId && saveHistoryEnabled() && traceLog.length) {
+        attachTraceToLastReply(traceScope.runId, reply, traceLog);
+      }
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
     } catch (error) {
+      // 失败也要把生成行落定为中断态，不留走秒残影
+      generatingRow?.settle({ title: "回复生成中断", failed: true });
       const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
       if (options.removeOnUnavailable && unavailable) {
         replyBlock.remove();
@@ -3663,14 +3861,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         return;
       }
       if (node.matches("button.source-chip")) {
-        body.push(`\\noindent\\emph{${latexEscape(node.textContent.trim())}}`);
+        body.push(`\\noindent{\\small\\emph{${latexEscape(node.textContent.trim())}}}`);
         return;
       }
       if (node.matches("table")) {
         const rows = [...node.querySelectorAll("tr")];
         if (!rows.length) return;
         const columnCount = Math.max(...rows.map(row => row.children.length));
-        const spec = Array(columnCount).fill("l").join(" ");
+        // 三线表列内容居中，贴近赛事论文习惯；左对齐反而像代码清单
+        const spec = Array(columnCount).fill("c").join(" ");
         const lines = rows.map(row => `${[...row.children].map(cell => latexInline(cell)).join(" & ")} \\\\`);
         body.push(`\\begin{table}[htbp]\n\\centering\n\\begin{tabular}{${spec}}\n\\toprule\n${lines[0]}\n\\midrule\n${lines.slice(1).join("\n")}\n\\bottomrule\n\\end{tabular}\n\\end{table}`);
         return;
@@ -3683,12 +3882,17 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (text) body.push(text);
     });
     return [
+      "% !TEX program = xelatex",
       "% 由 OpenMathModel 论文编辑器导出；公式保留原始 LaTeX，可直接用 xelatex 编译",
       "\\documentclass[12pt]{article}",
       "\\usepackage[UTF8]{ctex}",
       "\\usepackage{amsmath, amssymb, graphicx, booktabs}",
       "\\usepackage[margin=2.5cm]{geometry}",
-      `\\title{${latexEscape(title)}}`,
+      "% 赛事论文排版习惯：正文 1.5 倍行距；链接可点击但不带彩色边框",
+      "\\usepackage{setspace}",
+      "\\onehalfspacing",
+      "\\usepackage[hidelinks]{hyperref}",
+      `\\title{\\textbf{${latexEscape(title)}}}`,
       "\\date{}",
       "\\begin{document}",
       "\\maketitle",
@@ -4020,7 +4224,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (action === "more" || action === "row-menu") popupMenu(target, ["重命名", "复制", "归档"]);
       if (action === "toggle-activity") {
         const activityHost = target.closest(".focused-agent-chat, .assistant-block");
-        const list = activityHost?.querySelector(".focused-activity-list, .activity-list") || $(".focused-activity-list") || $(".activity-list");
+        // 对话尾部的执行轨迹块没有步骤时间线，折叠对象是块内的活动流（.agent-stream）
+        const list = activityHost?.querySelector(".focused-activity-list, .activity-list, .agent-stream") || $(".focused-activity-list") || $(".activity-list");
         list?.classList.toggle("collapsed");
         const collapsed = list?.classList.contains("collapsed") ?? false;
         target.setAttribute("aria-expanded", String(!collapsed));
@@ -4673,6 +4878,8 @@ export function activateScreen(screen: ScreenId): void {
   void hydrateAccountUi();
   // 侧栏「最近任务」换成真实任务记录；未登录保持模板演示条目。
   void hydrateRecentTasks();
+  // 「我的项目」页换成全量真实项目清单；未登录保持模板演示表格。
+  void hydrateProjectsPage();
   // 隐私开关并入本机（每会话一次），换浏览器后通知/历史闸门立即正确。
   void syncPrivacyGatesOnce();
   // 预算达到提醒阈值时提醒一次；正看着页面时以页内提示呈现。

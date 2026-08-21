@@ -15,12 +15,18 @@ import {
 import { saveHistoryEnabled } from "../preferences/privacy-preferences";
 import { currentChatMode } from "./chat-mode";
 
-/** Auto 模式的路由判定结果：难度 1-5 与判定用的模型（空 = 规则估计）。 */
+/** Auto 模式的路由判定结果：难度 1-5 与判定用的模型（空 = 规则估计/继承）。 */
 export interface ChatRouteMeta {
   mode?: string;
   difficulty?: number;
   reason?: string;
   judge_model?: string;
+  /** 本次实际使用的接口 id：下一轮回传给服务端做接口粘性。 */
+  endpoint_id?: string;
+  /** 本次是否真的花了一次判定调用；false = 短路/继承，用于重判轮数计数。 */
+  judged?: boolean;
+  /** true = 难度未跳档，沿用了上一轮接口（保住供应商侧 prompt cache）。 */
+  sticky?: boolean;
 }
 
 export interface ChatMeta {
@@ -75,6 +81,13 @@ export const OPENING_ANALYSIS_PROMPT =
 let scopeRunId: string | null = null;
 let scopeGoal = "";
 
+/**
+ * Auto 路由的会话内状态：上一轮判定结果随下一条消息回传（服务端无状态）。
+ * 服务端据此实现「短追问继承难度」与「接口粘性」，省掉重复判定调用并保住
+ * 供应商侧 prompt cache。turns = 距上次真实判定的轮数（judged 时清零）。
+ */
+let routeState: { difficulty: number; endpointId?: string; turns: number } | null = null;
+
 function goalPrefixed(goal: string, text: string): string {
   return goal ? `【当前建模任务】${goal}\n\n${text}` : text;
 }
@@ -92,6 +105,7 @@ export function configureConversation(runId: string | null, goal = ""): void {
   scopeRunId = runId;
   scopeGoal = goal;
   history.length = 0;
+  routeState = null;
   if (!runId) return;
   for (const entry of loadConversationLog(runId)) {
     if (entry.role === "assistant" && entry.opening) {
@@ -118,6 +132,11 @@ function taskGoal(): string {
   }
 }
 
+/** 供页面层的回复执行轨迹展示：当前绑定运行、题面与已发生的对话轮数（只读）。 */
+export function conversationSnapshot(): { runId: string | null; goal: string; turns: number } {
+  return { runId: scopeRunId, goal: taskGoal(), turns: history.length };
+}
+
 /**
  * 模型选择器当前值 → 请求体路由参数。
  * "auto" 走服务端难度判定路由；"endpoint-<id>" 指定某条已保存接口；
@@ -133,6 +152,37 @@ function routeSelection(): { route?: string; endpoint_id?: string } {
   if (raw.startsWith("endpoint-")) return { endpoint_id: raw.slice("endpoint-".length) };
   if (raw === "auto") return { route: "auto" };
   return {};
+}
+
+/** 难度重判用的微上下文：上一轮回复首行；首轮退到任务题面开头。 */
+function judgeContext(): string | undefined {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].role === "assistant") {
+      const line = history[i].content.split("\n", 1)[0]?.trim();
+      return line ? line.slice(0, 200) : undefined;
+    }
+  }
+  const goal = taskGoal().trim();
+  return goal ? goal.slice(0, 200) : undefined;
+}
+
+/** Auto 模式随消息携带的判定输入与会话路由状态（其余模式不带）。 */
+function routeExtras(routing: { route?: string }, text: string): Record<string, unknown> {
+  if (routing.route !== "auto") return {};
+  return {
+    // 判定只看用户敲的原文：注入的任务/附件/模式指令块会偏置难度并浪费判定 token
+    route_question: text.slice(0, 8000),
+    route_context: judgeContext(),
+    ...(routeState
+      ? {
+        route_state: {
+          difficulty: routeState.difficulty,
+          endpoint_id: routeState.endpointId,
+          turns: routeState.turns,
+        },
+      }
+      : {}),
+  };
 }
 
 async function errorFromResponse(response: Response): Promise<ChatError> {
@@ -201,13 +251,14 @@ export async function sendConversationTurn(
   history.push({ role: "user", content });
   trimHistory();
 
+  const routing = routeSelection();
   let response: Response;
   try {
     response = await fetch("/api/chat", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream, application/json" },
-      body: JSON.stringify({ messages: [...history], ...routeSelection() }),
+      body: JSON.stringify({ messages: [...history], ...routing, ...routeExtras(routing, text) }),
     });
   } catch {
     history.pop();
@@ -276,6 +327,16 @@ export async function sendConversationTurn(
   // 思考过程只用于展示，不进对话历史（回传会浪费上下文且各家协议不认）
   history.push({ role: "assistant", content: full });
   trimHistory();
+  // Auto 路由状态推进：judged=true 表示服务端真的花了一次判定（计数清零），
+  // 否则累加继承轮数，攒够后服务端会强制重判一次。
+  const route = meta.route;
+  if (route?.mode === "auto" && typeof route.difficulty === "number") {
+    routeState = {
+      difficulty: route.difficulty,
+      endpointId: route.endpoint_id ?? routeState?.endpointId,
+      turns: route.judged ? 0 : (routeState?.turns ?? 0) + 1,
+    };
+  }
   // 发送成功才把任务附件标记为已注入；失败路径保留，下一轮重新并入。
   taskAttachments?.commit();
   // 本机对话记录（按 run 隔离）：重新进入任务时恢复气泡与上下文。
@@ -301,4 +362,5 @@ export function resetConversation(): void {
   history.length = 0;
   scopeRunId = null;
   scopeGoal = "";
+  routeState = null;
 }
