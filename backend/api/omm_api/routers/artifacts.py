@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
@@ -17,9 +18,21 @@ from ..deps import AuthContext, get_auth_context
 from ..doc_text import extract_text
 from ..errors import ApiError, NotFoundError
 from ..orm import ArtifactRow, ArtifactTextRow, ProjectRow
-from ..serialize import utcnow
+from ..serialize import as_utc, utcnow
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
+
+#: 没抽出正文的缓存（empty/unsupported/failed）只短期复用：解析后端修复缺陷或
+#: 补装 OCR 依赖后，旧的空结果应自动重跑而不是永久挡路（2026-08 曾有版面检测
+#: 缺陷期写入的 empty 缓存在修复后仍长期生效）。成功正文因内容寻址不可变，永久复用。
+NEGATIVE_TEXT_CACHE_TTL = timedelta(hours=1)
+
+
+def _text_cache_reusable(cached: ArtifactTextRow) -> bool:
+    if cached.status in ("ready", "partial"):
+        return True
+    created_at = as_utc(cached.created_at)
+    return created_at is not None and utcnow() - created_at < NEGATIVE_TEXT_CACHE_TTL
 
 
 @router.post("/parse", response_model=AttachmentParseResult)
@@ -132,13 +145,14 @@ def read_artifact_text(
     """读取附件正文；首次访问时现场抽取并缓存。
 
     抽取放在读取时而不是上传时：上传路径要对用户即时响应，而几十兆的 PDF 抽一遍
-    要好几秒。产物内容寻址、字节不可变，因此抽一次可以一直复用；``refresh=true``
-    用于服务端补装了 OCR 或解析依赖之后重跑。
+    要好几秒。产物内容寻址、字节不可变，因此抽一次可以一直复用；没抽出正文的
+    负结果只在 TTL 内复用（见 NEGATIVE_TEXT_CACHE_TTL），``refresh=true``
+    用于服务端补装了 OCR 或解析依赖之后立即重跑。
     """
 
     row = _get_owned_artifact(session, ctx, artifact_id)
     cached = session.get(ArtifactTextRow, artifact_id)
-    if cached is not None and not refresh:
+    if cached is not None and not refresh and _text_cache_reusable(cached):
         return ArtifactText(
             artifact_id=artifact_id,
             name=row.name,

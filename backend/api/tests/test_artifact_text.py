@@ -226,7 +226,12 @@ def test_unknown_and_corrupted_inputs_degrade_without_raising():
 # ── PaddleOCR-VL 可选后端（假模块注入，不依赖真实 paddle 栈）──────────
 
 
-def _install_fake_paddleocr(monkeypatch, pages: list[str]) -> None:
+def _install_fake_paddleocr(
+    monkeypatch,
+    pages: list[str],
+    nolayout_pages: list[str] | None = None,
+    calls: list[bool] | None = None,
+) -> None:
     import sys
     import types
 
@@ -235,10 +240,14 @@ def _install_fake_paddleocr(monkeypatch, pages: list[str]) -> None:
     def _result(text: str):
         return types.SimpleNamespace(markdown={"markdown_texts": text})
 
+    def _predict(_path: str, use_layout_detection: bool = True):
+        if calls is not None:
+            calls.append(use_layout_detection)
+        chosen = pages if use_layout_detection else (nolayout_pages or [])
+        return [_result(text) for text in chosen]
+
     module = types.ModuleType("paddleocr")
-    module.PaddleOCRVL = lambda: types.SimpleNamespace(
-        predict=lambda _path: [_result(text) for text in pages],
-    )
+    module.PaddleOCRVL = lambda: types.SimpleNamespace(predict=_predict)
     monkeypatch.setitem(sys.modules, "paddleocr", module)
     # 惰性单例复位，避免其他用例触发的可用性判定串场；teardown 时自动还原。
     monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
@@ -267,6 +276,31 @@ def test_image_prefers_paddleocr_vl_over_tesseract(monkeypatch):
     assert result.status == "ready"
     assert result.engine == "paddleocr-vl"
     assert result.images == 1
+
+
+def test_sparse_screenshot_retries_without_layout_detection(monkeypatch):
+    """版面检测对稀疏截图（大片留白里两行公式）检出 0 区域是常态而非异常：
+    首轮为空时必须把整图直接交给识别端重试，否则正文恒为空（2026-08-21 实测）。"""
+
+    calls: list[bool] = []
+    _install_fake_paddleocr(
+        monkeypatch, pages=[], nolayout_pages=["$S=a+b$\n\n$\\max Z=3x+5y$"], calls=calls
+    )
+    result = extract_text(b"\x89PNG fake", "目标函数截图.png", "image/png")
+    assert result.status == "ready"
+    assert result.engine == "paddleocr-vl"
+    assert "max Z" in result.text
+    # 先带版面检测跑一轮，空了再整图重试一轮。
+    assert calls == [True, False]
+
+
+def test_image_reports_empty_when_both_vl_passes_find_nothing(monkeypatch):
+    calls: list[bool] = []
+    _install_fake_paddleocr(monkeypatch, pages=[], nolayout_pages=[], calls=calls)
+    result = extract_text(b"\x89PNG fake", "白图.png", "image/png")
+    assert result.status == "empty"
+    assert result.engine == "paddleocr-vl"
+    assert calls == [True, False]
 
 
 def test_warmup_vl_preloads_the_lazy_singleton(monkeypatch):
@@ -373,6 +407,43 @@ def test_text_endpoint_refresh_reruns_extraction(client):
     refreshed = client.get(f"{API}/artifacts/{artifact['id']}/text?refresh=true")
     assert refreshed.status_code == 200
     assert refreshed.json()["text"] == "行1\n行2"
+
+
+def test_text_endpoint_retries_stale_negative_cache_without_refresh(client, app):
+    """解析缺陷期落库的空结果不能永久挡路：超过 TTL 的负缓存在下一次读取时
+    自动重跑（无需前端知道 refresh 参数），成功后转为永久缓存。"""
+
+    from datetime import timedelta
+
+    from omm_api.orm import ArtifactTextRow
+    from omm_api.routers.artifacts import NEGATIVE_TEXT_CACHE_TTL
+    from omm_api.serialize import utcnow
+
+    project = create_project(client)
+    artifact = _upload(client, project["id"], "正文其实在这".encode("utf-8"), "迟到.txt", "text/plain")
+    assert client.get(f"{API}/artifacts/{artifact['id']}/text").json()["status"] == "ready"
+
+    def _force_negative(created_at) -> None:
+        with app.state.db.session_factory() as session:
+            cached = session.get(ArtifactTextRow, artifact["id"])
+            cached.status = "empty"
+            cached.text = ""
+            cached.characters = 0
+            cached.detail = "PaddleOCR-VL 没有识别出内容"
+            cached.created_at = created_at
+            session.commit()
+
+    # 过期负缓存 → 读取即自愈，正文回来了。
+    _force_negative(utcnow() - NEGATIVE_TEXT_CACHE_TTL - timedelta(minutes=1))
+    healed = client.get(f"{API}/artifacts/{artifact['id']}/text").json()
+    assert healed["status"] == "ready"
+    assert healed["text"] == "正文其实在这"
+
+    # TTL 内的负缓存仍然复用：不为注定失败的解析反复买单。
+    _force_negative(utcnow())
+    fresh = client.get(f"{API}/artifacts/{artifact['id']}/text").json()
+    assert fresh["status"] == "empty"
+    assert fresh["text"] == ""
 
 
 def test_text_endpoint_is_owner_scoped(client, second_client):

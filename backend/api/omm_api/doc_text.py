@@ -516,6 +516,18 @@ def _vl_pipeline() -> Optional[object]:
     return _VL_PIPELINE
 
 
+def _vl_markdown(results: Iterable[object]) -> str:
+    """把 predict 返回的逐页结果收敛成 Markdown 文本（在 VL 工作线程内取尽）。"""
+
+    pages: list[str] = []
+    for result in results:
+        markdown = getattr(result, "markdown", None)
+        text = markdown.get("markdown_texts", "") if isinstance(markdown, Mapping) else ""
+        if isinstance(text, str) and text.strip():
+            pages.append(text)
+    return _tidy("\n\n".join(pages))
+
+
 def _vl_text(path: str) -> Optional[str]:
     """专用工作线程内的完整解析：建管线 → predict → 抽取逐页 Markdown。
 
@@ -526,14 +538,14 @@ def _vl_text(path: str) -> Optional[str]:
     pipeline = _vl_pipeline()
     if pipeline is None:
         return None
-    results = pipeline.predict(path)  # type: ignore[attr-defined]
-    pages: list[str] = []
-    for result in results:
-        markdown = getattr(result, "markdown", None)
-        text = markdown.get("markdown_texts", "") if isinstance(markdown, Mapping) else ""
-        if isinstance(text, str) and text.strip():
-            pages.append(text)
-    return _tidy("\n\n".join(pages))
+    text = _vl_markdown(pipeline.predict(path))  # type: ignore[attr-defined]
+    if text:
+        return text
+    # 版面检测（PP-DocLayoutV3）面向整页文档训练，对稀疏截图——大片留白里
+    # 两行公式的小图——常检出 0 个区域，放大也无济于事（2026-08-21 实测），
+    # 正文因此恒为空。版面一无所获时把整图直接交给识别端重试一次；
+    # 真实文档页首轮已有结果，不会走到这里。
+    return _vl_markdown(pipeline.predict(path, use_layout_detection=False))  # type: ignore[attr-defined]
 
 
 def warmup_vl() -> None:
