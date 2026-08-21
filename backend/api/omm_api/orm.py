@@ -118,6 +118,9 @@ class ArtifactRow(Base):
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
     media_type: Mapped[Optional[str]] = mapped_column(String(200))
     producer_step: Mapped[Optional[str]] = mapped_column(String(100))
+    # 上游 Artifact 血缘（art_id 列表）：契约 inputs 字段。论文导出的 PDF 以此指向
+    # tex 源（ADR-0012）；历史行无该列，读取按空列表处理。
+    inputs: Mapped[Optional[list[str]]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -125,9 +128,10 @@ class ArtifactRow(Base):
 class ArtifactTextRow(Base):
     """附件正文抽取结果缓存。
 
-    抽取按需触发、结果长期有效：产物是内容寻址的，同一个 artifact 的字节永远
-    不会变，因此一次抽取可以一直复用。失败与不支持也要落库，否则每次 Agent
-    读取都会重跑一遍注定失败的解析。
+    抽取按需触发：产物是内容寻址的，同一个 artifact 的字节永远不会变，成功
+    正文因此可以永久复用。失败与不支持也要落库（否则每次 Agent 读取都重跑
+    注定失败的解析），但只短期复用——解析后端修复或补装依赖后要能自动重跑，
+    TTL 见 routers/artifacts.NEGATIVE_TEXT_CACHE_TTL。
     """
 
     __tablename__ = "artifact_texts"
@@ -144,6 +148,36 @@ class ArtifactTextRow(Base):
     detail: Mapped[Optional[str]] = mapped_column(String(500))
     text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PaperExportRow(Base):
+    """论文导出任务（ADR-0012 阶段 A）：客户端直传 .tex，服务端编译 PDF。
+
+    .tex 本体不进关系库：受理时按内容寻址落 blobstore 并登记为 kind=paper 的
+    Artifact（source_artifact_id）；PDF 完成后同样落产物并以 inputs 记血缘，
+    编译失败时源产物仍可下载排查。
+    """
+
+    __tablename__ = "paper_exports"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("projects.id"), nullable=False, index=True
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("task_runs.id"), index=True
+    )
+    format: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    artifact_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("artifacts.id"))
+    source_artifact_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("artifacts.id")
+    )
+    source_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    detail: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class EmailVerificationCodeRow(Base):
@@ -253,4 +287,6 @@ class LlmUsageRow(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Auto 路由回答调用的判定难度（1-5）；非 Auto 调用为 NULL。路由校准数据源。
+    route_difficulty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

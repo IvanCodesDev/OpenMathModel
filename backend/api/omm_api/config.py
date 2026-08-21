@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     default_max_concurrent_runs: int = 3
     max_concurrent_runs_ceiling: int = 8
 
+    # ── 论文导出（ADR-0012 阶段 A：服务端 Tectonic 编译 PDF）──────
+    # Tectonic 可执行文件路径；空 = 在 PATH 探测。未安装时导出任务落
+    # UNSUPPORTED 并说明启用途径（诚实降级，不阻断其他功能）。
+    tectonic_path: str = ""
+    paper_export_timeout_seconds: float = 120.0
+    # source_tex 的 UTF-8 字节上限
+    paper_export_max_bytes: int = 2 * 1024 * 1024
+    # 编译消费线程：开发链沿 RunnerThread 模式在 API 进程内直跑，目标态随
+    # 执行面迁往 backend/worker；测试关闭线程改用手动 process 驱动。
+    paper_export_worker_enabled: bool = True
+    paper_export_poll_seconds: float = 1.0
+    # 全局在途上限（QUEUED+RUNNING），防止编译队列被灌爆；每用户同时 1 个在提交时另行校验。
+    paper_export_queue_limit: int = 20
+
     # 「数据与隐私」保留清扫的周期（秒）。首轮延后一个周期执行；
     # 测试环境与 runner 一样可整体关闭，避免后台线程干扰断言。
     retention_sweep_enabled: bool = True

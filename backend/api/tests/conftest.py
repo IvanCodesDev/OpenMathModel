@@ -44,6 +44,8 @@ def app(tmp_path: Path):
         retention_sweep_enabled=False,
         # 预热线程会真实导入 paddle 栈（开发机可能装了），测试必须关闭保证确定性
         vl_warmup_enabled=False,
+        # 编译线程同理关闭，改由用例手动 process 驱动
+        paper_export_worker_enabled=False,
         sse_poll_seconds=0.01,
         sse_heartbeat_seconds=60.0,
         # 与本地 backend/api/.env 隔离：测试永远走开发模式验证码，绝不真实发信

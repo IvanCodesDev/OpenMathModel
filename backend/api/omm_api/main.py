@@ -17,8 +17,20 @@ from .db import Database
 from .doc_text import warmup_vl
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
+from .paper_export import PaperExportProcessor, PaperExportThread
 from .privacy import RetentionThread
-from .routers import account, artifacts, auth, chat, events, projects, task_runs, usage, workspace
+from .routers import (
+    account,
+    artifacts,
+    auth,
+    chat,
+    events,
+    paper_exports,
+    projects,
+    task_runs,
+    usage,
+    workspace,
+)
 from .runner import RunnerThread, WorkflowAdvancer
 
 
@@ -41,6 +53,13 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             sweeper = RetentionThread(db, resolved, app.state.blobs)
             sweeper.start()
         app.state.retention = sweeper
+        # 论文导出编译线程（ADR-0012）：开发链在 API 进程内消费队列，
+        # 目标态随执行面迁往 backend/worker；测试关闭后改用手动 process 驱动。
+        exporter: Optional[PaperExportThread] = None
+        if resolved.paper_export_worker_enabled:
+            exporter = PaperExportThread(app.state.paper_exports, resolved)
+            exporter.start()
+        app.state.paper_export_thread = exporter
         # PaddleOCR-VL 预热：守护线程后台加载，不阻塞启动；停机时无需等待
         # （只写模块级单例，进程退出即弃）。--reload 重启后自动重新预热。
         if resolved.vl_warmup_enabled:
@@ -52,6 +71,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 runner.stop()
             if sweeper is not None:
                 sweeper.stop()
+            if exporter is not None:
+                exporter.stop()
             db.dispose()
 
     app = FastAPI(
@@ -69,6 +90,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.state.avatars = LocalContentStore(resolved.avatars_dir)
     # 测试与内部工具可直接驱动推进（runner_enabled=False 时手动 tick）
     app.state.advancer = WorkflowAdvancer(db)
+    # 论文导出处理器：编译线程与测试共用（paper_export_worker_enabled=False 时手动 process）
+    app.state.paper_exports = PaperExportProcessor(db, resolved, blobs)
     # 登录限速：数据库实现，多实例一致（后续可等接口替换为 Redis）
     from .rate_limit import DbLoginRateLimiter
 
@@ -103,6 +126,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.include_router(workspace.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
+    app.include_router(paper_exports.router, prefix="/api")
     app.include_router(auth.router, prefix="/api/auth")
     app.include_router(account.router, prefix="/api/account")
     app.include_router(chat.chat_router, prefix="/api/chat")

@@ -14,6 +14,7 @@ from omm_contracts import (
     AgentEvent,
     ApprovalRequest,
     Artifact,
+    PaperExport,
     Project,
     StepRun,
     TaskRun,
@@ -42,7 +43,10 @@ def iso_z(value: Optional[datetime]) -> Optional[str]:
     return normalized.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def project_to_contract(row: orm.ProjectRow) -> Project:
+def project_to_contract(
+    row: orm.ProjectRow, stats: Optional[dict[str, Any]] = None
+) -> Project:
+    """stats 只在列表 include=stats 时由路由聚合传入；其余端点保持 null。"""
     return Project(
         id=row.id,
         name=row.name,
@@ -53,6 +57,7 @@ def project_to_contract(row: orm.ProjectRow) -> Project:
         description=row.description,
         created_at=iso_z(row.created_at),
         updated_at=iso_z(row.updated_at),
+        stats=stats,
     )
 
 
@@ -120,9 +125,25 @@ def artifact_to_contract(row: orm.ArtifactRow) -> Artifact:
         size_bytes=row.size_bytes,
         media_type=row.media_type,
         producer_step_id=row.producer_step,
-        inputs=[],  # Artifact 血缘随对象存储批次接入
+        inputs=row.inputs or [],  # 历史行无血缘列，按空列表处理
         status=row.status,
         created_at=iso_z(row.created_at),
+    )
+
+
+def paper_export_to_contract(row: orm.PaperExportRow) -> PaperExport:
+    return PaperExport(
+        id=row.id,
+        project_id=row.project_id,
+        run_id=row.run_id,
+        format=row.format,
+        status=row.status,
+        artifact_id=row.artifact_id,
+        source_artifact_id=row.source_artifact_id,
+        detail=row.detail,
+        created_at=iso_z(row.created_at),
+        started_at=iso_z(row.started_at),
+        ended_at=iso_z(row.ended_at),
     )
 
 
