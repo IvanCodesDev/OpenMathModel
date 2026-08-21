@@ -116,7 +116,9 @@ def chat(
     ]
     use_stream = gated.stream if body.stream is None else body.stream
 
-    def record_outcome(source: str, outcome: ChatOutcome) -> None:
+    def record_outcome(
+        source: str, outcome: ChatOutcome, route_difficulty: int | None = None
+    ) -> None:
         """一次成功调用记一行；记账失败只打日志，绝不影响对话本身。"""
         try:
             record_usage(
@@ -125,6 +127,7 @@ def chat(
                 source=source,
                 outcome=outcome,
                 third_party=is_third_party_host(outcome.endpoint.host),
+                route_difficulty=route_difficulty,
             )
             db.commit()
         except Exception:  # noqa: BLE001 - 用量记账绝不允许影响对话
@@ -134,9 +137,16 @@ def chat(
     chain = None
     route_meta = None
     if body.route == "auto":
+        state = body.route_state
         decision = auto_route(
             gated,
-            _latest_user_text(body),
+            # 判定输入优先用前端回传的原始问题：最后一条消息里混着任务/附件/
+            # 模式指令块，既偏置难度又浪费判定 token（旧客户端无此字段时回落）。
+            (body.route_question or _latest_user_text(body)).strip(),
+            context=(body.route_context or "").strip(),
+            last_difficulty=state.difficulty if state else None,
+            last_endpoint_id=state.endpoint_id if state else None,
+            turns_since_judge=state.turns if state else 0,
             on_usage=lambda outcome: record_outcome("route", outcome),
         )
         chain = list(decision.chain)
@@ -156,7 +166,11 @@ def chat(
 
     if not use_stream:
         outcome = complete_with_fallback(gated, messages, model=body.model, chain=chain)
-        record_outcome("chat", outcome)
+        record_outcome(
+            "chat",
+            outcome,
+            route_difficulty=route_meta["difficulty"] if route_meta else None,
+        )
         return {
             "reply": outcome.text,
             "reasoning": outcome.reasoning,
@@ -177,6 +191,7 @@ def chat(
 
     def record_stream_done(meta: dict, done: dict) -> None:
         try:
+            route = meta.get("route") or {}
             with session_factory() as record_session:
                 record_stream_usage(
                     record_session,
@@ -189,6 +204,7 @@ def chat(
                     fallback_used=bool(meta.get("fallback_used")),
                     usage=dict(done.get("usage") or {}),
                     elapsed_ms=int(done.get("elapsed_ms") or 0),
+                    route_difficulty=route.get("difficulty") if isinstance(route, dict) else None,
                 )
                 record_session.commit()
         except Exception:  # noqa: BLE001 - 用量记账绝不允许影响流式输出

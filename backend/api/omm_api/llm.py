@@ -226,15 +226,33 @@ def ensure_proxy_allowed(endpoint: LlmEndpoint, allow_proxy: bool) -> None:
 _STRONG_MODEL_HINTS = ("opus", "reasoner", "thinking", "max", "pro", "ultra", "sonnet")
 _LIGHT_MODEL_HINTS = ("flash", "mini", "lite", "nano", "haiku", "turbo", "air", "tiny", "small")
 
-JUDGE_READ_TIMEOUT_S = 30.0
-#: 判定提示词里问题的截断长度：难度信号集中在开头，全文只会拖慢判定。
-JUDGE_QUESTION_MAX_CHARS = 2000
+#: 判定挂了有规则估计兜底，不值得让用户对着空白气泡等 30 秒。
+JUDGE_READ_TIMEOUT_S = 10.0
+#: 判定输出只要一行 JSON；不设上限时推理型裁判可能烧掉几千思考 token。
+#: 个别网关不接受 max_tokens 时判定失败，同样走规则兜底，不影响对话。
+JUDGE_MAX_TOKENS = 512
+#: 判定提示词里问题的截断：头部保留题面主体，尾部保留「第 N 问/具体要求」
+#: （长题的落点常在结尾，只截头会丢掉真正要回答的部分）。
+JUDGE_QUESTION_HEAD_CHARS = 1500
+JUDGE_QUESTION_TAIL_CHARS = 500
 
-#: 规则估计用的建模类关键词：命中越多视为越难。
+#: 不超过该长度且无难度关键词的消息直接按难度 2 处理，不花判定调用。
+TRIVIAL_QUESTION_CHARS = 40
+#: 不超过该长度且无新难度信号的追问继承上一轮判定（省一次判定调用）。
+FOLLOWUP_QUESTION_CHARS = 200
+#: 追问继承的轮数预算：连续继承这么多轮后强制重判一次，防话题漂移。
+REJUDGE_EVERY_TURNS = 5
+
+#: 规则估计用的建模类关键词：命中越多视为越难。英文条目服务 COMAP 等
+#: 英文赛题（在小写文本上做包含匹配，"optimiz"/"simulat" 覆盖动名词变形）。
 _HARD_KEYWORDS = (
     "建模", "优化", "证明", "微分方程", "偏微分", "规划", "仿真", "预测",
     "算法", "机器学习", "神经网络", "论文", "灵敏度", "蒙特卡洛", "马尔可夫",
     "求解", "启发式", "多目标", "约束",
+    "optimiz", "prove", "proof", "differential equation", "pde", "simulat",
+    "forecast", "predict", "algorithm", "machine learning", "neural network",
+    "sensitivity", "monte carlo", "markov", "heuristic", "multi-objective",
+    "constraint", "regression", "clustering",
 )
 
 
@@ -251,28 +269,55 @@ def endpoint_strength(endpoint: LlmEndpoint) -> int:
     return min(10, max(1, score))
 
 
+def _has_difficulty_signal(question: str) -> bool:
+    lowered = question.lower()
+    return any(word in lowered for word in _HARD_KEYWORDS)
+
+
 def heuristic_difficulty(question: str) -> int:
-    """判定模型不可用时的规则估计：按问题长度与建模类关键词粗分。"""
-    hits = sum(1 for word in _HARD_KEYWORDS if word in question)
-    if len(question) > 1200 or hits >= 3:
+    """判定模型不可用时的规则估计：按问题长度与建模类关键词粗分。
+
+    中文按字符数、英文按词数分档：同一信息量下英文字符数是中文的数倍，
+    单一字符阈值会系统性低估英文题面。
+    """
+    lowered = question.lower()
+    hits = sum(1 for word in _HARD_KEYWORDS if word in lowered)
+    words = len(re.findall(r"[a-zA-Z]+", question))
+    if len(question) > 1200 or words > 250 or hits >= 3:
         return 5
-    if len(question) > 400 or hits >= 1:
+    if len(question) > 400 or words > 80 or hits >= 1:
         return 3
     return 2
 
 
+def _judge_excerpt(question: str) -> str:
+    """判定输入截断：保头部题面主体 + 尾部具体要求，中间省略。"""
+    limit = JUDGE_QUESTION_HEAD_CHARS + JUDGE_QUESTION_TAIL_CHARS
+    if len(question) <= limit:
+        return question
+    return (
+        question[:JUDGE_QUESTION_HEAD_CHARS]
+        + "\n…（中间已省略）…\n"
+        + question[-JUDGE_QUESTION_TAIL_CHARS:]
+    )
+
+
 def _difficulty_from_text(text: str) -> Optional[int]:
-    """从判定回复提取 1-5：优先 JSON 的 difficulty 字段，退而找第一个 1-5。"""
+    """从判定回复提取 1-5：优先 JSON 的 difficulty 字段，退而找独立的 1-5。
+
+    独立 = 前后都不是数字、小数点或连字符：避免把 "3.14"、"12345" 或裁判
+    回显的量表 "1-5" 误当难度。"""
     match = re.search(r'"difficulty"\s*:\s*"?([1-5])', text)
-    if match is None:
-        match = re.search(r"[1-5]", text)
-        return int(match.group(0)) if match else None
-    return int(match.group(1))
+    if match is not None:
+        return int(match.group(1))
+    match = re.search(r"(?<![\d.-])([1-5])(?![\d.-])", text)
+    return int(match.group(1)) if match else None
 
 
 def judge_difficulty(
     judge: LlmEndpoint,
     question: str,
+    context: str = "",
     on_usage: Optional[Callable[["ChatOutcome"], None]] = None,
 ) -> tuple[Optional[int], str, str]:
     """让判定接口为问题难度打分 → (难度, 理由, 实际判定模型)。
@@ -280,18 +325,23 @@ def judge_difficulty(
     判定失败（超时、限流、输出不含 1-5）返回 (None, "", "")，由调用方退回
     规则估计；判定只是路由参考，绝不能因为它挂了就阻塞对话本身。
     on_usage 在判定调用成功后收到 ChatOutcome（用量监控记账），异常不外抛。
+    context 是可选的对话背景（如上一轮回复摘要）：追问文本本身往往很短，
+    没有背景时会被误判成闲聊。
     """
+    background = f"对话背景（仅供参考）：{context[:500]}\n\n" if context else ""
     prompt = (
         "你是模型路由器，需要评估用户问题的难度来选择合适的模型。难度为 1-5 的整数：\n"
         "1-2 = 闲聊、简单问答或事实查询；3 = 常规分析、普通代码或数学计算；\n"
         "4-5 = 复杂数学建模、多步推理、长文档分析或高精度要求。\n"
+        "若问题是对先前对话的简短追问，按对话背景的主题难度评估。\n"
         '只回复一行 JSON，例如 {"difficulty": 3, "reason": "常规数学计算"}，reason 不超过 20 字。\n\n'
-        f"用户问题：{question[:JUDGE_QUESTION_MAX_CHARS]}"
+        f"{background}用户问题：{_judge_excerpt(question)}"
     )
     try:
         outcome = complete_once(
             judge,
             [{"role": "user", "content": prompt}],
+            max_tokens=JUDGE_MAX_TOKENS,
             read_timeout=JUDGE_READ_TIMEOUT_S,
         )
     except Exception as error:  # noqa: BLE001 - 判定失败退回规则估计
@@ -309,14 +359,27 @@ def judge_difficulty(
     return difficulty, reason.group(1) if reason else "", outcome.model
 
 
+#: 难度 → 目标能力强度：与候选池构成解耦。旧实现按「最弱/中间/最强」的
+#: 位置取接口：池里全是强模型时难度 1 也拿旗舰，弱模型多时中难度反而落到
+#: 弱档；按绝对强度找最近的没有这两类失真。
+_DIFFICULTY_TARGET_STRENGTH = {1: 2, 2: 3, 3: 5, 4: 8, 5: 10}
+
+
 def pick_by_difficulty(candidates: list[LlmEndpoint], difficulty: int) -> LlmEndpoint:
-    """难度 → 接口：1-2 用最轻量、3 用中档、4-5 用最强；同分保持保存顺序。"""
-    ordered = sorted(candidates, key=endpoint_strength)
-    if difficulty <= 2:
-        return ordered[0]
-    if difficulty >= 4:
-        return ordered[-1]
-    return ordered[len(ordered) // 2]
+    """难度 → 接口：选能力强度最接近目标档的。
+
+    同距时难度 ≥3 偏强（答不好引发的重问比强模型差价更贵），≤2 偏弱（省钱），
+    再同则保持保存顺序。
+    """
+    target = _DIFFICULTY_TARGET_STRENGTH.get(difficulty, 5)
+    prefer_strong = difficulty >= 3
+
+    def rank(pair: tuple[int, LlmEndpoint]) -> tuple[int, int, int]:
+        index, endpoint = pair
+        strength = endpoint_strength(endpoint)
+        return (abs(strength - target), -strength if prefer_strong else strength, index)
+
+    return min(enumerate(candidates), key=rank)[1]
 
 
 @dataclass(frozen=True)
@@ -327,8 +390,12 @@ class RouteDecision:
     chain: tuple[LlmEndpoint, ...]
     difficulty: int
     reason: str
-    #: 空串 = 判定接口不可用或输出无法解析，难度来自规则估计。
+    #: 空串 = 判定接口不可用或输出无法解析，难度来自规则估计/继承。
     judge_model: str = ""
+    #: 本次是否真的花了一次判定调用；前端据此维护重判轮数计数。
+    judged: bool = False
+    #: True = 难度未跳档，沿用上一轮接口（保住供应商侧 prompt cache）。
+    sticky: bool = False
 
     def meta(self) -> dict[str, Any]:
         return {
@@ -336,18 +403,33 @@ class RouteDecision:
             "difficulty": self.difficulty,
             "reason": self.reason,
             "judge_model": self.judge_model,
+            "endpoint_id": self.endpoint.id,
+            "judged": self.judged,
+            "sticky": self.sticky,
         }
 
 
 def auto_route(
     config: LlmConfig,
     question: str,
+    context: str = "",
+    last_difficulty: Optional[int] = None,
+    last_endpoint_id: Optional[str] = None,
+    turns_since_judge: int = 0,
     on_usage: Optional[Callable[["ChatOutcome"], None]] = None,
 ) -> RouteDecision:
     """Auto 模式入口：难度判定 + 按权重路由。
 
     候选池排除被中转站开关挡下的接口；回退链按能力从强到弱排（选中的在前），
     保证降级后仍是「还能用的里面最强的」。on_usage 透传给难度判定调用记账。
+
+    判定调用本身也是成本，token 纪律按优先级递减：
+    1. 短追问继承上一轮难度（last_* 由前端回传 route_state），连续继承
+       REJUDGE_EVERY_TURNS 轮或输入出现新难度信号时才重判；
+    2. 极短且无建模关键词的消息直接按难度 2，不花判定调用；
+    3. 其余照常判定，失败退规则估计。
+    选定后若与上一轮难度相差 ≤1 档则沿用上一轮接口：换接口会让供应商侧
+    prompt cache 全部失效，长对话下这笔隐性成本远大于相邻档位的能力差。
     """
     candidates = [
         endpoint
@@ -363,12 +445,53 @@ def auto_route(
     if len(candidates) == 1:
         only = candidates[0]
         return RouteDecision(only, (only,), heuristic_difficulty(question), "仅一个接口可用")
-    judge = min(candidates, key=endpoint_strength)
-    difficulty, reason, judge_model = judge_difficulty(judge, question, on_usage=on_usage)
-    if difficulty is None:
-        difficulty = heuristic_difficulty(question)
-        reason = "按问题长度与关键词估计"
+
+    question = question.strip()
+    has_signal = _has_difficulty_signal(question)
+    last = (
+        next((e for e in candidates if e.id == last_endpoint_id), None)
+        if last_endpoint_id
+        else None
+    )
+
+    judged = False
+    judge_model = ""
+    if (
+        last_difficulty is not None
+        and len(question) <= FOLLOWUP_QUESTION_CHARS
+        and not has_signal
+        and turns_since_judge < REJUDGE_EVERY_TURNS
+    ):
+        difficulty: Optional[int] = int(last_difficulty)
+        reason = "短追问继承上次判定"
+    elif (
+        last_difficulty is None
+        and len(question) <= TRIVIAL_QUESTION_CHARS
+        and not has_signal
+    ):
+        # 只在没有会话状态时短路：会话中途的短消息要么走上面的继承，要么
+        # （继承轮数耗尽后）带上下文重判——直接按 2 会把硬题续聊踢到弱模型。
+        difficulty, reason = 2, "短消息按简单处理"
+    else:
+        judge = min(candidates, key=endpoint_strength)
+        difficulty, reason, judge_model = judge_difficulty(
+            judge, question, context=context, on_usage=on_usage
+        )
+        judged = True
+        if difficulty is None:
+            difficulty = heuristic_difficulty(question)
+            reason = "按问题长度与关键词估计"
+            judge_model = ""
+
     chosen = pick_by_difficulty(candidates, difficulty)
+    sticky = False
+    if (
+        last is not None
+        and last_difficulty is not None
+        and abs(difficulty - int(last_difficulty)) <= 1
+        and last.id != chosen.id
+    ):
+        chosen, sticky = last, True
     backups = sorted(
         [endpoint for endpoint in candidates if endpoint.id != chosen.id],
         key=endpoint_strength,
@@ -376,14 +499,16 @@ def auto_route(
     )
     chain = (chosen, *backups) if config.fallback else (chosen,)
     logger.info(
-        "llm route: difficulty=%d judge=%s endpoint=%s model=%s strength=%d",
+        "llm route: difficulty=%d judge=%s endpoint=%s model=%s strength=%d judged=%s sticky=%s",
         difficulty,
-        judge_model or "heuristic",
+        judge_model or ("heuristic" if judged else "rule"),
         chosen.name,
         chosen.model,
         endpoint_strength(chosen),
+        judged,
+        sticky,
     )
-    return RouteDecision(chosen, chain, difficulty, reason, judge_model)
+    return RouteDecision(chosen, chain, difficulty, reason, judge_model, judged, sticky)
 
 
 # ── 请求构造与响应解析（按协议） ────────────────────────────────────────────

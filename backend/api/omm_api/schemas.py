@@ -231,6 +231,19 @@ class ChatMessageModel(BaseModel):
         return value
 
 
+class ChatRouteStateModel(BaseModel):
+    """Auto 路由的会话内状态：前端保存上一轮 route meta 并随下一条消息回传。
+
+    服务端保持无状态（对话历史与路由状态都由前端携带），据此实现「短追问
+    继承难度」与「接口粘性」两个省 token 策略；缺省等价于会话首轮。
+    """
+
+    difficulty: Optional[int] = Field(default=None, ge=1, le=5)
+    endpoint_id: Optional[str] = Field(default=None, max_length=64)
+    #: 距上次真实判定过去的轮数：meta.judged=true 时前端清零，否则自增。
+    turns: int = Field(default=0, ge=0, le=1000)
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessageModel] = Field(min_length=1, max_length=100)
     # None = 跟随设置中心「流式输出」开关
@@ -240,6 +253,12 @@ class ChatRequest(BaseModel):
     route: Optional[str] = Field(default=None, max_length=20)
     # 指定某条已保存接口作为本次主接口（模型选择器手动选中时携带）
     endpoint_id: Optional[str] = Field(default=None, max_length=64)
+    # Auto 路由的判定输入：用户原始问题，不含前端注入的任务/附件/模式指令块
+    # （那些块既偏置难度又浪费判定 token）。缺省回落最后一条 user 消息全文。
+    route_question: Optional[str] = Field(default=None, max_length=8_000)
+    # Auto 路由的判定微上下文（如上一轮回复首行）：只在真实重判时并入提示词。
+    route_context: Optional[str] = Field(default=None, max_length=500)
+    route_state: Optional[ChatRouteStateModel] = None
 
 
 # ── 响应体构造 ───────────────────────────────────────────────────

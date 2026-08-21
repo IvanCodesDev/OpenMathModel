@@ -542,10 +542,12 @@ def _weighted_pool() -> list[dict]:
 def test_auto_route_hard_question_goes_to_strong_endpoint(client, monkeypatch):
     """判定为高难度时路由到权重最高的接口；判定请求由最轻量的接口承担。"""
     judge_hosts: list[str] = []
+    judge_max_tokens: list[object] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if _is_judge_request(request):
             judge_hosts.append(request.url.host)
+            judge_max_tokens.append(json.loads(request.content).get("max_tokens"))
             return _judge_reply(5)
         assert request.url.host == "strong.test", "高难度问题应路由到旗舰接口"
         return _openai_reply("旗舰模型的回答")
@@ -564,12 +566,18 @@ def test_auto_route_hard_question_goes_to_strong_endpoint(client, monkeypatch):
     assert payload["route"]["mode"] == "auto"
     assert payload["route"]["difficulty"] == 5
     assert payload["route"]["judge_model"] == "judge-mini"
+    assert payload["route"]["judged"] is True
     assert judge_hosts == ["light.test"], "难度判定应使用最轻量的接口"
+    assert judge_max_tokens == [512], "判定调用必须设 max_tokens，防推理型裁判烧 token"
 
 
-def test_auto_route_easy_question_stays_on_light_endpoint(client, monkeypatch):
+def test_auto_route_short_message_skips_judge_entirely(client, monkeypatch):
+    """极短且无建模关键词的消息不花判定调用：直接按难度 2 走轻量接口。"""
+    judge_calls: list[str] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         if _is_judge_request(request):
+            judge_calls.append(request.url.host)
             return _judge_reply(1)
         assert request.url.host == "light.test", "简单问题应留在轻量接口"
         return _openai_reply("轻量模型的回答")
@@ -582,7 +590,9 @@ def test_auto_route_easy_question_stays_on_light_endpoint(client, monkeypatch):
         json={"messages": [{"role": "user", "content": "你好"}], "stream": False, "route": "auto"},
     ).json()
     assert payload["endpoint"] == "轻量接口"
-    assert payload["route"]["difficulty"] == 1
+    assert payload["route"]["difficulty"] == 2
+    assert payload["route"]["judged"] is False
+    assert judge_calls == [], "短消息不该花一次判定调用"
 
 
 def test_auto_route_medium_question_picks_middle_tier(client, monkeypatch):
@@ -603,7 +613,7 @@ def test_auto_route_medium_question_picks_middle_tier(client, monkeypatch):
 
     payload = client.post(
         "/api/chat",
-        json={"messages": [{"role": "user", "content": "帮我算一道数学题"}], "stream": False, "route": "auto"},
+        json={"messages": [{"role": "user", "content": "帮我求解一个线性规划问题并解释思路"}], "stream": False, "route": "auto"},
     ).json()
     assert payload["endpoint"] == "中档接口"
 
@@ -643,7 +653,10 @@ def test_auto_route_stream_meta_carries_route_info(client, monkeypatch):
     _save_config(client, _weighted_pool())
 
     events = _sse_events(
-        client.post("/api/chat", json={"messages": MESSAGES, "route": "auto"}).text
+        client.post(
+            "/api/chat",
+            json={"messages": [{"role": "user", "content": "请为这个优化问题建模"}], "route": "auto"},
+        ).text
     )
     meta = events[0]
     assert meta["type"] == "meta"
@@ -693,6 +706,123 @@ def test_auto_route_respects_proxy_gate(client, monkeypatch):
     assert payload["endpoint"] == "官方接口"
 
 
+def test_auto_route_followup_inherits_difficulty(client, monkeypatch):
+    """短追问继承上一轮难度：不再花判定调用，且难度维持高档。"""
+    judge_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_judge_request(request):
+            judge_calls.append(request.url.host)
+            return _judge_reply(1)
+        assert request.url.host == "strong.test", "继承难度 5 应继续用旗舰接口"
+        return _openai_reply("继续深入的回答")
+
+    _install_transport(monkeypatch, handler)
+    config = _save_config(client, _weighted_pool())
+    strong_id = config["endpoints"][1]["id"]
+
+    payload = client.post(
+        "/api/chat",
+        json={
+            "messages": [{"role": "user", "content": "那继续第二问呢"}],
+            "stream": False,
+            "route": "auto",
+            "route_state": {"difficulty": 5, "endpoint_id": strong_id, "turns": 1},
+        },
+    ).json()
+    assert judge_calls == [], "短追问不该重新判定"
+    assert payload["route"]["difficulty"] == 5
+    assert payload["route"]["judged"] is False
+    assert payload["endpoint"] == "旗舰接口"
+
+
+def test_auto_route_sticky_keeps_last_endpoint_within_one_level(client, monkeypatch):
+    """难度只差一档时沿用上一轮接口：换接口会让供应商 prompt cache 失效。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_judge_request(request):
+            return _judge_reply(3)
+        assert request.url.host == "strong.test", "difficulty 4→3 应粘在上一轮的旗舰接口"
+        return _openai_reply("粘性接口的回答")
+
+    _install_transport(monkeypatch, handler)
+    config = _save_config(client, _weighted_pool())
+    strong_id = config["endpoints"][1]["id"]
+
+    payload = client.post(
+        "/api/chat",
+        json={
+            "messages": [{"role": "user", "content": "再对这个规划模型的求解做一次灵敏度分析"}],
+            "stream": False,
+            "route": "auto",
+            "route_state": {"difficulty": 4, "endpoint_id": strong_id, "turns": 2},
+        },
+    ).json()
+    assert payload["route"]["difficulty"] == 3
+    assert payload["route"]["judged"] is True
+    assert payload["route"]["sticky"] is True
+    assert payload["endpoint"] == "旗舰接口"
+
+
+def test_auto_route_rejudges_after_turn_budget(client, monkeypatch):
+    """继承轮数耗尽后必须重判一次（带上下文），防止话题漂移后难度失真。"""
+    judge_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_judge_request(request):
+            judge_calls.append(json.loads(request.content)["messages"][-1]["content"])
+            return _judge_reply(5)
+        return _openai_reply("重判后的回答")
+
+    _install_transport(monkeypatch, handler)
+    config = _save_config(client, _weighted_pool())
+    strong_id = config["endpoints"][1]["id"]
+
+    payload = client.post(
+        "/api/chat",
+        json={
+            "messages": [{"role": "user", "content": "继续"}],
+            "stream": False,
+            "route": "auto",
+            "route_state": {"difficulty": 5, "endpoint_id": strong_id, "turns": 5},
+            "route_context": "上一轮正在推导多目标优化模型的帕累托前沿",
+        },
+    ).json()
+    assert len(judge_calls) == 1, "轮数预算耗尽应强制重判"
+    assert "对话背景" in judge_calls[0], "重判提示词应带上微上下文"
+    assert payload["route"]["judged"] is True
+    assert payload["route"]["difficulty"] == 5
+
+
+def test_auto_route_prefers_route_question_over_message_blocks(client, monkeypatch):
+    """判定输入优先用 route_question：消息里的注入块不该参与难度判定。"""
+    judge_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_judge_request(request):
+            judge_calls.append(request.url.host)
+            return _judge_reply(5)
+        assert request.url.host == "light.test"
+        return _openai_reply("轻量接口的回答")
+
+    _install_transport(monkeypatch, handler)
+    _save_config(client, _weighted_pool())
+
+    content = "【当前建模任务】请建立复杂的优化仿真模型\n\n【回答方式】深度研究模式\n\n你好"
+    payload = client.post(
+        "/api/chat",
+        json={
+            "messages": [{"role": "user", "content": content}],
+            "stream": False,
+            "route": "auto",
+            "route_question": "你好",
+        },
+    ).json()
+    assert judge_calls == [], "route_question 是短消息时不该因注入块触发判定"
+    assert payload["route"]["difficulty"] == 2
+    assert payload["endpoint"] == "轻量接口"
+
+
 def test_chat_with_endpoint_id_uses_that_endpoint(client, monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "strong.test"
@@ -735,3 +865,46 @@ def test_chat_falls_back_on_timeout(client, monkeypatch):
     response = client.post("/api/chat", json={"messages": MESSAGES, "stream": False})
     assert response.status_code == 200, response.text
     assert response.json()["endpoint"] == "备用接口"
+
+
+# ── Auto 路由纯函数：规则估计、判定解析与强度映射 ───────────────────────────
+
+
+def test_heuristic_difficulty_recognizes_english_keywords():
+    """COMAP 等英文题面必须能命中难度信号，不再被单一字符阈值低估。"""
+    assert llm_module.heuristic_difficulty("hello there") == 2
+    assert llm_module.heuristic_difficulty(
+        "Build an optimization model to forecast demand under constraints"
+    ) == 5, "三个及以上英文关键词应判到最高档"
+    assert llm_module.heuristic_difficulty("Please prove this inequality") == 3
+    long_english = "word " * 300
+    assert llm_module.heuristic_difficulty(long_english) == 5, "长英文文本按词数分档"
+
+
+def test_difficulty_parse_only_accepts_standalone_digits():
+    parse = llm_module._difficulty_from_text
+    assert parse('{"difficulty": 4, "reason": "多步推理"}') == 4
+    assert parse("难度是 3") == 3
+    assert parse("答案是 3.14，无难度数字") is None, "小数不算难度"
+    assert parse("编号 12345 没有独立数字") is None
+    assert parse("在 1-5 的量表上打分") is None, "裁判回显量表不算难度"
+    assert parse("完全没有数字") is None
+
+
+def test_pick_by_difficulty_uses_absolute_strength_targets():
+    """映射与池构成解耦：全强池的简单题取相对最弱，弱多池的中档题不落到最弱。"""
+    light = _endpoint(id="ep_l", weight=2)
+    mid = _endpoint(id="ep_m", weight=5)
+    strong = _endpoint(id="ep_s", weight=9)
+    pick = llm_module.pick_by_difficulty
+    assert pick([light, mid, strong], 1) is light
+    assert pick([light, mid, strong], 3) is mid
+    assert pick([light, mid, strong], 5) is strong
+    # 池里只有两个强模型：难度 1 也只能取相对较弱的那个
+    strong_a = _endpoint(id="ep_a", weight=8)
+    strong_b = _endpoint(id="ep_b", weight=10)
+    assert pick([strong_b, strong_a], 1) is strong_a
+    # 同距时中难度偏强（答不好引发的重问比差价更贵）
+    four = _endpoint(id="ep_4", weight=4)
+    six = _endpoint(id="ep_6", weight=6)
+    assert pick([four, six], 3) is six

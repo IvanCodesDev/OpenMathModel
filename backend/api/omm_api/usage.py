@@ -126,8 +126,13 @@ def record_usage(
     outcome: ChatOutcome,
     third_party: bool,
     run_id: str | None = None,
+    route_difficulty: int | None = None,
 ) -> LlmUsageRow:
-    """把一次成功的模型调用记入 llm_usage_records（不 commit，随调用方事务）。"""
+    """把一次成功的模型调用记入 llm_usage_records（不 commit，随调用方事务）。
+
+    route_difficulty 只在 Auto 路由的回答调用上有值：为路由校准提供离线
+    数据（按难度统计模型分布与误判率）。
+    """
     row = LlmUsageRow(
         user_id=user_id,
         source=source,
@@ -140,6 +145,7 @@ def record_usage(
         prompt_tokens=int(outcome.usage.get("prompt_tokens") or 0),
         completion_tokens=int(outcome.usage.get("completion_tokens") or 0),
         elapsed_ms=int(outcome.elapsed_ms or 0),
+        route_difficulty=route_difficulty,
         created_at=utcnow(),
     )
     session.add(row)
@@ -158,6 +164,7 @@ def record_stream_usage(
     fallback_used: bool,
     usage: dict,
     elapsed_ms: int,
+    route_difficulty: int | None = None,
 ) -> LlmUsageRow:
     """流式调用的记录入口：字段来自 meta / done 两个 SSE 事件。"""
     row = LlmUsageRow(
@@ -172,6 +179,7 @@ def record_stream_usage(
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
         elapsed_ms=int(elapsed_ms or 0),
+        route_difficulty=route_difficulty,
         created_at=utcnow(),
     )
     session.add(row)
