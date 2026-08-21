@@ -949,6 +949,40 @@
             ],
             "title": "Route"
           },
+          "route_context": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Context"
+          },
+          "route_question": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Question"
+          },
+          "route_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatRouteStateModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "stream": {
             "anyOf": [
               {
@@ -967,6 +1001,45 @@
         "title": "ChatRequest",
         "type": "object"
       },
+      "ChatRouteStateModel": {
+        "description": "Auto 路由的会话内状态：前端保存上一轮 route meta 并随下一条消息回传。\n\n服务端保持无状态（对话历史与路由状态都由前端携带），据此实现「短追问\n继承难度」与「接口粘性」两个省 token 策略；缺省等价于会话首轮。",
+        "properties": {
+          "difficulty": {
+            "anyOf": [
+              {
+                "maximum": 5.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difficulty"
+          },
+          "endpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Id"
+          },
+          "turns": {
+            "default": 0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "title": "ChatRouteStateModel",
+        "type": "object"
+      },
       "CodeRequest": {
         "properties": {
           "code": {
@@ -980,6 +1053,49 @@
           "code"
         ],
         "title": "CodeRequest",
+        "type": "object"
+      },
+      "CreatePaperExportInput": {
+        "description": "与 openapi CreatePaperExportInput 一致（ADR-0012 阶段 A）。\n\nsource_tex 的 2MB 上限按字符数在此约束；服务端另按 UTF-8 字节数复核。",
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/Format"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "source_tex": {
+            "maxLength": 2097152,
+            "minLength": 1,
+            "title": "Source Tex",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "format",
+          "title",
+          "source_tex"
+        ],
+        "title": "CreatePaperExportInput",
         "type": "object"
       },
       "CreateProjectInput": {
@@ -1126,6 +1242,15 @@
         "title": "Failure",
         "type": "object"
       },
+      "Format": {
+        "description": "pdf = 排队编译；tex = 只落源产物并立即 READY。",
+        "enum": [
+          "pdf",
+          "tex"
+        ],
+        "title": "Format",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1153,6 +1278,43 @@
         ],
         "title": "Kind1",
         "type": "string"
+      },
+      "LatestRun": {
+        "additionalProperties": false,
+        "description": "该项目最新一次运行的轻量投影（按创建时间取最近）；从未发起运行时为 null。",
+        "properties": {
+          "current_node": {
+            "description": "领域阶段节点，随 workflow_version 演进；消费方必须容忍未知节点名。",
+            "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "title": "Current Node",
+            "type": "string"
+          },
+          "goal": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "status": {
+            "$ref": "#/components/schemas/omm_contracts__v1__project__Status"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "current_node",
+          "goal",
+          "updated_at"
+        ],
+        "title": "LatestRun",
+        "type": "object"
       },
       "LlmConfigUpdateRequest": {
         "description": "整体替换式保存：与设置面板「保存更改」语义一致。",
@@ -1703,6 +1865,112 @@
         "title": "Pages",
         "type": "object"
       },
+      "PaperExport": {
+        "additionalProperties": false,
+        "description": "论文导出任务（ADR-0012 阶段 A）：客户端提交完整 .tex 源，服务端排队编译 PDF。tex 源与 PDF 都是 kind=paper 的 Artifact，PDF 的 inputs 指向 tex 源；下载沿用 /v1/artifacts/{id}/download。",
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "pattern": "^art_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "交付产物：format=pdf 时为编译出的 PDF，format=tex 时为 tex 源产物。",
+            "title": "Artifact Id"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "FAILED 时为编译日志尾部；UNSUPPORTED 时为启用途径说明。",
+            "title": "Detail"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "format": {
+            "$ref": "#/components/schemas/Format"
+          },
+          "id": {
+            "pattern": "^pex_[0-9a-f]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^proj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "pattern": "^run_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "关联的工作台运行；带 run_id 的导出完成时沿 run 事件流追加 paper.export.finished。",
+            "title": "Run Id"
+          },
+          "source_artifact_id": {
+            "anyOf": [
+              {
+                "pattern": "^art_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "受理时落库的 .tex 源产物；编译失败仍可下载排查。",
+            "title": "Source Artifact Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/omm_contracts__v1__paper_export__Status"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "format",
+          "status",
+          "created_at"
+        ],
+        "title": "PaperExport",
+        "type": "object"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "current_password": {
@@ -1905,6 +2173,17 @@
             "title": "Owner",
             "type": "string"
           },
+          "stats": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectStats"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "列表统计投影：仅 GET /v1/projects?include=stats 计算并返回对象，其余端点为 null 或缺省。服务端一次聚合，客户端不再按项目逐个拉取运行与产物。"
+          },
           "updated_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -1957,6 +2236,34 @@
           "total"
         ],
         "title": "ProjectList",
+        "type": "object"
+      },
+      "ProjectStats": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_count": {
+            "description": "项目产物总条数（运行产出与手动上传都计入）。",
+            "minimum": 0.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatestRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "该项目最新一次运行的轻量投影（按创建时间取最近）；从未发起运行时为 null。"
+          }
+        },
+        "required": [
+          "latest_run",
+          "artifact_count"
+        ],
+        "title": "ProjectStats",
         "type": "object"
       },
       "ProjectUpdateInput": {
@@ -2501,7 +2808,8 @@
           "step.failed",
           "approval.requested",
           "approval.resolved",
-          "artifact.published"
+          "artifact.published",
+          "paper.export.finished"
         ],
         "title": "Type",
         "type": "string"
@@ -2628,6 +2936,31 @@
           "READY",
           "STALE",
           "DELETED"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "omm_contracts__v1__paper_export__Status": {
+        "description": "UNSUPPORTED = 服务端未安装编译器，诚实降级不伪装成功。",
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "READY",
+          "FAILED",
+          "UNSUPPORTED"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "omm_contracts__v1__project__Status": {
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "WAITING_APPROVAL",
+          "PAUSED",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
         ],
         "title": "Status",
         "type": "string"
@@ -3795,7 +4128,7 @@
     },
     "/api/v1/artifacts/{artifact_id}/text": {
       "get": {
-        "description": "读取附件正文；首次访问时现场抽取并缓存。\n\n抽取放在读取时而不是上传时：上传路径要对用户即时响应，而几十兆的 PDF 抽一遍\n要好几秒。产物内容寻址、字节不可变，因此抽一次可以一直复用；``refresh=true``\n用于服务端补装了 OCR 或解析依赖之后重跑。",
+        "description": "读取附件正文；首次访问时现场抽取并缓存。\n\n抽取放在读取时而不是上传时：上传路径要对用户即时响应，而几十兆的 PDF 抽一遍\n要好几秒。产物内容寻址、字节不可变，因此抽一次可以一直复用；没抽出正文的\n负结果只在 TTL 内复用（见 NEGATIVE_TEXT_CACHE_TTL），``refresh=true``\n用于服务端补装了 OCR 或解析依赖之后立即重跑。",
         "operationId": "read_artifact_text_api_v1_artifacts__artifact_id__text_get",
         "parameters": [
           {
@@ -3846,6 +4179,90 @@
         ]
       }
     },
+    "/api/v1/paper-exports": {
+      "post": {
+        "description": "提交论文导出（ADR-0012 阶段 A：客户端直传 .tex）。\n\n受理即把 .tex 源落为 kind=paper 的 Artifact——编译失败源文件仍可下载排查。\nformat=tex 只落源产物并立即 READY；format=pdf 排队编译，未安装 Tectonic\n时直接落 UNSUPPORTED（诚实降级，不占队列）。",
+        "operationId": "create_paper_export_api_v1_paper_exports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaperExportInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperExport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Paper Export",
+        "tags": [
+          "paper-exports"
+        ]
+      }
+    },
+    "/api/v1/paper-exports/{export_id}": {
+      "get": {
+        "operationId": "get_paper_export_api_v1_paper_exports__export_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "title": "Export Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperExport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Paper Export",
+        "tags": [
+          "paper-exports"
+        ]
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "operationId": "list_projects_api_v1_projects_get",
@@ -3860,6 +4277,66 @@
               "description": "true 时只返回已归档项目",
               "title": "Archived",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "stats = 每项附带最新运行投影与产物计数（服务端一次聚合，客户端不再 N+1）",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "stats",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "stats = 每项附带最新运行投影与产物计数（服务端一次聚合，客户端不再 N+1）",
+              "title": "Include"
+            }
+          },
+          {
+            "description": "按项目名或最新运行目标模糊搜索（大小写不敏感）",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按项目名或最新运行目标模糊搜索（大小写不敏感）",
+              "title": "Q"
+            }
+          },
+          {
+            "description": "按最新运行归桶：active = 有运行且未到终态；done = 最新运行已完成",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按最新运行归桶：active = 有运行且未到终态；done = 最新运行已完成",
+              "title": "State"
             }
           },
           {
