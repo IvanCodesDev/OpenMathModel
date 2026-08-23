@@ -79,8 +79,13 @@ class Settings(BaseSettings):
     # 前端会先裁剪压缩到 256×256 再上传，这里是服务端兜底上限
     avatar_max_bytes: int = 2 * 1024 * 1024
 
-    # 开发环境 CORS（Vite 默认端口）；生产由网关处理。
-    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # 开发环境 CORS（Vite 端口：5183 为本项目固定端口，5173 为历史默认保留）；生产由网关处理。
+    cors_origins: list[str] = [
+        "http://localhost:5183",
+        "http://127.0.0.1:5183",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
 
     # ── 认证与会话（账户与安全批次） ─────────────────────────────
     # 开发默认值仅用于本地；生产部署必须以 OMM_SECRET_KEY 覆盖。

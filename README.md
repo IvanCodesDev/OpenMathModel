@@ -63,7 +63,7 @@ py -3.12 -m venv .venv
 npm run dev
 ```
 
-该命令启动或复用 `127.0.0.1:8000` 的 API，等待健康检查成功，再启动 Web 开发服务器。浏览器地址以终端输出为准，默认通常为 [http://localhost:5173](http://localhost:5173)。
+该命令启动或复用 `127.0.0.1:8000` 的 API，等待健康检查成功，再启动 Web 开发服务器。浏览器地址以终端输出为准，默认为 [http://localhost:5183](http://localhost:5183)（本项目固定端口，避免与其他本地 Vite 项目挤占默认 5173）。
 
 启动后可单独确认 API：
 
@@ -96,7 +96,7 @@ npm run dev:web
 
 ```powershell
 $base = "http://127.0.0.1:8000"
-$web = "http://localhost:5173" # 若 Vite 选择了其他端口，替换为终端输出地址
+$web = "http://localhost:5183" # 若 Vite 选择了其他端口，替换为终端输出地址
 $login = Invoke-RestMethod `
   -Method Post `
   -Uri "$base/api/auth/login" `
