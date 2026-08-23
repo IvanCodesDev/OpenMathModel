@@ -3652,8 +3652,7 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
 .project-table th:last-child,
 .project-table td:last-child { text-align: right; }
 
-.table-doc > div { min-width: 0; }
-.table-doc > i { color: #9a9a94; }
+.project-name { min-width: 0; }
 .project-name strong { margin-bottom: 2px; color: #242422; font-weight: 650; }
 .project-name span { display: block; color: #858580; }
 .project-table tbody tr:hover .project-name strong { color: #111110; }
@@ -3727,7 +3726,6 @@ html[data-theme="dark"] .project-table td { color: #b7b7b1; }
 html[data-theme="dark"] .project-name { color: #f1f1ee !important; }
 html[data-theme="dark"] .project-name strong { color: #f1f1ee; }
 html[data-theme="dark"] .project-name span { color: #9a9a94; }
-html[data-theme="dark"] .table-doc > i { color: #85857f; }
 html[data-theme="dark"] .project-table tbody tr:hover { background: #232322; }
 html[data-theme="dark"] .project-table tbody tr:hover .project-name strong { color: #fff; }
 html[data-theme="dark"] .stage-pill { background: #2b2b29; color: #c6c6c0; }
@@ -3828,7 +3826,9 @@ html[data-theme="dark"] .page-button:disabled:hover { border-color: #3d3d3a; bac
 
 @media (max-width: 820px) {
   .new-screen { padding: 56px 18px 18px; }
-  .hero-logo { width: 76px; height: 94px; margin-top: 6vh; }
+  /* Logo 与底部 composer 的两个 auto 外边距平分剩余空间：
+     hero 区在输入框上方垂直居中，屏幕再高也不会中间空一大块。 */
+  .hero-logo { width: 76px; height: 94px; margin-top: auto; }
   .new-screen h1 { margin-top: 14px; font-size: 22px; letter-spacing: -.6px; }
   .new-screen .lead { font-size: 13.5px; }
   .composer-area { width: 100%; }
@@ -3839,7 +3839,7 @@ html[data-theme="dark"] .page-button:disabled:hover { border-color: #3d3d3a; bac
 }
 
 @media (max-width: 520px) {
-  .hero-logo { width: 62px; height: 77px; margin-top: 3vh; }
+  .hero-logo { width: 62px; height: 77px; }
   .new-screen h1 { font-size: 19px; }
   .composer-shortcuts button { height: 30px; padding: 0 10px; font-size: 12px; }
 }
@@ -3851,14 +3851,14 @@ html[data-theme="dark"] .page-button:disabled:hover { border-color: #3d3d3a; bac
   .task-toolbar p { display: none; }
   .task-toolbar-actions { gap: 6px; }
   .task-toolbar-actions .run-status { display: none; }
-  .running-chat-pane { --chat-gutter: 18px; }
+  .running-chat-pane { --chat-gutter: 28px; }
   .running-chat-pane .chat-scroll { padding-top: 20px; padding-bottom: 150px; }
   .running-chat-pane > .chat-composer { bottom: 14px; height: 116px; min-height: 116px; }
   .user-bubble { max-width: 88%; }
 }
 
 @media (max-width: 520px) {
-  .running-chat-pane { --chat-gutter: 12px; }
+  .running-chat-pane { --chat-gutter: 20px; }
   .running-chat-pane > .chat-composer { height: 108px; min-height: 108px; }
 }
 
@@ -3997,7 +3997,7 @@ html[data-theme="dark"] .sidebar-drawer-toggle {
 
 /* 赛题 / 论文详情页：整页滚动容器，给抽屉按钮让出顶部，标签列表改上下堆叠。 */
 @media (max-width: 820px) {
-  .resource-detail-page { padding: 58px 16px 0; }
+  .resource-detail-page { padding: 58px 24px 0; }
   .detail-row { grid-template-columns: minmax(0, 1fr); gap: 2px; margin-top: 18px; }
   .paper-detail h2 { font-size: 19px; }
   .paper-detail-actions { flex-wrap: wrap; gap: 10px; }

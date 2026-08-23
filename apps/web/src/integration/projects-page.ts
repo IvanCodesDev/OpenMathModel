@@ -175,7 +175,7 @@ function rowHtml(item: ProjectItem): string {
   const files = item.artifactCount === null ? "—" : String(item.artifactCount);
   // data-stage 保持中文原值：它是 CSS 配色选择器，不参与界面语言切换。
   return `<tr data-project-row data-project-id="${escapeHtml(item.project.id)}"${runAttribute} tabindex="0">
-    <td class="project-name"><div class="table-doc">${icon("file-text")}<div><strong>${escapeHtml(item.project.name)}</strong><span>${subtitle}</span></div></div></td>
+    <td class="project-name"><strong>${escapeHtml(item.project.name)}</strong><span>${subtitle}</span></td>
     <td><span class="stage-pill" data-stage="${escapeHtml(stage)}">${t(stage)}</span></td>
     <td>${updated}</td>
     <td>${files}</td><td>—</td><td>—</td>

@@ -112,7 +112,6 @@ html[data-contrast="high"] .stage-pill {
 }
 
 html[data-contrast="high"] .project-name span,
-html[data-contrast="high"] .table-doc > i,
 html[data-contrast="high"] .row-menu-button {
   color: var(--muted);
 }

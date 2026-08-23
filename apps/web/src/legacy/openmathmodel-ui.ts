@@ -698,7 +698,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <thead><tr><th>项目名称</th><th>当前阶段</th><th>最近更新　⌃</th><th>文件</th><th>实验</th><th>论文</th><th>操作</th></tr></thead>
             <tbody>
               ${projectRows.map(r => `<tr data-project="${r[0]}">
-                <td class="project-name"><div class="table-doc">${icon("file-text")}<div><strong>${r[0]}</strong><span>${r[1]}</span></div></div></td>
+                <td class="project-name"><strong>${r[0]}</strong><span>${r[1]}</span></td>
                 <td><span class="stage-pill" data-stage="${r[2]}">${r[2]}</span></td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td>
                 <td><button type="button" class="row-menu-button" data-action="row-menu" aria-label="更多操作">${icon("dots-three")}</button></td>
               </tr>`).join("")}

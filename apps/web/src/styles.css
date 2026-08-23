@@ -44,10 +44,6 @@ button {
 
 button:hover { background: #f7f7f7; border-color: #cfcfcf; }
 button:active { transform: translateY(1px); }
-button:focus-visible, input:focus-visible, textarea:focus-visible, [contenteditable]:focus-visible {
-  outline: 2px solid rgba(20, 115, 230, .28);
-  outline-offset: 2px;
-}
 
 a { color: inherit; text-decoration: none; }
 i[class^="ph"], i[class*=" ph"] { font-size: 19px; line-height: 1; }
@@ -407,6 +403,8 @@ html[data-theme="dark"] .recent::-webkit-scrollbar-thumb:hover { background: #5a
   resize: none;
   border: 0;
   outline: 0;
+  /* 去掉 UA 默认 2px 内边距：首行与引用 chips 行（24px）齐平，不再错位 */
+  padding: 0;
   font-size: 17px;
   background: transparent;
   line-height: 1.7;
@@ -551,7 +549,6 @@ html[data-theme="dark"] .recent::-webkit-scrollbar-thumb:hover { background: #5a
 .project-name { color: #222 !important; }
 .project-name strong { display: block; margin-bottom: 3px; font-size: 14px; }
 .project-name span { color: #777; font-size: 12px; }
-.table-doc { display: flex; align-items: flex-start; gap: 11px; }
 .project-footer { margin-top: 16px; display: flex; align-items: center; }
 .pagination { margin-left: auto; display: flex; gap: 12px; align-items: center; }
 .page-button { width: 38px; height: 36px; }
@@ -2281,13 +2278,6 @@ html[data-theme="dark"] select {
 html[data-theme="dark"] button:hover {
   border-color: #50504c;
   background: #292927;
-}
-
-html[data-theme="dark"] button:focus-visible,
-html[data-theme="dark"] input:focus-visible,
-html[data-theme="dark"] textarea:focus-visible,
-html[data-theme="dark"] [contenteditable]:focus-visible {
-  outline-color: rgba(210, 210, 204, .42);
 }
 
 html[data-theme="dark"] .sidebar,
@@ -7262,7 +7252,6 @@ body[data-screen="projects"] .project-table th {
 /* 正文行:字色更清晰 */
 body[data-screen="projects"] .project-table td { color: #55554f; }
 body[data-screen="projects"] .project-name strong { font-weight: 600; }
-body[data-screen="projects"] .table-doc > i { color: #b2b2ab; }
 
 /* 数字列(文件/实验/论文)右对齐 + 等宽数字;操作列居中收窄 */
 body[data-screen="projects"] .project-table th:nth-child(4),
