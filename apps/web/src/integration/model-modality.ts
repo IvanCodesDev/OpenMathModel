@@ -22,7 +22,12 @@ const VISION_PATTERNS: readonly RegExp[] = [
   /llava|pixtral|internvl|minicpm-v/i,
 ];
 
-/** 明确为纯文本的模型名模式。deepseek 对话/推理线不收图；qwen 文本线与视觉线（-vl）分列。 */
+/**
+ * 明确为纯文本的模型名模式。deepseek 对话/推理线不收图；qwen 文本线与视觉线（-vl）分列。
+ * 注意判定顺序：视觉表先于本表命中，deepseek 名下带 vision 记号的视觉线
+ * （如 2026-08-21 上线的 deepseek-v4-flash-vision-exp）由上方 /vision/i 兜住，
+ * 不会落进本表的 deepseek 纯文本规则。
+ */
 const TEXT_ONLY_PATTERNS: readonly RegExp[] = [
   /^deepseek-(?!vl)/i,
   /^qwen(?![\d.]*-?vl)(?!.*omni)/i,
@@ -52,6 +57,8 @@ export interface EffectiveModality {
   /** 生效模型名（对话页文案不展示，仅供模态判定与调试）；解析不出来时为空串 */
   model: string;
   modality: ModelModality;
+  /** 生效模型来自哪条已保存接口：携图直通时用它钉住请求，绕过 Auto 难度路由 */
+  endpointId?: string;
 }
 
 /**
@@ -73,7 +80,11 @@ export async function resolveSelectedModality(selected: string): Promise<Effecti
     ? config.endpoints.find(item => item.id === raw.slice("endpoint-".length))
     : config.endpoints.find(item => item.id === config.active_endpoint_id) ?? config.endpoints[0];
   if (!endpoint?.model) return { model: "", modality: "unknown" };
-  return { model: endpoint.model, modality: modelModality(endpoint.model) };
+  return {
+    model: endpoint.model,
+    modality: modelModality(endpoint.model),
+    endpointId: endpoint.id ?? undefined,
+  };
 }
 
 /** 附件托盘提醒行文案；不需要提醒时返回空串。 */

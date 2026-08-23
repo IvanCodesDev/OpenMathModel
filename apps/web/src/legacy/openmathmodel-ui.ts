@@ -15,6 +15,8 @@ import { hydrateMaxConcurrency, persistMaxConcurrency } from "../preferences/acc
 import { ApiError, authApi } from "../auth/api";
 import { attachmentsOf } from "../attachments/composer-attachments";
 import { collectConversationAttachments } from "../attachments/conversation-context";
+import { encodePassthroughImages, planImagePassthrough } from "../attachments/image-passthrough";
+import { resolveSelectedModality } from "../integration/model-modality";
 import { OPENING_ANALYSIS_PROMPT, conversationSnapshot, sendConversationTurn } from "../integration/agent-chat";
 import { CHAT_MODES, currentChatMode, saveChatMode } from "../integration/chat-mode";
 import {
@@ -3322,8 +3324,26 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       const references = options.opening ? [] : [...listComposerReferences()];
       const referenceBlock = references.length ? composerReferenceBlock() : "";
       let attachmentContext = "";
+      // 视觉直通（ADR-0010）：生效模型具备视觉能力时，托盘位图以原图随消息直发，
+      // 跳过分钟级 OCR 并钉住该接口；其余附件照走文本解析通道。
+      let passthroughImages = [];
+      let passthroughNames = [];
+      let pinEndpointId;
       if (store && store.list().length > 0) {
-        attachmentContext = (await collectConversationAttachments(store)).block;
+        let passthroughIds;
+        const plan = planImagePassthrough(store.list());
+        if (plan.send.length > 0) {
+          const effective = await resolveSelectedModality(
+            localStorage.getItem("openmathmodelSelectedModel") || "auto",
+          );
+          if (effective.modality === "vision") {
+            passthroughImages = await encodePassthroughImages(plan.send);
+            passthroughNames = plan.send.map(item => item.file.name);
+            pinEndpointId = effective.endpointId;
+            passthroughIds = new Set(plan.send.map(item => item.id));
+          }
+        }
+        attachmentContext = (await collectConversationAttachments(store, passthroughIds)).block;
       }
       const contextBlocks = [referenceBlock, attachmentContext].filter(Boolean).join("\n\n");
       // ── 执行轨迹：每条回复都由真实过程行组成（与首条 Agent 消息同构）。
@@ -3353,6 +3373,17 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           title: attachmentNames.length ? "已解析并注入附件" : "已添加上下文引用",
           suffix: ` ×${contextNames.length}`,
           detail: contextNames.join("\n"),
+        };
+        appendReplyTraceRow(replyBlock, row);
+        traceLog.push(row);
+      }
+      // 行②'：图片原图直通视觉模型（真实动作：这些图跳过 OCR 随消息直发）
+      if (passthroughNames.length) {
+        const row = {
+          icon: "image",
+          title: "原图已直通视觉模型",
+          suffix: ` ×${passthroughNames.length}`,
+          detail: passthroughNames.join("\n"),
         };
         appendReplyTraceRow(replyBlock, row);
         traceLog.push(row);
@@ -3406,6 +3437,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         attachmentContext: contextBlocks,
         openingAnalysis: options.opening === true,
         attachmentNames: [...attachmentNames, ...references.map(reference => `@${reference.title}`)],
+        ...(passthroughImages.length ? { images: passthroughImages, pinEndpointId } : {}),
       });
       // 附件与引用内容已随本条消息进入上下文；成功后清空托盘与引用 chips，
       // 失败路径保留以便重试。

@@ -6,6 +6,7 @@
  * 页面内存里随请求携带，服务端无状态、不落库（本机留存策略归「数据与隐私」）。
  */
 
+import type { ChatImagePayload } from "../attachments/image-passthrough";
 import { collectTaskAttachmentContext } from "../attachments/task-attachment-context";
 import {
   appendConversationEntries,
@@ -223,6 +224,10 @@ export interface ChatTurnOptions {
   openingAnalysis?: boolean;
   /** 随消息发送的附件名：进入本机对话记录，恢复时重建纸夹徽标。 */
   attachmentNames?: string[];
+  /** 直通给视觉模型的原图（ADR-0010 直通）：仅本条消息生效，历史轮不重发。 */
+  images?: ChatImagePayload[];
+  /** 携图时钉住的接口 id：绕过 Auto 难度路由，确保图片落在视觉模型上。 */
+  pinEndpointId?: string;
 }
 
 /**
@@ -251,14 +256,23 @@ export async function sendConversationTurn(
   history.push({ role: "user", content });
   trimHistory();
 
-  const routing = routeSelection();
+  // 携图直通时钉住视觉接口：Auto 难度路由看不见图片，可能把消息发给纯文本模型。
+  const images = options.images?.length ? options.images : undefined;
+  const routing = images && options.pinEndpointId
+    ? { endpoint_id: options.pinEndpointId }
+    : routeSelection();
   let response: Response;
   try {
     response = await fetch("/api/chat", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream, application/json" },
-      body: JSON.stringify({ messages: [...history], ...routing, ...routeExtras(routing, text) }),
+      body: JSON.stringify({
+        messages: [...history],
+        ...routing,
+        ...routeExtras(routing, text),
+        ...(images ? { images } : {}),
+      }),
     });
   } catch {
     history.pop();

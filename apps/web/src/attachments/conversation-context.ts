@@ -8,6 +8,7 @@
 
 import { localFirstEnabled } from "../preferences/privacy-preferences";
 import { parseAttachmentOnServer, type AdhocParseResult } from "./adhoc-parse";
+import { formatBytes } from "./limits";
 import type { ParseOutcome } from "./parse";
 import type { Attachment, AttachmentStore } from "./store";
 
@@ -65,6 +66,7 @@ async function resolveText(store: AttachmentStore, attachment: Attachment): Prom
 
 export async function collectConversationAttachments(
   store: AttachmentStore,
+  passthroughIds?: ReadonlySet<string>,
 ): Promise<ConversationAttachmentContext> {
   await store.settled();
   const items = store.list();
@@ -75,6 +77,23 @@ export async function collectConversationAttachments(
   const names: string[] = [];
   for (const item of items) {
     names.push(item.file.name);
+    if (passthroughIds?.has(item.id)) {
+      // 原图已直通视觉模型（ADR-0010）：跳过分钟级 OCR，上下文只留元信息；
+      // 卡片如实改写，替换「已排队交由服务端识别」的占位说明。
+      sections.push(
+        `【附件：${item.file.name}】（${item.descriptor.label}，${formatBytes(item.file.size)}）\n`
+        + "（原图已随本条消息直接提供给当前视觉模型，请直接读图作答）",
+      );
+      store.update(item.id, {
+        parse: {
+          ...(item.parse ?? { text: "", characters: 0, metrics: [] }),
+          status: "ready",
+          notice: "原图已直通视觉模型，无需 OCR",
+        },
+        phase: "parsed",
+      });
+      continue;
+    }
     const text = await resolveText(store, item);
     const parse = store.list().find(candidate => candidate.id === item.id)?.parse;
     const meta = [item.descriptor.label];

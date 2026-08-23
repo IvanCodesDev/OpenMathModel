@@ -6,7 +6,8 @@
  * - OpenAI GPT-5.6 家族 2026-07-09 GA（gpt-5.6 别名指向 gpt-5.6-sol）；
  * - Anthropic Fable 5 / Opus 5 / Sonnet 5 为无日期固定 ID，Haiku 4.5 用别名；
  * - Gemini 3.5/3.6 Flash 系列 GA，3.5 Pro 尚未开放公共 API；
- * - DeepSeek V4（deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用）；
+ * - DeepSeek V4（deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用；
+ *   deepseek-v4-flash-vision-exp 视觉实验版 2026-08-21 上线，价格与 v4-flash 相同）；
  * - Qwen3.8-Max 2026-08-03 上线（DashScope OpenAI 兼容模式）；
  * - Kimi K3（api.moonshot.cn，OpenAI 兼容）；
  * - GLM-5.2 / GLM-5 系列（open.bigmodel.cn/api/paas/v4）；
@@ -61,7 +62,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     logo: "deepseek",
     protocol: "openai",
     baseUrl: "https://api.deepseek.com",
-    models: ["deepseek-v4-pro", "deepseek-v4-flash"],
+    models: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
   },
   {
     id: "qwen",

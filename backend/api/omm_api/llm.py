@@ -528,14 +528,28 @@ def _openai_family(protocol: str) -> bool:
     return protocol in {"openai", "ollama", "custom"}
 
 
+def _last_user_index(messages: list[dict[str, Any]]) -> Optional[int]:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index
+    return None
+
+
 def build_chat_request(
     endpoint: LlmEndpoint,
     messages: list[dict[str, str]],
     stream: bool,
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    images: Optional[list[dict[str, str]]] = None,
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
-    """按协议组装 (url, headers, body)。"""
+    """按协议组装 (url, headers, body)。
+
+    images（{media_type, data(base64), name}）挂到最后一条 user 消息上，
+    按各协议的多模态格式转换（ADR-0010 直通阶梯）；输入 messages 不被改写，
+    回退链里每个接口各自重新组装。图片顺序遵循各家文档的推荐：OpenAI 文前图后，
+    Anthropic 与 Gemini 图前文后。
+    """
     api_base = _WEBSITE_TO_API.get(endpoint.host)
     if api_base:
         raise ApiError(
@@ -560,7 +574,23 @@ def build_chat_request(
             headers["Authorization"] = f"Bearer {endpoint.api_key}"
         if endpoint.organization:
             headers["OpenAI-Organization"] = endpoint.organization
-        body: dict[str, Any] = {"model": resolved_model, "messages": messages, "stream": stream}
+        payload_messages: list[dict[str, Any]] = list(messages)
+        target = _last_user_index(payload_messages) if images else None
+        if images and target is not None:
+            payload_messages[target] = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": messages[target]["content"]},
+                    *(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{img['media_type']};base64,{img['data']}"},
+                        }
+                        for img in images
+                    ),
+                ],
+            }
+        body: dict[str, Any] = {"model": resolved_model, "messages": payload_messages, "stream": stream}
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
         return url, headers, body
@@ -570,10 +600,31 @@ def build_chat_request(
         headers["x-api-key"] = endpoint.api_key
         headers["anthropic-version"] = "2023-06-01"
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        chat_messages: list[dict[str, Any]] = [m for m in messages if m["role"] != "system"]
+        anthropic_target = _last_user_index(chat_messages) if images else None
+        if images and anthropic_target is not None:
+            anthropic_text = chat_messages[anthropic_target]["content"]
+            chat_messages[anthropic_target] = {
+                "role": "user",
+                "content": [
+                    *(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img["media_type"],
+                                "data": img["data"],
+                            },
+                        }
+                        for img in images
+                    ),
+                    {"type": "text", "text": anthropic_text},
+                ],
+            }
         body = {
             "model": resolved_model,
             "max_tokens": max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS,
-            "messages": [m for m in messages if m["role"] != "system"],
+            "messages": chat_messages,
             "stream": stream,
         }
         if system:
@@ -585,11 +636,26 @@ def build_chat_request(
         query = f"?key={endpoint.api_key}" + ("&alt=sse" if stream else "")
         url = f"{base}{prefix or '/v1beta'}/models/{resolved_model}:{action}{query}"
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
-        contents = [
+        contents: list[dict[str, Any]] = [
             {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
             for m in messages
             if m["role"] != "system"
         ]
+        if images:
+            for index in range(len(contents) - 1, -1, -1):
+                if contents[index]["role"] != "user":
+                    continue
+                contents[index] = {
+                    "role": "user",
+                    "parts": [
+                        *(
+                            {"inlineData": {"mimeType": img["media_type"], "data": img["data"]}}
+                            for img in images
+                        ),
+                        *contents[index]["parts"],
+                    ],
+                }
+                break
         body = {"contents": contents}
         if system_parts:
             body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
@@ -792,9 +858,12 @@ def complete_once(
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
     read_timeout: float = CHAT_READ_TIMEOUT_S,
+    images: Optional[list[dict[str, str]]] = None,
 ) -> ChatOutcome:
     """对单个接口做一次非流式补全；429 归一为 LLM_RATE_LIMITED 供回退判断。"""
-    url, headers, body = build_chat_request(endpoint, messages, stream=False, model=model, max_tokens=max_tokens)
+    url, headers, body = build_chat_request(
+        endpoint, messages, stream=False, model=model, max_tokens=max_tokens, images=images
+    )
     started = time.monotonic()
     try:
         response = _post(endpoint, url, headers, body, read_timeout)
@@ -829,6 +898,7 @@ def complete_with_fallback(
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
     chain: Optional[list[LlmEndpoint]] = None,
+    images: Optional[list[dict[str, str]]] = None,
 ) -> ChatOutcome:
     """按主接口 → 备用接口的顺序尝试非流式补全；chain 可由 Auto 路由指定。"""
     chain = list(chain) if chain is not None else config.chain()
@@ -838,7 +908,7 @@ def complete_with_fallback(
     for index, endpoint in enumerate(chain):
         ensure_proxy_allowed(endpoint, config.allow_proxy)
         try:
-            outcome = complete_once(endpoint, messages, model=model, max_tokens=max_tokens)
+            outcome = complete_once(endpoint, messages, model=model, max_tokens=max_tokens, images=images)
             outcome.fallback_used = index > 0
             return outcome
         except Exception as error:  # noqa: BLE001 - 统一走回退判定
@@ -856,6 +926,7 @@ def stream_events(
     model: Optional[str] = None,
     chain: Optional[list[LlmEndpoint]] = None,
     extra_meta: Optional[dict[str, Any]] = None,
+    images: Optional[list[dict[str, str]]] = None,
 ) -> Iterator[dict[str, Any]]:
     """流式对话事件：meta → delta* → done；失败时产出 error 事件。
 
@@ -873,7 +944,7 @@ def stream_events(
         except ApiError as error:
             yield {"type": "error", "code": error.code, "message": error.message}
             return
-        url, headers, body = build_chat_request(endpoint, messages, stream=True, model=model)
+        url, headers, body = build_chat_request(endpoint, messages, stream=True, model=model, images=images)
         started = time.monotonic()
         emitted = False
         usage: dict[str, int] = {}

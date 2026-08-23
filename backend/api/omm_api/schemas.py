@@ -231,6 +231,47 @@ class ChatMessageModel(BaseModel):
         return value
 
 
+#: 直通图片的格式白名单：四种主流位图，是各家视觉 API 支持格式的交集。
+CHAT_IMAGE_MEDIA_TYPES = ("image/jpeg", "image/png", "image/gif", "image/webp")
+#: 单图 base64 上限 ≈ 4MB 原始字节（base64 膨胀 4/3）。取各协议单图上限的
+#: 保守交集（Anthropic 5MB / Gemini 整请求 20MB / DeepSeek 整请求 48MiB），
+#: 前端超限图片回落 OCR 文本通道，不直通。
+CHAT_IMAGE_MAX_BASE64 = 5_800_000
+#: 每条消息最多直通的图片数：4 张 × 4MB 在最紧的 Gemini 20MB 请求上限内。
+CHAT_IMAGE_MAX_COUNT = 4
+
+_BASE64_PATTERN = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+
+
+class ChatImageModel(BaseModel):
+    """随消息直通给视觉模型的原图（ADR-0010 直通阶梯）。
+
+    只在前端判定生效模型具备视觉能力时携带；服务端把它挂到最后一条
+    user 消息上按协议转成多模态格式，不落库、不进用量正文。
+    """
+
+    media_type: str
+    #: 纯 base64 内容（不带 data: URL 前缀）。
+    data: str = Field(max_length=CHAT_IMAGE_MAX_BASE64)
+    #: 可选文件名，仅用于日志与排障，不进提示词。
+    name: str = Field(default="", max_length=255)
+
+    @field_validator("media_type")
+    @classmethod
+    def check_media_type(cls, value: str) -> str:
+        if value not in CHAT_IMAGE_MEDIA_TYPES:
+            raise ValueError("图片格式仅支持 JPEG / PNG / GIF / WebP")
+        return value
+
+    @field_validator("data")
+    @classmethod
+    def check_data(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or len(stripped) % 4 != 0 or not _BASE64_PATTERN.fullmatch(stripped):
+            raise ValueError("图片数据必须是纯 base64（不带 data: URL 前缀）")
+        return stripped
+
+
 class ChatRouteStateModel(BaseModel):
     """Auto 路由的会话内状态：前端保存上一轮 route meta 并随下一条消息回传。
 
@@ -259,6 +300,9 @@ class ChatRequest(BaseModel):
     # Auto 路由的判定微上下文（如上一轮回复首行）：只在真实重判时并入提示词。
     route_context: Optional[str] = Field(default=None, max_length=500)
     route_state: Optional[ChatRouteStateModel] = None
+    # 直通给视觉模型的图片（仅当前消息生效，历史轮不重发）：前端只在生效
+    # 模型判定为视觉时携带，并同时钉住该接口绕过 Auto 难度路由。
+    images: list[ChatImageModel] = Field(default_factory=list, max_length=CHAT_IMAGE_MAX_COUNT)
 
 
 # ── 响应体构造 ───────────────────────────────────────────────────

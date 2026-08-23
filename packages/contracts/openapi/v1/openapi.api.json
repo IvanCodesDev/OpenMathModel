@@ -883,6 +883,32 @@
         "title": "BudgetInput",
         "type": "object"
       },
+      "ChatImageModel": {
+        "description": "随消息直通给视觉模型的原图（ADR-0010 直通阶梯）。\n\n只在前端判定生效模型具备视觉能力时携带；服务端把它挂到最后一条\nuser 消息上按协议转成多模态格式，不落库、不进用量正文。",
+        "properties": {
+          "data": {
+            "maxLength": 5800000,
+            "title": "Data",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 255,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "media_type",
+          "data"
+        ],
+        "title": "ChatImageModel",
+        "type": "object"
+      },
       "ChatMessageModel": {
         "properties": {
           "content": {
@@ -915,6 +941,14 @@
               }
             ],
             "title": "Endpoint Id"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ChatImageModel"
+            },
+            "maxItems": 4,
+            "title": "Images",
+            "type": "array"
           },
           "messages": {
             "items": {

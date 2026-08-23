@@ -101,6 +101,51 @@ def test_build_request_missing_model_is_actionable_error():
     assert "默认模型" in str(excinfo.value)
 
 
+IMAGES = [{"media_type": "image/png", "data": "aGVsbG8=", "name": "题面.png"}]
+
+
+def test_build_request_openai_attaches_images_to_last_user_message():
+    messages = [
+        {"role": "system", "content": "身份"},
+        {"role": "user", "content": "看第一张"},
+        {"role": "assistant", "content": "好"},
+        {"role": "user", "content": "这张图里是什么"},
+    ]
+    snapshot = json.loads(json.dumps(messages))
+    _, _, body = build_chat_request(_endpoint(), messages, stream=False, images=IMAGES)
+    assert messages == snapshot, "输入 messages 不能被改写：回退链每个接口要重新组装"
+    content = body["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "这张图里是什么"}
+    assert content[1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+    }
+    assert body["messages"][1]["content"] == "看第一张", "历史 user 消息保持纯文本"
+
+
+def test_build_request_anthropic_puts_images_before_text():
+    endpoint = _endpoint(protocol="anthropic", base_url="https://api.anthropic.com")
+    messages = [{"role": "system", "content": "身份"}, *MESSAGES]
+    _, _, body = build_chat_request(endpoint, messages, stream=False, images=IMAGES)
+    content = body["messages"][-1]["content"]
+    assert content[0]["type"] == "image"
+    assert content[0]["source"] == {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}
+    assert content[-1] == {"type": "text", "text": "你好"}
+
+
+def test_build_request_gemini_inline_data_parts():
+    endpoint = _endpoint(protocol="gemini", base_url="https://generativelanguage.googleapis.com")
+    _, _, body = build_chat_request(endpoint, MESSAGES, stream=False, images=IMAGES)
+    parts = body["contents"][-1]["parts"]
+    assert parts[0] == {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
+    assert parts[-1] == {"text": "你好"}
+
+
+def test_build_request_without_images_keeps_plain_content():
+    _, _, body = build_chat_request(_endpoint(), MESSAGES, stream=False, images=None)
+    assert body["messages"] == MESSAGES
+
+
 def test_parse_custom_headers_tolerates_formats():
     assert parse_custom_headers("") == {}
     assert parse_custom_headers("A: 1\nB:2; C: 3") == {"A": "1", "B": "2", "C": "3"}
@@ -319,6 +364,50 @@ def test_chat_stream_flag_follows_saved_setting(client, monkeypatch):
     response = client.post("/api/chat", json={"messages": MESSAGES})
     assert response.headers["content-type"].startswith("application/json"), "关闭流式后走 JSON"
     assert response.json()["reply"] == "OK"
+
+
+def test_chat_forwards_images_to_provider(client, monkeypatch):
+    """视觉直通（ADR-0010）：请求里的 images 以多模态格式出现在出网载荷里。"""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return _openai_reply("图里是一张流程图")
+
+    _install_transport(monkeypatch, handler)
+    _save_config(client, [_openai_endpoint_body()])
+    response = client.post(
+        "/api/chat",
+        json={
+            "messages": MESSAGES,
+            "stream": False,
+            "images": [{"media_type": "image/jpeg", "data": "aGVsbG8=", "name": "photo.jpg"}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    content = seen["body"]["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "你好"}
+    assert content[1]["image_url"]["url"] == "data:image/jpeg;base64,aGVsbG8="
+
+
+def test_chat_rejects_unsupported_or_malformed_images(client, monkeypatch):
+    _install_transport(monkeypatch, lambda request: _openai_reply("不应被调用"))
+    _save_config(client, [_openai_endpoint_body()])
+
+    bad_type = client.post(
+        "/api/chat",
+        json={"messages": MESSAGES, "images": [{"media_type": "image/tiff", "data": "aGVsbG8="}]},
+    )
+    assert bad_type.status_code == 422
+
+    data_url = client.post(
+        "/api/chat",
+        json={
+            "messages": MESSAGES,
+            "images": [{"media_type": "image/png", "data": "data:image/png;base64,aGVsbG8="}],
+        },
+    )
+    assert data_url.status_code == 422, "data: URL 前缀必须被拒绝，只收纯 base64"
 
 
 def test_chat_falls_back_on_429_and_reports_it(client, monkeypatch):

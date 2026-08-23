@@ -114,6 +114,8 @@ def chat(
     messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}] + [
         {"role": m.role, "content": m.content} for m in body.messages
     ]
+    # 视觉直通图片（ADR-0010）：挂到最后一条 user 消息，各协议格式在 llm.py 转换。
+    images = [image.model_dump() for image in body.images] or None
     use_stream = gated.stream if body.stream is None else body.stream
 
     def record_outcome(
@@ -165,7 +167,7 @@ def chat(
         chain = gated.chain_from(endpoint)
 
     if not use_stream:
-        outcome = complete_with_fallback(gated, messages, model=body.model, chain=chain)
+        outcome = complete_with_fallback(gated, messages, model=body.model, chain=chain, images=images)
         record_outcome(
             "chat",
             outcome,
@@ -212,7 +214,9 @@ def chat(
 
     def sse() -> Iterator[str]:
         meta: dict = {}
-        for event in stream_events(gated, messages, model=body.model, chain=chain, extra_meta=extra_meta):
+        for event in stream_events(
+            gated, messages, model=body.model, chain=chain, extra_meta=extra_meta, images=images
+        ):
             if event.get("type") == "meta":
                 meta = event
             elif event.get("type") == "done":
