@@ -33,7 +33,9 @@ PAPER_ROOT = ROOT / "datasets/raw/sources/github/zhanwen-MathModel/papers"
 OUTPUT = ROOT / "datasets/interim/cpmcm_paper_fulltext/papers.json"
 REPOSITORY = "zhanwen/MathModel"
 COMMIT = "cd5be91735ebf11d5ee52eb170e86a6d07131977"
-PAPER_PATH_RE = re.compile(r"^国赛论文/(\d{4})年优秀论文/([A-F])/(.+)\.pdf$")
+# 题组既可能是 A–F 目录，也可能是「获数模之星提名奖（12篇）」这类奖项目录；
+# 后者的题组按文件名首字母推导（与 ingest_mathmodel_full_problems 的清单规则一致）。
+PAPER_PATH_RE = re.compile(r"^国赛论文/(\d{4})年优秀论文/([^/]+)/([^/]+)\.pdf$")
 USER_AGENT = "OpenMathModel-dataset/1.0 (+https://github.com/IvanCodesDev/OpenMathModel)"
 
 TITLE_RE = re.compile(r"^题\s*目\s*[:：]?\s*(.*)$")
@@ -104,11 +106,18 @@ def paper_targets(years: set[int]) -> list[dict[str, Any]]:
         match = PAPER_PATH_RE.match(item.get("path", ""))
         if not match or int(match.group(1)) not in years:
             continue
+        directory, stem = match.group(2), match.group(3)
+        if re.fullmatch(r"[A-F]", directory):
+            letter = directory
+        elif stem[:1].upper() in "ABCDEF":
+            letter = stem[:1].upper()
+        else:
+            continue
         targets.append({
             "path": item["path"],
             "year": int(match.group(1)),
-            "letter": match.group(2),
-            "stem": match.group(3),
+            "letter": letter,
+            "stem": stem,
             "size": int(item.get("size", 0)),
             "git_blob_sha": item["sha"],
         })
@@ -127,23 +136,31 @@ def fetch_one(target: dict[str, Any], attempts: int = 3) -> tuple[dict[str, Any]
     destination = local_path(target)
     if destination.exists() and git_blob_sha(destination.read_bytes()) == target["git_blob_sha"]:
         return target, "cached"
-    url = f"https://raw.githubusercontent.com/{REPOSITORY}/{COMMIT}/{urllib.parse.quote(target['path'])}"
+    quoted = urllib.parse.quote(target["path"])
+    # raw.githubusercontent.com 在部分开发网络下无法解析或被劫持；jsDelivr 提供同一
+    # 提交的字节级镜像（与 Web 阅读器的源顺序一致）。本机对各域名的 DNS 解析会间歇
+    # 失效，故把 jsDelivr 的官方备用域都列进候选，逐个尝试；所有来源都要过
+    # git blob 哈希校验，坏字节或劫持响应会被拒绝。
+    urls = tuple(
+        f"https://{host}/gh/{REPOSITORY}@{COMMIT}/{quoted}"
+        for host in ("cdn.jsdelivr.net", "gcore.jsdelivr.net", "testingcf.jsdelivr.net", "fastly.jsdelivr.net")
+    ) + (f"https://raw.githubusercontent.com/{REPOSITORY}/{COMMIT}/{quoted}",)
     last_error = "unknown"
     for attempt in range(attempts):
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            payload = urllib.request.urlopen(request, timeout=180).read()
-        except Exception as error:  # network flake; retry with backoff
-            last_error = f"{type(error).__name__}: {error}"
-            time.sleep(2 * (attempt + 1))
-            continue
-        if git_blob_sha(payload) != target["git_blob_sha"]:
-            last_error = "blob hash mismatch"
-            time.sleep(2 * (attempt + 1))
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(payload)
-        return target, "downloaded"
+        for url in urls:
+            try:
+                request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                payload = urllib.request.urlopen(request, timeout=180).read()
+            except Exception as error:  # network flake; try the next source
+                last_error = f"{type(error).__name__}: {error}"
+                continue
+            if git_blob_sha(payload) != target["git_blob_sha"]:
+                last_error = "blob hash mismatch"
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
+            return target, "downloaded"
+        time.sleep(2 * (attempt + 1))
     return target, f"failed ({last_error})"
 
 
@@ -170,6 +187,11 @@ def collapse_doubled(text: str) -> str:
     if all(pair[0] == pair[1] for pair in pairs):
         return "".join(pair[0] for pair in pairs)
     return text
+
+
+def clean_title(value: str) -> str:
+    """Drop the fill-in-the-blank underline runs some cover sheets keep around the title."""
+    return " ".join(re.sub(r"[_＿]+", " ", value).split())
 
 
 def cover_lines(blocks: list[dict[str, Any]]) -> list[str]:
@@ -214,10 +236,10 @@ def cover_fields(pdf_path: Path) -> dict[str, Any]:
         if not title:
             match = TITLE_RE.match(text)
             if match:
-                title = match.group(1).strip()
+                title = clean_title(match.group(1))
                 # A long title wraps onto the following block.
                 if not title and index + 1 < len(texts):
-                    title = texts[index + 1].strip()
+                    title = clean_title(texts[index + 1])
         if not institution:
             match = SCHOOL_RE.search(text)
             if match and "参赛队号" not in match.group(1):

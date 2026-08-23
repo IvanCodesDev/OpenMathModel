@@ -20,6 +20,8 @@ SNAPSHOT_ROOT = ROOT / "datasets" / "raw" / "snapshots"
 DEFAULT_OUTPUT = ROOT / "apps" / "web" / "src" / "data" / "knowledge-library.json"
 FULL_PROBLEMS_PATH = ROOT / "datasets" / "interim" / "github_zhanwen_mathmodel" / "full-problems.json"
 ARCHIVE_FULL_PROBLEMS_PATH = ROOT / "datasets" / "interim" / "full_problem_sources" / "problems.json"
+CPMCM_PAPER_FULLTEXT_PATH = ROOT / "datasets" / "interim" / "cpmcm_paper_fulltext" / "papers.json"
+MCM_PAPER_FULLTEXT_PATH = ROOT / "datasets" / "interim" / "mcm_paper_fulltext" / "papers.json"
 
 
 def strip_tags(value: str) -> str:
@@ -262,6 +264,105 @@ def paper_collections(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def apply_cpmcm_fulltext(papers: list[dict[str, Any]]) -> int:
+    """Overlay cover-sheet bibliography parsed by ingest_cpmcm_paper_fulltext.py.
+
+    The repository tree only names files after team numbers, so inventory records
+    carry placeholders until the PDFs are parsed. The fulltext recipe runs per
+    year batch; papers without a parsed record keep their inventory fields.
+    """
+    if not CPMCM_PAPER_FULLTEXT_PATH.exists():
+        return 0
+    parsed = json.loads(CPMCM_PAPER_FULLTEXT_PATH.read_text(encoding="utf-8"))["papers"]
+    enriched = 0
+    for paper in papers:
+        fields = parsed.get(paper.get("id", ""))
+        if not fields or not fields.get("title"):
+            continue
+        paper["title"] = fields["title"]
+        if fields.get("institution"):
+            paper["institution"] = fields["institution"]
+        if fields.get("team_id"):
+            paper["team_id"] = fields["team_id"]
+        if fields.get("models"):
+            paper["models"] = fields["models"]
+        if fields.get("summary"):
+            paper["summary"] = fields["summary"]
+        paper["innovation"] = parsed_innovation(fields.get("keywords", []))
+        enriched += 1
+    return enriched
+
+
+def parsed_innovation(keywords: list[str]) -> str:
+    cleaned = [part for part in keywords if part]
+    return (
+        "题目、摘要与关键词已从论文封面解析。"
+        + (f"关键词：{'、'.join(cleaned[:8])}。" if cleaned else "")
+    )
+
+
+def apply_mcm_fulltext(papers: list[dict[str, Any]], problem_titles: dict[str, str]) -> tuple[int, int]:
+    """Attach the pinned COMAP outstanding-paper snapshot to the paper list.
+
+    Results-page records (2021-2025) get upgraded in place: the readable per-paper
+    PDF replaces the collection landing page and the parsed cover fills title,
+    methods and summary. Years the results snapshot does not cover (2013-2020)
+    are appended as new records from the repository inventory.
+    """
+    if not MCM_PAPER_FULLTEXT_PATH.exists():
+        return 0, 0
+    parsed = json.loads(MCM_PAPER_FULLTEXT_PATH.read_text(encoding="utf-8"))["papers"]
+    remaining = dict(parsed)
+    upgraded = 0
+    for paper in papers:
+        fields = remaining.pop(paper.get("id", ""), None)
+        if not fields:
+            continue
+        if fields.get("title"):
+            paper["title"] = fields["title"]
+        if fields.get("models"):
+            paper["models"] = fields["models"]
+        if fields.get("summary"):
+            paper["summary"] = fields["summary"]
+        paper["full_text_url"] = fields["source_url"]
+        paper["access_scope"] = "linked_content"
+        paper["source_file_bytes"] = fields["source_file_bytes"]
+        paper["source_git_blob_sha"] = fields["git_blob_sha"]
+        paper["innovation"] = parsed_innovation(fields.get("keywords", []))
+        upgraded += 1
+    for paper_id, fields in remaining.items():
+        letter = fields.get("letter", "")
+        family = "ICM" if letter in {"D", "E", "F"} else "MCM"
+        problem_id = f"comap-{fields['year']}-{family.lower()}-{letter.lower()}" if letter else None
+        papers.append({
+            "id": paper_id,
+            "title": fields.get("title") or fields["team_id"],
+            "record_type": "paper",
+            "problem_id": problem_id if problem_id in problem_titles else None,
+            "problem_code": fields["problem_code"],
+            "competition": "COMAP MCM/ICM",
+            "category": "Outstanding Winner",
+            "year": fields["year"],
+            "award": "Outstanding Winner",
+            "distinctions": [],
+            "institution": None,
+            "team_id": fields["team_id"],
+            "models": fields.get("models", []),
+            "innovation": parsed_innovation(fields.get("keywords", [])) if fields.get("title")
+            else "已建立逐篇来源索引，封面解析未识别出题目。",
+            "summary": fields.get("summary")
+            or f"{fields['problem_code']} Outstanding Winner 论文全文。",
+            "source_id": "github_jackksonns_mcm_icm",
+            "source_url": fields["source_url"],
+            "full_text_url": fields["source_url"],
+            "source_status": "community_repository_snapshot",
+            "access_scope": "linked_content",
+            "source_file_bytes": fields["source_file_bytes"],
+            "source_git_blob_sha": fields["git_blob_sha"],
+        })
+    return upgraded, len(remaining)
+
+
 def repository_full_problems() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not FULL_PROBLEMS_PATH.exists():
         raise FileNotFoundError(
@@ -296,6 +397,12 @@ def build() -> dict[str, Any]:
     papers = comap_papers(source_records["comap_mcm_icm"], problem_titles)
     papers += paper_collections(source_records["cmathc_cpmcm"])
     papers += full_problem_data["papers"]
+    enriched_count = apply_cpmcm_fulltext(papers)
+    print(f"CPMCM_FULLTEXT_ENRICHED {enriched_count}/{len(full_problem_data['papers'])}")
+    upgraded_count, appended_count = apply_mcm_fulltext(papers, problem_titles)
+    print(f"MCM_FULLTEXT_UPGRADED {upgraded_count} APPENDED {appended_count}")
+    # 列表页按数组顺序渲染并标注“按年份从新到旧”；多来源拼接后统一排序兑现该承诺。
+    papers.sort(key=lambda item: (-item["year"], item["problem_code"], str(item.get("team_id") or ""), item["id"]))
     latest_time = max(
         [item.get("finished_at", "") for item in manifests if item]
         + [full_problem_data.get("generated_at", ""), archive_problem_data.get("generated_at", "")],
@@ -305,7 +412,7 @@ def build() -> dict[str, Any]:
     version = hashlib.sha256(fingerprint_input).hexdigest()[:12]
     return {
         "schema_version": "1.0.0", "dataset_version": f"wave-a-{version}", "generated_at": latest_time,
-        "stats": {"problem_count": len(problems), "paper_count": len(papers), "source_count": 8},
+        "stats": {"problem_count": len(problems), "paper_count": len(papers), "source_count": 9},
         "problems": problems, "papers": papers,
     }
 

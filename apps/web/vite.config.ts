@@ -14,6 +14,13 @@ const paperCacheRoot = resolve(
 );
 const paperRoutePrefix = "/paper-files/";
 const paperSourceRevision = "cd5be91735ebf11d5ee52eb170e86a6d07131977";
+const mcmPaperCacheRoot = resolve(
+  workspaceRoot,
+  "datasets/raw/sources/github/Jackksonns-MCM-ICM-Outstanding-Papers/papers",
+);
+const mcmPaperSourceRevision = "d29267cb9e993419749e6111981b30a44183fdf8";
+// 各镜像域名的 DNS 解析在部分开发网络下会间歇失效，官方备用域一并列入候选。
+const jsDelivrHosts = ["cdn.jsdelivr.net", "gcore.jsdelivr.net", "testingcf.jsdelivr.net"];
 
 function sendGuestAccount(res: ServerResponse): void {
   const body = JSON.stringify({ code: "UNAUTHENTICATED", message: "请先登录" });
@@ -78,6 +85,13 @@ function parseRange(rangeHeader: string | undefined, size: number): { start: num
 // raw.githubusercontent.com 在部分代理/运营商网络下会超时或被劫持，浏览器直连拿到的
 // 残缺字节流会让 pdf.js 把论文渲染成乱码页。因此中转优先走 jsDelivr 的同提交字节镜像，
 // 下载成功即写入本地缓存，此后该论文的所有请求（含 Range 分段）都由磁盘原样提供。
+function mirrorUrls(repository: string, revision: string, sourcePath: string): string[] {
+  return [
+    ...jsDelivrHosts.map(host => `https://${host}/gh/${repository}@${revision}/${sourcePath}`),
+    `https://raw.githubusercontent.com/${repository}/${revision}/${sourcePath}`,
+  ];
+}
+
 function paperUpstreamUrls(year: string, problemGroup: string, filename: string): string[] {
   const sourceDirectories = [problemGroup];
   if (year === "2021") sourceDirectories.push("获数模之星提名奖（12篇）");
@@ -88,11 +102,16 @@ function paperUpstreamUrls(year: string, problemGroup: string, filename: string)
       sourceDirectory,
       filename,
     ].map(segment => encodeURIComponent(segment)).join("/");
-    return [
-      `https://cdn.jsdelivr.net/gh/zhanwen/MathModel@${paperSourceRevision}/${sourcePath}`,
-      `https://raw.githubusercontent.com/zhanwen/MathModel/${paperSourceRevision}/${sourcePath}`,
-    ];
+    return mirrorUrls("zhanwen/MathModel", paperSourceRevision, sourcePath);
   });
+}
+
+// 美赛论文（Jackksonns 快照）：2016 年起按题组分目录，2013–2015 年直接挂在年份下
+// （路由里用 X 占位题组）。
+function mcmPaperUpstreamUrls(year: string, problemGroup: string, filename: string): string[] {
+  const segments = problemGroup === "X" ? [year, filename] : [year, problemGroup, filename];
+  const sourcePath = segments.map(segment => encodeURIComponent(segment)).join("/");
+  return mirrorUrls("Jackksonns/MCM-ICM-Outstanding-Papers", mcmPaperSourceRevision, sourcePath);
 }
 
 async function fetchPaperBytes(sourceUrl: string): Promise<Buffer | null> {
@@ -121,16 +140,11 @@ async function fetchPaperBytes(sourceUrl: string): Promise<Buffer | null> {
 
 const paperDownloads = new Map<string, Promise<void>>();
 
-function downloadPaperToCache(
-  year: string,
-  problemGroup: string,
-  filename: string,
-  filePath: string,
-): Promise<void> {
+function downloadPaperToCache(sourceUrls: string[], filePath: string): Promise<void> {
   const inFlight = paperDownloads.get(filePath);
   if (inFlight) return inFlight;
   const task = (async () => {
-    for (const sourceUrl of paperUpstreamUrls(year, problemGroup, filename)) {
+    for (const sourceUrl of sourceUrls) {
       const body = await fetchPaperBytes(sourceUrl);
       if (!body) continue;
       await mkdir(dirname(filePath), { recursive: true });
@@ -146,7 +160,7 @@ function downloadPaperToCache(
       }
       return;
     }
-    throw new Error(`论文上游镜像均不可用：${year}/${problemGroup}/${filename}`);
+    throw new Error(`论文上游镜像均不可用：${filePath}`);
   })().finally(() => paperDownloads.delete(filePath));
   paperDownloads.set(filePath, task);
   return task;
@@ -174,11 +188,12 @@ async function serveCachedPaper(
     res.writeHead(400).end();
     return;
   }
-  const [year, problemGroup, filename] = segments;
+  const isMcm = segments[0] === "mcm";
+  const [year, problemGroup, filename] = isMcm ? segments.slice(1) : segments;
   if (
-    segments.length !== 3
+    segments.length !== (isMcm ? 4 : 3)
     || !/^\d{4}$/.test(year ?? "")
-    || !/^[A-F]$/i.test(problemGroup ?? "")
+    || !(isMcm ? /^[A-FX]$/i : /^[A-F]$/i).test(problemGroup ?? "")
     || !filename
     || !/\.pdf$/i.test(filename)
   ) {
@@ -186,8 +201,11 @@ async function serveCachedPaper(
     return;
   }
 
-  const filePath = resolve(paperCacheRoot, year, problemGroup.toUpperCase(), filename);
-  if (!filePath.startsWith(`${paperCacheRoot}${sep}`)) {
+  const cacheRoot = isMcm ? mcmPaperCacheRoot : paperCacheRoot;
+  // 采集脚本对无题组目录的 2013–2015 年美赛论文使用 "_" 作为本地缓存目录。
+  const cacheGroup = isMcm && problemGroup.toUpperCase() === "X" ? "_" : problemGroup.toUpperCase();
+  const filePath = resolve(cacheRoot, year, cacheGroup, filename);
+  if (!filePath.startsWith(`${cacheRoot}${sep}`)) {
     res.writeHead(404).end();
     return;
   }
@@ -195,7 +213,10 @@ async function serveCachedPaper(
   try {
     let info = await stat(filePath).catch(() => null);
     if (!info?.isFile()) {
-      await downloadPaperToCache(year, problemGroup.toUpperCase(), filename, filePath);
+      const upstreamUrls = isMcm
+        ? mcmPaperUpstreamUrls(year, problemGroup.toUpperCase(), filename)
+        : paperUpstreamUrls(year, problemGroup.toUpperCase(), filename);
+      await downloadPaperToCache(upstreamUrls, filePath);
       info = await stat(filePath);
     }
     const range = parseRange(req.headers.range, info.size);
@@ -260,6 +281,8 @@ export default defineConfig({
   plugins: [localDevelopmentResources(), react()],
   server: {
     host: "0.0.0.0",
+    // 固定独立端口，避免与本机其他 Vite 项目在默认 5173 上相互挤占。
+    port: 5183,
     allowedHosts: ["terminal.local"],
     proxy: apiProxy,
   },

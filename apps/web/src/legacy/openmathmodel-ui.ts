@@ -1056,9 +1056,16 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   const localPaperPdfUrl = paper => {
     const source = String(paper?.full_text_url || "").trim();
     if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
+    if (source.startsWith("/")) return source;
     try {
       const url = new URL(source, window.location.origin);
       const decodedPath = decodeURIComponent(url.pathname);
+      // 美赛论文（Jackksonns 快照）：开发中转路由 /paper-files/mcm/<年>/<题组|X>/<控制号>.pdf；
+      // 2013–2015 源路径没有题组目录，用 X 占位。
+      const mcmMatch = /^\/Jackksonns\/MCM-ICM-Outstanding-Papers\/blob\/[0-9a-f]{40}\/(\d{4})\/(?:([A-F])\/)?(\d{4,8}\.pdf)$/i.exec(decodedPath);
+      if (url.hostname.toLowerCase() === "github.com" && mcmMatch) {
+        return `/paper-files/mcm/${mcmMatch[1]}/${(mcmMatch[2] || "X").toUpperCase()}/${encodeURIComponent(mcmMatch[3])}`;
+      }
       const segments = decodedPath.split("/").filter(Boolean);
       const yearIndex = segments.findIndex(segment => /^\d{4}年优秀论文$/.test(segment));
       const year = yearIndex >= 0 ? segments[yearIndex].slice(0, 4) : "";
@@ -1075,23 +1082,26 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   };
   // raw.githubusercontent.com 在部分网络/代理下会超时或被劫持，pdf.js 拿到残缺字节流
   // 会把论文渲染成乱码页；jsDelivr 提供同一提交的字节级镜像，作为直连 raw 前的兜底源。
-  const jsDelivrPaperPdfUrl = paper => {
+  // 各镜像域名的 DNS 解析在部分网络下会间歇失效，官方备用域一并列入候选。
+  const jsDelivrPaperPdfUrls = paper => {
     const source = String(paper?.full_text_url || "").trim();
-    if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
+    if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return [];
     try {
       const url = new URL(source);
-      if (url.hostname.toLowerCase() !== "github.com") return "";
+      if (url.hostname.toLowerCase() !== "github.com") return [];
       const parts = url.pathname.split("/").filter(Boolean);
-      if (parts.length < 6 || parts[2] !== "blob") return "";
+      if (parts.length < 6 || parts[2] !== "blob") return [];
       const [owner, repository, , revision, ...pathParts] = parts;
-      return `https://cdn.jsdelivr.net/gh/${owner}/${repository}@${revision}/${pathParts.join("/")}`;
+      return ["cdn.jsdelivr.net", "gcore.jsdelivr.net", "testingcf.jsdelivr.net"].map(
+        host => `https://${host}/gh/${owner}/${repository}@${revision}/${pathParts.join("/")}`,
+      );
     } catch {
-      return "";
+      return [];
     }
   };
   const paperPdfSources = paper => [...new Set([
     localPaperPdfUrl(paper),
-    jsDelivrPaperPdfUrl(paper),
+    ...jsDelivrPaperPdfUrls(paper),
     remotePaperPdfUrl(paper),
   ].filter(Boolean))];
   const paperPdfUrl = paper => paperPdfSources(paper)[0] || "";
@@ -2623,10 +2633,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           meta: `${problem.competition} · ${problem.year} · ${problem.problem_type}`,
           haystack: `${problem.code} ${problem.title} ${problem.competition} ${(problem.keywords || []).join(" ")}`.toLowerCase(),
         }))
-        : papers.map(paper => ({
-          reference: paperReference(paper),
+        // 与优秀论文页同口径：只提供有完整正文的论文，标题用解析后的主题名。
+        // 美赛结果页的名单元数据（metadata_only、无全文）不进入引用，避免引用一份读不到的论文。
+        : paperEntries().map(({ paper, displayTitle }) => ({
+          reference: paperReference({ ...paper, title: displayTitle }),
           meta: [`${paper.competition} ${paper.year}`, paper.award, paper.institution].filter(Boolean).join(" · "),
-          haystack: `${paper.title} ${paper.problem_code} ${(paper.models || []).join(" ")} ${paper.institution || ""}`.toLowerCase(),
+          haystack: `${displayTitle} ${paper.title} ${paper.problem_code} ${(paper.models || []).join(" ")} ${paper.institution || ""}`.toLowerCase(),
         }));
     }
 
