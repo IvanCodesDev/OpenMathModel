@@ -5,6 +5,7 @@ SDK。工具、技能与执行环境通过端口注入，因此本包位于依�
 """
 
 from .engine import AdvanceOutcome, TaskRunEngine
+from .errors import CATALOG, AgentError, Disposition, ErrorCode, ErrorInfo
 from .models import (
     AgentEvent,
     ArtifactRef,
@@ -46,10 +47,15 @@ from .states import (
 
 __all__ = [
     "AdvanceOutcome",
+    "AgentError",
     "AgentEvent",
     "ArtifactRef",
     "ArtifactStore",
+    "CATALOG",
     "Clock",
+    "Disposition",
+    "ErrorCode",
+    "ErrorInfo",
     "EventSink",
     "EventType",
     "Failure",

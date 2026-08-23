@@ -4,21 +4,34 @@
 接口，以便记录输入输出摘要、耗时、成本与产物。
 """
 
-from .invoker import EventRecorder, RecordingInvoker, summarize
+from .invoker import (
+    MAX_TURN_PARALLELISM,
+    EventRecorder,
+    IdempotencyCache,
+    RecordingInvoker,
+    args_fingerprint,
+    execute_parallel,
+    summarize,
+)
 from .python_runner import PythonSandbox
 from .registry import (
+    TIERS,
     ToolCallContext,
     ToolHandler,
     ToolNotAllowed,
     ToolRegistry,
     ToolSpec,
+    tier_rank,
 )
 from .workspace import TaskWorkspace, WorkspaceArtifactStore, WorkspaceViolation
 
 __all__ = [
     "EventRecorder",
+    "IdempotencyCache",
+    "MAX_TURN_PARALLELISM",
     "PythonSandbox",
     "RecordingInvoker",
+    "TIERS",
     "TaskWorkspace",
     "ToolCallContext",
     "ToolHandler",
@@ -27,5 +40,8 @@ __all__ = [
     "ToolSpec",
     "WorkspaceArtifactStore",
     "WorkspaceViolation",
+    "args_fingerprint",
+    "execute_parallel",
     "summarize",
+    "tier_rank",
 ]

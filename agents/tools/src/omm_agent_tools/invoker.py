@@ -18,9 +18,12 @@ Hard kills are only real for subprocess-backed tools (see python_runner).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
-from typing import Any, Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, MutableMapping, Sequence
 
 from omm_agent_core import AgentEvent, EventType, ToolResult
 
@@ -28,8 +31,20 @@ from .registry import ToolCallContext, ToolNotAllowed, ToolRegistry
 
 _SUMMARY_LIMIT = 512
 
+#: §4.3: at most this many tool calls run concurrently within one turn.
+MAX_TURN_PARALLELISM = 2
+
 #: Signature of the engine-provided recording callback.
 EventRecorder = Callable[[EventType, dict[str, Any]], AgentEvent]
+
+#: Idempotency storage: (step_id, call_index) -> (args_hash, result). The
+#: default is in-memory; a durable mapping can be injected for crash replay.
+IdempotencyCache = MutableMapping[tuple[str, int], tuple[str, ToolResult]]
+
+
+def args_fingerprint(arguments: dict[str, Any]) -> str:
+    canonical = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=repr)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def summarize(value: Any, limit: int = _SUMMARY_LIMIT) -> str:
@@ -42,11 +57,33 @@ def summarize(value: Any, limit: int = _SUMMARY_LIMIT) -> str:
 
 
 class RecordingInvoker:
-    """Implements the core ToolInvoker port around a registry and a recorder."""
+    """Implements the core ToolInvoker port around a registry and a recorder.
 
-    def __init__(self, registry: ToolRegistry, recorder: EventRecorder) -> None:
+    Optional H0 enhancements (§4.3), both off unless configured:
+
+    - ``caller_max_tier``: minimal-grant enforcement; a tool demanding a
+      higher tier fails with an ``[E240]`` result (assembly defect).
+    - ``idempotency_cache``: keyed ``(step_id, call_index, args_hash)``.
+      Replaying the same call slot with identical arguments returns the
+      stored result WITHOUT re-executing the handler (audited with
+      ``idempotent_replay``); the same slot with different arguments is an
+      ``[E250]`` conflict — a non-deterministic replay must not run tools.
+    """
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        recorder: EventRecorder,
+        *,
+        caller_max_tier: str | None = None,
+        idempotency_cache: IdempotencyCache | None = None,
+    ) -> None:
         self._registry = registry
         self._recorder = recorder
+        self._caller_max_tier = caller_max_tier
+        self._cache = idempotency_cache
+        self._call_indices: dict[str, int] = {}
+        self._index_lock = threading.Lock()
 
     def invoke(
         self,
@@ -55,9 +92,49 @@ class RecordingInvoker:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> ToolResult:
+        call_index = self.reserve_call_indices(step_id, 1)
+        return self.invoke_indexed(run_id, step_id, tool_name, arguments, call_index)
+
+    def reserve_call_indices(self, step_id: str, count: int) -> int:
+        """Reserve ``count`` consecutive call indices; returns the first one."""
+        with self._index_lock:
+            first = self._call_indices.get(step_id, 0)
+            self._call_indices[step_id] = first + count
+            return first
+
+    def invoke_indexed(
+        self,
+        run_id: str,
+        step_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        call_index: int,
+    ) -> ToolResult:
         started = time.monotonic()
+        fingerprint = args_fingerprint(arguments)
+
+        if self._cache is not None:
+            cached = self._cache.get((step_id, call_index))
+            if cached is not None:
+                stored_fingerprint, stored_result = cached
+                if stored_fingerprint != fingerprint:
+                    result = ToolResult(
+                        status="failed",
+                        error=(
+                            f"[E250] idempotency conflict: step {step_id!r} call #{call_index} "
+                            f"was recorded with different arguments"
+                        ),
+                    )
+                    self._emit(step_id, tool_name, arguments, result, started)
+                    return result
+                self._emit(
+                    step_id, tool_name, arguments, stored_result, started,
+                    idempotent_replay=True,
+                )
+                return stored_result
+
         try:
-            spec = self._registry.resolve(tool_name)
+            spec = self._registry.resolve(tool_name, caller_max_tier=self._caller_max_tier)
         except ToolNotAllowed as exc:
             result = ToolResult(status="failed", error=str(exc))
             self._emit(step_id, tool_name, arguments, result, started)
@@ -71,6 +148,8 @@ class RecordingInvoker:
 
         ctx = ToolCallContext(run_id=run_id, step_id=step_id, tool_name=tool_name)
         result = self._run_with_timeout(spec, arguments, ctx)
+        if self._cache is not None:
+            self._cache[(step_id, call_index)] = (fingerprint, result)
         self._emit(step_id, tool_name, arguments, result, started)
         return result
 
@@ -107,19 +186,52 @@ class RecordingInvoker:
         arguments: dict[str, Any],
         result: ToolResult,
         started_monotonic: float,
+        *,
+        idempotent_replay: bool = False,
     ) -> None:
         duration_ms = int((time.monotonic() - started_monotonic) * 1000)
-        self._recorder(
-            EventType.TOOL_CALLED,
-            {
-                "step_id": step_id,
-                "tool": tool_name,
-                "status": result.status,
-                "duration_ms": duration_ms,
-                "input_summary": summarize(arguments),
-                "output_summary": summarize(
-                    result.output if result.ok else result.error
-                ),
-                "artifact_ids": [ref.artifact_id for ref in result.artifacts],
-            },
-        )
+        payload: dict[str, Any] = {
+            "step_id": step_id,
+            "tool": tool_name,
+            "status": result.status,
+            "duration_ms": duration_ms,
+            "input_summary": summarize(arguments),
+            "output_summary": summarize(
+                result.output if result.ok else result.error
+            ),
+            "artifact_ids": [ref.artifact_id for ref in result.artifacts],
+        }
+        if idempotent_replay:
+            payload["idempotent_replay"] = True
+        self._recorder(EventType.TOOL_CALLED, payload)
+
+
+def execute_parallel(
+    invoker: RecordingInvoker,
+    run_id: str,
+    step_id: str,
+    calls: Sequence[tuple[str, dict[str, Any]]],
+    *,
+    max_parallel: int = MAX_TURN_PARALLELISM,
+) -> list[ToolResult]:
+    """Run one turn's tool calls concurrently, capped at 2 (§4.3).
+
+    Call indices are assigned by list position BEFORE execution so the
+    idempotency key stays deterministic regardless of thread scheduling.
+    Results come back in input order.
+    """
+    workers = max(1, min(max_parallel, MAX_TURN_PARALLELISM, len(calls) or 1))
+    base_index = invoker.reserve_call_indices(step_id, len(calls))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(
+                invoker.invoke_indexed,
+                run_id,
+                step_id,
+                tool_name,
+                arguments,
+                base_index + offset,
+            )
+            for offset, (tool_name, arguments) in enumerate(calls)
+        ]
+        return [future.result() for future in futures]

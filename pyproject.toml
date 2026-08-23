@@ -13,6 +13,7 @@ package = false
 members = [
   "packages/contracts",
   "agents/core",
+  "agents/harness",
   "agents/skills",
   "agents/tools",
   "agents/evals",
@@ -23,6 +24,7 @@ members = [
 [tool.uv.sources]
 omm-contracts = { workspace = true }
 omm-agent-core = { workspace = true }
+omm-agent-harness = { workspace = true }
 omm-agent-skills = { workspace = true }
 omm-agent-tools = { workspace = true }
 omm-agent-evals = { workspace = true }
@@ -55,6 +57,7 @@ warn_unreachable = true
 files = [
   "packages/contracts/src",
   "agents/core/src",
+  "agents/harness/src",
   "agents/skills/src",
   "agents/tools/src",
   "agents/evals/src",

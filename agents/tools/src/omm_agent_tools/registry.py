@@ -16,6 +16,19 @@ from omm_agent_core import ToolResult
 #: A handler receives (arguments, call context) and returns a ToolResult.
 ToolHandler = Callable[[dict[str, Any], "ToolCallContext"], ToolResult]
 
+#: Permission tiers in ascending privilege (design doc §4.3): a caller bound
+#: to tier T may only invoke tools whose tier ranks ≤ T. Minimal grant per
+#: node/subagent; a subagent's tier never exceeds its parent's.
+TIERS: tuple[str, ...] = ("readonly", "workspace_write", "execute", "spawn")
+
+
+def tier_rank(tier: str) -> int:
+    """Rank a tier for comparison; unknown names are assembly defects."""
+    try:
+        return TIERS.index(tier)
+    except ValueError:
+        raise ValueError(f"unknown tool tier {tier!r}; expected one of {TIERS}") from None
+
 
 @dataclass(frozen=True)
 class ToolCallContext:
@@ -33,6 +46,8 @@ class ToolSpec:
     timeout_s: float = 30.0
     #: Names of required argument keys; validated before the handler runs.
     required_args: tuple[str, ...] = ()
+    #: Permission tier this tool demands from its caller (§4.3).
+    tier: str = "readonly"
 
 
 class ToolNotAllowed(Exception):
@@ -49,17 +64,25 @@ class ToolRegistry:
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self.specs:
             raise ValueError(f"tool {spec.name!r} already registered")
+        tier_rank(spec.tier)  # unknown tier is an assembly defect: fail at registration
         self.specs[spec.name] = spec
 
     def with_allowlist(self, names: Iterable[str]) -> "ToolRegistry":
         return ToolRegistry(specs=dict(self.specs), allowlist=frozenset(names))
 
-    def resolve(self, name: str) -> ToolSpec:
+    def resolve(self, name: str, caller_max_tier: str | None = None) -> ToolSpec:
         if self.allowlist is not None and name not in self.allowlist:
             raise ToolNotAllowed(f"tool {name!r} is not on the allowlist")
         spec = self.specs.get(name)
         if spec is None:
             raise ToolNotAllowed(f"tool {name!r} is not registered")
+        if caller_max_tier is not None and tier_rank(spec.tier) > tier_rank(caller_max_tier):
+            # E240: tier violations are assembly defects (D2.1), reported with
+            # the code in-band because ToolResult carries no error_code field.
+            raise ToolNotAllowed(
+                f"[E240] tool {name!r} requires tier {spec.tier!r}, "
+                f"caller is limited to {caller_max_tier!r}"
+            )
         return spec
 
     @staticmethod
