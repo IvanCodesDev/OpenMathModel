@@ -68,6 +68,47 @@ jobs:
             echo "agent runtime not present on this ref; skipped"
           fi
 
+  api-postgres:
+    name: API tests on PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # 与 infra/docker/compose.dev.yaml 同镜像同版本：CI 验证的就是部署要用的底座
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: openmathmodel
+          POSTGRES_PASSWORD: openmathmodel-dev
+          POSTGRES_DB: openmathmodel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openmathmodel -d openmathmodel"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 与 python job 相同的可编辑安装（backend/api 依赖本仓库的 contracts/core/skills）
+      - name: Install backend/api with workspace deps
+        run: pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
+      # 迁移验证用独立数据库：alembic_version 等痕迹不进测试库，两条验证互不干扰
+      - name: Alembic upgrade head on real PostgreSQL
+        working-directory: backend/api
+        env:
+          OMM_DATABASE_URL: postgresql+psycopg://openmathmodel:openmathmodel-dev@127.0.0.1:5432/omm_migrations
+        run: |
+          python -c "import psycopg; psycopg.connect('postgresql://openmathmodel:openmathmodel-dev@127.0.0.1:5432/postgres', autocommit=True).execute('CREATE DATABASE omm_migrations')"
+          python -m alembic upgrade head
+      # conftest 的 OMM_TEST_DATABASE_URL 覆盖：同一套件对真库实跑（每用例 drop_all 隔离）。
+      # 此前 PG 兼容只靠人工验证记录，这个 job 把它变成每次提交都执行的机器事实。
+      - name: Full API test suite on real PostgreSQL
+        env:
+          OMM_TEST_DATABASE_URL: postgresql+psycopg://openmathmodel:openmathmodel-dev@127.0.0.1:5432/openmathmodel
+        run: python -m pytest backend/api/tests -q
+
   contracts-ts:
     name: Contracts generated TS types
     runs-on: ubuntu-latest
