@@ -46,10 +46,46 @@ BOILERPLATE_RE = re.compile(
     r"control\s*number|problem\s*chosen|summary\s*sheet|contest\s*(date|year)|"
     r"for\s+office\s+use\s+only|^[TF]\s*[1-4]\s*[_.]*$|^_+$|"
     r"mathematical\s+contest\s+in\s+modeling|interdisciplinary\s+contest|"
-    r"^\d{4}\s*(mcm|icm|mcm/icm)|^(mcm|icm|mcm/icm)\b|^page\s+\d+|^team\s*#?\s*\d+|^\d{4,8}$"
+    r"^\d{4}\s*(mcm|icm|mcm/icm)|^(mcm|icm|mcm/icm)\b|^page\s+\d+|team\s*#|page\s+\d+\s+of\s+\d+|^team\s*\d+|^\d{4,8}$|"
+    # 观察到的真实垃圾形态：封面提示语、题组页眉、资源站水印、"Type a summary" 说明行、
+    # 无空格渲染的样板、打印痕迹、封面指引文字与正文引导句。
+    r"attach\s*a\s*copy|type\s*a\s*summary|^[A-F]\s*(mcm|icm|mcm/icm)|(mcm|icm)/(mcm|icm)\s*\d{5,}|"
+    r"www\.|weixin|公众号|小站|整理|"
+    r"for\s*office\s*use\s*only|print\s+this\s+page|close\s+this\s+window|team\s*control|"
+    r"your\s+school|advisor|team\s+members|this\s+page|in\s+this\s+paper|"
+    r"we\s+(build|propose|present|develop|use|study|establish)"
     r")",
     re.I,
 )
+
+#: 标题里常见的下节标题泄漏（"... 1 Introduction"、"... 5.2 Comparison"）、
+#: Control # 后缀、括号内封面提示语与前缀标签。
+TITLE_SECTION_LEAK_RE = re.compile(
+    r"\s+\d+(\.\d+)*\s+(introduction|background|restatement|comparison|assumptions?|notations?|model)s?\b.*$",
+    re.I,
+)
+TITLE_CONTROL_SUFFIX_RE = re.compile(r"\s*control\s*#?\s*\d{4,}.*$", re.I)
+TITLE_PAREN_NOTE_RE = re.compile(r"^\(\s*attach[^)]*\)\s*", re.I)
+TITLE_PREFIX_RE = re.compile(r"^(title|题目)\s*[:：]\s*", re.I)
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def accept_title(value: str) -> str:
+    """High-precision gate: a bad title is worse than no title (fallbacks exist)."""
+    cleaned = TITLE_PAREN_NOTE_RE.sub("", value)
+    cleaned = TITLE_PREFIX_RE.sub("", cleaned)
+    cleaned = TITLE_SECTION_LEAK_RE.sub("", cleaned)
+    cleaned = TITLE_CONTROL_SUFFIX_RE.sub("", cleaned)
+    cleaned = " ".join(cleaned.split())
+    if not 10 <= len(cleaned) <= 110:
+        return ""
+    words = cleaned.split()
+    # 无空格连写（PDF 字距丢失）不作为产品标题。
+    if len(words) > 16 or max(len(word) for word in words) > 22:
+        return ""
+    if BOILERPLATE_RE.search(cleaned) or CJK_RE.search(cleaned) or "@" in cleaned:
+        return ""
+    return cleaned
 
 
 def read_tree() -> list[dict[str, Any]]:
@@ -180,7 +216,10 @@ def cover_fields(pdf_path: Path, path_letter: str) -> dict[str, Any]:
                 # Wrapped titles span consecutive candidate lines before the summary.
                 if title_lines and index and not title_candidate(lines[index - 1]):
                     continue
-                if len(title_lines) < 3:
+                # 句末标点意味着已进入正文段落（摘要泄漏），不再拼接。
+                if title_lines and title_lines[-1].rstrip().endswith((".", "!", "?", "。")):
+                    continue
+                if len(title_lines) < 2:
                     title_lines.append(line)
             continue
         if len(" ".join(summary)) < 900:
@@ -188,7 +227,7 @@ def cover_fields(pdf_path: Path, path_letter: str) -> dict[str, Any]:
         elif keywords:
             break
 
-    title = " ".join(" ".join(title_lines).split())
+    title = accept_title(" ".join(title_lines))
     return {
         "title": title,
         "letter": letter,
