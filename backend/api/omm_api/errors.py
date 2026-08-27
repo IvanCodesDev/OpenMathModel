@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .middleware import get_request_id
@@ -117,6 +118,20 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_envelope(code, str(exc.detail)),
+        )
+
+    @app.exception_handler(OperationalError)
+    async def handle_db_busy(request: Request, exc: OperationalError) -> JSONResponse:
+        """数据库暂时不可用（本地 SQLite 只有一个写位，写锁竞争是常见来源）。
+
+        这类失败重试就能过，落到通用兜底会显示成「服务器内部错误」，用户看不出
+        该重试还是该改配置，所以单独给一个可判别的错误码。
+        """
+        logger.warning("database unavailable request_id=%s: %s", get_request_id(), exc)
+        return JSONResponse(
+            status_code=503,
+            content=_envelope("DB_BUSY", "数据库正忙，请稍后重试"),
+            headers={"Retry-After": "2"},
         )
 
     @app.exception_handler(Exception)

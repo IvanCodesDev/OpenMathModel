@@ -11,7 +11,8 @@ def test_system_info_is_public_and_non_sensitive(second_client):
 
     assert payload["name"] == "OpenMathModel API"
     assert payload["version"] == "0.1.0"
-    assert payload["database"] == "sqlite"
+    # 方言随测试库变化（SQLite 默认；OMM_TEST_DATABASE_URL 指向 PG 时为 postgresql）
+    assert payload["database"] == second_client.app.state.db.engine.dialect.name
     assert payload["runner_enabled"] is False
     # 形如 3.10.11 的版本号与 ISO 时间戳
     assert all(part.isdigit() for part in payload["python"].split("."))

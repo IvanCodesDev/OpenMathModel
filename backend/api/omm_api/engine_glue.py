@@ -7,14 +7,16 @@
 - 审批行的"解决"侧（option/comment/client_token 与 v1 approval.resolved 事件）归
   动作层 actions.py（它持有这些上下文），投影只负责审批行创建与请求/状态事件；
 - 节点装配按运行归属决定：run → project.owner → users.llm_config。配置了
-  自定义 API 的用户，问题分析与建模方案两个阶段走 agents/skills 的真实 LLM
-  节点（llm.EngineLlmPort 出网）；未配置或提示词缺失时整条链回落 sim-0.1
-  模拟节点，其余阶段（数据准备/实验/检验/论文）在真实节点补齐前仍为模拟。
+  自定义 API 的用户，六个建模阶段全部走 agents/skills 的真实 LLM 节点
+  （llm.EngineLlmPort 出网；实验阶段另经 agents/tools 的 python 沙箱执行
+  生成代码，工具调用通过引擎 record_external 留 TOOL_CALLED 事件）；
+  未配置或提示词缺失时整条链回落 sim-0.1 模拟节点。
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
 import re
@@ -41,15 +43,21 @@ from omm_agent_core import (
     replay_events,
 )
 from omm_agent_skills import (
+    DataPreparationNode,
+    ExperimentExecutionNode,
     ModelPlanningNode,
+    PaperWritingNode,
     ProblemAnalysisNode,
     PromptRegistry,
+    ValidationNode,
     load_default_registry,
 )
+from omm_agent_tools import PythonSandbox, RecordingInvoker, TaskWorkspace, ToolRegistry
 from omm_contracts import (
     AgentEventType,
     ApprovalDecisionType,
     ApprovalStatus,
+    ArtifactKind,
     ArtifactStatus,
     StepRunStatus,
     TaskRunStatus,
@@ -81,6 +89,7 @@ REJECT_OPTION_ID = "reject"
 _ARTIFACT_NAMES = {
     "figure": "基线实验结果图（模拟）",
     "report": "建模报告草稿（模拟）",
+    "paper": "建模论文草稿",
 }
 
 FAIL_EXPERIMENT_MARKER = "[fail:experiment]"
@@ -213,18 +222,31 @@ _ATTACHMENT_SUMMARY_LIMIT = 4000
 _ATTACHMENT_EXCERPT_LIMIT = 1200
 
 
-def _attachments_summary(params: dict[str, Any]) -> str:
-    """运行参数里的附件元数据（含前端解析的正文摘要）→ 提示词附件摘要段。
+_REFERENCE_KIND_LABELS = {"problem": "赛题", "paper": "优秀论文", "method": "方法"}
 
-    真实题面常在附件里而不在首句指令里；把 excerpt 交给问题分析节点，
-    分析产出（含 title）才反映实际要解决的问题。
+
+def _attachments_summary(params: dict[str, Any]) -> str:
+    """运行参数里的附件与知识库引用 → 提示词附件摘要段。
+
+    真实题面常在附件或 @ 引用的赛题里而不在首句指令里；把 excerpt 交给
+    问题分析节点，分析产出（含 title 与 viability 判定）才反映实际要解决
+    的问题。附件（attachment_metadata）与知识库引用（reference_metadata，
+    首页「添加上下文」挑选的赛题/论文/方法）共用同一份预算。
     """
-    entries = params.get("attachment_metadata")
-    if not isinstance(entries, list):
-        return ""
     parts: list[str] = []
     used = 0
-    for entry in entries:
+
+    def push(piece: str) -> bool:
+        nonlocal used
+        if used + len(piece) > _ATTACHMENT_SUMMARY_LIMIT:
+            parts.append("（其余材料从略）")
+            return False
+        parts.append(piece)
+        used += len(piece)
+        return True
+
+    entries = params.get("attachment_metadata")
+    for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
@@ -236,11 +258,21 @@ def _attachments_summary(params: dict[str, Any]) -> str:
             if excerpt
             else f"《{name}》（正文尚未提取，仅有文件元数据）"
         )
-        if used + len(piece) > _ATTACHMENT_SUMMARY_LIMIT:
-            parts.append("（其余附件从略）")
-            break
-        parts.append(piece)
-        used += len(piece)
+        if not push(piece):
+            return "\n".join(parts)
+
+    references = params.get("reference_metadata")
+    for entry in references if isinstance(references, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        excerpt = re.sub(r"\s+", " ", str(entry.get("excerpt") or "")).strip()
+        if not title or not excerpt:
+            continue
+        label = _REFERENCE_KIND_LABELS.get(str(entry.get("kind") or ""), "资料")
+        if not push(f"【引用{label}】《{title}》：{excerpt[:_ATTACHMENT_EXCERPT_LIMIT]}"):
+            return "\n".join(parts)
+
     return "\n".join(parts)
 
 
@@ -258,6 +290,56 @@ class _GoalProblemAnalysisNode(ProblemAnalysisNode):
         }
 
 
+class _ParamsDataPreparationNode(DataPreparationNode):
+    """数据准备节点的 API 侧变量适配：附件摘要从运行参数的附件元数据提取。"""
+
+    def build_variables(self, ctx: Any) -> dict[str, Any]:
+        variables = super().build_variables(ctx)
+        if variables["attachments_summary"] in ("", "无"):
+            summary = _attachments_summary(dict(ctx.inputs.get("params") or {}))
+            variables["attachments_summary"] = summary or "无"
+        return variables
+
+
+#: 实验代码允许使用的第三方库候选：沙箱与 API 同一解释器（sys.executable），
+#: 在 API 进程探测一次即等于沙箱事实；结果注入实验提示词的 import 白名单，
+#: 代码质量随环境升级（有 numpy/pandas 就不必被钉死在纯标准库）。
+_SANDBOX_PACKAGE_CANDIDATES = (
+    "numpy",
+    "pandas",
+    "scipy",
+    "sklearn",
+    "statsmodels",
+    "matplotlib",
+    "networkx",
+    "sympy",
+)
+
+
+@lru_cache(maxsize=1)
+def _sandbox_packages() -> str:
+    available = [
+        name
+        for name in _SANDBOX_PACKAGE_CANDIDATES
+        if importlib.util.find_spec(name) is not None
+    ]
+    return "、".join(available) if available else "无（仅 Python 标准库）"
+
+
+#: 六个阶段的模板齐套才启用真实链路：缺一个就整链回落模拟，
+#: 避免「前两个阶段真实、后四个阶段无声退化」的混合链误导用户。
+_REQUIRED_PROMPTS = frozenset(
+    {
+        "problem_analysis.default",
+        "data_preparation.default",
+        "model_planning.default",
+        "experiment_code.default",
+        "validating.default",
+        "paper_writing.default",
+    }
+)
+
+
 @lru_cache(maxsize=1)
 def _prompt_registry() -> Optional[PromptRegistry]:
     """agents/prompts 的模板注册表；目录缺失（异常部署）时返回 None 并回落模拟。"""
@@ -266,8 +348,7 @@ def _prompt_registry() -> Optional[PromptRegistry]:
     except Exception:  # noqa: BLE001 - 提示词损坏不允许拖垮控制面
         logger.exception("加载提示词模板失败，任务将回落模拟节点")
         return None
-    required = {"problem_analysis.default", "model_planning.default"}
-    if not required.issubset(set(registry.ids())):
+    if not _REQUIRED_PROMPTS.issubset(set(registry.ids())):
         logger.warning("提示词模板不完整（%s），任务将回落模拟节点", registry.ids())
         return None
     return registry
@@ -322,7 +403,13 @@ def _llm_wiring(session: Session, run: TaskRunRow) -> tuple[Optional[EngineLlmPo
     )
     overrides = {
         TaskState.PROBLEM_ANALYSIS: _GoalProblemAnalysisNode(registry),
+        TaskState.DATA_PREPARATION: _ParamsDataPreparationNode(registry),
         TaskState.MODEL_PLANNING: ModelPlanningNode(registry),
+        TaskState.EXPERIMENTING: ExperimentExecutionNode(
+            registry, available_packages=_sandbox_packages()
+        ),
+        TaskState.VALIDATING: ValidationNode(registry),
+        TaskState.PAPER_WRITING: PaperWritingNode(registry),
     }
     return port, overrides
 
@@ -477,14 +564,17 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         if step is not None:
             step.status = StepRunStatus.SUCCEEDED.value
             step.ended_at = at
+            outputs = dict(payload.get("outputs") or {})
             append_event(
                 session,
                 run.id,
                 AgentEventType.step_succeeded.value,
-                {"node": step.node, "attempt": step.attempt},
+                # outputs 随事件下发：工作台执行轨迹的「阶段产出」可展开行
+                # 的数据源（v1 契约 payload 为自由对象，消费方容忍未知字段）。
+                {"node": step.node, "attempt": step.attempt, "outputs": outputs},
             )
             if step.node == TaskState.PROBLEM_ANALYSIS.value:
-                _maybe_rename_project(session, run, dict(payload.get("outputs") or {}))
+                _maybe_rename_project(session, run, outputs)
         return
 
     if kind is EventType.STEP_FAILED:
@@ -504,13 +594,20 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
 
     if kind is EventType.ARTIFACT_PRODUCED:
         ref = dict(payload["artifact"])
-        name = _ARTIFACT_NAMES.get(str(ref.get("kind")), str(ref.get("kind")))
+        # kind 映射优先（模拟链路的中文名不变）；未登记的 kind 取 URI 尾部的
+        # 真实文件名（实验代码产出的 table/figure/code 等按文件名展示）。
+        uri_tail = str(ref.get("uri") or "").rstrip("/").rsplit("/", 1)[-1]
+        name = _ARTIFACT_NAMES.get(str(ref.get("kind"))) or uri_tail or str(ref.get("kind"))
+        # v1 契约把 kind 约束为枚举；节点/工具产生的词不在表内时归入 other，
+        # 一个新产物类型绝不允许把序列化层打成 500。
+        valid_kinds = {member.value for member in ArtifactKind}
+        artifact_kind = str(ref["kind"]) if str(ref["kind"]) in valid_kinds else "other"
         session.add(
             ArtifactRow(
                 id=str(ref["artifact_id"]),
                 project_id=run.project_id,
                 run_id=run.id,
-                kind=str(ref["kind"]),
+                kind=artifact_kind,
                 name=name,
                 uri=str(ref["uri"]),
                 sha256=str(ref["sha256"]),
@@ -544,7 +641,10 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 {"id": "approve", "label": "采用当前方案", "description": "确认方案并进入实验阶段"},
                 {"id": "reject", "label": "退回重做方案", "description": "重新执行建模方案阶段并再次确认"},
             ],
-            evidence={"note": "模拟工作流生成的方案确认请求（sim-0.1）"},
+            evidence={
+                "note": str(payload.get("reason") or "建模方案确认请求"),
+                "requested_by_step": str(payload.get("requested_by_step") or ""),
+            },
             status=ApprovalStatus.PENDING.value,
             requested_at=at,
         )
@@ -632,11 +732,23 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
 
 
 class _ProjectingSink:
-    """引擎事件汇：先落 run_domain_events（执行真相），再做 v1 投影。同一事务提交。"""
+    """引擎事件汇：先落 run_domain_events（执行真相），再做 v1 投影。
 
-    def __init__(self, session: Session, run: TaskRunRow) -> None:
+    领域事件与它的 v1 投影始终在同一个事务里，两者不会脱节。``checkpoint``
+    决定这个事务有多大：
+
+    - 关闭（HTTP 动作路径）：整个请求一个事务，动作要么整体生效要么整体回滚；
+    - 打开（推进器 tick）：每条事件单独提交。真实节点是分钟级的（LLM 调用、
+      沙箱执行），把整个 tick 包成一个事务会让 SQLite 的单写锁被占满节点执行
+      全程，并发请求等满 busy_timeout 后以 "database is locked" 失败（页面
+      表现为对话 500）。逐条提交同时满足引擎的持久化契约——事件在应用到快照
+      前就已落盘，进程中途死亡由重放与 heal 修复，而不是靠回滚整个 tick。
+    """
+
+    def __init__(self, session: Session, run: TaskRunRow, checkpoint: bool = False) -> None:
         self._session = session
         self._run = run
+        self._checkpoint = checkpoint
 
     def emit(self, event: CoreEvent) -> None:
         self._session.add(
@@ -649,6 +761,8 @@ class _ProjectingSink:
             )
         )
         _project(self._session, self._run, event)
+        if self._checkpoint:
+            self._session.commit()
 
 
 # ── 适配器：runner / actions / router 的统一入口 ──────────────────────────
@@ -672,34 +786,77 @@ def _load_core_events(session: Session, run_id: str) -> list[CoreEvent]:
     ]
 
 
-def _build_engine(session: Session, run: TaskRunRow) -> TaskRunEngine:
+def _build_engine(
+    session: Session, run: TaskRunRow, checkpoint: bool = False
+) -> tuple[TaskRunEngine, NodeServices]:
     llm_port, node_overrides = _llm_wiring(session, run)
-    return TaskRunEngine(
-        sink=_ProjectingSink(session, run),
+    services = NodeServices(
+        clock=_ApiClock(),
+        ids=_ApiIds(),
+        artifacts=ApiArtifactStore(get_blobstore()),
+        llm=llm_port,
+    )
+    engine = TaskRunEngine(
+        sink=_ProjectingSink(session, run, checkpoint=checkpoint),
         clock=_ApiClock(),
         ids=_ApiIds(),
         nodes={**SIM_NODES, **node_overrides},
-        services=NodeServices(
-            clock=_ApiClock(),
-            ids=_ApiIds(),
-            artifacts=ApiArtifactStore(get_blobstore()),
-            llm=llm_port,
-        ),
+        services=services,
+    )
+    return engine, services
+
+
+def _build_tool_invoker(
+    engine: TaskRunEngine, snapshot: TaskRunSnapshot, run: TaskRunRow
+) -> RecordingInvoker:
+    """实验节点的工具端口：python 沙箱 + 允许列表 + execute 最小授权。
+
+    产物存储注入 ApiArtifactStore：实验代码创建的文件直接进内容寻址存储，
+    与其他产物同一条下载链路；工作区目录只是执行暂存。
+    工具事件走引擎 record_external（序列分配必须留在引擎单路径上），
+    随 _ProjectingSink 投影成 v1 run.log，工作台执行轨迹可见每次调用。
+    """
+    settings = get_settings()
+    workspace = TaskWorkspace(settings.workspaces_dir, run.id)
+    sandbox = PythonSandbox(
+        workspace,
+        timeout_s=settings.experiment_timeout_seconds,
+        store=ApiArtifactStore(get_blobstore()),
+    )
+    registry = ToolRegistry()
+    registry.register(sandbox.spec())
+
+    def record(event_type: EventType, payload: dict[str, Any]) -> CoreEvent:
+        return engine.record_external(snapshot, event_type, payload)
+
+    return RecordingInvoker(
+        registry.with_allowlist({PythonSandbox.TOOL_NAME}),
+        record,
+        caller_max_tier="execute",
     )
 
 
 def open_engine(
-    session: Session, run: TaskRunRow
+    session: Session, run: TaskRunRow, checkpoint: bool = False
 ) -> tuple[TaskRunEngine, TaskRunSnapshot]:
-    engine = _build_engine(session, run)
+    engine, services = _build_engine(session, run, checkpoint=checkpoint)
     events = _load_core_events(session, run.id)
     snapshot = replay_events(run.id, run.project_id, events)
+    if services.llm is not None:
+        # 工具事件要挂在当前快照的事件序列上，因此在快照重放之后绑定。
+        services.tools = _build_tool_invoker(engine, snapshot, run)
     return engine, snapshot
 
 
 def create_run_events(session: Session, run: TaskRunRow, goal: str, auto_start: bool) -> None:
-    """为新建的 v1 运行行播种领域日志（RUN_CREATED → v1 run.created 投影）。"""
-    engine = _build_engine(session, run)
+    """为新建的 v1 运行行播种领域日志（RUN_CREATED → v1 run.created 投影）。
+
+    先 flush：run 行此刻可能仍在 pending，而事件表与 task_runs 之间只有外键、
+    没有 ORM relationship，unit-of-work 不保证跨 mapper 的插入顺序——
+    PostgreSQL 会以外键违规拒绝先插入的事件行（SQLite 默认不查外键，掩盖此序）。
+    """
+    session.flush()
+    engine, _ = _build_engine(session, run)
     engine.create_run(
         project_id=run.project_id,
         inputs={"goal": goal, "params": run.params or {}, "auto_start": auto_start},
@@ -708,7 +865,10 @@ def create_run_events(session: Session, run: TaskRunRow, goal: str, auto_start: 
 
 
 def advance_run(session: Session, run: TaskRunRow) -> None:
-    """一次 tick：终态/等待态直接返回，否则引擎推进一步（含取消落定）。"""
+    """一次 tick：终态/等待态直接返回，否则引擎推进一步（含取消落定）。
+
+    唯一开 checkpoint 的入口：节点执行是这里最慢的一段，写锁不能跨过它。
+    """
     idle = {
         TaskRunStatus.PAUSED.value,
         TaskRunStatus.WAITING_APPROVAL.value,
@@ -718,7 +878,7 @@ def advance_run(session: Session, run: TaskRunRow) -> None:
     }
     if run.status in idle:
         return
-    engine, snapshot = open_engine(session, run)
+    engine, snapshot = open_engine(session, run, checkpoint=True)
     engine.advance(snapshot)
 
 
@@ -744,12 +904,15 @@ def retry_run(session: Session, run: TaskRunRow) -> None:
 
 
 def resolve_approval(session: Session, run: TaskRunRow, option_id: str) -> None:
-    """approve 动作的引擎侧：批准=继续下一阶段；拒绝=重做 MODEL_PLANNING 并再次请求确认。"""
+    """approve 动作的引擎侧：批准=继续下一阶段；拒绝=重做 MODEL_PLANNING 并再次请求确认。
+
+    两个分支都只落「审批已解决」的状态（投影把 run 置回 RUNNING），实际推进
+    交给 RunnerThread 的下一个 tick：真实节点是分钟级长任务（LLM 调用 +
+    实验代码执行），不允许在 HTTP 动作请求里同步执行。
+    """
     engine, snapshot = open_engine(session, run)
     if option_id == REJECT_OPTION_ID:
         engine.resolve_review(snapshot, approved=False, reason="方案退回重做")
-        engine.retry(snapshot)
-        engine.advance(snapshot)  # 重跑 MODEL_PLANNING（attempt+1）并再次进入审批
+        engine.retry(snapshot)  # RUN_RETRIED 投影置回 RUNNING；下个 tick 重跑 MODEL_PLANNING
         return
-    engine.resolve_review(snapshot, approved=True, reason=option_id)
-    engine.advance(snapshot)  # 启动下一阶段（EXPERIMENTING）
+    engine.resolve_review(snapshot, approved=True, reason=option_id)  # 下个 tick 进入 EXPERIMENTING

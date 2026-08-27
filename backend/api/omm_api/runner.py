@@ -31,7 +31,13 @@ class WorkflowAdvancer:
         self._db = db
 
     def advance(self, run_id: str) -> Optional[str]:
-        """推进一步并返回推进后的状态；无事可做返回当前状态。"""
+        """推进一步并返回推进后的状态；无事可做返回当前状态。
+
+        事务边界是每条领域事件，不是整个 tick（见 engine_glue._ProjectingSink
+        的 checkpoint）：节点执行期间不持有写锁，否则分钟级的 LLM 调用会把并发
+        请求堵到 busy_timeout。因此 ``lock_run`` 的行锁只覆盖到第一条事件落盘，
+        run 级互斥由「进程内只有一个推进线程」保证；跨进程互斥归 worker 的租约。
+        """
         session = self._db.session_factory()
         try:
             run = lock_run(session, run_id)

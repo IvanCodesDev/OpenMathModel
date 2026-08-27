@@ -53,6 +53,7 @@ def app(tmp_path: Path):
         email_dev_mode=True,
         artifacts_dir=tmp_path / "artifacts",
         avatars_dir=tmp_path / "avatars",
+        workspaces_dir=tmp_path / "workspaces",
     )
     application = create_app(settings)
     yield application

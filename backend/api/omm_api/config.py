@@ -38,6 +38,10 @@ class Settings(BaseSettings):
 
     # Artifact 二进制内容存储根（本地内容寻址；MinIO/S3 待底座就绪后经同一协议接入）
     artifacts_dir: Path = SERVICE_ROOT / "data" / "artifacts"
+    # 实验代码的隔离工作区根（每个 run 一个子目录）与单次执行时限。
+    # 工作区是执行暂存；产物文件通过 ArtifactStore 端口进内容寻址存储。
+    workspaces_dir: Path = SERVICE_ROOT / "data" / "workspaces"
+    experiment_timeout_seconds: float = 120.0
     # 上传大小上限（字节）；对象存储直传落地前的临时护栏
     artifact_max_bytes: int = 50 * 1024 * 1024
     # 正文抽取上限（字节）：比上传上限更严，超过的附件只保留原文件不抽正文，

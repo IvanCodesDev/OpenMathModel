@@ -23,8 +23,10 @@ dependencies = [
   "httpx>=0.27",
   "omm-contracts",
   "omm-agent-core",
-  # 问题分析 / 建模方案两个阶段的真实 LLM 节点与提示词注册表
+  # 六个建模阶段的真实 LLM 节点与提示词注册表
   "omm-agent-skills",
+  # 实验阶段的 python 沙箱、工具注册表与调用记录器
+  "omm-agent-tools",
 ]
 
 [project.optional-dependencies]

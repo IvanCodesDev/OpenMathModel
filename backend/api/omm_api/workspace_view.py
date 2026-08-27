@@ -24,6 +24,7 @@ from .orm import (
     TaskRunRow,
 )
 from .serialize import iso_z
+from .stage_outputs import StageState, replay_stage_outputs
 from .workflow import STAGE_LABELS
 
 PAGE_SPECS: tuple[dict[str, Any], ...] = (
@@ -100,6 +101,64 @@ STAGE_SUMMARIES = {
 
 def _page_for_node(node: str) -> dict[str, Any]:
     return PAGE_BY_NODE.get(node, PAGE_SPECS[0])
+
+
+#: plan_text 的展示上限（契约 maxLength 300 的保守余量）
+_PLAN_TEXT_LIMIT = 240
+
+
+def _clip_plan(text: str) -> str:
+    return text if len(text) <= _PLAN_TEXT_LIMIT else text[: _PLAN_TEXT_LIMIT - 1] + "…"
+
+
+def _chosen_plan(outputs: dict[str, Any]) -> dict[str, Any] | None:
+    """与 agents/skills 的 chosen_plan 同语义：推荐方案优先，其次首个。"""
+    plans = [plan for plan in outputs.get("plans") or [] if isinstance(plan, dict)]
+    recommended = outputs.get("recommended_plan_id")
+    for plan in plans:
+        if plan.get("id") == recommended:
+            return plan
+    return plans[0] if plans else None
+
+
+def _plan_texts(stages: dict[str, StageState]) -> dict[str, str]:
+    """页面 key → 本任务专属的计划短句（执行计划面板的渐进细化数据源）。
+
+    初稿来自问题分析的 plan_outline（按 stage 一条本题化短句）；建模方案产出后，
+    「实验与验证」条目细化为选中方案的名称与步骤。状态不在这里派生——面板的
+    勾选只信 pages.status（引擎执行事实），计划文本只负责「说人话」。
+    没有 plan_outline（模拟链/旧运行/模型未给）时返回空表，展示层回退固定 label。
+    """
+    analysis = stages.get("PROBLEM_ANALYSIS")
+    if analysis is None:
+        return {}
+    outline: dict[str, str] = {}
+    for item in analysis.outputs.get("plan_outline") or []:
+        if not isinstance(item, dict):
+            continue
+        stage = str(item.get("stage") or "")
+        text = str(item.get("text") or "").strip()
+        if stage and text:
+            outline[stage] = text
+    if not outline:
+        return {}
+
+    texts: dict[str, str] = {}
+    for spec in PAGE_SPECS:
+        parts = [outline[node] for node in spec["nodes"] if node in outline]
+        if parts:
+            texts[spec["key"]] = _clip_plan("；".join(parts))
+
+    planning = stages.get("MODEL_PLANNING")
+    if planning is not None:
+        chosen = _chosen_plan(planning.outputs)
+        if chosen is not None:
+            name = str(chosen.get("name") or chosen.get("id") or "").strip()
+            steps = [str(step).strip() for step in chosen.get("steps") or [] if str(step).strip()]
+            lead = f"按方案「{name}」实施" if name else "按选定方案实施"
+            detail = "：" + "；".join(steps[:3]) if steps else ""
+            texts["experiments"] = _clip_plan(lead + detail)
+    return texts
 
 
 def _latest_steps(rows: Iterable[StepRunRow]) -> dict[str, StepRunRow]:
@@ -331,6 +390,8 @@ def build_modeling_workspace_view(
     if approval is not None:
         projection_times.append(approval.requested_at)
     projection_times.extend(row.created_at for row in artifact_rows)
+    stage_states, _ = replay_stage_outputs(session, run.id)
+    plan_texts = _plan_texts(stage_states)
     pages = []
     for spec in PAGE_SPECS:
         nodes = tuple(spec["nodes"])
@@ -339,6 +400,7 @@ def build_modeling_workspace_view(
                 **spec,
                 "nodes": list(nodes),
                 "status": _page_status(run, nodes, latest_steps),
+                "plan_text": plan_texts.get(spec["key"]),
                 "artifact_ids": list(artifact_nodes)
                 if spec["key"] == "complete"
                 else [

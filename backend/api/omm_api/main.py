@@ -25,8 +25,10 @@ from .routers import (
     auth,
     chat,
     events,
+    intake,
     paper_exports,
     projects,
+    stage_outputs,
     task_runs,
     usage,
     workspace,
@@ -122,8 +124,10 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     # 统一挂载在 /api 下：前端经 Vite 代理 /api → 8000 同源转发。
     app.include_router(projects.router, prefix="/api")
+    app.include_router(intake.router, prefix="/api")
     app.include_router(task_runs.router, prefix="/api")
     app.include_router(workspace.router, prefix="/api")
+    app.include_router(stage_outputs.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
     app.include_router(paper_exports.router, prefix="/api")

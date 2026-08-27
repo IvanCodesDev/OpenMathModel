@@ -36,8 +36,12 @@ def test_full_run_reaches_approval_then_completes(client, make_run, tick, valida
     approved = _action(client, run_id, "approve", option_id="approve", comment="采用当前方案")
     assert approved.status_code == 200
     assert approved.json()["status"] == "RUNNING"
-    assert approved.json()["current_node"] == "EXPERIMENTING"  # 实验阶段已同拍完成
+    # 动作只解决审批并把任务放回 RUNNING：真实节点是分钟级长任务，
+    # 不在 HTTP 动作请求里同步执行，实验阶段由推进器下一拍完成
+    assert approved.json()["current_node"] == "MODEL_PLANNING"
 
+    assert tick(run_id) == "RUNNING"
+    assert _node(client, run_id) == "EXPERIMENTING"
     assert tick(run_id) == "RUNNING"
     assert _node(client, run_id) == "VALIDATING"
     assert tick(run_id) == "RUNNING"
@@ -170,8 +174,9 @@ def test_injected_failure_then_retry_completes(client, make_run, tick):
     tick(run_id, times=3)  # 到 WAITING_APPROVAL
     approved = _action(client, run_id, "approve")  # 默认第一个选项 = approve
     assert approved.status_code == 200
-    # 审批后同拍执行 EXPERIMENTING：失败注入在第 1 次尝试生效
-    assert approved.json()["status"] == "FAILED"
+    assert approved.json()["status"] == "RUNNING"  # 动作只解决审批，不同步执行实验
+    # 下一拍执行 EXPERIMENTING：失败注入在第 1 次尝试生效
+    assert tick(run_id) == "FAILED"
 
     failed = client.get(f"/api/v1/task-runs/{run_id}").json()
     assert failed["failure"]["failure_class"] == "CODE_DEFECT"

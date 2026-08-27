@@ -10,6 +10,11 @@ from omm_contracts import (
     AgentEvent,
     ApprovalRequest,
     Artifact,
+    DatasetProfile,
+    DeliveryManifest,
+    DocumentDraft,
+    ExperimentSummary,
+    PlanProposal,
     Project,
     StepRun,
     TaskRun,
@@ -49,6 +54,38 @@ class AgentEventList(BaseModel):
 class ArtifactList(BaseModel):
     items: list[Artifact]
     total: int
+
+
+class StageOutputs(BaseModel):
+    """五类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。
+
+    每个字段是对应阶段（DATA_PREPARATION/MODEL_PLANNING/EXPERIMENTING+VALIDATING/
+    PAPER_WRITING）真实节点的最新成功输出投影；阶段尚未成功完成时对应字段为
+    null（不是 404——运行本身存在，只是该阶段的正文还没有）。delivery_manifest
+    在运行尚无任何可交付内容（无产物且五个阶段均未产出）时也为 null。
+    """
+
+    run_id: str
+    dataset_profile: Optional[DatasetProfile] = None
+    plan_proposal: Optional[PlanProposal] = None
+    experiment_summary: Optional[ExperimentSummary] = None
+    document_draft: Optional[DocumentDraft] = None
+    delivery_manifest: Optional[DeliveryManifest] = None
+
+
+class TaskIntakeInput(BaseModel):
+    """发送前接待判定的输入：首页/确认页的任务描述与是否带附件。"""
+
+    goal: str = Field(min_length=1, max_length=4000)
+    has_attachments: bool = False
+
+
+class TaskIntakeResult(BaseModel):
+    """接待判定结果：modeling_task 才继续创建任务，其余原地展示 reply。"""
+
+    intent: Literal["modeling_task", "needs_info", "chat"]
+    reply: str = ""
+    source: Literal["heuristic", "judge", "fallback"]
 
 
 class ArtifactText(BaseModel):

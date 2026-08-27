@@ -68,15 +68,16 @@ def test_reject_reruns_planning_and_asks_again(client):
     run_id = run["id"]
 
     first = approve_when_asked(client, run_id, option_id="reject")
-    # 拒绝后同拍重做 MODEL_PLANNING（attempt 2）并再次请求确认
-    assert first["status"] == "WAITING_APPROVAL"
+    # 拒绝动作只落「退回重做」并放回 RUNNING；重跑 MODEL_PLANNING（attempt 2）
+    # 与再次请求确认由推进器完成（长任务不在 HTTP 动作请求里同步执行）
+    assert first["status"] == "RUNNING"
     assert first["current_node"] == "MODEL_PLANNING"
+
+    approval = wait_until(client, run_id, pending_approval(client, run_id))
 
     steps = client.get(f"{API}/task-runs/{run_id}/steps").json()["items"]
     planning_attempts = [s["attempt"] for s in steps if s["node"] == "MODEL_PLANNING"]
     assert max(planning_attempts, default=0) == 2
-
-    approval = wait_until(client, run_id, pending_approval(client, run_id))
     response = client.post(
         f"{API}/task-runs/{run_id}/actions",
         json={"action": "approve", "approval_id": approval["id"], "option_id": "approve"},

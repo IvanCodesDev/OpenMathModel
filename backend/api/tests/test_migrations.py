@@ -1,4 +1,4 @@
-"""Alembic 迁移与 ORM metadata 的一致性检查（SQLite 上执行；PostgreSQL 路径待底座就绪后补验）。"""
+"""Alembic 迁移与 ORM metadata 的一致性检查（SQLite 上执行；PostgreSQL 路径由 CI 的 api-postgres job 对真库实跑）。"""
 
 from __future__ import annotations
 
