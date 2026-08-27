@@ -272,6 +272,23 @@ async function unarchiveItem(item: RecentTaskItem): Promise<void> {
   }
 }
 
+const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
+const ACTIVE_PROJECT_KEY = "openmathmodel.activeProjectId";
+
+/** 用户当前停留的页面是否正属于该任务：URL 身份命中，或工作台页面经
+ *  sessionStorage 恢复的身份命中（§5.1 允许 URL 不带参数）。 */
+function viewingTask(item: RecentTaskItem): boolean {
+  const params = new URL(window.location.href).searchParams;
+  if (params.get("run_id") === item.runId || params.get("project_id") === item.projectId) return true;
+  if (params.get("demo") === "1" || params.has("run_id")) return false;
+  if (!document.querySelector("[data-modeling-shell]")) return false;
+  try {
+    return sessionStorage.getItem(ACTIVE_RUN_KEY) === item.runId;
+  } catch {
+    return false;
+  }
+}
+
 function openDeleteDialog(item: RecentTaskItem): void {
   const backdrop = openDialog(
     t("删除任务"),
@@ -282,10 +299,27 @@ function openDeleteDialog(item: RecentTaskItem): void {
   );
   backdrop.querySelector<HTMLButtonElement>("[data-dialog-submit]")?.addEventListener("click", function () {
     void runDialogAction(backdrop, this, async () => {
+      // 是否正在浏览被删任务要在清身份之前判定（判定会读 sessionStorage）。
+      const viewing = viewingTask(item);
       await modelingWorkspaceApi.deleteProject(item.projectId);
       forgetLastTask(item.runId);
       // 服务端已级联删除，本机对话记录一并清掉，不留孤儿数据。
       clearConversationLog(item.runId);
+      // 活动身份指向被删任务时一并清除：其余流程页不再带着死链身份自动恢复。
+      try {
+        if (sessionStorage.getItem(ACTIVE_RUN_KEY) === item.runId) {
+          sessionStorage.removeItem(ACTIVE_RUN_KEY);
+          sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
+        }
+      } catch {
+        // 会话存储不可用时也没有身份可清
+      }
+      if (viewing) {
+        // 正在看的就是被删任务：原地停留只会继续展示已不存在的内容，直接回
+        // 初始问答页。用 replace 不留历史死链，回退不会又跳回已删除的任务页。
+        window.location.replace("/");
+        return;
+      }
       showToast(t("任务已删除"));
       void hydrateRecentTasks();
     });
