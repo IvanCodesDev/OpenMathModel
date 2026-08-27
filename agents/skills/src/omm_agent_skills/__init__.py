@@ -6,10 +6,18 @@
 
 from .llm import LlmCall, ScriptedLlmPort, StubLlmPort, stub_response
 from .nodes import (
+    DEFAULT_AVAILABLE_PACKAGES,
+    PYTHON_TOOL_NAME,
+    DataPreparationNode,
+    ExperimentExecutionNode,
     LlmSkillNode,
     ModelPlanningNode,
+    PaperWritingNode,
     ProblemAnalysisNode,
+    ValidationNode,
+    chosen_plan,
     extract_json,
+    render_paper_markdown,
 )
 from .prompt_registry import (
     DEFAULT_PROMPTS_DIR,
@@ -23,10 +31,15 @@ from .prompt_registry import (
 from .schema import validate
 
 __all__ = [
+    "DEFAULT_AVAILABLE_PACKAGES",
     "DEFAULT_PROMPTS_DIR",
+    "PYTHON_TOOL_NAME",
+    "DataPreparationNode",
+    "ExperimentExecutionNode",
     "LlmCall",
     "LlmSkillNode",
     "ModelPlanningNode",
+    "PaperWritingNode",
     "ProblemAnalysisNode",
     "PromptFormatError",
     "PromptRegistry",
@@ -34,9 +47,12 @@ __all__ = [
     "PromptTemplate",
     "ScriptedLlmPort",
     "StubLlmPort",
+    "ValidationNode",
+    "chosen_plan",
     "extract_json",
     "load_default_registry",
     "parse_prompt_text",
+    "render_paper_markdown",
     "stub_response",
     "validate",
 ]

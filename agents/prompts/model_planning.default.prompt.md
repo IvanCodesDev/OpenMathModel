@@ -2,9 +2,9 @@
 id: model_planning.default
 stage: MODEL_PLANNING
 variant: default
-version: 1
+version: 2
 input_schema: {"type": "object", "required": ["problem_analysis"], "properties": {"problem_analysis": {"type": "string"}, "data_profile": {"type": "string"}}}
-output_schema: {"type": "object", "required": ["plans", "recommended_plan_id"], "properties": {"plans": {"type": "array", "items": {"type": "object", "required": ["id", "name", "approach", "steps", "risks"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "approach": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}, "risks": {"type": "array", "items": {"type": "string"}}}}}, "recommended_plan_id": {"type": "string"}, "rationale": {"type": "string"}}}
+output_schema: {"type": "object", "required": ["plans", "recommended_plan_id"], "properties": {"plans": {"type": "array", "items": {"type": "object", "required": ["id", "name", "approach", "steps", "risks"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "approach": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}, "risks": {"type": "array", "items": {"type": "string"}}}}}, "recommended_plan_id": {"type": "string"}, "rationale": {"type": "string"}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的资深教练。基于以下问题分析结果与数据画像，给出两套可执行的建模方案供用户确认。
 
@@ -26,3 +26,4 @@ output_schema: {"type": "object", "required": ["plans", "recommended_plan_id"], 
   - `risks`（该方案的主要风险与失效条件）。
 - `recommended_plan_id`：推荐方案的 id。
 - `rationale`：推荐理由，说明与数据规模、约束和评审标准的匹配度。
+- `progress_note`：两三句面向用户的进度汇报（两套方案的取舍点、为什么推荐这套、确认后会先做什么实验），口语化，不要罗列字段清单；它会直接显示在任务页的执行过程里。

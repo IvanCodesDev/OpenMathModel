@@ -20,9 +20,11 @@ import mimetypes
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
-from omm_agent_core import ToolResult
+from omm_agent_core import ArtifactRef, ToolResult
+from omm_agent_core.ports import ArtifactStore
 
 from .registry import ToolCallContext, ToolSpec
 from .workspace import TaskWorkspace, WorkspaceArtifactStore
@@ -45,6 +47,27 @@ _OUTPUT_LIMIT = 32 * 1024
 _MAX_ARTIFACTS = 16
 _MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
 
+#: Artifact kind by file suffix, using the packages/contracts vocabulary
+#: (artifact.schema.json kind enum) so captured files project onto the v1
+#: contract without a translation layer downstream.
+_KIND_BY_SUFFIX = {
+    ".svg": "figure",
+    ".png": "figure",
+    ".jpg": "figure",
+    ".jpeg": "figure",
+    ".gif": "figure",
+    ".csv": "table",
+    ".tsv": "table",
+    ".py": "code",
+    ".log": "log",
+    ".txt": "log",
+    ".json": "dataset",
+}
+
+
+def _artifact_kind(name: str) -> str:
+    return _KIND_BY_SUFFIX.get(os.path.splitext(name)[1].lower(), "other")
+
 
 def _clip(text: str, limit: int = _OUTPUT_LIMIT) -> str:
     if len(text) > limit:
@@ -60,9 +83,13 @@ class PythonSandbox:
         workspace: TaskWorkspace,
         python_executable: str | None = None,
         timeout_s: float = 60.0,
+        store: ArtifactStore | None = None,
     ) -> None:
         self._workspace = workspace
-        self._store = WorkspaceArtifactStore(workspace)
+        # Injectable so an embedding runtime (API/worker) can capture created
+        # files straight into its durable artifact store; the workspace-local
+        # store remains the zero-infrastructure default.
+        self._store = store or WorkspaceArtifactStore(workspace)
         self._python = python_executable or sys.executable
         self.timeout_s = timeout_s
 
@@ -76,6 +103,7 @@ class PythonSandbox:
             # happens in-process below, so give it headroom to fire first.
             timeout_s=self.timeout_s + 10.0,
             required_args=("code",),
+            tier="execute",
         )
 
     # -- handler ---------------------------------------------------------
@@ -139,8 +167,10 @@ class PythonSandbox:
             )
         return ToolResult(status="succeeded", output=output, artifacts=tuple(artifacts))
 
-    def _collect_artifacts(self, step_dir, before, ctx):
-        artifacts = []
+    def _collect_artifacts(
+        self, step_dir: Path, before: set[Path], ctx: ToolCallContext
+    ) -> tuple[list[ArtifactRef], list[str]]:
+        artifacts: list[ArtifactRef] = []
         skipped: list[str] = []
         created = sorted(
             path
@@ -157,9 +187,11 @@ class PythonSandbox:
                 continue
             media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             artifacts.append(
-                self._store.import_file(
-                    source=path,
-                    kind="file",
+                self._store.put(
+                    run_id=self._workspace.run_id,
+                    kind=_artifact_kind(path.name),
+                    name=path.name,
+                    content=path.read_bytes(),
                     media_type=media_type,
                     producer_step=ctx.step_id,
                 )

@@ -62,16 +62,28 @@ def test_parse_requires_closing_fence_and_body():
         parse_prompt_text(headers)
 
 
-def test_default_registry_loads_first_batch_prompts():
+def test_default_registry_loads_all_stage_prompts():
     registry = load_default_registry()
-    assert registry.ids() == ["model_planning.default", "problem_analysis.default"]
+    assert registry.ids() == [
+        "data_preparation.default",
+        "experiment_code.default",
+        "model_planning.default",
+        "paper_writing.default",
+        "problem_analysis.default",
+        "validating.default",
+    ]
 
-    analysis = registry.get("problem_analysis.default")
-    assert analysis.stage == "PROBLEM_ANALYSIS"
-    assert analysis.placeholders() <= set(
-        analysis.input_schema.get("properties", {})
-    ), "every placeholder must be declared in the input schema"
+    # Every placeholder must be declared in the input schema, for every stage.
+    for prompt_id in registry.ids():
+        template = registry.get(prompt_id)
+        assert template.placeholders() <= set(
+            template.input_schema.get("properties", {})
+        ), f"{prompt_id}: every placeholder must be declared in the input schema"
 
     planning = registry.get("model_planning.default")
     assert planning.stage == "MODEL_PLANNING"
     assert "plans" in planning.output_schema["required"]
+
+    experiment = registry.get("experiment_code.default")
+    assert experiment.stage == "EXPERIMENTING"
+    assert "code" in experiment.output_schema["required"]

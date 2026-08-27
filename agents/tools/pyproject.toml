@@ -6,7 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "omm-agent-tools"
 version = "0.1.0"
 description = "工具适配器：任务工作区隔离、产物存储、工具注册表 allowlist、记录式调用器与 Python 子进程沙箱"
-requires-python = ">=3.12"
+# 与 omm-agent-core / omm-agent-skills 同理：纯标准库 + 惰性注解，运行时兼容 3.10
+# （backend/api 当前 venv；engine_glue 的实验沙箱装配依赖本包）；3.12 仍是 uv
+# workspace 目标（ADR-0003）
+requires-python = ">=3.10"
 dependencies = ["omm-agent-core"]
 
 [project.optional-dependencies]

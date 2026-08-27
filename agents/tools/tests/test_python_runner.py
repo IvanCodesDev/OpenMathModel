@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from omm_agent_core import InMemoryArtifactStore
 from omm_agent_tools import PythonSandbox, TaskWorkspace
 from omm_agent_tools.registry import ToolCallContext
 
@@ -86,3 +87,55 @@ def test_spec_wires_registry_metadata(sandbox):
     assert spec.risk == "high"
     assert spec.required_args == ("code",)
     assert spec.timeout_s > sandbox.timeout_s
+    # 执行任意代码的工具必须要求 execute 层级，最小授权装配依赖这个声明
+    assert spec.tier == "execute"
+
+
+def test_artifact_kinds_follow_contracts_vocabulary(sandbox):
+    """捕获文件的 kind 按后缀映射到 packages/contracts 的 artifact kind 枚举。
+
+    实验/成果页按 kind 分组文件（figure/table/log/code/dataset 面板），
+    错误的 kind 会让真实产物落错面板或丢出分组。
+    """
+    code = (
+        "from pathlib import Path\n"
+        "for name in ('results.csv', 'plot.svg', 'run.log', 'data.json',"
+        " 'helper.py', 'blob.bin'):\n"
+        "    Path(name).write_text('x', encoding='utf-8')\n"
+    )
+    result = sandbox._handle({"code": code}, ctx("step_kinds"))
+
+    assert result.status == "succeeded"
+    kinds = {ref.uri.replace("\\", "/").rsplit("/", 1)[-1]: ref.kind for ref in result.artifacts}
+    assert kinds == {
+        "results.csv": "table",
+        "plot.svg": "figure",
+        "run.log": "log",
+        "data.json": "dataset",
+        "helper.py": "code",
+        "blob.bin": "other",
+    }
+
+
+def test_injected_store_captures_created_files(tmp_path):
+    """注入外部 ArtifactStore 时，沙箱产物直接写进该存储（worker/API 接线依赖）。"""
+    workspace = TaskWorkspace(root=tmp_path, run_id="run_s")
+    store = InMemoryArtifactStore()
+    sandbox = PythonSandbox(workspace, timeout_s=15.0, store=store)
+
+    result = sandbox._handle(
+        {
+            # write_bytes：字节精确断言不受 Windows 文本模式换行转换影响
+            "code": (
+                "from pathlib import Path\n"
+                "Path('out.csv').write_bytes(b'a,b\\n1,2\\n')\n"
+            )
+        },
+        ctx("step_store"),
+    )
+
+    assert result.status == "succeeded"
+    (ref,) = result.artifacts
+    assert ref.uri.startswith("memory://run_s/")
+    assert ref.producer_step == "step_store"
+    assert store.blobs[ref.uri] == b"a,b\n1,2\n"

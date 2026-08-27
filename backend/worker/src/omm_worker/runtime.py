@@ -8,7 +8,9 @@ Execution-plane rules implemented here (PROJECT_STRUCTURE / system-overview):
 - dangling RUNNING steps from a dead executor are failed ("healed") before
   new work starts, so retries are explicit attempts, not silent overwrites;
 - events/artifacts are persisted before state moves (engine + JSONL sink);
-- the job loop is budgeted — a runaway registry cannot spin forever.
+- the job loop is budgeted — a runaway registry cannot spin forever;
+- tools are minimally granted: the per-run invoker allowlists python_run only
+  and caps the caller tier at "execute" (isomorphic to the API-side glue).
 """
 
 from __future__ import annotations
@@ -16,12 +18,13 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from omm_agent_core import (
-    AdvanceOutcome,
+    Clock,
+    IdGenerator,
     LlmPort,
     NodeRegistry,
     NodeServices,
@@ -84,8 +87,8 @@ class WorkerRuntime:
         nodes: NodeRegistry,
         llm: LlmPort | None = None,
         worker_id: str | None = None,
-        clock=None,
-        ids=None,
+        clock: Clock | None = None,
+        ids: IdGenerator | None = None,
     ) -> None:
         self.config = config
         self.events = JsonlEventStore(config.events_dir)
@@ -179,7 +182,13 @@ class WorkerRuntime:
                 engine.resolve_review(snapshot, approved=True, reason=reason)
                 self.queue.enqueue(run_id, kind="advance")
             elif action == "reject":
+                # 拒绝 = 退回重做（产品审批卡的「退回重做方案」）：解决审批后运行
+                # 落 FAILED 且 failure 指向请求确认的阶段，立即 retry 重新进入该
+                # 阶段（attempt+1）并排队推进，下一轮产出后会再次请求确认——与
+                # API 侧 resolve_approval 的 reject 分支同构。
                 engine.resolve_review(snapshot, approved=False, reason=reason)
+                engine.retry(snapshot)
+                self.queue.enqueue(run_id, kind="advance")
             else:
                 raise ValueError(f"unknown action {action!r}")
             return snapshot.state.value
@@ -213,14 +222,23 @@ class WorkerRuntime:
         workspace = TaskWorkspace(self.config.workspaces_dir, run_id)
         services.artifacts = WorkspaceArtifactStore(workspace)
 
-        sandbox = PythonSandbox(workspace, timeout_s=self.config.python_timeout_s)
+        # 沙箱共用 run 的产物存储实例：实验代码创建的文件与节点发布的产物走同
+        # 一条存储路径（与 API 侧把沙箱 store 指向其 ApiArtifactStore 同构）。
+        sandbox = PythonSandbox(
+            workspace,
+            timeout_s=self.config.python_timeout_s,
+            store=services.artifacts,
+        )
         registry = ToolRegistry()
         registry.register(sandbox.spec())
+        # 最小授权：允许列表只放 python_run，调用方层级封顶 execute；工具事件
+        # 经引擎 record_external 落日志（序列分配必须留在引擎单路径上）。
         services.tools = RecordingInvoker(
-            registry,
+            registry.with_allowlist({PythonSandbox.TOOL_NAME}),
             recorder=lambda event_type, payload: engine.record_external(
                 snapshot, event_type, payload
             ),
+            caller_max_tier="execute",
         )
         return engine, snapshot
 
@@ -239,7 +257,7 @@ class WorkerLoop:
             return None
         try:
             outcome = self.runtime.process_job(job)
-        except Exception:  # noqa: BLE001 - the loop must survive any job crash
+        except Exception:
             self.runtime.queue.fail(job)
             return "job_error"
         if outcome == WorkerRuntime.LEASE_BUSY:

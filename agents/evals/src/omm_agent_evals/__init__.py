@@ -2,8 +2,32 @@
 
 评测集与生产索引隔离存放，避免被抓取或被 Prompt 记忆污染；评分规则和基线随 Skill
 版本一起记录，便于版本回滚决策。
+
+场景目录：
+
+- ``scenario``：worker 全栈金样（队列→租约→引擎→真实沙箱），LLM 打桩，
+  DATA_PREPARATION/EXPERIMENTING/VALIDATING/PAPER_WRITING 为场景内简化节点。
+- ``full_chain``：六阶段真实 LLM 节点全链（agents/skills 全部节点），引擎直驱，
+  LLM 与 python_run 工具打桩，覆盖审批门、实验修复轮、审批拒绝重试与失败恢复。
 """
 
+from .full_chain import (
+    CANNED_EXPERIMENT,
+    CANNED_PAPER,
+    CANNED_PREPARATION,
+    CANNED_VALIDATION,
+    FULL_CHAIN_GOLDEN_EVENT_TYPES,
+    FULL_CHAIN_METRICS,
+    FULL_CHAIN_PROMPT_SEQUENCE,
+    FULL_CHAIN_RESULTS_CSV,
+    FakeToolInvoker,
+    FullChainSession,
+    ScriptedRun,
+    build_full_chain_llm,
+    build_full_chain_session,
+    sandbox_failure,
+    sandbox_success,
+)
 from .scenario import (
     CANNED_ANALYSIS,
     CANNED_PLANNING,
@@ -16,10 +40,25 @@ from .scenario import (
 
 __all__ = [
     "CANNED_ANALYSIS",
+    "CANNED_EXPERIMENT",
+    "CANNED_PAPER",
     "CANNED_PLANNING",
+    "CANNED_PREPARATION",
+    "CANNED_VALIDATION",
     "EXPERIMENT_CODE",
+    "FULL_CHAIN_GOLDEN_EVENT_TYPES",
+    "FULL_CHAIN_METRICS",
+    "FULL_CHAIN_PROMPT_SEQUENCE",
+    "FULL_CHAIN_RESULTS_CSV",
     "GOLDEN_EVENT_TYPES",
     "PROBLEM_STATEMENT",
+    "FakeToolInvoker",
+    "FullChainSession",
+    "ScriptedRun",
+    "build_full_chain_llm",
+    "build_full_chain_session",
     "build_llm",
     "build_runtime",
+    "sandbox_failure",
+    "sandbox_success",
 ]
