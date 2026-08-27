@@ -23,7 +23,7 @@
 |---|---|---|
 | Web | 可运行 | React + TypeScript + Vite，使用现有路由表、页面模板和 DOM 适配器承载 14 个产品页面；首页发送已真实创建 Project/TaskRun 并传播 `run_id`（`/confirm` 为直接访问的草稿复核入口），工作台状态、审批、SSE 与 Artifact 元数据已原位接通；阶段正文和论文保存仍按契约推进 |
 | API | 可运行 | FastAPI、SQLAlchemy 2、Alembic、会话鉴权、项目与任务、动作幂等、SSE 事件、Artifact 校验与下载 |
-| Agent | 基础闭环已实现 | 显式状态机、领域事件、回放恢复、结构化节点、Prompt 注册与输出校验 |
+| Agent | 六阶段真实节点已接线 | 显式状态机、领域事件、回放恢复；配置自定义 API 后题意解析、数据准备、建模方案、实验（python 沙箱执行生成代码）、检验、论文六阶段全部走真实 LLM 节点，未配置时回落模拟链路 |
 | Worker / Tools | 独立原型已验证 | 文件队列、租约、事件日志、隔离工作区、工具允许列表和 Python 子进程执行；当前尚未由 API 调度 |
 | Contracts | 可校验与生成 | OpenAPI + JSON Schema，生成 Python 模型与 TypeScript 类型，提供兼容性检查 |
 | Data | 管线已建立 | 来源注册、采集、校验、内容寻址、结构化题面与前端知识库快照 |
@@ -52,7 +52,7 @@ git clone git@github.com:IvanCodesDev/OpenMathModel.git
 cd OpenMathModel
 npm install
 py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
+.venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e agents/tools -e "backend/api[dev]"
 ```
 
 ### 2. 启动完整联调（推荐）

@@ -53,7 +53,7 @@ Python 发行名使用 `omm-*`，导入名使用 `omm_*`。`packages/contracts`�
 flowchart LR
     WEB["apps/web\n14 个页面"] -->|"fetch / EventSource"| API["backend/api\nFastAPI"]
     API --> RUNNER["进程内 RunnerThread"]
-    RUNNER --> CORE["agents/core\n状态机 + SimStageNode"]
+    RUNNER --> CORE["agents/core\n状态机 + 真实/模拟节点"]
     API --> SQLITE[("SQLite")]
     API --> BLOB["本地 Artifact Store"]
     CONTRACTS["packages/contracts"] --> WEB
@@ -67,7 +67,7 @@ flowchart LR
 2. API 既负责 HTTP 控制面，也由进程内 `RunnerThread` 推进当前模拟工作流。
 3. API 默认使用 `backend/api/data/dev.db` 和本地内容寻址 Artifact Store。
 4. `backend/worker` 已有文件队列、租约、事件日志和隔离执行能力，但 API 当前没有导入或调度 `omm_worker`。
-5. `agents/skills` 的完整真实节点尚未替换 API 中的全部 `SimStageNode`。
+5. 配置了自定义 API 的用户，六个建模阶段全部由 `agents/skills` 真实节点执行，实验阶段经 `agents/tools` 的 python 沙箱运行生成代码；未配置或提示词缺失时整链回落 `SimStageNode` 模拟节点。
 
 详细事实来源见[系统架构](./docs/architecture/system-overview.md)和[前后端与 Agent 工作台对接规范](./docs/development/frontend-backend-agent-integration.md)。
 

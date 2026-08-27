@@ -26,7 +26,7 @@ flowchart LR
     FastAPI["FastAPI"]
     Workspace["ModelingWorkspaceView 投影"]
     Runner["内嵌 RunnerThread"]
-    Engine["agents/core 状态机 + SimStageNode"]
+    Engine["agents/core 状态机 + 真实/模拟节点"]
   end
 
   subgraph LocalData["当前默认数据面"]
@@ -57,7 +57,7 @@ flowchart LR
 4. `GET /api/v1/task-runs/{run_id}/workspace` 聚合运行、步骤、待审批项和产物，作为 Agent 左栏与阶段页面状态的共同语义来源；它当前不提供右侧详细正文。
 5. Web 首屏取快照，随后订阅 SSE；阶段或产物事件触发快照刷新。
 6. API 默认使用 SQLite、本地 Artifact Store 和进程内 `RunnerThread`。
-7. API 当前执行节点仍是 `SimStageNode`。生产接线尚未替换为完整的真实技能节点。
+7. 配置了自定义 API 的用户，六个建模阶段全部由 `agents/skills` 真实节点执行（实验阶段经 `agents/tools` 的 python 沙箱运行生成代码）；未配置或提示词缺失时整链回落 `SimStageNode` 模拟节点。
 
 完整的前后端与 Agent 映射见[前后端与 Agent 工作台对接规范](../development/frontend-backend-agent-integration.md)。
 
@@ -227,7 +227,7 @@ flowchart LR
 ## 9. 当前关键缺口
 
 1. API 与独立 Worker 尚未贯通。
-2. 完整真实 Agent 节点尚未替换 `SimStageNode`。
+2. 真实节点依赖用户配置自定义 API；未配置时仍为 `SimStageNode` 模拟链路。
 3. `STEP_SUCCEEDED` 的结构化 outputs/metrics 尚未投影为版本化阶段输出。
 4. 五类页面正文契约、论文保存与版本冲突处理尚未落地。
 5. 新任务附件当前只进入 TaskRun 参数元数据；二进制上传、解析和 Artifact 血缘绑定尚未接通。

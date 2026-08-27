@@ -49,9 +49,10 @@ jobs:
       - name: API tests (activates once backend/api lands)
         run: |
           if [ -f backend/api/pyproject.toml ]; then
-            # backend/api 依赖 omm-agent-skills（真实技能节点），它只存在于本仓库，
-            # 必须与 contracts/core 一样以可编辑方式一并安装，否则 pip 会去 PyPI 找。
-            pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
+            # backend/api 依赖 omm-agent-skills / omm-agent-tools（真实技能节点与
+            # 实验沙箱），它们只存在于本仓库，必须与 contracts/core 一样以可编辑
+            # 方式一并安装，否则 pip 会去 PyPI 找。
+            pip install -e packages/contracts -e agents/core -e agents/skills -e agents/tools -e "backend/api[dev]"
             python -m pytest backend/api/tests -q
             python packages/contracts/scripts/export_openapi.py --check
           else
@@ -91,9 +92,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # 与 python job 相同的可编辑安装（backend/api 依赖本仓库的 contracts/core/skills）
+      # 与 python job 相同的可编辑安装（backend/api 依赖本仓库的 contracts/core/skills/tools）
       - name: Install backend/api with workspace deps
-        run: pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
+        run: pip install -e packages/contracts -e agents/core -e agents/skills -e agents/tools -e "backend/api[dev]"
       # 迁移验证用独立数据库：alembic_version 等痕迹不进测试库，两条验证互不干扰
       - name: Alembic upgrade head on real PostgreSQL
         working-directory: backend/api

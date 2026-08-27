@@ -673,6 +673,18 @@ GET /api/health
 - 修正 `.composer-attachments[hidden]`：托盘是作者级 `display:flex`，会压过 UA 的 `[hidden]`，此前托盘为空时留白不可见，现在有常驻折叠头必须显式还原 `display:none`。
 - 全部动效尊重 `prefers-reduced-motion`；暗色主题按 `html[data-theme="dark"]` 补齐配色。
 
+### 2026-08-27 厂商预设、模态识别与费用估算刷新到当代型号
+
+按各厂商官方文档重新采集（2026-08-27），只改数据与识别规则，不动页面结构与接口契约：
+
+- 厂商预设（`integration/llm-providers.ts`）：智谱换成 glm-5.3 / glm-5.3-flash / glm-5.2（GLM-5.3 于 2026-08-14 发布、08-19 开放 API，与 5.2 共用基座同价）；通义千问补 qwen3.8-flash（2026-08-26 上线）；Kimi 换成 kimi-k3 / kimi-k2.7-code / kimi-k2.6；Anthropic 把能力最强的 claude-fable-5 提到首位（Mythos 5 仅限 Project Glasswing，不入预设）。OpenAI、Gemini、DeepSeek、xAI 经核对仍是当前在售型号，保持不变。
+- 预设新增可选 `altHosts`：同一厂商的多个官方入口（智谱 `api.z.ai`、Kimi `api.moonshot.ai`）共用一张卡片的「已连接」判定与品牌标识，新增 `presetMatchesHost()` 供卡片状态与模型选择器共用。
+- 官方域名白名单（`llm.py`）补 `api.z.ai`、`api.moonshot.ai`；官网→API 提示补 z.ai / chat.z.ai / www.bigmodel.cn。
+- Auto 路由的能力推断：新一代档位记号入表——强档补 `fable`、`-sol`，轻档补 `-luna`（带连字符避免误伤 solar 等词根）。命中不了的型号仍按中位 5，用户填写的权重永远优先。
+- 模态识别（`integration/model-modality.ts`，ADR-0010）：修正 Kimi K 系列误判——K2.5 起均支持图片输入，此前被当作纯文本会误报「图片不会被看到」，现改判视觉；GLM 视觉线模式放宽到 `glm-Nv`（覆盖 glm-5v-turbo），并单列原生多模态的 GLM-5.3-Flash；GLM-5.3 官方声明仅文本，精确入纯文本表（不做家族级推断，未知型号继续沉默）。
+- 「默认模型 ID」补全（新增 `POST /api/llm/models`）：预设表是快照、写下来那天就开始过期，因此让输入框直接问接口本身要模型列表——OpenAI 兼容家族 `GET {base}/v1/models`（裸域名补 `/v1`，不套「路径前缀」，那是对话补全用的）、Anthropic `GET {base}/v1/models`（x-api-key + anthropic-version）、Gemini `GET {base}/v1beta/models?pageSize=200&key=`（去掉条目名的 `models/` 前缀）。密钥仍只在服务端使用，不产生 token、不记用量，因而也不受预算闸门约束；上限 300 条，网关未实现（404/405）时给 `LLM_MODELS_UNSUPPORTED` 并指向「手填模型 ID」。前端在现有输入框上挂原生 `<datalist>`（UA 默认 `display:none`，零布局改动）：先按 Base URL 域名秒填预设型号，聚焦时再拉真实清单合并（`fetchEndpointModels` 按「协议+地址+密钥」缓存，失败不留缓存以便重试），拉不到就只留预设，不打断填写。新增 8 个后端用例覆盖三种协议的路径与头、404 指引、中转站门控与登录校验。
+- 费用估算表（`usage.py`，影响预算硬闸门）：按「本地零费用 → 当代型号 → 上一代型号 → 家族兜底」重新分组，补 GPT-5.6 三档、Fable/Opus 5、Gemini 3.6 Flash、DeepSeek V4 Pro/Flash（2026-08-16 起峰谷两价，按峰价保守估）、Qwen3.8-Flash、GLM-5.3/5.2、Grok 4.5/4.6 的实际单价；顺带修掉 `qwen3:` 本地标签被 qwen 家族兜底价抢先命中的失效条目。未收录的新型号仍落家族兜底，不会算不出钱。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；
