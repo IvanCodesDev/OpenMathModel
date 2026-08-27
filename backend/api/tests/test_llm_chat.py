@@ -596,6 +596,148 @@ def test_llm_test_non_json_body_is_actionable(client, monkeypatch):
     assert response.json()["code"] == "LLM_BAD_RESPONSE"
 
 
+# ── 模型列表：让「默认模型 ID」跟上厂商上新 ─────────────────────────────────
+
+
+def _models_reply(ids: list[str]) -> httpx.Response:
+    return httpx.Response(200, json={"data": [{"id": model_id} for model_id in ids]})
+
+
+def test_llm_models_lists_openai_ids_in_order(client, monkeypatch):
+    """OpenAI 兼容家族走 /v1/models，返回顺序即补全顺序（通常新型号在前）。"""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("Authorization", "")
+        return _models_reply(["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.3"])
+
+    _install_transport(monkeypatch, handler)
+    response = client.post(
+        "/api/llm/models",
+        json={
+            **_openai_endpoint_body(base_url="https://open.bigmodel.cn/api/paas/v4"),
+            "allow_proxy": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen["url"] == "https://open.bigmodel.cn/api/paas/v4/models"
+    assert seen["auth"] == "Bearer sk-main"
+    payload = response.json()
+    assert payload["models"] == ["glm-5.3", "glm-5.3-flash", "glm-5.2"], "重复项要去掉且保持顺序"
+    assert payload["host"] == "open.bigmodel.cn"
+    assert payload["third_party"] is False
+
+
+def test_llm_models_bare_domain_defaults_to_v1_path(client, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return _models_reply(["gpt-5.6-sol"])
+
+    _install_transport(monkeypatch, handler)
+    response = client.post(
+        "/api/llm/models",
+        json={**_openai_endpoint_body(base_url="https://gateway.test"), "allow_proxy": True},
+    )
+    assert response.status_code == 200, response.text
+    assert seen["url"] == "https://gateway.test/v1/models"
+
+
+def test_llm_models_ignores_chat_path_prefix(client, monkeypatch):
+    """「路径前缀」是给对话补全用的，套到模型列表上只会 404。"""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return _models_reply(["gpt-5.6-sol"])
+
+    _install_transport(monkeypatch, handler)
+    response = client.post(
+        "/api/llm/models",
+        json={**_openai_endpoint_body(path_prefix="/api/v3/chat"), "allow_proxy": True},
+    )
+    assert response.status_code == 200, response.text
+    assert seen["url"] == "https://gateway.test/v1/models"
+
+
+def test_llm_models_anthropic_uses_key_header(client, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get("x-api-key", "")
+        seen["version"] = request.headers.get("anthropic-version", "")
+        return _models_reply(["claude-fable-5", "claude-opus-5"])
+
+    _install_transport(monkeypatch, handler)
+    response = client.post(
+        "/api/llm/models",
+        json={
+            **_openai_endpoint_body(protocol="anthropic", base_url="https://api.anthropic.com"),
+            "allow_proxy": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen["url"] == "https://api.anthropic.com/v1/models"
+    assert seen["key"] == "sk-main" and seen["version"] == "2023-06-01"
+    assert response.json()["models"] == ["claude-fable-5", "claude-opus-5"]
+
+
+def test_llm_models_gemini_strips_models_prefix(client, monkeypatch):
+    """Gemini 条目名带 models/ 前缀，填进模型 ID 输入框必须去掉。"""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "models/gemini-3.6-flash"}, {"name": "models/gemini-3.5-flash-lite"}]},
+        )
+
+    _install_transport(monkeypatch, handler)
+    response = client.post(
+        "/api/llm/models",
+        json={
+            **_openai_endpoint_body(
+                protocol="gemini", base_url="https://generativelanguage.googleapis.com"
+            ),
+            "allow_proxy": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "/v1beta/models?pageSize=200&key=sk-main" in seen["url"]
+    assert response.json()["models"] == ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+
+
+def test_llm_models_missing_endpoint_tells_user_to_type_it(client, monkeypatch):
+    """自建网关常常没实现模型列表；提示要指向「手填」，别让人以为接口坏了。"""
+    _install_transport(monkeypatch, lambda request: httpx.Response(404, text="not found"))
+    response = client.post(
+        "/api/llm/models",
+        json={**_openai_endpoint_body(), "allow_proxy": True},
+    )
+    assert response.status_code == 502
+    payload = response.json()
+    assert payload["code"] == "LLM_MODELS_UNSUPPORTED"
+    assert "手填模型 ID" in payload["message"]
+
+
+def test_llm_models_respects_proxy_gate(client, monkeypatch):
+    _install_transport(monkeypatch, lambda request: _models_reply(["不该发出请求"]))
+    response = client.post(
+        "/api/llm/models",
+        json={**_openai_endpoint_body(), "allow_proxy": False},
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "PROXY_DISABLED"
+
+
+def test_llm_models_requires_login(second_client):
+    assert second_client.post("/api/llm/models", json={}).status_code == 401
+
+
 # ── Auto 模式：难度判定 + 权重路由 ──────────────────────────────────────────
 
 

@@ -18,20 +18,30 @@ const VISION_PATTERNS: readonly RegExp[] = [
   /^grok-4/i,
   /-vl\b|-vl-/i,
   /vision/i,
-  /^glm-4(\.\d+)?v/i,
+  // glm-4.5v / glm-4.6v / glm-5v-turbo 等视觉线，以及原生多模态的 GLM-5.3-Flash
+  /^glm-\d+(\.\d+)?v/i,
+  /^glm-5\.3-flash/i,
+  // Kimi K2.5 起的 K 系列均可收图（K3 支持图像输入，K2.7-Code 另支持视频）
+  /^kimi-k[2-9]/i,
+  // Qwen3.8 整代原生视觉（Max 的视觉理解贯穿全流程，27B 是视觉语言 Dense 模型）
+  /^qwen3\.8/i,
   /llava|pixtral|internvl|minicpm-v/i,
 ];
 
 /**
- * 明确为纯文本的模型名模式。deepseek 对话/推理线不收图；qwen 文本线与视觉线（-vl）分列。
+ * 明确为纯文本的模型名模式。deepseek 对话/推理线不收图；qwen 3.7 及更早的文本线与
+ * 视觉线（-vl）分列，3.8 起整代原生多模态已由上方视觉表接管；
+ * GLM-5.3 官方声明仅处理文本模态（同代的 GLM-5.3-Flash 才是多模态）。
  * 注意判定顺序：视觉表先于本表命中，deepseek 名下带 vision 记号的视觉线
  * （如 2026-08-21 上线的 deepseek-v4-flash-vision-exp）由上方 /vision/i 兜住，
  * 不会落进本表的 deepseek 纯文本规则。
+ * 本表只收官方明确不收图的型号，不做家族级推断：判错方向不同——漏报只是少一条
+ * 提醒，误报会让用户以为图片没被看见。未来型号命中不了就按 unknown 沉默。
  */
 const TEXT_ONLY_PATTERNS: readonly RegExp[] = [
   /^deepseek-(?!vl)/i,
   /^qwen(?![\d.]*-?vl)(?!.*omni)/i,
-  /^kimi-k/i,
+  /^glm-5\.3(?!-flash)/i,
 ];
 
 export function modelModality(model: string): ModelModality {

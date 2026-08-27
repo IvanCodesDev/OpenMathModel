@@ -42,7 +42,10 @@ OFFICIAL_HOSTS = frozenset(
         "api.deepseek.com",
         "dashscope.aliyuncs.com",
         "open.bigmodel.cn",
+        # 智谱国内站与 Z.ai 是同一家的两个官方入口，模型 ID 一致
+        "api.z.ai",
         "api.moonshot.cn",
+        "api.moonshot.ai",
         "api.x.ai",
         "api.mistral.ai",
         "api.minimax.chat",
@@ -76,7 +79,11 @@ _WEBSITE_TO_API = {
     "tongyi.aliyun.com": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "chatglm.cn": "https://open.bigmodel.cn/api/paas/v4",
     "bigmodel.cn": "https://open.bigmodel.cn/api/paas/v4",
+    "www.bigmodel.cn": "https://open.bigmodel.cn/api/paas/v4",
     "www.zhipuai.cn": "https://open.bigmodel.cn/api/paas/v4",
+    "z.ai": "https://api.z.ai/api/paas/v4",
+    "www.z.ai": "https://api.z.ai/api/paas/v4",
+    "chat.z.ai": "https://api.z.ai/api/paas/v4",
     "x.ai": "https://api.x.ai/v1",
     "www.x.ai": "https://api.x.ai/v1",
     "grok.com": "https://api.x.ai/v1",
@@ -223,8 +230,16 @@ def ensure_proxy_allowed(endpoint: LlmEndpoint, allow_proxy: bool) -> None:
 # （1-5），再把问题路由到强弱合适的接口。
 
 #: 模型名中的旗舰/推理型信号与轻量型信号；两类都命中时相互抵消。
-_STRONG_MODEL_HINTS = ("opus", "reasoner", "thinking", "max", "pro", "ultra", "sonnet")
-_LIGHT_MODEL_HINTS = ("flash", "mini", "lite", "nano", "haiku", "turbo", "air", "tiny", "small")
+#: 各家的档位记号会随命名习惯变化（OpenAI 5.6 的 sol/terra/luna、Anthropic 的
+#: fable 都是无先例的新词），带连字符的条目是为了不误伤名字里恰好含该词根的
+#: 模型（如 "sol" 会命中 solar 系列）。命中不了的模型按中位 5 处理，用户随时
+#: 可以在接口上填「模型能力权重」直接覆盖推断结果。
+_STRONG_MODEL_HINTS = (
+    "opus", "reasoner", "thinking", "max", "pro", "ultra", "sonnet", "fable", "-sol",
+)
+_LIGHT_MODEL_HINTS = (
+    "flash", "mini", "lite", "nano", "haiku", "turbo", "air", "tiny", "small", "-luna",
+)
 
 #: 判定挂了有规则估计兜底，不值得让用户对着空白气泡等 30 秒。
 JUDGE_READ_TIMEOUT_S = 10.0
@@ -1007,6 +1022,104 @@ def test_endpoint(endpoint: LlmEndpoint, allow_proxy: bool) -> ChatOutcome:
     )
 
 
+# ── 模型列表：让「默认模型 ID」跟上厂商上新 ────────────────────────────────
+#
+# 厂商预设表是快照，写下来那天就开始过期。三种协议都提供了「列出当前可用
+# 模型」的接口，直接问接口本身拿，新模型上线当天就能在补全里选到。
+
+#: 只是拉一张表，不该按对话的耐心等；网关不实现该接口时也能快速落到提示。
+MODELS_READ_TIMEOUT_S = 20.0
+#: 中转站动辄聚合上千个模型，补全列表塞不下也没有意义，截断即可。
+MODELS_MAX_ITEMS = 300
+
+
+def build_models_request(endpoint: LlmEndpoint) -> tuple[str, dict[str, str]]:
+    """按协议组装模型列表接口的 (url, headers)。
+
+    不复用「路径前缀」：那一项是给对话补全路径用的，模型列表在各协议下都是
+    另一条固定路径，套上去只会 404。
+    """
+    headers = {"Accept": "application/json", **parse_custom_headers(endpoint.headers)}
+    base = endpoint.base_url
+
+    if _openai_family(endpoint.protocol):
+        # 与对话补全同一套判断：裸域名补 /v1，已带路径的原样拼接。
+        url = base + ("/models" if urlsplit(base).path.strip("/") else "/v1/models")
+        if endpoint.api_key:
+            headers["Authorization"] = f"Bearer {endpoint.api_key}"
+        if endpoint.organization:
+            headers["OpenAI-Organization"] = endpoint.organization
+        return url, headers
+
+    if endpoint.protocol == "anthropic":
+        headers["x-api-key"] = endpoint.api_key
+        headers["anthropic-version"] = "2023-06-01"
+        return base + "/v1/models", headers
+
+    if endpoint.protocol == "gemini":
+        # 默认只回一页，显式要大页避免旧型号占满、新型号被截在后面。
+        return f"{base}/v1beta/models?pageSize=200&key={endpoint.api_key}", headers
+
+    raise ApiError(400, "LLM_PROTOCOL_UNSUPPORTED", f"不支持的接口协议：{endpoint.protocol}")
+
+
+def parse_models_response(protocol: str, data: dict[str, Any]) -> list[str]:
+    """模型列表响应 → 去重后的模型 ID（保持服务端返回顺序，通常新在前）。"""
+    if protocol == "gemini":
+        # Gemini 的条目名带 "models/" 前缀，填进模型 ID 输入框要去掉。
+        raw = [
+            str(item.get("name") or "").removeprefix("models/")
+            for item in data.get("models") or []
+            if isinstance(item, dict)
+        ]
+    else:
+        raw = [
+            str(item.get("id") or "")
+            for item in data.get("data") or []
+            if isinstance(item, dict)
+        ]
+    seen: dict[str, None] = {}
+    for name in raw:
+        if name:
+            seen.setdefault(name, None)
+    return list(seen)[:MODELS_MAX_ITEMS]
+
+
+def list_models(endpoint: LlmEndpoint, allow_proxy: bool) -> list[str]:
+    """拉取该接口实际提供的模型 ID。
+
+    这是补全建议而非必要能力：不少自建网关和中转站没有实现模型列表接口，
+    命中 404/405 时给出「手填模型 ID」的明确指引，不要让用户对着通用错误
+    以为整条接口坏了。
+    """
+    ensure_proxy_allowed(endpoint, allow_proxy)
+    url, headers = build_models_request(endpoint)
+    try:
+        with _client(MODELS_READ_TIMEOUT_S) as client:
+            response = client.get(url, headers=headers)
+    except httpx.TimeoutException as error:
+        raise ApiError(
+            504,
+            "LLM_TIMEOUT",
+            f"接口「{endpoint.name}」拉取模型列表超时（{endpoint.host}）",
+        ) from error
+    except httpx.TransportError as error:
+        raise ApiError(
+            502,
+            "LLM_UNREACHABLE",
+            f"无法连接接口「{endpoint.name}」（{endpoint.host}）：{error}",
+        ) from error
+    if response.status_code in (404, 405):
+        raise ApiError(
+            502,
+            "LLM_MODELS_UNSUPPORTED",
+            f"接口「{endpoint.name}」没有提供模型列表（HTTP {response.status_code}），请直接手填模型 ID",
+        )
+    if response.status_code >= 400:
+        raise _upstream_error(endpoint, response)
+    return parse_models_response(endpoint.protocol, _response_json(endpoint, response))
+
+
 # ── 任务引擎的 LlmPort 适配 ────────────────────────────────────────────────
 
 
@@ -1045,6 +1158,18 @@ class EngineLlmPort:
     def complete(self, prompt_id: str, variables: dict[str, Any]) -> str:
         template = self._registry.get(prompt_id)
         prompt = template.render(variables)
+        # 技能节点的一次修复重试通过 __repair_error/__previous_output 传入；
+        # 模板正文没有这两个占位符，必须在这里显式拼接，否则「把错误反馈给
+        # 模型」退化成盲目原样重发。
+        repair_error = str(variables.get("__repair_error") or "")
+        if repair_error:
+            previous = str(variables.get("__previous_output") or "")
+            prompt += (
+                "\n\n## 上次输出未通过校验\n\n"
+                f"校验错误：{repair_error}\n\n"
+                f"上次输出（节选）：\n{previous[:2000]}\n\n"
+                "请修正以上问题，重新只输出一个符合输出要求的 JSON 对象。"
+            )
         outcome = complete_with_fallback(
             self._config,
             [{"role": "user", "content": prompt}],

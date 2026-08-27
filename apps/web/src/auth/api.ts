@@ -73,6 +73,13 @@ export interface LlmTestResult {
   reply: string;
 }
 
+/** 接口自报的可用模型 ID：「默认模型 ID」的补全来源，比预设表新。 */
+export interface LlmModelsResult {
+  models: string[];
+  host: string;
+  third_party: boolean;
+}
+
 /** 设置中心「用量监控」的三个预算项；硬限制由服务端在调用路径上执行。 */
 export interface UsageSettings {
   monthly_budget_cny: number | null;
@@ -238,6 +245,9 @@ export const authApi = {
   },
   testLlmEndpoint(body: LlmEndpoint & { allow_proxy: boolean }) {
     return request<LlmTestResult>("/api/llm/test", { method: "POST", body });
+  },
+  listLlmModels(body: LlmEndpoint & { allow_proxy: boolean }) {
+    return request<LlmModelsResult>("/api/llm/models", { method: "POST", body });
   },
   getUsageSummary(month?: string) {
     return request<UsageSummary>(`/api/usage/summary${month ? `?month=${encodeURIComponent(month)}` : ""}`);

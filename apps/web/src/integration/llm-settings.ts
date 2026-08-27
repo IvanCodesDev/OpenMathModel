@@ -74,6 +74,34 @@ export async function fetchLlmConfig(): Promise<LlmConfig | null> {
   }
 }
 
+/**
+ * 「默认模型 ID」的补全来源：直接问接口本身要模型列表，比内置的厂商预设表新
+ * （预设表写下来那天就开始过期，新模型上线当天就能从这里选到）。
+ *
+ * 纯锦上添花：拿不到（未登录、网关没实现 /models、网络不通）就返回空数组由
+ * 调用方回落到预设，绝不打断填写。按「协议+地址+密钥」缓存，避免每次聚焦
+ * 输入框都出一次网；换了地址或密钥自然是另一条缓存，失败的不留缓存以便重试。
+ */
+const modelListCache = new Map<string, Promise<string[]>>();
+
+export async function fetchEndpointModels(values: Record<string, unknown>): Promise<string[]> {
+  const endpoint = endpointFromForm(values);
+  if (!endpoint) return [];
+  const key = `${endpoint.protocol}|${endpoint.base_url}|${endpoint.api_key}`;
+  let pending = modelListCache.get(key);
+  if (!pending) {
+    pending = authApi.listLlmModels({ ...endpoint, allow_proxy: values.allowProxyApi !== false }).then(
+      result => result.models,
+      () => {
+        modelListCache.delete(key);
+        return [];
+      },
+    );
+    modelListCache.set(key, pending);
+  }
+  return pending;
+}
+
 function syncFailureMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 401) {
     return "自定义 API 已在本机保存，登录后才会同步到服务端供对话与任务使用。";

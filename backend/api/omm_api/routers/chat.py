@@ -28,6 +28,7 @@ from ..llm import (
     auto_route,
     complete_with_fallback,
     is_third_party_host,
+    list_models,
     parse_llm_config,
     stream_events,
     test_endpoint,
@@ -85,6 +86,24 @@ def test_llm_endpoint(
         "host": outcome.endpoint.host,
         "third_party": is_third_party_host(outcome.endpoint.host),
         "reply": outcome.text[:200],
+    }
+
+
+@llm_router.post("/models")
+def list_llm_models(
+    body: LlmTestRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """按表单当前值拉取该接口提供的模型 ID，供「默认模型 ID」补全。
+
+    只读一张列表：不产生 token、不记用量、不落库，因此也不受预算闸门约束。
+    密钥同样只在服务端使用，与其余出网点一致。
+    """
+    endpoint = _endpoint_from_request(body)
+    return {
+        "models": list_models(endpoint, allow_proxy=body.allow_proxy),
+        "host": endpoint.host,
+        "third_party": is_third_party_host(endpoint.host),
     }
 
 
