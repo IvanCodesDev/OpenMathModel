@@ -4,11 +4,16 @@
 from .agent_event import AgentEvent
 from .approval_request import ApprovalRequest
 from .artifact import Artifact
+from .dataset_profile import DatasetProfile
+from .delivery_manifest import DeliveryManifest
+from .document_draft import DocumentDraft
 from .error import ErrorEnvelope
+from .experiment_summary import ExperimentSummary
 from .modeling_workspace_view import ModelingWorkspaceView
 from .paper_export import PaperExport
+from .plan_proposal import PlanProposal
 from .project import Project
 from .step_run import StepRun
 from .task_run import TaskRun
 
-__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "ErrorEnvelope", "ModelingWorkspaceView", "PaperExport", "Project", "StepRun", "TaskRun"]
+__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "DatasetProfile", "DeliveryManifest", "DocumentDraft", "ErrorEnvelope", "ExperimentSummary", "ModelingWorkspaceView", "PaperExport", "PlanProposal", "Project", "StepRun", "TaskRun"]

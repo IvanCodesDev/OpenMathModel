@@ -1,0 +1,35 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "problem_title": "共享单车调度优化",
+  "artifacts": [
+    {
+      "id": "art_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "kind": "table",
+      "name": "results.csv",
+      "media_type": "text/csv",
+      "size_bytes": 23,
+      "status": "READY",
+      "producer_node": "EXPERIMENTING",
+      "download_url": "/api/v1/artifacts/art_0f1e2d3c4b5a69788796a5b4c3d2e1f0/download"
+    },
+    {
+      "id": "art_9f8e7d6c5b4a30211203a4b5c6d7e8f9",
+      "kind": "paper",
+      "name": "建模论文草稿",
+      "media_type": "text/markdown",
+      "size_bytes": 2048,
+      "status": "READY",
+      "producer_node": "PAPER_WRITING",
+      "download_url": null
+    }
+  ],
+  "key_metrics": { "rmse": 0.5 },
+  "validation_verdict": "concerns",
+  "paper_citation": {
+    "title": "基于整数规划的共享单车调度优化",
+    "abstract": "本文建立整数规划模型求解调度问题。",
+    "keywords": ["整数规划", "调度"],
+    "artifact_id": "art_9f8e7d6c5b4a30211203a4b5c6d7e8f9"
+  },
+  "updated_at": "2026-08-27T01:45:00.000000Z"
+}

@@ -7,6 +7,11 @@
  */
 
 export type { ModelingWorkspaceView } from "./ts/v1/modeling-workspace-view";
+export type { DatasetProfile } from "./ts/v1/dataset-profile";
+export type { PlanProposal } from "./ts/v1/plan-proposal";
+export type { ExperimentSummary } from "./ts/v1/experiment-summary";
+export type { DocumentDraft } from "./ts/v1/document-draft";
+export type { DeliveryManifest } from "./ts/v1/delivery-manifest";
 
 // ---- TaskRun：status 是稳定生命周期，current_node 是领域阶段（两轴分离） ----
 

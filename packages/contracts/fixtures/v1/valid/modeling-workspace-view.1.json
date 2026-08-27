@@ -22,12 +22,12 @@
     }
   },
   "pages": [
-    { "key": "running", "label": "问题分析", "route": "/task/running", "nodes": ["CREATED", "PROBLEM_ANALYSIS"], "status": "SUCCEEDED", "artifact_ids": [] },
-    { "key": "data", "label": "数据准备", "route": "/workspace/data", "nodes": ["DATA_PREPARATION"], "status": "SUCCEEDED", "artifact_ids": [] },
-    { "key": "model", "label": "建模方案", "route": "/workspace/model-plan", "nodes": ["MODEL_PLANNING"], "status": "WAITING_APPROVAL", "artifact_ids": [] },
-    { "key": "experiments", "label": "实验与验证", "route": "/workspace/experiments", "nodes": ["EXPERIMENTING", "VALIDATING"], "status": "PENDING", "artifact_ids": [] },
-    { "key": "editor", "label": "论文编辑", "route": "/workspace/paper-editor", "nodes": ["PAPER_WRITING"], "status": "PENDING", "artifact_ids": [] },
-    { "key": "complete", "label": "最终成果", "route": "/task/complete", "nodes": ["COMPLETED"], "status": "PENDING", "artifact_ids": [] }
+    { "key": "running", "label": "问题分析", "route": "/task/running", "nodes": ["CREATED", "PROBLEM_ANALYSIS"], "status": "SUCCEEDED", "artifact_ids": [], "plan_text": "解析单车调度的三个子问题与容量约束" },
+    { "key": "data", "label": "数据准备", "route": "/workspace/data", "nodes": ["DATA_PREPARATION"], "status": "SUCCEEDED", "artifact_ids": [], "plan_text": "构造骑行订单数据并画像高峰需求分布" },
+    { "key": "model", "label": "建模方案", "route": "/workspace/model-plan", "nodes": ["MODEL_PLANNING"], "status": "WAITING_APPROVAL", "artifact_ids": [], "plan_text": "比较整数规划与启发式调度并请求确认" },
+    { "key": "experiments", "label": "实验与验证", "route": "/workspace/experiments", "nodes": ["EXPERIMENTING", "VALIDATING"], "status": "PENDING", "artifact_ids": [], "plan_text": "按方案「整数规划」实施：定义调度变量；求解并对比基线" },
+    { "key": "editor", "label": "论文编辑", "route": "/workspace/paper-editor", "nodes": ["PAPER_WRITING"], "status": "PENDING", "artifact_ids": [], "plan_text": "撰写含调度方案对比与检验结论的论文" },
+    { "key": "complete", "label": "最终成果", "route": "/task/complete", "nodes": ["COMPLETED"], "status": "PENDING", "artifact_ids": [], "plan_text": null }
   ],
   "artifacts": [],
   "pending_approval": {

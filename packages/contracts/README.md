@@ -22,6 +22,10 @@ check_compat.py      向后兼容门禁（消费者视角只增不破坏）
 
 `Project`、`TaskRun`、`StepRun`、`AgentEvent`、`Artifact`、`ApprovalRequest`，以及统一错误信封 `ErrorEnvelope`。
 
+## 第二批对象（v1，六阶段真实节点 → 页面正文）
+
+`DatasetProfile`、`PlanProposal`、`ExperimentSummary`、`DocumentDraft`、`DeliveryManifest`：数据准备/建模方案/实验与验证/论文编辑/最终成果五类页面的正文投影，数据源是 `run_domain_events` 中 `STEP_SUCCEEDED` 事件 `payload.outputs`（六阶段真实 LLM 节点的最新成功输出），由 `GET /api/v1/task-runs/{run_id}/stage-outputs` 端点承载；阶段未完成时对应字段为 `null`。
+
 ## 演进规则
 
 1. 协议先于调用方变更；先改本包，再同步生产者与消费者。

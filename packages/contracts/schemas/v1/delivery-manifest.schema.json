@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.delivery-manifest",
+  "title": "DeliveryManifest",
+  "description": "最终成果页正文投影：本次运行的成果交付清单。数据源是 artifacts 表（run 产出的产物列表）与各阶段最新成功输出（题目标题、实验关键指标、检验结论、论文引用）。运行尚无任何可交付内容时整体为 null，由 stage-outputs 端点表达。",
+  "type": "object",
+  "properties": {
+    "run_id": { "$ref": "#/$defs/run_id" },
+    "problem_title": {
+      "type": ["string", "null"],
+      "description": "PROBLEM_ANALYSIS 提取的任务标题；模拟链或阶段未完成时为 null。"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact_projection" },
+      "description": "本次运行产出的交付物（按创建顺序）；投影形状与 ModelingWorkspaceView.artifacts 一致。"
+    },
+    "key_metrics": {
+      "type": ["object", "null"],
+      "description": "EXPERIMENTING 阶段的核心指标（自由载荷：指标名 → 数值）；实验未完成时为 null，脚本未打印指标时为空对象。"
+    },
+    "validation_verdict": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/verdict" }
+      ],
+      "description": "VALIDATING 阶段的总体结论；检验未完成时为 null。"
+    },
+    "paper_citation": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/paper_citation" }
+      ],
+      "description": "论文引用（标题、摘要、关键词与草稿产物指引）；论文阶段未完成时为 null。"
+    },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "required": [
+    "run_id",
+    "problem_title",
+    "artifacts",
+    "key_metrics",
+    "validation_verdict",
+    "paper_citation",
+    "updated_at"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-f]{32}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "concerns", "fail"],
+      "description": "检验总体结论：pass 可信 / concerns 可用但有保留 / fail 不可信需重做。"
+    },
+    "artifact_projection": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^art_[0-9a-f]{32}$" },
+        "kind": {
+          "type": "string",
+          "enum": ["dataset", "code", "figure", "table", "log", "report", "paper", "model", "other"]
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "status": { "type": "string", "enum": ["PENDING", "READY", "STALE", "DELETED"] },
+        "producer_node": { "type": ["string", "null"], "maxLength": 100 },
+        "download_url": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^/api/v1/artifacts/art_[0-9a-f]{32}/download$" }
+          ]
+        }
+      },
+      "required": ["id", "kind", "name", "media_type", "size_bytes", "status", "producer_node", "download_url"],
+      "additionalProperties": false
+    },
+    "paper_citation": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "论文标题。" },
+        "abstract": { "type": ["string", "null"], "description": "论文摘要。" },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "关键词；未给出时为空列表。"
+        },
+        "artifact_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^art_[0-9a-f]{32}$" }
+          ],
+          "description": "论文草稿产物（kind=paper）；沿 /v1/artifacts/{id}/download 获取本体。"
+        }
+      },
+      "required": ["title", "abstract", "keywords", "artifact_id"],
+      "additionalProperties": false
+    }
+  }
+}

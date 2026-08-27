@@ -1,0 +1,14 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "构造合成需求数据",
+  "metrics": {},
+  "stdout_tail": "",
+  "experiment_summary": "构造合成需求数据",
+  "validation": {
+    "verdict": "maybe",
+    "checks": [],
+    "risks": [],
+    "validation_summary": "非法的总体结论取值"
+  },
+  "updated_at": "2026-08-27T01:35:00.000000Z"
+}

@@ -1,0 +1,17 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "profile_summary": "合成订单数据规模适中，质量良好，可直接建模",
+  "datasets": [
+    {
+      "name": "历史订单",
+      "source": "需构造",
+      "fields": ["hour 时段", "demand 需求量（次）"],
+      "quality_risks": ["高峰时段方差大"]
+    }
+  ],
+  "preparation_steps": ["构造合成需求数据", "按时段聚合"],
+  "missing_value_strategy": "前向填充",
+  "outlier_strategy": null,
+  "derived_features": ["高峰标志位"],
+  "updated_at": "2026-08-27T01:30:00.000000Z"
+}

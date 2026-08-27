@@ -500,82 +500,6 @@
         "title": "ArtifactList",
         "type": "object"
       },
-      "ArtifactProjection": {
-        "additionalProperties": false,
-        "properties": {
-          "download_url": {
-            "anyOf": [
-              {
-                "pattern": "^/api/v1/artifacts/art_[0-9a-f]{32}/download$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Download Url"
-          },
-          "id": {
-            "pattern": "^art_[0-9a-f]{32}$",
-            "title": "Id",
-            "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/Kind1"
-          },
-          "media_type": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Media Type",
-            "type": "string"
-          },
-          "name": {
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "producer_node": {
-            "anyOf": [
-              {
-                "maxLength": 100,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Producer Node"
-          },
-          "size_bytes": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Size Bytes"
-          },
-          "status": {
-            "$ref": "#/components/schemas/omm_contracts__v1__modeling_workspace_view__Status"
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "name",
-          "media_type",
-          "size_bytes",
-          "status",
-          "producer_node",
-          "download_url"
-        ],
-        "title": "ArtifactProjection",
-        "type": "object"
-      },
       "ArtifactText": {
         "description": "附件正文抽取结果。\n\n``status`` 分五档：ready 完整抽出、partial 触顶截断、empty 文件正常但没有\n文字、unsupported 缺少可选依赖或格式不支持、failed 文件损坏或抽取出错。\n后三档也是正常响应（200）——调用方需要的是原因，而不是一个错误码。",
         "properties": {
@@ -1247,6 +1171,122 @@
         "title": "CreateTaskRunInput",
         "type": "object"
       },
+      "DatasetEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "description": "字段清单（含字段含义与单位）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "name": {
+            "description": "数据集名。",
+            "title": "Name",
+            "type": "string"
+          },
+          "quality_risks": {
+            "description": "该数据集的质量风险（缺失、异常、口径不一等）；无则为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Quality Risks",
+            "type": "array"
+          },
+          "source": {
+            "description": "来源：题目附件 / 需收集 / 需构造。",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "fields",
+          "quality_risks"
+        ],
+        "title": "DatasetEntry",
+        "type": "object"
+      },
+      "DatasetProfile": {
+        "additionalProperties": false,
+        "description": "数据准备页正文投影：DATA_PREPARATION 阶段真实 LLM 节点的最新成功输出（run_domain_events 的 STEP_SUCCEEDED）。模拟链或阶段未完成时该投影整体为 null，由 stage-outputs 端点表达。",
+        "properties": {
+          "datasets": {
+            "description": "数据清单；题目未附数据时 source 注明「需收集」或「需构造」。",
+            "items": {
+              "$ref": "#/components/schemas/DatasetEntry"
+            },
+            "title": "Datasets",
+            "type": "array"
+          },
+          "derived_features": {
+            "description": "建议构造的衍生变量（含构造方式）；节点未给出时为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Derived Features",
+            "type": "array"
+          },
+          "missing_value_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "缺失值处理策略与理由；节点未给出时为 null。",
+            "title": "Missing Value Strategy"
+          },
+          "outlier_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "异常值识别与处理策略；节点未给出时为 null。",
+            "title": "Outlier Strategy"
+          },
+          "preparation_steps": {
+            "description": "可执行的数据准备步骤，按执行顺序排列。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Preparation Steps",
+            "type": "array"
+          },
+          "profile_summary": {
+            "description": "一段话的数据画像摘要（数据构成、规模量级、质量状况与可用性结论）。",
+            "title": "Profile Summary",
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "run_id",
+          "profile_summary",
+          "datasets",
+          "preparation_steps",
+          "missing_value_strategy",
+          "outlier_strategy",
+          "derived_features",
+          "updated_at"
+        ],
+        "title": "DatasetProfile",
+        "type": "object"
+      },
       "DecisionType": {
         "enum": [
           "confirm_plan",
@@ -1256,6 +1296,194 @@
         ],
         "title": "DecisionType",
         "type": "string"
+      },
+      "DeliveryManifest": {
+        "additionalProperties": false,
+        "description": "最终成果页正文投影：本次运行的成果交付清单。数据源是 artifacts 表（run 产出的产物列表）与各阶段最新成功输出（题目标题、实验关键指标、检验结论、论文引用）。运行尚无任何可交付内容时整体为 null，由 stage-outputs 端点表达。",
+        "properties": {
+          "artifacts": {
+            "description": "本次运行产出的交付物（按创建顺序）；投影形状与 ModelingWorkspaceView.artifacts 一致。",
+            "items": {
+              "$ref": "#/components/schemas/omm_contracts__v1__delivery_manifest__ArtifactProjection"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "key_metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EXPERIMENTING 阶段的核心指标（自由载荷：指标名 → 数值）；实验未完成时为 null，脚本未打印指标时为空对象。",
+            "title": "Key Metrics"
+          },
+          "paper_citation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaperCitation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "论文引用（标题、摘要、关键词与草稿产物指引）；论文阶段未完成时为 null。"
+          },
+          "problem_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PROBLEM_ANALYSIS 提取的任务标题；模拟链或阶段未完成时为 null。",
+            "title": "Problem Title"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "validation_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verdict"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "VALIDATING 阶段的总体结论；检验未完成时为 null。"
+          }
+        },
+        "required": [
+          "run_id",
+          "problem_title",
+          "artifacts",
+          "key_metrics",
+          "validation_verdict",
+          "paper_citation",
+          "updated_at"
+        ],
+        "title": "DeliveryManifest",
+        "type": "object"
+      },
+      "DocumentDraft": {
+        "additionalProperties": false,
+        "description": "论文编辑页正文投影：PAPER_WRITING 阶段真实 LLM 节点的最新成功输出（结构化论文草稿）。version/updated_at 支撑后续论文编辑的版本演进；markdown 产物本体沿 Artifact 下载链路获取。",
+        "properties": {
+          "abstract": {
+            "description": "摘要（问题、方法、核心结果、结论）。",
+            "title": "Abstract",
+            "type": "string"
+          },
+          "keywords": {
+            "description": "关键词；节点未给出时为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "sections": {
+            "description": "章节列表，按论文顺序排列。",
+            "items": {
+              "$ref": "#/components/schemas/PaperSection"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "title": {
+            "description": "论文标题。",
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "version": {
+            "description": "草稿版本号：PAPER_WRITING 阶段每次成功产出递增（重试/重跑产生新版本）。",
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "title",
+          "abstract",
+          "keywords",
+          "sections",
+          "version",
+          "updated_at"
+        ],
+        "title": "DocumentDraft",
+        "type": "object"
+      },
+      "ExperimentSummary": {
+        "additionalProperties": false,
+        "description": "实验与验证页正文投影：EXPERIMENTING 阶段真实节点（LLM 生成代码 + python 沙箱执行）的最新成功输出；validation 为同页 VALIDATING 阶段的检验报告，检验未完成时为 null。",
+        "properties": {
+          "approach_summary": {
+            "description": "实现思路摘要（算法、数据构造方式、评估口径）。",
+            "title": "Approach Summary",
+            "type": "string"
+          },
+          "experiment_summary": {
+            "description": "实验过程摘要（思路 + 核心指标 + 产物文件），供检验与论文阶段引用。",
+            "title": "Experiment Summary",
+            "type": "string"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "description": "实验脚本按 OMM_METRICS_JSON 标记行打印的核心指标（自由载荷：指标名 → 数值），消费方容忍未知指标名；脚本未打印时为空对象。",
+            "title": "Metrics",
+            "type": "object"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "stdout_tail": {
+            "description": "实验脚本标准输出尾部（节点侧截断）。",
+            "title": "Stdout Tail",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "VALIDATING 阶段的检验报告；该阶段未成功完成时为 null。"
+          }
+        },
+        "required": [
+          "run_id",
+          "approach_summary",
+          "metrics",
+          "stdout_tail",
+          "experiment_summary",
+          "validation",
+          "updated_at"
+        ],
+        "title": "ExperimentSummary",
+        "type": "object"
       },
       "Failure": {
         "additionalProperties": false,
@@ -1596,7 +1824,7 @@
           },
           "artifacts": {
             "items": {
-              "$ref": "#/components/schemas/ArtifactProjection"
+              "$ref": "#/components/schemas/omm_contracts__v1__modeling_workspace_view__ArtifactProjection"
             },
             "title": "Artifacts",
             "type": "array"
@@ -1863,6 +2091,20 @@
             "title": "Nodes",
             "type": "array"
           },
+          "plan_text": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "本任务专属的计划短句（问题分析的 plan_outline 派生，方案确认后实验条目细化为选中方案）；未产出时为 null，展示层回退 label。",
+            "title": "Plan Text"
+          },
           "route": {
             "$ref": "#/components/schemas/Route"
           },
@@ -1897,6 +2139,57 @@
       "Pages": {
         "properties": {},
         "title": "Pages",
+        "type": "object"
+      },
+      "PaperCitation": {
+        "additionalProperties": false,
+        "properties": {
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "论文摘要。",
+            "title": "Abstract"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "pattern": "^art_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "论文草稿产物（kind=paper）；沿 /v1/artifacts/{id}/download 获取本体。",
+            "title": "Artifact Id"
+          },
+          "keywords": {
+            "description": "关键词；未给出时为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "title": {
+            "description": "论文标题。",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "abstract",
+          "keywords",
+          "artifact_id"
+        ],
+        "title": "PaperCitation",
         "type": "object"
       },
       "PaperExport": {
@@ -2005,6 +2298,27 @@
         "title": "PaperExport",
         "type": "object"
       },
+      "PaperSection": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "正文 Markdown（可含列表与表格）。",
+            "title": "Content",
+            "type": "string"
+          },
+          "heading": {
+            "description": "章节标题。",
+            "title": "Heading",
+            "type": "string"
+          }
+        },
+        "required": [
+          "heading",
+          "content"
+        ],
+        "title": "PaperSection",
+        "type": "object"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "current_password": {
@@ -2034,6 +2348,98 @@
           "password"
         ],
         "title": "PasswordRequest",
+        "type": "object"
+      },
+      "PlanOption": {
+        "additionalProperties": false,
+        "properties": {
+          "approach": {
+            "description": "核心思路与数学工具。",
+            "title": "Approach",
+            "type": "string"
+          },
+          "id": {
+            "description": "方案标识（如 A / B）。",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "方法名。",
+            "title": "Name",
+            "type": "string"
+          },
+          "risks": {
+            "description": "该方案的主要风险与失效条件。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "steps": {
+            "description": "可执行的实验步骤（能直接转成 Python 实验）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "approach",
+          "steps",
+          "risks"
+        ],
+        "title": "PlanOption",
+        "type": "object"
+      },
+      "PlanProposal": {
+        "additionalProperties": false,
+        "description": "建模方案页正文投影：MODEL_PLANNING 阶段真实 LLM 节点的最新成功输出（审批门的确认对象）。节点侧已保证 recommended_plan_id 指向 plans 中的方案；llm_attempts 等过程杂项不进入本投影。",
+        "properties": {
+          "plans": {
+            "description": "候选方案列表（当前提示词约定为 A/B 两套）。",
+            "items": {
+              "$ref": "#/components/schemas/PlanOption"
+            },
+            "minItems": 1,
+            "title": "Plans",
+            "type": "array"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "推荐理由（与数据规模、约束和评审标准的匹配度）；节点未给出时为 null。",
+            "title": "Rationale"
+          },
+          "recommended_plan_id": {
+            "description": "推荐方案的 id；审批「采用当前方案」即采纳该方案。",
+            "title": "Recommended Plan Id",
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "run_id",
+          "plans",
+          "recommended_plan_id",
+          "rationale",
+          "updated_at"
+        ],
+        "title": "PlanProposal",
         "type": "object"
       },
       "PreferencesUpdateRequest": {
@@ -2402,6 +2808,16 @@
         "title": "Resolution",
         "type": "object"
       },
+      "Result": {
+        "description": "该项检查结论。",
+        "enum": [
+          "pass",
+          "warn",
+          "fail"
+        ],
+        "title": "Result",
+        "type": "string"
+      },
       "Route": {
         "enum": [
           "/task/running",
@@ -2449,6 +2865,70 @@
         "pattern": "^[a-f0-9]{64}$",
         "title": "Sha256",
         "type": "string"
+      },
+      "StageOutputs": {
+        "description": "五类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。\n\n每个字段是对应阶段（DATA_PREPARATION/MODEL_PLANNING/EXPERIMENTING+VALIDATING/\nPAPER_WRITING）真实节点的最新成功输出投影；阶段尚未成功完成时对应字段为\nnull（不是 404——运行本身存在，只是该阶段的正文还没有）。delivery_manifest\n在运行尚无任何可交付内容（无产物且五个阶段均未产出）时也为 null。",
+        "properties": {
+          "dataset_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivery_manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryManifest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "document_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "experiment_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExperimentSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan_proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "StageOutputs",
+        "type": "object"
       },
       "StepRun": {
         "additionalProperties": false,
@@ -2594,6 +3074,61 @@
           "option_id"
         ],
         "title": "TaskAgentAction",
+        "type": "object"
+      },
+      "TaskIntakeInput": {
+        "description": "发送前接待判定的输入：首页/确认页的任务描述与是否带附件。",
+        "properties": {
+          "goal": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "has_attachments": {
+            "default": false,
+            "title": "Has Attachments",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "title": "TaskIntakeInput",
+        "type": "object"
+      },
+      "TaskIntakeResult": {
+        "description": "接待判定结果：modeling_task 才继续创建任务，其余原地展示 reply。",
+        "properties": {
+          "intent": {
+            "enum": [
+              "modeling_task",
+              "needs_info",
+              "chat"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "reply": {
+            "default": "",
+            "title": "Reply",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "heuristic",
+              "judge",
+              "fallback"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent",
+          "source"
+        ],
+        "title": "TaskIntakeResult",
         "type": "object"
       },
       "TaskRun": {
@@ -2880,6 +3415,31 @@
         "title": "UsageSettingsUpdateRequest",
         "type": "object"
       },
+      "ValidationCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "检查名（结果合理性、稳健性等）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "description": "依据，一句话。",
+            "title": "Note",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Result"
+          }
+        },
+        "required": [
+          "name",
+          "result",
+          "note"
+        ],
+        "title": "ValidationCheck",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2920,6 +3480,53 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "ValidationReport": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "description": "逐项检查列表。",
+            "items": {
+              "$ref": "#/components/schemas/ValidationCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "risks": {
+            "description": "主要风险与失效条件；节点未给出时为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "validation_summary": {
+            "description": "一段话的检验结论（如实包含保留意见），供论文阶段引用。",
+            "title": "Validation Summary",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        },
+        "required": [
+          "verdict",
+          "checks",
+          "risks",
+          "validation_summary"
+        ],
+        "title": "ValidationReport",
+        "type": "object"
+      },
+      "Verdict": {
+        "description": "检验总体结论：pass 可信 / concerns 可用但有保留 / fail 不可信需重做。",
+        "enum": [
+          "pass",
+          "concerns",
+          "fail"
+        ],
+        "title": "Verdict",
+        "type": "string"
+      },
       "omm_contracts__v1__approval_request__Status": {
         "enum": [
           "PENDING",
@@ -2954,6 +3561,183 @@
         ],
         "title": "Status",
         "type": "string"
+      },
+      "omm_contracts__v1__delivery_manifest__ArtifactProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "download_url": {
+            "anyOf": [
+              {
+                "pattern": "^/api/v1/artifacts/art_[0-9a-f]{32}/download$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
+          "id": {
+            "pattern": "^art_[0-9a-f]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/omm_contracts__v1__delivery_manifest__Kind"
+          },
+          "media_type": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "producer_node": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer Node"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "status": {
+            "$ref": "#/components/schemas/omm_contracts__v1__delivery_manifest__Status"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "media_type",
+          "size_bytes",
+          "status",
+          "producer_node",
+          "download_url"
+        ],
+        "title": "ArtifactProjection",
+        "type": "object"
+      },
+      "omm_contracts__v1__delivery_manifest__Kind": {
+        "enum": [
+          "dataset",
+          "code",
+          "figure",
+          "table",
+          "log",
+          "report",
+          "paper",
+          "model",
+          "other"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "omm_contracts__v1__delivery_manifest__Status": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "STALE",
+          "DELETED"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "omm_contracts__v1__modeling_workspace_view__ArtifactProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "download_url": {
+            "anyOf": [
+              {
+                "pattern": "^/api/v1/artifacts/art_[0-9a-f]{32}/download$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
+          "id": {
+            "pattern": "^art_[0-9a-f]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind1"
+          },
+          "media_type": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "producer_node": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer Node"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "status": {
+            "$ref": "#/components/schemas/omm_contracts__v1__modeling_workspace_view__Status"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "media_type",
+          "size_bytes",
+          "status",
+          "producer_node",
+          "download_url"
+        ],
+        "title": "ArtifactProjection",
+        "type": "object"
       },
       "omm_contracts__v1__modeling_workspace_view__Kind": {
         "enum": [
@@ -3858,6 +4642,46 @@
         ]
       }
     },
+    "/api/llm/models": {
+      "post": {
+        "description": "按表单当前值拉取该接口提供的模型 ID，供「默认模型 ID」补全。\n\n只读一张列表：不产生 token、不记用量、不落库，因此也不受预算闸门约束。\n密钥同样只在服务端使用，与其余出网点一致。",
+        "operationId": "list_llm_models_api_llm_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Llm Models",
+        "tags": [
+          "llm"
+        ]
+      }
+    },
     "/api/llm/test": {
       "post": {
         "description": "用表单当前值做一次最小补全，验证地址、密钥与模型 ID 全链路可用。",
@@ -4707,6 +5531,47 @@
         ]
       }
     },
+    "/api/v1/task-intake": {
+      "post": {
+        "operationId": "create_task_intake_api_v1_task_intake_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskIntakeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskIntakeResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Task Intake",
+        "tags": [
+          "task-intake"
+        ]
+      }
+    },
     "/api/v1/task-runs": {
       "get": {
         "operationId": "list_task_runs_api_v1_task_runs_get",
@@ -5089,6 +5954,48 @@
         "summary": "List Run Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/api/v1/task-runs/{run_id}/stage-outputs": {
+      "get": {
+        "operationId": "get_stage_outputs_api_v1_task_runs__run_id__stage_outputs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageOutputs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Stage Outputs",
+        "tags": [
+          "stage-outputs"
         ]
       }
     },

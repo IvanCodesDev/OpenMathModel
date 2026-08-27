@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmathmodel.contracts.v1.document-draft",
+  "title": "DocumentDraft",
+  "description": "论文编辑页正文投影：PAPER_WRITING 阶段真实 LLM 节点的最新成功输出（结构化论文草稿）。version/updated_at 支撑后续论文编辑的版本演进；markdown 产物本体沿 Artifact 下载链路获取。",
+  "type": "object",
+  "properties": {
+    "run_id": { "$ref": "#/$defs/run_id" },
+    "title": { "type": "string", "description": "论文标题。" },
+    "abstract": { "type": "string", "description": "摘要（问题、方法、核心结果、结论）。" },
+    "keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "关键词；节点未给出时为空列表。"
+    },
+    "sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/paper_section" },
+      "description": "章节列表，按论文顺序排列。"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "草稿版本号：PAPER_WRITING 阶段每次成功产出递增（重试/重跑产生新版本）。"
+    },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "required": ["run_id", "title", "abstract", "keywords", "sections", "version", "updated_at"],
+  "additionalProperties": false,
+  "$defs": {
+    "run_id": { "type": "string", "pattern": "^run_[0-9a-f]{32}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "UTC ISO-8601，统一以 Z 结尾。"
+    },
+    "paper_section": {
+      "type": "object",
+      "properties": {
+        "heading": { "type": "string", "description": "章节标题。" },
+        "content": { "type": "string", "description": "正文 Markdown（可含列表与表格）。" }
+      },
+      "required": ["heading", "content"],
+      "additionalProperties": false
+    }
+  }
+}

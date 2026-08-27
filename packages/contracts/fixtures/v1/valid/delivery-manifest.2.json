@@ -1,0 +1,20 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "problem_title": null,
+  "artifacts": [
+    {
+      "id": "art_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "kind": "figure",
+      "name": "基线实验结果图（模拟）",
+      "media_type": "image/svg+xml",
+      "size_bytes": null,
+      "status": "READY",
+      "producer_node": null,
+      "download_url": null
+    }
+  ],
+  "key_metrics": null,
+  "validation_verdict": null,
+  "paper_citation": null,
+  "updated_at": "2026-08-27T01:20:00.000000Z"
+}

@@ -91,6 +91,10 @@ export interface PageProjection {
   nodes: [string, ...string[]];
   status: PageStatus;
   artifact_ids: string[];
+  /**
+   * 本任务专属的计划短句（问题分析的 plan_outline 派生，方案确认后实验条目细化为选中方案）；未产出时为 null，展示层回退 label。
+   */
+  plan_text?: null | string;
 }
 export interface ArtifactProjection {
   id: string;

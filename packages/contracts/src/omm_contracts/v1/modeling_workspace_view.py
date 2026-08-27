@@ -153,6 +153,10 @@ class PageProjection(BaseModel):
     nodes: list[Node] = Field(..., min_length=1)
     status: PageStatus
     artifact_ids: list[constr(pattern=r"^art_[0-9a-f]{32}$")]
+    plan_text: constr(min_length=1, max_length=300) | None = Field(
+        None,
+        description="本任务专属的计划短句（问题分析的 plan_outline 派生，方案确认后实验条目细化为选中方案）；未产出时为 null，展示层回退 label。",
+    )
 
 
 class Kind1(Enum):
