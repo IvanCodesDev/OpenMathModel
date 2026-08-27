@@ -1130,9 +1130,11 @@ class EngineLlmPort:
     """omm_agent_core.LlmPort 实现：渲染提示词模板后走同一条回退链。
 
     技能节点自带 JSON 解析与一次修复重试，这里只负责把渲染好的提示词发出去。
-    on_event 是过程事件回调（进 run.log）：每次模型调用产出一条 llm_call
-    摘要（模型/接口/耗时/用量），推理模型另有一条 thinking（思考内容），
-    供工作台把「智能体正在做什么」逐条展示出来（设计文档 §12.4 微技能级文案）。
+    on_event 是过程事件回调（进 run.log）：每次模型调用**开始**时产出一条
+    llm_call_started（工作台立即显示走秒中的思考行，调用期间不再静默），
+    结束时产出一条 llm_call 摘要（模型/接口/耗时/用量），推理模型另有一条
+    thinking（思考内容），供工作台把「智能体正在做什么」逐条展示出来
+    （设计文档 §12.4 微技能级文案）。
     """
 
     def __init__(
@@ -1170,6 +1172,13 @@ class EngineLlmPort:
                 f"上次输出（节选）：\n{previous[:2000]}\n\n"
                 "请修正以上问题，重新只输出一个符合输出要求的 JSON 对象。"
             )
+        # 调用开始即发过程事件：模型一次调用动辄一两分钟，没有这条事件的话
+        # 工作台在整个阶段里收不到任何东西，结束时才一次性收到全部过程行。
+        self._emit({
+            "kind": "llm_call_started",
+            "prompt_id": prompt_id,
+            "repair": bool(repair_error),
+        })
         outcome = complete_with_fallback(
             self._config,
             [{"role": "user", "content": prompt}],

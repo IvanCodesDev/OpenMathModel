@@ -354,7 +354,9 @@ def _prompt_registry() -> Optional[PromptRegistry]:
     return registry
 
 
-def _llm_wiring(session: Session, run: TaskRunRow) -> tuple[Optional[EngineLlmPort], dict]:
+def _llm_wiring(
+    session: Session, run: TaskRunRow, checkpoint: bool = False
+) -> tuple[Optional[EngineLlmPort], dict]:
     """按运行归属解析自定义 API 配置：可用则换上真实 LLM 节点。"""
     owner = session.execute(
         select(ProjectRow.owner).where(ProjectRow.id == run.project_id)
@@ -383,15 +385,21 @@ def _llm_wiring(session: Session, run: TaskRunRow) -> tuple[Optional[EngineLlmPo
             )
             return None, {}
         config = replace(config, endpoints=free)
-    # 模型调用的过程事件（思考内容/调用摘要）进 run.log：与本次 advance 同事务
-    # 提交，SSE 把它们转发给工作台的执行轨迹逐条展示。每次成功调用同时记入
-    # llm_usage_records（用量监控），与本次 advance 同事务。
+    # 模型调用的过程事件（调用开始/思考内容/调用摘要）进 run.log，SSE 转发给
+    # 工作台的执行轨迹逐条展示。推进线程（checkpoint 模式）下每条过程事件在
+    # 发生的当下就独立提交：SSE 是「轮询已提交行」的模式，不提交就要等节点结束
+    # 的下一次 checkpoint，一个阶段几分钟的模型调用期间工作台会完全静默、结束时
+    # 一次性闪现整批过程行。HTTP 动作路径（checkpoint=False）保持整请求一个
+    # 事务，不在中途提交。每次成功调用同时记入 llm_usage_records（用量监控）。
+    def _process_event(payload: dict) -> None:
+        append_event(session, run.id, AgentEventType.run_log.value, payload)
+        if checkpoint:
+            session.commit()
+
     port = EngineLlmPort(
         config,
         registry,
-        on_event=lambda payload: append_event(
-            session, run.id, AgentEventType.run_log.value, payload
-        ),
+        on_event=_process_event,
         on_usage=lambda outcome: record_usage(
             session,
             user_id=user.id,
@@ -789,7 +797,7 @@ def _load_core_events(session: Session, run_id: str) -> list[CoreEvent]:
 def _build_engine(
     session: Session, run: TaskRunRow, checkpoint: bool = False
 ) -> tuple[TaskRunEngine, NodeServices]:
-    llm_port, node_overrides = _llm_wiring(session, run)
+    llm_port, node_overrides = _llm_wiring(session, run, checkpoint=checkpoint)
     services = NodeServices(
         clock=_ApiClock(),
         ids=_ApiIds(),

@@ -273,7 +273,8 @@ def test_llm_failure_fails_step_and_run_is_retryable(client, monkeypatch):
 
 
 def test_llm_process_events_land_in_run_log(client, monkeypatch):
-    """真实节点的模型调用要产生过程事件：thinking（思考内容）+ llm_call（调用摘要）。
+    """真实节点的模型调用要产生过程事件：llm_call_started（调用开始，供工作台
+    立即显示走秒思考行）→ thinking（思考内容）→ llm_call（调用摘要）。
 
     这是工作台执行轨迹「看到智能体在做什么」的数据来源（设计文档 §12.4）。
     """
@@ -284,13 +285,19 @@ def test_llm_process_events_land_in_run_log(client, monkeypatch):
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
     logs = [event["payload"] for event in events if event["type"] == "run.log"]
 
+    started = [entry for entry in logs if entry.get("kind") == "llm_call_started"]
+    assert started, "每次模型调用开始都应有 llm_call_started 过程事件"
+    assert started[0]["prompt_id"] == "problem_analysis.default"
+
     thinking = [entry for entry in logs if entry.get("kind") == "thinking"]
     assert thinking, "推理内容应作为 thinking 过程事件进入 run.log"
     assert thinking[0]["prompt_id"] == "problem_analysis.default"
     assert "梳理目标" in thinking[0]["text"]
+    assert logs.index(started[0]) < logs.index(thinking[0]), "调用开始事件先于思考内容"
 
     calls = [entry for entry in logs if entry.get("kind") == "llm_call"]
     assert len(calls) >= 2, "问题分析与建模方案各至少一次模型调用摘要"
+    assert len(started) == len(calls), "开始事件与调用摘要一一配对"
     assert calls[0]["model"] == "gpt-test"
     assert calls[0]["endpoint"] == "测试网关"
     assert calls[0]["prompt_tokens"] == 10

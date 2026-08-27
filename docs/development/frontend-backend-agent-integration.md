@@ -685,6 +685,14 @@ GET /api/health
 - 「默认模型 ID」补全（新增 `POST /api/llm/models`）：预设表是快照、写下来那天就开始过期，因此让输入框直接问接口本身要模型列表——OpenAI 兼容家族 `GET {base}/v1/models`（裸域名补 `/v1`，不套「路径前缀」，那是对话补全用的）、Anthropic `GET {base}/v1/models`（x-api-key + anthropic-version）、Gemini `GET {base}/v1beta/models?pageSize=200&key=`（去掉条目名的 `models/` 前缀）。密钥仍只在服务端使用，不产生 token、不记用量，因而也不受预算闸门约束；上限 300 条，网关未实现（404/405）时给 `LLM_MODELS_UNSUPPORTED` 并指向「手填模型 ID」。前端在现有输入框上挂原生 `<datalist>`（UA 默认 `display:none`，零布局改动）：先按 Base URL 域名秒填预设型号，聚焦时再拉真实清单合并（`fetchEndpointModels` 按「协议+地址+密钥」缓存，失败不留缓存以便重试），拉不到就只留预设，不打断填写。新增 8 个后端用例覆盖三种协议的路径与头、404 指引、中转站门控与登录校验。
 - 费用估算表（`usage.py`，影响预算硬闸门）：按「本地零费用 → 当代型号 → 上一代型号 → 家族兜底」重新分组，补 GPT-5.6 三档、Fable/Opus 5、Gemini 3.6 Flash、DeepSeek V4 Pro/Flash（2026-08-16 起峰谷两价，按峰价保守估）、Qwen3.8-Flash、GLM-5.3/5.2、Grok 4.5/4.6 的实际单价；顺带修掉 `qwen3:` 本地标签被 qwen 家族兜底价抢先命中的失效条目。未收录的新型号仍落家族兜底，不会算不出钱。
 
+### 2026-08-27 执行过程事件即时可见（修复「阶段静默后整批闪现」）
+
+真实节点的一次模型调用动辄一两分钟，此前 `EngineLlmPort.on_event` 产出的 `thinking`/`llm_call` 过程事件只挂在推进事务里、要等节点结束的下一次 checkpoint 才随 `STEP_SUCCEEDED` 一起提交——SSE 是轮询已提交行的模式，结果是每个阶段执行期间工作台完全静默，结束时整批过程行同时闪现。本批修复：
+
+- 推进线程（checkpoint 模式）下，每条过程事件在发生的当下独立提交并立即对 SSE 可见；HTTP 动作路径保持整请求一个事务不变。
+- 新增 `llm_call_started` 过程事件（`kind`/`prompt_id`/`repair`）：每次模型调用开始时发出。前端把它渲染为带实时走秒的「深度思考 · 阶段」行，`thinking` 到达时整体替换为含思考全文的最终行，无思考内容的模型由 `llm_call` 就地落定（活动流仍不展示模型与接口名）。
+- 用户刷新页面时若某次调用仍在进行，SSE 首连回放会重建这条走秒行，落点仍在首气泡活动流。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

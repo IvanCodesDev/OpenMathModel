@@ -487,6 +487,15 @@ function streamRow(root: HTMLElement, options: StreamRowOptions): void {
   streamAppend(root, item);
 }
 
+/** 移除等待中的行：被信息更完整的行整体替换时用（与「落定」不同，不保留元素）。 */
+function dropPendingStreamRow(root: HTMLElement, key: string): void {
+  const state = streamState(root);
+  const entry = state.pending.get(key);
+  if (!entry) return;
+  state.pending.delete(key);
+  entry.element.remove();
+}
+
 /** 等待中的行落定：优先用服务端时间差，取不到再退回本地走秒值。 */
 function settleStreamRow(root: HTMLElement, key: string, endedServerMs: number | null): void {
   const state = streamState(root);
@@ -536,7 +545,21 @@ function ingestStreamEvent(
     }
     case "run.log": {
       const kind = String(payload.kind ?? "");
+      if (kind === "llm_call_started") {
+        // 调用开始即出走秒行：一次模型调用动辄一两分钟，没有这行的话调用期间
+        // 活动流完全静默、结束时整批闪现。结束事件到达时被 thinking 行整体
+        // 替换（推理模型）或就地落定（无思考内容的模型）。
+        const stage = STAGE_BY_PROMPT[String(payload.prompt_id)];
+        streamRow(root, {
+          key: `llm:${String(payload.prompt_id)}`,
+          icon: "sparkle",
+          title: `深度思考${stage ? ` · ${stage}` : ""}`,
+          waitingSinceMs: eventMs,
+        });
+        return;
+      }
       if (kind === "thinking") {
+        dropPendingStreamRow(root, `llm:${String(payload.prompt_id)}`);
         streamRow(root, {
           icon: "sparkle",
           title: `深度思考${STAGE_BY_PROMPT[String(payload.prompt_id)] ? ` · ${STAGE_BY_PROMPT[String(payload.prompt_id)]}` : ""}`,
@@ -546,9 +569,11 @@ function ingestStreamEvent(
         return;
       }
       if (kind === "llm_call") {
+        // 无思考内容的模型不会发 thinking：调用摘要到达时就地落定走秒行。
         // 对话页不显示模型/接口等信息（与聊天回复的既有政策一致）：llm_call 过程事件
-        // 不进活动流；用量透明度只体现在设置中心的本机用量记录。早退避免落入下方
+        // 本身不进活动流；用量透明度只体现在设置中心的本机用量记录。早退避免落入下方
         // 通用 run.log 兜底把 payload（含模型名）原样展示出来。
+        settleStreamRow(root, `llm:${String(payload.prompt_id)}`, eventMs);
         return;
       }
       if (payload.tool === "python_run") {
