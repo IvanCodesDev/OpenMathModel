@@ -8,7 +8,13 @@ import { uploadAttachments } from "../attachments/upload";
 import { fetchMe, invalidateMe } from "../auth/api";
 import { openAuthDialog } from "../auth/auth-dialog";
 import type { ScreenId } from "../types/screens";
-import { persistPendingTaskReferences } from "./composer-references";
+import {
+  clearComposerReferences,
+  composerReferenceBlock,
+  listComposerReferences,
+  persistPendingTaskReferences,
+} from "./composer-references";
+import { runHomeChatTurn } from "./home-chat";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
   buildRunningUrl,
@@ -102,7 +108,9 @@ function currentTaskType(root: HTMLElement, fallback: string): string {
 
 type SubmitOutcome =
   | { status: "created"; url: string }
-  | { status: "auth-required" };
+  | { status: "auth-required" }
+  /** 接待判定认为不该启动任务（闲聊/缺题面）：原地展示回应，不建项目。 */
+  | { status: "guidance"; reply: string };
 
 interface SubmitOptions {
   signal: AbortSignal;
@@ -110,6 +118,8 @@ interface SubmitOptions {
   attachments?: AttachmentStore;
   onProgress: (message: string) => void;
   onDraft: (draft: TaskDraft) => void;
+  /** 首页对话已开启：接待判定的进度不再写状态行（气泡区自会反馈）。 */
+  quietIntake?: () => boolean;
 }
 
 async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<SubmitOutcome> {
@@ -123,6 +133,26 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
 
   const me = await fetchMe(true);
   if (!me) return { status: "auth-required" };
+
+  // 接待判定（对话优先，Codex/opencode 式门控）：闲聊或缺题面的输入不建任务、
+  // 不产生垃圾项目，转入首页对话由用户配置的模型正常回应；判定异常由服务端
+  // 放行，这里不会被卡住。已写回 project_id 的失败重试跳过判定——那份内容
+  // 此前已被放行过。@ 引用了赛题 = 带着题面来的（「做这道题」），与附件同权
+  // 直接放行；引用论文/方法不算题面，照常判定（多半是想聊方法）。
+  if (!draft.project_id) {
+    if (!options.quietIntake?.()) options.onProgress("正在确认任务类型…");
+    const hasProblemReference = listComposerReferences().some(item => item.kind === "problem");
+    const intake = await modelingWorkspaceApi.runTaskIntake(
+      {
+        goal: draft.description,
+        has_attachments: draft.attachments.length > 0 || hasProblemReference,
+      },
+      options.signal,
+    );
+    if (intake.intent !== "modeling_task") {
+      return { status: "guidance", reply: intake.reply };
+    }
+  }
 
   let projectId = draft.project_id;
   if (!projectId) {
@@ -174,6 +204,13 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
       task_type: draft.task_type,
       selected_model: draft.selected_model,
       attachment_metadata: draft.attachments,
+      // @ 引用的赛题/论文/方法正文摘要：问题分析靠它看到真实题面
+      // （「这道题」+ 引用赛题的发送方式，题面全在引用里）。
+      reference_metadata: listComposerReferences().map(reference => ({
+        kind: reference.kind,
+        title: reference.title,
+        excerpt: reference.text.slice(0, 4000),
+      })),
       attachment_upload_state: store && store.list().length > 0
         ? uploadStateOf(store.list())
         : draft.attachments.length > 0 ? "metadata_only" : "none",
@@ -205,6 +242,10 @@ interface TaskSubmitterOptions {
   attachments?: AttachmentStore;
   setBusy: (busy: boolean) => void;
   isDisposed: () => boolean;
+  /** 接待判定不放行时的处理；缺省显示在状态行（确认页）。首页转对话气泡。 */
+  onGuidance?: (reply: string, sentText: string) => void;
+  /** 对话态下接待判定静默进行（气泡区自会反馈），不写状态行。 */
+  quietIntake?: () => boolean;
 }
 
 function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
@@ -228,17 +269,31 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
     options.setBusy(true);
     root.dataset.taskStartState = "loading";
     renderStatus(root, "正在验证登录状态并创建项目…");
+    const sentText = draft.description;
     void submitDraft(draft, {
       signal: options.signal,
       attachments: options.attachments,
       onProgress: message => renderStatus(root, message),
       onDraft: updated => { draft = updated; },
+      quietIntake: options.quietIntake,
     }).then(outcome => {
       if (options.isDisposed()) return;
       if (outcome.status === "auth-required") {
         pending = false;
         options.setBusy(false);
         requestAuthentication("请先登录，登录成功后会继续创建当前任务。");
+        return;
+      }
+      if (outcome.status === "guidance") {
+        pending = false;
+        options.setBusy(false);
+        root.dataset.taskStartState = "guidance";
+        if (options.onGuidance) {
+          clearStatus(root);
+          options.onGuidance(outcome.reply, sentText);
+        } else {
+          renderStatus(root, outcome.reply);
+        }
         return;
       }
       root.dataset.taskStartState = "created";
@@ -314,6 +369,24 @@ function mountNewTask(root: HTMLElement): () => void {
       sendButton.disabled = busy;
       sendButton.setAttribute("aria-busy", String(busy));
     },
+    // 接待判定不放行 → 进入首页对话：输入变成用户气泡，回复由用户配置的
+    // 模型流式生成；@ 引用的资料随本轮消息送给模型（与执行页同语义：
+    // 发送成功后清空引用，失败保留以便重试）。输入框清空以便继续聊或
+    // 粘贴完整题面（后续发送仍会先过接待判定，题面完整时自动升级）。
+    onGuidance: (_reply, sentText) => {
+      if (textarea) {
+        textarea.value = "";
+        persistCurrent();
+      }
+      const references = listComposerReferences();
+      void runHomeChatTurn(root, sentText, {
+        referenceContext: composerReferenceBlock(),
+        referenceTitles: references.map(reference => reference.title),
+      }).then(delivered => {
+        if (delivered && references.length > 0) clearComposerReferences();
+      });
+    },
+    quietIntake: () => root.dataset.homeChat === "on",
   });
 
   const persistCurrent = (): boolean => {
