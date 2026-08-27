@@ -82,6 +82,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
+/** 发送前接待判定的结果：modeling_task 才继续创建任务，其余原地展示 reply。 */
+export interface TaskIntakeResult {
+  intent: "modeling_task" | "needs_info" | "chat";
+  reply: string;
+  source: "heuristic" | "judge" | "fallback";
+}
+
+/** GET /task-runs/{id}/stage-outputs：五类页面正文（未产出的阶段为 null）。 */
+export interface StageOutputsPayload {
+  run_id: string;
+  dataset_profile: import("@openmathmodel/contracts").DatasetProfile | null;
+  plan_proposal: import("@openmathmodel/contracts").PlanProposal | null;
+  experiment_summary: import("@openmathmodel/contracts").ExperimentSummary | null;
+  document_draft: import("@openmathmodel/contracts").DocumentDraft | null;
+  delivery_manifest: import("@openmathmodel/contracts").DeliveryManifest | null;
+}
+
 export const modelingWorkspaceApi = {
   createProject(input: CreateProjectInput, signal?: AbortSignal): Promise<Project> {
     return request<Project>("/api/v1/projects", {
@@ -90,6 +107,27 @@ export const modelingWorkspaceApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
+  },
+
+  /** 发送前接待判定（对话优先门控）：判定失败时服务端已放行，前端无需兜底分支。 */
+  runTaskIntake(
+    input: { goal: string; has_attachments: boolean },
+    signal?: AbortSignal,
+  ): Promise<TaskIntakeResult> {
+    return request<TaskIntakeResult>("/api/v1/task-intake", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** 五类页面正文（数据画像/建模方案/实验总结/论文草稿/交付清单）。 */
+  getStageOutputs(runId: string, signal?: AbortSignal): Promise<StageOutputsPayload> {
+    return request<StageOutputsPayload>(
+      `/api/v1/task-runs/${encodeURIComponent(runId)}/stage-outputs`,
+      { signal },
+    );
   },
 
   /** 项目列表；默认只含未归档，archived=true 时只看已归档。 */

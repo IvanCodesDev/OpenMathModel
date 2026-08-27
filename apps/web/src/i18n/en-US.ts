@@ -376,6 +376,7 @@ const TASK_RUNNING: Record<string, string> = {
   "难度": "difficulty",
   "前往设置中心配置模型接口": "Configure a model endpoint in Settings",
   "请先登录后再使用模型对话": "Sign in before chatting with the model",
+  "请先登录后再继续对话。": "Sign in to continue the conversation.",
   "对话请求失败，请稍后再试": "Chat request failed — please try again later",
   "模型没有返回内容，请重试或检查接口配置":
     "The model returned nothing — retry or check the endpoint settings",
@@ -565,6 +566,14 @@ const DATA_STAGE: Record<string, string> = {
   "站点基础信息": "Station reference data",
   "天气观测数据": "Weather observations",
   "清洗后建模数据": "Cleaned modeling data",
+  // 真实阶段正文（stage-content：DatasetProfile → 数据准备页）
+  "数据画像": "Data profile",
+  "数据集": "Datasets",
+  "准备步骤": "Preparation steps",
+  "数据清单与质量风险": "Datasets and quality risks",
+  "质量风险": "Quality risks",
+  "准备步骤与清洗策略": "Preparation steps and cleaning strategy",
+  "衍生变量": "Derived features",
 };
 
 /** 建模方案页。 */
@@ -697,6 +706,15 @@ const MODEL_STAGE: Record<string, string> = {
     "Plan v2 compares accuracy, efficiency, interpretability and risk.",
   "已确认": "Confirmed",
   "已应用": "Applied",
+  // 真实阶段正文（stage-content：PlanProposal → 建模方案页）
+  "建议采用方案": "Recommended plan",
+  "方案": "Plan",
+  "推荐主方案": "recommended",
+  "核心方法": "Core method",
+  "实验步骤": "Experiment steps",
+  "主要风险": "Main risks",
+  "推荐理由": "Why recommended",
+  "推荐理由与风险见下方方案详情": "see the plan details below for rationale and risks",
 };
 
 /** 实验与验证页。 */
@@ -857,6 +875,14 @@ const EXPERIMENT_STAGE: Record<string, string> = {
   "返回论文编辑": "Back to paper editor",
   "返回任务执行": "Back to task run",
   "返回首页": "Back to home",
+  // 真实阶段正文（stage-content：ExperimentSummary → 实验与验证页）
+  "结果通过": "Result passed",
+  "结果可用（有保留意见）": "Result usable (with reservations)",
+  "结果未通过": "Result failed",
+  "实验已完成": "Experiments complete",
+  "风险": "Risk",
+  "实现思路": "Implementation approach",
+  "检验结论": "Validation verdict",
 };
 
 /** 论文编辑与最终成果页。 */
@@ -1003,6 +1029,10 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "已开始下载全部文件": "Downloading all files",
   "已复制为新任务": "Duplicated as a new task",
   "历史供需数据_2024Q4.xlsx 已加入下载队列": "supply-demand-2024Q4.xlsx queued for download",
+  // 真实阶段正文（stage-content：DocumentDraft → 论文编辑页；DeliveryManifest → 最终成果页）
+  "摘要": "Abstract",
+  "关键词": "Keywords",
+  "产物数量": "Artifact count",
 };
 
 /** 赛题库、论文库与方法库。 */
@@ -1048,28 +1078,33 @@ const LIBRARY: Record<string, string> = {
   "原题 PDF · 353 附件": "Original PDF · 353 attachments",
   "该记录没有可公开跳转的官方来源页": "This record has no public official source page",
   "资源采集队列中": "Queued for collection",
-  "按研究主题、年份与题组浏览获奖论文，点击即可阅读完整正文。":
-    "Browse award papers by topic, year and problem group; open one to read it in full.",
+  "先选比赛，再按年份与题组浏览获奖论文，点击即可阅读完整正文。":
+    "Pick a contest first, then browse award papers by year and problem group; open one to read it in full.",
   "篇完整论文": "full papers",
   "搜索论文": "Search papers",
   "搜索研究主题、论文编号或关键词": "Search topics, paper numbers or keywords",
   "全部年份": "All years",
   "按年份筛选论文": "Filter papers by year",
   "论文分类筛选": "Paper filters",
+  "按比赛筛选": "Filter by contest",
+  "研究生赛（华为杯）": "CPMCM (Huawei Cup)",
+  "美赛（MCM/ICM）": "COMAP MCM/ICM",
   "按奖项分类": "By award",
   "奖项": "Award",
   "题组": "Problem group",
   "按题组筛选": "Filter by problem group",
   "全部题组": "All groups",
+  "未标注题组": "Group not recorded",
   "研究主题与论文编号": "Topic and paper number",
-  "题目分类": "Category",
+  "比赛与题组": "Contest and group",
   "论文编号": "Paper number",
   "论文编号待补充": "Paper number pending",
   "阅读论文：": "Read paper:",
   "，编号": ", no.",
   "完整 PDF": "Full PDF",
   "没有符合条件的论文": "No matching papers",
-  "调整年份、题组或搜索词后再试。": "Adjust the year, group or search terms and try again.",
+  "调整比赛、年份、题组或搜索词后再试。":
+    "Adjust the contest, year, group or search terms and try again.",
   "篇 · 第 1 页": "papers · page 1",
   "按年份从新到旧排列": "Newest year first",
   "题获奖论文": "award papers",
@@ -1429,6 +1464,7 @@ const SETTINGS: Record<string, string> = {
   "诊断中…": "Running diagnostics…",
   "系统信息已复制": "System info copied",
   "用量明细 CSV 已生成": "Usage CSV generated",
+  "正在导出…": "Exporting…",
   "数据导出申请已提交，完成后会通知你":
     "Export request submitted; you will be notified when it is ready",
   "本地缓存已清理，共释放 386 MB": "Local cache cleared, 386 MB freed",

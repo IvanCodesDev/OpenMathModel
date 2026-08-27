@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { File } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { URL } from "node:url";

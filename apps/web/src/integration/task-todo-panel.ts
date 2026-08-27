@@ -55,7 +55,9 @@ function applyCollapsed(panel: HTMLElement, collapsed: boolean): void {
   panel.querySelector<HTMLElement>(".todo-collapsible")?.classList.toggle("is-collapsed", collapsed);
 }
 
-/** 面板锚定：跟随 composer 的实际几何（各布局的 composer 位置/尺寸不同，不写死）。 */
+/** 面板锚定：跟随 composer 的实际几何（各布局的 composer 位置/尺寸不同，不写死）。
+ *  面板是绝对定位、不挤压布局，因此要把「composer + 面板」的实际总高度让给
+ *  滚动区的 padding-bottom——否则对话内容的最后一段会被面板盖住，划到底也看不到。 */
 function anchorPanel(panel: HTMLElement, composer: HTMLElement): void {
   const pane = composer.closest<HTMLElement>(".chat-pane") ?? composer.parentElement;
   if (!pane) return;
@@ -65,6 +67,12 @@ function anchorPanel(panel: HTMLElement, composer: HTMLElement): void {
   panel.style.left = `${Math.round(composerRect.left - paneRect.left)}px`;
   panel.style.width = `${Math.round(composerRect.width)}px`;
   panel.style.bottom = `${Math.round(paneRect.bottom - composerRect.top + 10)}px`;
+  const scroll = pane.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
+  if (scroll) {
+    const panelHeight = panel.hidden ? 0 : panel.getBoundingClientRect().height;
+    const reserved = Math.round(composerRect.height + panelHeight + 56);
+    scroll.style.paddingBottom = `${reserved}px`;
+  }
 }
 
 function ensurePanel(root: HTMLElement): HTMLElement | null {
@@ -99,6 +107,8 @@ function ensurePanel(root: HTMLElement): HTMLElement | null {
   if (typeof ResizeObserver !== "undefined") {
     const observer = new ResizeObserver(reposition);
     observer.observe(composer);
+    // 面板自身高度随条目增减与展开/折叠变化：同样要重算滚动区的底部让位
+    observer.observe(panel);
     const pane = composer.closest<HTMLElement>(".chat-pane");
     if (pane) observer.observe(pane);
   }

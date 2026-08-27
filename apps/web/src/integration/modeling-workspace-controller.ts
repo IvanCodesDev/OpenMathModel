@@ -6,12 +6,15 @@ import { notifyRunStatusChange } from "../notifications/desktop-notifications";
 import { saveHistoryEnabled } from "../preferences/privacy-preferences";
 import { forgetLastTask, rememberLastTask } from "../tasks/last-task-record";
 import type { ScreenId } from "../types/screens";
+import { renderMarkdown } from "../text/markdown";
+import { typesetMath } from "../text/math-typeset";
 import {
   modelingWorkspaceApi,
   WORKSPACE_EVENT_TYPES,
   WorkspaceApiError,
 } from "./modeling-workspace-api";
 import { hydrateRecentTasks } from "./recent-tasks";
+import { renderStageContent } from "./stage-content";
 import { hideTaskTodos, renderTaskTodos, type TaskTodoItem } from "./task-todo-panel";
 import {
   openAttachmentsDialog,
@@ -232,14 +235,103 @@ function isPlanningPhase(view: ModelingWorkspaceView): boolean {
 
 const STAGE_BY_PROMPT: Record<string, string> = {
   "problem_analysis.default": "题意解析",
+  "data_preparation.default": "数据准备",
   "model_planning.default": "建模方案",
+  "experiment_code.default": "实验代码",
+  "validating.default": "结果验证",
+  "paper_writing.default": "论文撰写",
 };
+
+const STAGE_OUTPUT_LABELS: Record<string, string> = {
+  PROBLEM_ANALYSIS: "题意解析",
+  DATA_PREPARATION: "数据准备",
+  MODEL_PLANNING: "建模方案",
+  EXPERIMENTING: "实验运行",
+  VALIDATING: "结果验证",
+  PAPER_WRITING: "论文撰写",
+};
+
+/** 阶段产出 → 可展开详情的纯文本（执行轨迹的「看到智能体做了什么」主体）。 */
+function formatStageOutputs(node: string, outputs: Record<string, unknown>): string {
+  const str = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+  const list = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map(item => str(item)).filter(Boolean) : [];
+  const section = (label: string, items: string[]): string =>
+    items.length ? `${label}：\n${items.map(item => `- ${item}`).join("\n")}` : "";
+  const parts: string[] = [];
+  if (node === "PROBLEM_ANALYSIS") {
+    if (str(outputs.title)) parts.push(`标题：${str(outputs.title)}`);
+    if (str(outputs.problem_type)) parts.push(`问题类型：${str(outputs.problem_type)}`);
+    parts.push(section("目标问题", list(outputs.objectives)));
+    parts.push(section("约束条件", list(outputs.constraints)));
+    parts.push(section("数据需求", list(outputs.data_requirements)));
+    parts.push(section("关键假设", list(outputs.key_assumptions)));
+    const outline = Array.isArray(outputs.plan_outline)
+      ? (outputs.plan_outline as Array<Record<string, unknown>>)
+        .map(item => str(item?.text)).filter(Boolean)
+      : [];
+    parts.push(section("执行计划", outline));
+  } else if (node === "DATA_PREPARATION") {
+    if (str(outputs.profile_summary)) parts.push(`数据画像：${str(outputs.profile_summary)}`);
+    const datasets = Array.isArray(outputs.datasets)
+      ? (outputs.datasets as Array<Record<string, unknown>>)
+        .map(item => [str(item?.name), str(item?.source)].filter(Boolean).join("｜")).filter(Boolean)
+      : [];
+    parts.push(section("数据清单", datasets));
+    parts.push(section("准备步骤", list(outputs.preparation_steps)));
+    if (str(outputs.missing_value_strategy)) parts.push(`缺失值策略：${str(outputs.missing_value_strategy)}`);
+    if (str(outputs.outlier_strategy)) parts.push(`异常值策略：${str(outputs.outlier_strategy)}`);
+    parts.push(section("衍生变量", list(outputs.derived_features)));
+  } else if (node === "MODEL_PLANNING") {
+    const plans = Array.isArray(outputs.plans)
+      ? (outputs.plans as Array<Record<string, unknown>>)
+      : [];
+    for (const plan of plans) {
+      const head = `方案 ${str(plan?.id)}｜${str(plan?.name)}：${str(plan?.approach)}`;
+      const steps = section("  步骤", list(plan?.steps));
+      const risks = section("  风险", list(plan?.risks));
+      parts.push([head, steps, risks].filter(Boolean).join("\n"));
+    }
+    if (str(outputs.recommended_plan_id)) parts.push(`推荐方案：${str(outputs.recommended_plan_id)}`);
+    if (str(outputs.rationale)) parts.push(`推荐理由：${str(outputs.rationale)}`);
+  } else if (node === "EXPERIMENTING") {
+    if (str(outputs.approach_summary)) parts.push(`实现思路：${str(outputs.approach_summary)}`);
+    const metrics = outputs.metrics && typeof outputs.metrics === "object"
+      ? Object.entries(outputs.metrics as Record<string, unknown>).map(([key, value]) => `${key} = ${String(value)}`)
+      : [];
+    parts.push(section("核心指标", metrics));
+    const stdout = str(outputs.stdout_tail);
+    if (stdout) parts.push(`运行输出（尾部）：\n${stdout.slice(-600)}`);
+  } else if (node === "VALIDATING") {
+    if (str(outputs.verdict)) parts.push(`总体结论：${str(outputs.verdict)}`);
+    const checks = Array.isArray(outputs.checks)
+      ? (outputs.checks as Array<Record<string, unknown>>)
+        .map(item => [str(item?.name), str(item?.result), str(item?.note)].filter(Boolean).join("｜")).filter(Boolean)
+      : [];
+    parts.push(section("逐项检查", checks));
+    parts.push(section("主要风险", list(outputs.risks)));
+    if (str(outputs.validation_summary)) parts.push(`检验结论：${str(outputs.validation_summary)}`);
+  } else if (node === "PAPER_WRITING") {
+    if (str(outputs.title)) parts.push(`标题：${str(outputs.title)}`);
+    if (str(outputs.abstract)) parts.push(`摘要：${str(outputs.abstract)}`);
+    const keywords = list(outputs.keywords);
+    if (keywords.length) parts.push(`关键词：${keywords.join("；")}`);
+    const sections = Array.isArray(outputs.sections)
+      ? (outputs.sections as Array<Record<string, unknown>>)
+        .map(item => str(item?.heading)).filter(Boolean)
+      : [];
+    parts.push(section("章节", sections));
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
 
 interface AgentStreamState {
   host: HTMLElement | null;
   seen: Set<number>;
   /** 待落定的行（等待确认等）：key → 行元素与服务端开始时间 */
   pending: Map<string, { element: HTMLElement; sinceServerMs: number | null }>;
+  /** 当前处理的是首连回放的历史事件（决定落点，见 resolveStreamHost）。 */
+  replaying: boolean;
 }
 
 const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
@@ -247,7 +339,7 @@ const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
 function streamState(root: HTMLElement): AgentStreamState {
   let state = streamByRoot.get(root);
   if (!state) {
-    state = { host: null, seen: new Set(), pending: new Map() };
+    state = { host: null, seen: new Set(), pending: new Map(), replaying: false };
     streamByRoot.set(root, state);
   }
   return state;
@@ -291,10 +383,12 @@ function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLEl
 /** 解析本条过程行的落点：
  *  - 聚焦布局（无对话流）或首条消息未封口：锚定在摘要之后——开场分析结束前
  *    保持隐藏，揭示时与计划一起放行（先思考 → 再计划 → 后过程）；
- *  - 首条消息封口后：写入对话末尾的执行轨迹块，与后续对话按时间交替。 */
+ *  - 首条消息封口后：写入对话末尾的执行轨迹块，与后续对话按时间交替；
+ *  - 首连回放的历史事件例外：它们属于「过去」，即使首气泡此刻已经封口也要落回
+ *    首气泡的活动流，否则重进任务时整段执行轨迹会排到后来的对话气泡后面。 */
 function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElement | null {
   const scroll = root.querySelector<HTMLElement>(".chat-scroll");
-  if (scroll) {
+  if (scroll && !state.replaying) {
     const { block, sealed } = firstAssistantMessage(root, scroll);
     if (block && sealed) return tailTraceHost(scroll, block);
   }
@@ -411,15 +505,21 @@ function settleStreamRow(root: HTMLElement, key: string, endedServerMs: number |
   if (icon) icon.className = "ph-fill ph-check-circle";
 }
 
-/** 一条领域事件 → 活动流内容；step.* 归上方时间线，不在这里重复。 */
+/** 一条领域事件 → 活动流内容；step.* 归上方时间线，不在这里重复。
+ *
+ * ``replay`` 只影响落点，处理逻辑与实时事件完全一致。标记打在 state 上而不是
+ * 逐层透传：streamNarration / streamRow 只在本函数内调用，且整条链路同步无重入。
+ */
 function ingestStreamEvent(
   root: HTMLElement,
   event: { sequence?: number; type?: string; payload?: Record<string, unknown>; created_at?: string },
+  replay = false,
 ): void {
   const sequence = Number(event.sequence);
   const state = streamState(root);
   if (!Number.isFinite(sequence) || state.seen.has(sequence)) return;
   state.seen.add(sequence);
+  state.replaying = replay;
   const payload = event.payload ?? {};
   const eventMs = parseIso(event.created_at ?? null);
 
@@ -451,6 +551,22 @@ function ingestStreamEvent(
         // 通用 run.log 兜底把 payload（含模型名）原样展示出来。
         return;
       }
+      if (payload.tool === "python_run") {
+        // 实验沙箱执行：标题说人话，输入/输出摘要进可展开详情。
+        const failed = payload.status !== "succeeded";
+        streamRow(root, {
+          icon: failed ? "warning-circle" : "terminal-window",
+          title: failed ? "实验代码执行失败（准备修复重试）" : "已在沙箱执行实验代码",
+          elapsedMs: Number(payload.duration_ms) || undefined,
+          detail: [
+            `状态：${String(payload.status ?? "")}`,
+            payload.input_summary ? `输入：${String(payload.input_summary)}` : "",
+            payload.output_summary ? `输出：${String(payload.output_summary)}` : "",
+          ].filter(Boolean).join("\n"),
+          mono: true,
+        });
+        return;
+      }
       // 其他 run.log（未来的工具调用等）：原样以等宽详情展示
       streamRow(root, {
         icon: "terminal-window",
@@ -459,6 +575,32 @@ function ingestStreamEvent(
         mono: true,
         elapsedMs: Number(payload.elapsed_ms) || undefined,
       });
+      return;
+    }
+    case "step.succeeded": {
+      // 阶段完成：先输出智能体的进度叙述正文（progress_note，直接可读、
+      // 不折叠——叙述与过程行交替），再挂结构化「阶段产出」可展开明细。
+      // 模拟节点只有 {label}，两者都为空则不渲染。
+      const node = String(payload.node ?? "");
+      const label = STAGE_OUTPUT_LABELS[node];
+      const outputs = (payload.outputs ?? {}) as Record<string, unknown>;
+      if (!label) return;
+      const note = typeof outputs.progress_note === "string" ? outputs.progress_note.trim() : "";
+      if (note) {
+        const paragraph = document.createElement("div");
+        paragraph.className = "analysis-copy stream-note";
+        paragraph.innerHTML = renderMarkdown(note);
+        typesetMath(paragraph);
+        streamAppend(root, paragraph);
+      }
+      const detail = formatStageOutputs(node, outputs);
+      if (detail) {
+        streamRow(root, {
+          icon: "clipboard-text",
+          title: `阶段产出 · ${label}`,
+          detail,
+        });
+      }
       return;
     }
     case "approval.requested": {
@@ -515,7 +657,9 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
   root.dataset.planPhase = planning || openingPending ? "planning" : "revealed";
 
   // 阶段计划不再画进聊天消息：输入框上方的可折叠「执行计划」面板承载，
-  // 阶段数量与名称完全来自服务端 pages 投影。
+  // 条目文案优先用服务端派生的本任务计划短句（问题分析的 plan_outline，
+  // 方案确认后实验条目细化为选中方案），未产出时回退固定阶段名；
+  // 勾选状态始终来自 pages.status（引擎执行事实），文本变化不影响状态语义。
   renderTaskTodos(root, {
     runId: view.run_id,
     planning: planning || Boolean(openingPending),
@@ -528,7 +672,7 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
           : display === "RUNNING" || display === "WAITING_APPROVAL" || display === "PAUSED"
             ? "active"
             : "pending";
-      return { key: page.key, label: page.label, status };
+      return { key: page.key, label: page.plan_text ?? page.label, status };
     }),
   });
 
@@ -678,6 +822,9 @@ function renderArtifacts(root: HTMLElement, screen: ScreenId, view: ModelingWork
 
 function decorateNavigation(root: HTMLElement, view: ModelingWorkspaceView): void {
   root.querySelectorAll<HTMLAnchorElement>("a[href]").forEach(link => {
+    // 页内锚点（论文大纲 #section-N）解析后的 pathname 恰好等于当前工作台路由，
+    // 改写会把目录跳转变成整页导航，必须跳过。
+    if (link.getAttribute("href")?.startsWith("#")) return;
     const url = new URL(link.href, window.location.origin);
     if (!Object.values(ROUTE_BY_GO).some(path => path === url.pathname)) return;
     link.href = runAwareUrl(url.pathname, view.run_id, view.project_id);
@@ -767,6 +914,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   let refreshTimer: number | undefined;
   let reconnectTimer: number | undefined;
   let lastSequence: number | undefined;
+  // 首连回放的边界：连接那一刻快照里的最大事件序号。序号不超过它的都是历史，
+  // 用来决定活动流的落点（见 resolveStreamHost）。连接后冻结，不随刷新推进，
+  // 否则实时事件也会被当成历史挤回首气泡。
+  let replayThrough: number | undefined;
   let streamEnded = false;
   let disposed = false;
   let actionPending = false;
@@ -844,10 +995,14 @@ export function mountModelingWorkspace(screen: ScreenId): void {
           detail: { runId: view.run_id, goal: view.goal },
         }));
       }
-      if (view.latest_event_sequence !== null) {
-        lastSequence = Math.max(lastSequence ?? 0, view.latest_event_sequence);
-      }
       renderWorkspace(root, currentScreen, view);
+      // 五类页面正文（数据画像/方案/实验/论文/交付）：拉取失败或阶段未产出
+      // 时保留演示模板，绝不阻断主视图刷新；渲染器内部按 updated_at 幂等。
+      void modelingWorkspaceApi.getStageOutputs(runId, abortController.signal)
+        .then(outputs => {
+          if (!disposed) renderStageContent(root, outputs);
+        })
+        .catch(() => undefined);
     } catch (error) {
       if (disposed || (error instanceof DOMException && error.name === "AbortError")) return;
       if (error instanceof WorkspaceApiError && error.status === 404) {
@@ -869,6 +1024,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
 
   const connectEvents = (): void => {
     if (disposed || streamEnded) return;
+    // 活动流完全由事件重建，因此首连必须让服务端从头回放：只有断线重连才带
+    // after（= 已经收到的最后一条）。快照的 latest_event_sequence 不能拿来当
+    // 首连的起点——那等于宣称「历史我都有了」，结果是重进任务后执行轨迹一片空白。
+    replayThrough ??= currentView?.latest_event_sequence ?? 0;
     const url = new URL(`/api/v1/task-runs/${encodeURIComponent(runId)}/events`, window.location.origin);
     if (lastSequence) url.searchParams.set("after", String(lastSequence));
     eventSource = new EventSource(`${url.pathname}${url.search}`);
@@ -880,7 +1039,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
       }
       // SSE 帧携带完整事件体：喂给活动流（内部按 sequence 去重，重连不重复）
       try {
-        ingestStreamEvent(root, JSON.parse(String(message.data)));
+        const frame = JSON.parse(String(message.data));
+        ingestStreamEvent(root, frame, Number(frame?.sequence) <= (replayThrough ?? 0));
       } catch {
         // 单帧事件体异常只影响一行过程展示，不阻断视图刷新
       }

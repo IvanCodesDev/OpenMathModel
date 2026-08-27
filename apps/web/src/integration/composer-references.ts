@@ -13,7 +13,8 @@ import type { KnowledgePaper, KnowledgeProblem } from "../types/knowledge-librar
 
 export interface ComposerReference {
   key: string;
-  kind: "problem" | "paper" | "method";
+  /** quote = 从论文编辑器正文点选的来源引用（页面内存，不随任务创建交接）。 */
+  kind: "problem" | "paper" | "method" | "quote";
   title: string;
   text: string;
 }
@@ -27,6 +28,7 @@ const KIND_LABELS: Record<ComposerReference["kind"], string> = {
   problem: "赛题",
   paper: "优秀论文",
   method: "方法",
+  quote: "论文引用",
 };
 
 let selected: ComposerReference[] = [];
@@ -166,7 +168,7 @@ export function composerReferenceBlock(): string {
 
 function chipHtml(reference: ComposerReference): string {
   return `<span class="composer-context-chip" data-reference-key="${escapeHtml(reference.key)}">
-    <i class="ph ph-at" aria-hidden="true"></i>
+    <i class="ph ph-${reference.kind === "quote" ? "quotes" : "at"}" aria-hidden="true"></i>
     <span>${escapeHtml(reference.title)}</span>
     <button type="button" data-reference-remove aria-label="${t("移除引用")}" title="${t("移除引用")}">
       <i class="ph ph-x" aria-hidden="true"></i>

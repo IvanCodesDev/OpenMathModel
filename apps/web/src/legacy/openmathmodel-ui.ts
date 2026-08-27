@@ -34,12 +34,13 @@ import {
 import { attachTraceToLastReply, loadConversationLog } from "../tasks/conversation-log";
 import {
   endpointHost,
-  presetHost,
+  presetMatchesHost,
   PROVIDER_PRESETS,
   providerPreset,
 } from "../integration/llm-providers";
 import {
   endpointFromForm,
+  fetchEndpointModels,
   fetchLlmConfig,
   labelFromProtocol,
   persistLlmSettings,
@@ -72,6 +73,7 @@ import { mountSidebarSearch } from "../integration/sidebar-search";
 import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { hydrateProjectsPage } from "../integration/projects-page";
 import { renderMarkdown } from "../text/markdown";
+import { typesetMath } from "../text/math-typeset";
 import {
   notificationsSupported,
   requestNotificationPermission,
@@ -92,11 +94,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   const providerLogoSources = {
     qwen: "/assets/provider-qwen.svg",
     deepseek: "/assets/provider-deepseek.svg",
-    openai: "/assets/provider-openai.webp",
+    openai: "/assets/provider-openai.svg",
     anthropic: "/assets/provider-anthropic.svg",
+    google: "/assets/provider-google.svg",
+    kimi: "/assets/provider-kimi.svg",
+    zhipu: "/assets/provider-zhipu.svg",
+    xai: "/assets/provider-xai.svg",
     ollama: "/assets/provider-ollama.svg"
   };
-  // 没有品牌资源的厂商（Gemini/Kimi/智谱/xAI 等）回落为首字母标，不放错误的图
+  // 自定义中转站等没有品牌资源的来源回落为首字母标，不放错误的图
   const providerLogo = (provider, label, extra = "") =>
     providerLogoSources[provider]
       ? `<img class="provider-brand-logo provider-brand-${provider} ${extra}" src="${providerLogoSources[provider]}" alt="${escapeHtml(label)}">`
@@ -157,7 +163,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
   /** 接口域名 → 厂商标（有品牌资源的用品牌图，其余按自定义 API 处理）。 */
   const providerForEndpointHost = host =>
-    PROVIDER_PRESETS.find(preset => presetHost(preset) === host)?.logo || "custom";
+    PROVIDER_PRESETS.find(preset => presetMatchesHost(preset, host))?.logo || "custom";
 
   /** 一条已保存接口 → 模型选择器选项；权重展示给 Auto 路由做参照。 */
   const endpointModelOption = (endpoint, isPrimary) => {
@@ -986,7 +992,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                   <h2 id="section-3">3 需求预测模型构建</h2>
                   <h3>3.1 问题定义</h3><p>在给定研究区域与时间范围内，基于历史数据与相关影响因素，预测各区域在未来时段的共享单车需求，并制定车辆调度方案，使得调度总成本最小，同时满足各区域的需求平衡约束。</p>
                   <h3>3.2 特征设计</h3><p>本文从时间、空间、天气和社会活动四个维度构建特征体系。时间维度包括小时、星期、节假日等；<mark>空间维度包括区域类型、POI 密度、周边地铁站距离等；</mark>天气维度包括温度、降水、风速等；社会活动维度包括大型活动、演出、赛事等。</p>
-                  <button class="source-chip" contenteditable="false" data-action="source-detail">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
+                  <button class="source-chip" contenteditable="false" data-action="source-detail" title="点击引用到左侧对话，直接提问或要求修改">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
                   <h3>3.3 模型设定</h3><p>采用基于图卷积网络（GCN）的时空预测模型，结合区域间拓扑关系与动态特征，捕捉需求的时空相关性。</p><p>模型目标函数如下：</p>
                   <div class="editor-formula" data-tex="\\min\\;\\sum_{i=1}^{N}\\sum_{t=1}^{T}\\left(y_{it}-\\hat{y}_{it}\\right)^{2}+\\lambda\\lVert\\Theta\\rVert_{2}^{2}" contenteditable="false" title="点击编辑公式"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
                   <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>
@@ -1131,6 +1137,27 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const archivedTopic = archivedPaperTopics[`${paper.year}-${paperGroup(paper)}`];
     return looksLikeIdentifier ? (paperProblem(paper)?.title || archivedTopic || `${paper.year} 年 ${paperGroup(paper)} 题获奖论文`) : rawTitle;
   };
+  // 奖项名本身看不出比赛（"优秀论文" 是研究生赛的、"Outstanding Winner" 是美赛的），
+  // 所以比赛必须作为独立的第一维度显式给出，而不是让读者从奖项去反推。
+  const paperCompetitionKey = paper => {
+    const competition = String(paper.competition || "").trim();
+    if (competition === "COMAP MCM/ICM") return "美赛";
+    if (competition === "中国研究生数学建模竞赛") return "研究生赛";
+    return competition || "其他";
+  };
+  const PAPER_COMPETITION_LABELS = {
+    "研究生赛": "研究生赛（华为杯）",
+    "美赛": "美赛（MCM/ICM）",
+  };
+  const paperCompetitionLabel = key => PAPER_COMPETITION_LABELS[key] || key;
+  // 美赛的 A/B/C 属 MCM、D/E/F 属 ICM，选中美赛后按真实赛别命名题组；
+  // 2013–2015 的美赛快照源目录没有题组层级，这批论文的题组只能留空。
+  const paperGroupLabel = (competition, group) => {
+    if (!group || group === "—") return "未标注题组";
+    if (competition === "美赛") return `${"ABC".includes(group) ? "MCM" : "ICM"} ${group}`;
+    return `${group} 题`;
+  };
+  const paperAwardLabel = paper => String(paper.award || paper.category || "").trim();
   const paperEntries = () => papers
     .map((paper, index) => ({
       paper,
@@ -1138,9 +1165,31 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       problem: paperProblem(paper),
       displayTitle: paperDisplayTitle(paper),
       group: paperGroup(paper),
+      competition: paperCompetitionKey(paper),
+      award: paperAwardLabel(paper),
     }))
     .filter(({ paper }) => paper.record_type === "paper" && paper.access_scope === "linked_content" && paperPdfUrl(paper));
-  const paperTabs = () => ["全部", ...new Set(paperEntries().map(({ paper }) => paper.category))];
+  const paperCompetitionTabs = () => {
+    const pinned = ["研究生赛", "美赛"];
+    const seen = [...new Set(paperEntries().map(({ competition }) => competition))];
+    return [...pinned.filter(key => seen.includes(key)), ...seen.filter(key => !pinned.includes(key))];
+  };
+  const paperAwardTabs = () => {
+    const awards = [...new Set(paperEntries().map(({ award }) => award))].filter(Boolean);
+    const pinned = ["优秀论文", "Outstanding Winner", "数模之星提名奖"];
+    return ["全部", ...pinned.filter(award => awards.includes(award)), ...awards.filter(award => !pinned.includes(award))];
+  };
+  // 奖项/题组/年份都只存在于某一个比赛下，渲染时把各选项的归属比赛写进 data-paper-scope，
+  // 切换比赛后由绑定层据此隐藏无关选项，避免出现必定为空的组合。
+  const paperOptionScopes = pick => {
+    const scopes = new Map();
+    paperEntries().forEach(entry => {
+      const key = pick(entry);
+      if (!scopes.has(key)) scopes.set(key, new Set());
+      scopes.get(key).add(entry.competition);
+    });
+    return scopes;
+  };
   // 页码按钮由 applyResourceFilters 按“筛选后”的条数现算，所以这里不再预渲染：
   // 搜索或切换分类之后总页数会变，静态渲染出来的 1…N 只会是假的。
   const RESOURCE_PAGE_SIZE = 15;
@@ -1189,39 +1238,48 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
   function papersScreen() {
     const entries = paperEntries();
-    const years = [...new Set(entries.map(({ paper }) => paper.year))].sort((a, b) => b - a);
-    const groups = [...new Set(entries.map(({ group }) => group).filter(group => group !== "—"))].sort();
+    const competitions = paperCompetitionTabs();
+    const yearScopes = paperOptionScopes(({ paper }) => String(paper.year));
+    const awardScopes = paperOptionScopes(({ award }) => award);
+    const groupScopes = paperOptionScopes(({ group }) => group);
+    const years = [...yearScopes.keys()].sort((a, b) => Number(b) - Number(a));
+    const groups = [...groupScopes.keys()].filter(group => group !== "—").sort();
+    const scopeAttr = (scopes, key) => escapeHtml([...(scopes.get(key) || [])].join(" "));
     return shell(`
       <section class="library-main resource-library papers-main">
-        <div class="library-heading paper-library-heading"><div><h1>优秀论文</h1><p>按研究主题、年份与题组浏览获奖论文，点击即可阅读完整正文。</p></div><span class="paper-library-total"><strong>${entries.length}</strong> 篇完整论文</span></div>
+        <div class="library-heading paper-library-heading"><div><h1>优秀论文</h1><p>先选比赛，再按年份与题组浏览获奖论文，点击即可阅读完整正文。</p></div><span class="paper-library-total"><strong>${entries.length}</strong> 篇完整论文</span></div>
         <div class="paper-library-controls"><label class="search-box">${icon("magnifying-glass")}<input type="search" name="paper-search" data-paper-search autocomplete="off" aria-label="搜索论文" placeholder="搜索研究主题、论文编号或关键词"></label>
           <div class="paper-year-filter" data-paper-year-select data-select-menu><span>年份</span><button type="button" class="paper-year-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="按年份筛选论文"><span data-select-label>全部年份</span></button>${icon("caret-down")}
             <div class="settings-select-menu" role="listbox" aria-label="按年份筛选论文">
-              ${[["", "全部年份"], ...years.map(year=>[String(year), `${year} 年`])].map(([value, label], index)=>`<button type="button" role="option" data-select-option="${escapeHtml(value)}" aria-selected="${index === 0}"><span>${escapeHtml(label)}</span>${icon("check")}</button>`).join("")}
+              <button type="button" role="option" data-select-option="" aria-selected="true"><span>全部年份</span>${icon("check")}</button>
+              ${years.map(year=>`<button type="button" role="option" data-select-option="${escapeHtml(year)}" data-paper-scope="${scopeAttr(yearScopes, year)}" aria-selected="false"><span>${escapeHtml(year)} 年</span>${icon("check")}</button>`).join("")}
             </div>
           </div>
           <button class="paper-filter-reset" type="button" data-paper-filter-reset>${icon("arrow-counter-clockwise")} 重置</button>
         </div>
         <div class="paper-classification-panel" aria-label="论文分类筛选">
+          <div class="paper-classification-row"><span class="paper-classification-label">比赛</span><div class="paper-competition-tabs" role="group" aria-label="按比赛筛选">
+            <button class="active" type="button" data-paper-competition-filter="">全部比赛</button>${competitions.map(key=>`<button type="button" data-paper-competition-filter="${escapeHtml(key)}">${escapeHtml(paperCompetitionLabel(key))}</button>`).join("")}
+          </div></div>
           <div class="paper-classification-row"><span class="paper-classification-label">奖项</span><div class="resource-tabs paper-resource-tabs" role="tablist" aria-label="按奖项分类">
-            ${paperTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper">${escapeHtml(x)}</button>`).join("")}
+            ${paperAwardTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper"${i===0?"":` data-paper-scope="${scopeAttr(awardScopes, x)}"`}>${escapeHtml(x)}</button>`).join("")}
           </div></div>
           <div class="paper-classification-row"><span class="paper-classification-label">题组</span><div class="paper-group-tabs" role="group" aria-label="按题组筛选">
-            <button class="active" type="button" data-paper-group-filter="">全部题组</button>${groups.map(group=>`<button type="button" data-paper-group-filter="${escapeHtml(group)}">${escapeHtml(group)} 题</button>`).join("")}
+            <button class="active" type="button" data-paper-group-filter="">全部题组</button>${groups.map(group=>`<button type="button" data-paper-group-filter="${escapeHtml(group)}" data-paper-scope="${scopeAttr(groupScopes, group)}">${escapeHtml(paperGroupLabel("", group))}</button>`).join("")}${groupScopes.has("—")?`<button type="button" data-paper-group-filter="—" data-paper-scope="${scopeAttr(groupScopes, "—")}">未标注题组</button>`:""}
           </div><span class="paper-result-count" data-paper-result-copy>${entries.length} 篇</span></div>
         </div>
         <div class="resource-table-wrap paper-resource-wrap">
           <table class="resource-table paper-resource-table">
-            <thead><tr><th>研究主题与论文编号</th><th>题目分类</th><th>奖项</th><th>正文</th><th>收藏</th></tr></thead>
+            <thead><tr><th>研究主题与论文编号</th><th>比赛与题组</th><th>奖项</th><th>正文</th><th>收藏</th></tr></thead>
             <tbody data-paper-list>
-              ${entries.map(({ paper: p, index: sourceIndex, problem, displayTitle, group })=>`<tr class="paper-item" data-resource-index="${sourceIndex}" data-resource-category="${escapeHtml(p.category)}" data-paper-year="${p.year}" data-paper-group="${escapeHtml(group)}" data-resource-search="${escapeHtml([displayTitle,p.title,p.team_id,p.problem_code,p.competition,p.year,p.award,p.institution,problem?.problem_type,...(problem?.keywords || []),...p.distinctions,...p.models].filter(Boolean).join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="阅读论文：${escapeHtml(displayTitle)}，编号 ${escapeHtml(paperIdentifier(p))}">
+              ${entries.map(({ paper: p, index: sourceIndex, problem, displayTitle, group, competition, award })=>`<tr class="paper-item" data-resource-index="${sourceIndex}" data-resource-category="${escapeHtml(award)}" data-paper-competition="${escapeHtml(competition)}" data-paper-year="${p.year}" data-paper-group="${escapeHtml(group)}" data-resource-search="${escapeHtml([displayTitle,p.title,p.team_id,p.problem_code,competition,p.competition,p.year,award,p.institution,problem?.problem_type,...(problem?.keywords || []),...p.distinctions,...p.models].filter(Boolean).join(" "))}" data-saved="false" tabindex="0" role="link" aria-label="阅读论文：${escapeHtml(displayTitle)}，编号 ${escapeHtml(paperIdentifier(p))}">
                 <td><div class="paper-primary-cell"><strong>${escapeHtml(displayTitle)}</strong><span>论文编号 ${escapeHtml(paperIdentifier(p))}　·　${escapeHtml(p.problem_code)}</span></div></td>
-                <td><div class="paper-topic-cell"><span class="paper-group-badge">${escapeHtml(group)} 题</span><span>${escapeHtml(problem?.problem_type || "数学建模研究")}</span></div></td>
-                <td><span class="paper-award-badge">${escapeHtml(p.award)}</span></td>
+                <td><div class="paper-topic-cell"><span class="paper-competition-badge">${escapeHtml(competition)}</span>${group === "—" ? "" : `<span class="paper-group-badge">${escapeHtml(paperGroupLabel(competition, group))}</span>`}<span>${escapeHtml(problem?.problem_type || "")}</span></div></td>
+                <td><span class="paper-award-badge">${escapeHtml(award)}</span></td>
                 <td><div class="paper-access-cell">${icon("file-pdf")}<span><strong>完整 PDF</strong><small>${escapeHtml(formatFileSize(p.source_file_bytes) || "在线阅读")}</small></span></div></td>
                 <td><button class="row-star" data-action="resource-bookmark" aria-label="收藏 ${escapeHtml(displayTitle)}">${icon("star")}</button></td>
               </tr>`).join("")}
-              <tr class="paper-empty-row" data-paper-empty hidden><td colspan="5">${icon("magnifying-glass")}<strong>没有符合条件的论文</strong><span>调整年份、题组或搜索词后再试。</span></td></tr>
+              <tr class="paper-empty-row" data-paper-empty hidden><td colspan="5">${icon("magnifying-glass")}<strong>没有符合条件的论文</strong><span>调整比赛、年份、题组或搜索词后再试。</span></td></tr>
             </tbody>
           </table>
         </div>
@@ -1427,35 +1485,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   };
 
   /**
-   * KaTeX 体积远大于本页其余代码，因此只在真正出现公式时动态加载，
-   * 加载前 data-tex 节点保留 LaTeX 源码作为可读回退。
+   * KaTeX 排版统一走 text/math-typeset：懒加载 + 结果缓存 + 就绪后同步渲染，
+   * 流式对话的实时排版与方法库、论文编辑器共享同一份模块与缓存。
    */
-  let katexLoader = null;
   function renderFormulas(scope = document) {
-    const nodes = $$("[data-tex]", scope).filter(node => node.dataset.texDone !== "true");
-    if (!nodes.length) return;
-    katexLoader = katexLoader || Promise.all([
-      import("katex"),
-      import("katex/dist/katex.min.css"),
-    ]).then(([module]) => module.default ?? module);
-    katexLoader
-      .then(katex => {
-        nodes.forEach(node => {
-          try {
-            // 聊天气泡里的行内公式带 data-tex-inline；方法库等块级公式保持原行为
-            katex.render(node.dataset.tex, node, {
-              throwOnError: false,
-              displayMode: node.dataset.texInline !== "true",
-            });
-            node.dataset.texDone = "true";
-          } catch {
-            // 渲染失败时保留 LaTeX 源码文本，不让公式区变空白
-          }
-        });
-      })
-      .catch(() => {
-        // 离线或加载失败：回退文本已经在 DOM 里，无需额外处理
-      });
+    typesetMath(scope);
   }
 
   const codeBlockMarkup = (entryId, recipe) => {
@@ -2134,10 +2168,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                 <div class="settings-section-heading"><div><h3>智能路由</h3><p>根据任务类型、速度与费用自动选择模型。</p></div></div>
                 ${settingsToggle("smartRouting", "启用模型智能路由", "优先满足质量要求，并在同等能力下选择成本更低的模型", true)}
                 <div class="settings-grid two">
-                  <label class="settings-field"><span>编程与 Agent</span><select name="codingModel"><option>自动选择</option><option>GPT-5.6 Sol</option><option>Claude Opus 5</option><option>GLM-5.2</option><option>DeepSeek-V4-Pro</option></select></label>
+                  <label class="settings-field"><span>编程与 Agent</span><select name="codingModel"><option>自动选择</option><option>GPT-5.6 Sol</option><option>Claude Opus 5</option><option>GLM-5.3</option><option>DeepSeek-V4-Pro</option></select></label>
                   <label class="settings-field"><span>深度研究</span><select name="researchModel"><option>自动选择</option><option>Qwen3.8-Max</option><option>DeepSeek-V4-Pro</option><option>Claude Fable 5</option><option>GPT-5.6 Sol</option></select></label>
                   <label class="settings-field"><span>长文写作</span><select name="writingModel"><option>自动选择</option><option>Claude Sonnet 5</option><option>Qwen3.8-Max</option><option>Kimi K3</option></select></label>
-                  <label class="settings-field"><span>视觉理解</span><select name="visionModel"><option>自动选择</option><option>Gemini 3.5 Flash</option><option>GPT-5.6 Sol</option><option>Qwen3.8-Max</option></select></label>
+                  <label class="settings-field"><span>视觉理解</span><select name="visionModel"><option>自动选择</option><option>Gemini 3.6 Flash</option><option>GPT-5.6 Sol</option><option>Qwen3.8-Max</option></select></label>
                 </div>
               </div>
             </div>
@@ -2150,7 +2184,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                   <label class="settings-field"><span>接口协议</span><select name="apiProtocol"><option>OpenAI Compatible</option><option>Anthropic Messages API</option><option>Google Gemini API</option><option>Ollama</option><option>自定义 REST</option></select></label>
                   <label class="settings-field settings-span-two"><span>Base URL</span><input name="apiBaseUrl" value="https://api.example.com/v1" placeholder="https://api.example.com/v1"></label>
                   <label class="settings-field settings-span-two"><span>API Key</span><div class="secret-field"><input type="password" name="apiKey" value="sk-openmathmodel-demo-key"><button type="button" data-settings-action="toggle-secret" aria-label="显示或隐藏 API Key">${icon("eye")}</button></div></label>
-                  <label class="settings-field"><span>默认模型 ID</span><input name="apiModel" value="gpt-5.6-sol" placeholder="gpt-5.6-sol"></label>
+                  <label class="settings-field"><span>默认模型 ID</span><input name="apiModel" value="gpt-5.6-sol" placeholder="gpt-5.6-sol" list="apiModelOptions" autocomplete="off"><datalist id="apiModelOptions"></datalist></label>
                   <label class="settings-field"><span>组织 / 项目标识</span><input name="apiOrganization" placeholder="可选"></label>
                 </div>
                 <details class="api-advanced"><summary>请求头与高级参数 ${icon("caret-down")}</summary><div class="settings-grid two"><label class="settings-field"><span>自定义请求头</span><input name="customHeader" placeholder="X-API-Source: OpenMathModel"></label><label class="settings-field"><span>路径前缀</span><input name="apiPathPrefix" placeholder="/chat/completions"></label><label class="settings-field"><span>模型能力权重</span><div class="field-with-unit"><input type="number" name="apiWeight" min="0" max="10" step="1" placeholder="自动"><b>1-10</b></div><small>Auto 模式按权重路由：难题给高权重接口。留空按模型名自动推断</small></label></div></details>
@@ -2486,6 +2520,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         assign("apiPathPrefix", "");
         assign("apiKey", "");
         setProtocolSelect(backdrop, preset.protocol);
+        renderModelOptions(backdrop, preset.models);
         $('[name="apiKey"]', backdrop)?.focus();
         toast(t(preset.id === "ollama"
           ? "已填入本地 Ollama 参数，无需密钥，模型 ID 填你已安装的模型"
@@ -2566,6 +2601,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     backdrop.addEventListener("change", event => {
       if (event.target?.name === "interfaceLanguage") applyLocale(event.target.value);
     });
+    // 聚焦模型 ID 时才去要模型列表：地址或密钥还没填完就出网没有意义，
+    // 且 fetchEndpointModels 自带按接口缓存，反复聚焦不会反复请求。
+    backdrop.addEventListener("focusin", event => {
+      if (event.target?.name === "apiModel") void refreshModelOptions(backdrop, collectSettingsValues());
+    });
     document.addEventListener("keydown", onSettingsKeydown);
     restoreSettings();
     enhanceSettingsSelects();
@@ -2584,11 +2624,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     $(".settings-close", backdrop).focus();
   }
 
-  function popupMenu(anchor, items, onPick) {
+  function popupMenu(anchor, items, onPick, decorateItem) {
     $(".menu")?.remove();
     const menu = document.createElement("div");
     menu.className = "menu";
     menu.innerHTML = items.map(i => `<button data-menu-value="${i}">${i}</button>`).join("");
+    // 字体菜单等场景给每个选项做所见即所得装饰（例如用对应字体渲染选项本身）
+    if (decorateItem) $$("button", menu).forEach(button => decorateItem(button, button.dataset.menuValue));
     document.body.appendChild(menu);
     const rect = anchor.getBoundingClientRect();
     menu.style.left = `${Math.min(rect.left, window.innerWidth - 190)}px`;
@@ -2802,12 +2844,38 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
   }
 
+  /**
+   * 「默认模型 ID」的补全列表。两级来源：先按 Base URL 域名秒填厂商预设里的
+   * 型号（离线、立即可用），再向接口本身要一次真实清单合并进来——预设表是
+   * 快照会过期，接口自报的才跟得上厂商上新。拉不到就只留预设，不打断填写。
+   */
+  function renderModelOptions(backdrop, names) {
+    const list = $("#apiModelOptions", backdrop);
+    if (!list) return;
+    list.innerHTML = names.map(name => `<option value="${escapeHtml(name)}"></option>`).join("");
+  }
+
+  function seedModelOptions(backdrop, baseUrl) {
+    const host = endpointHost(String(baseUrl || "").trim());
+    const preset = PROVIDER_PRESETS.find(item => presetMatchesHost(item, host));
+    renderModelOptions(backdrop, preset?.models || []);
+    return preset;
+  }
+
+  async function refreshModelOptions(backdrop, values) {
+    const preset = seedModelOptions(backdrop, values.apiBaseUrl);
+    const live = await fetchEndpointModels(values);
+    if (!live.length) return;
+    // 接口自报的排前面（通常新型号在前），预设里有而接口没报的仍然保留
+    renderModelOptions(backdrop, [...new Set([...live, ...(preset?.models || [])])]);
+  }
+
   /** 厂商卡片状态：已保存接口中存在同域名的即视为已连接。 */
   function renderProviderStatus(backdrop, config) {
     $$("[data-provider-card]", backdrop).forEach(card => {
       const preset = providerPreset(card.dataset.providerCard);
       const connected = Boolean(
-        preset && config?.endpoints.some(item => endpointHost(item.base_url) === presetHost(preset)),
+        preset && config?.endpoints.some(item => presetMatchesHost(preset, endpointHost(item.base_url))),
       );
       card.classList.toggle("connected", connected);
       const status = $("[data-provider-status]", card);
@@ -2853,6 +2921,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     assign("apiPathPrefix", active.path_prefix);
     assign("apiWeight", active.weight || "");
     setProtocolSelect(backdrop, active.protocol);
+    // 只按预设铺底，真实清单等用户聚焦模型 ID 时再拉：开设置面板不该顺带出网。
+    seedModelOptions(backdrop, active.base_url);
   }
 
   /**
@@ -2973,10 +3043,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const runId = event.detail?.runId;
     const scroll = $(".chat-scroll");
     if (!runId || !scroll) return;
+    // 防重标记只在拿到回复后才落（见下方 then）：一次失败——比如接口报错——
+    // 不该把这个任务永久钉成「没有开场分析」，重新进来还在规划阶段就再试一次。
     const guard = `openmathmodelOpeningReply.${runId}`;
     try {
       if (sessionStorage.getItem(guard)) return;
-      sessionStorage.setItem(guard, "1");
     } catch {
       return;
     }
@@ -3000,7 +3071,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       replyId,
       scroll,
       { removeOnUnavailable: true, opening: true },
-    ).finally(() => {
+    ).then(delivered => {
+      if (delivered) {
+        try { sessionStorage.setItem(guard, "1"); } catch {}
+      }
+    }).finally(() => {
       // 回复彻底结束（成功、失败或静默移除）后才放行计划部分，并立即通知
       // 控制器重渲染，不必等下一次 SSE 刷新。
       if (stepsBlock) stepsBlock.dataset.openingState = "done";
@@ -3289,16 +3364,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    *  发送前显示本次请求的实际域名（含中转/备用标记）并把用量写入本机记录
    *  （设置中心可查），关闭时域名与记录都不留。
    *  options.removeOnUnavailable：未配置接口/未登录时整块静默移除
-   *  （用于系统自动发起的开场分析，不该向用户弹配置提示）。 */
+   *  （用于系统自动发起的开场分析，不该向用户弹配置提示）。
+   *  返回是否真的拿到了回复：调用方据此决定要不要落防重标记。 */
   async function streamAssistantReply(text, replyId, scroll, options = {}) {
     const replyBlock = document.getElementById(replyId);
     const copy = replyBlock?.querySelector(".analysis-copy");
-    if (!replyBlock || !copy) return;
+    if (!replyBlock || !copy) return false;
     const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
     const render = value => {
       copy.innerHTML = value
         ? renderMarkdown(value)
         : `<p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p>`;
+      // 已闭合的公式随增量立即排版：innerHTML 重建后旧节点作废，对新节点
+      // 同步补排（KaTeX 就绪后同帧完成无闪烁；加载前保留 LaTeX 源码回退）。
+      if (value) renderFormulas(copy);
     };
     const transparency = proxyTransparencyEnabled();
     // 「发送请求前显示实际域名」：开关开启时先显示预期目标，meta 到达后以实际为准
@@ -3332,8 +3411,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       // 即席解析（含可选 VL），结果如实回写附件卡片；解析期间沿用「思考中…」占位。
       const store = options.attachments;
       const attachmentNames = store ? store.list().map(item => item.file.name) : [];
-      // 「添加上下文」引用与附件上下文并列进入请求正文；系统开场分析不携带引用。
-      const references = options.opening ? [] : [...listComposerReferences()];
+      // 「添加上下文」引用与附件上下文并列进入请求正文。开场分析同样携带：
+      // 首页随任务交接的引用往往就是题面本身（@ 赛题 +「这道题」的发送方式），
+      // 排除引用会让开场分析对着三个字的 goal 说「没收到题目」。
+      const references = [...listComposerReferences()];
       const referenceBlock = references.length ? composerReferenceBlock() : "";
       let attachmentContext = "";
       // 视觉直通（ADR-0010）：生效模型具备视觉能力时，托盘位图以原图随消息直发，
@@ -3465,8 +3546,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         traceLog.push({ icon: "check-circle", title: "已生成回复", elapsed: formatTraceElapsed(generateElapsedMs) });
       }
       render(reply);
-      // 公式在全文到齐后一次性排版，流式期间保留 LaTeX 源码回退
-      renderFormulas(copy);
       // 对话页不显示模型名；「记录接口用量」随开关开启才落本机记录
       if (transparency && (meta.host || meta.endpoint)) {
         recordLlmUsage({
@@ -3489,13 +3568,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         attachTraceToLastReply(traceScope.runId, reply, traceLog);
       }
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+      return true;
     } catch (error) {
       // 失败也要把生成行落定为中断态，不留走秒残影
       generatingRow?.settle({ title: "回复生成中断", failed: true });
       const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
       if (options.removeOnUnavailable && unavailable) {
         replyBlock.remove();
-        return;
+        return false;
       }
       const message = error instanceof Error ? error.message : "对话请求失败，请稍后再试";
       copy.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
@@ -3506,6 +3586,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         );
       }
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+      return false;
     }
   }
 
@@ -3659,13 +3740,40 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   // ── 论文编辑器（业主指定实现）：工具栏真实命令、KaTeX 公式、本机草稿、结构检查与导出 ──
   const PAPER_DRAFT_KEY = "openmathmodelPaperDraft.v1";
   const PAPER_BLOCKS = { "正文": "p", "标题 1": "h1", "标题 2": "h2", "标题 3": "h3" };
+  // 前四项映射系统字体（Windows/macOS 自带）；后三项是免费可商用的开源字体
+  //（SIL OFL 授权：思源宋体/思源黑体来自 Google Noto，霞鹜文楷来自 lxgw），
+  // 由 ensurePaperWebfonts 按需从 CDN 挂载 @font-face，系统缺字时也能渲染成功。
   const PAPER_FONTS = {
-    "宋体": '"Songti SC", SimSun, serif',
-    "黑体": '"Heiti SC", SimHei, "Microsoft YaHei", sans-serif',
-    "楷体": '"Kaiti SC", KaiTi, serif',
-    "仿宋": '"Fangsong SC", FangSong, serif',
+    "宋体": '"Songti SC", SimSun, "Noto Serif SC", serif',
+    "黑体": '"Heiti SC", SimHei, "Microsoft YaHei", "Noto Sans SC", sans-serif',
+    "楷体": '"Kaiti SC", KaiTi, "LXGW WenKai", serif',
+    "仿宋": '"Fangsong SC", FangSong, "Noto Serif SC", serif',
+    "思源宋体": '"Noto Serif SC", "Songti SC", SimSun, serif',
+    "思源黑体": '"Noto Sans SC", "Heiti SC", "Microsoft YaHei", sans-serif',
+    "霞鹜文楷": '"LXGW WenKai", "Kaiti SC", KaiTi, serif',
     "Times New Roman": '"Times New Roman", Times, serif',
   };
+  // 开源字体的 CSS 按 unicode-range 切片，浏览器只下载正文实际用到的字块，
+  // 不会一次拉整套中文字库；加载失败时 font-family 链自动回退系统字体。
+  // 思源两款带 700 字重（标题/加粗真加粗），霞鹜文楷只挂 regular+bold，
+  // 不引 style.css 全家桶（那会连 Mono/Light 的切片 CSS 一起拉下来）。
+  const PAPER_WEBFONT_LINKS = [
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5/index.css",
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5/700.css",
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5/index.css",
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5/700.css",
+    "https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1/lxgwwenkai-regular.css",
+    "https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1/lxgwwenkai-bold.css",
+  ];
+  function ensurePaperWebfonts() {
+    PAPER_WEBFONT_LINKS.forEach(href => {
+      if (document.head.querySelector(`link[href="${href}"]`)) return;
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      document.head.appendChild(link);
+    });
+  }
   // 中文字号按 pt 折算 px（三号 16pt / 四号 14pt / 小四 12pt / 五号 10.5pt / 小五 9pt）
   const PAPER_SIZES = { "三号": "21px", "四号": "19px", "小四": "16px", "五号": "14px", "小五": "12px" };
   const PAPER_COLORS = { "正文黑": "#171717", "深灰": "#525252", "强调红": "#a50c25", "批注绿": "#007004" };
@@ -3690,6 +3798,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   function savePaperDraftNow(label = "草稿已保存到本机") {
     const page = paperPage();
     if (!page) return;
+    // 手动保存（Ctrl+S / 公式弹窗确认）同样是用户编辑动作，补上用户草稿标记
+    page.dataset.userEdited = "true";
     clearTimeout(paperAutosaveTimer);
     paperDirty = false;
     try { localStorage.setItem(PAPER_DRAFT_KEY, page.innerHTML); } catch {
@@ -3703,6 +3813,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   function schedulePaperAutosave() {
     const page = paperPage();
     if (!page) return;
+    // 标记「用户亲手编辑过」：task-autosave 只把带此标记的现场当作用户草稿落盘，
+    // Agent 填充或演示模板不再伪装成用户草稿挡住后续真实论文正文的渲染。
+    page.dataset.userEdited = "true";
     // 逐键只改状态文案，字数与落盘放进防抖回调，避免每击键读一次 innerText
     paperDirty = true;
     const state = $("[data-editor-savestate]");
@@ -3717,6 +3830,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     modal("恢复初始正文", "<p>将丢弃本机草稿，恢复到本次打开时的初始正文。确认继续？</p>", () => {
       page.innerHTML = paperInitialHtml;
       try { localStorage.removeItem(PAPER_DRAFT_KEY); } catch {}
+      // 用户草稿标记与已填充版本号一并复位：真实运行的下一次刷新会重新灌入
+      // Agent 定稿；不清标记的话，被丢弃的草稿会继续挡住真实正文回来。
+      delete page.dataset.userEdited;
+      delete page.dataset.stageDraftVersion;
+      try {
+        const projectParam = new URL(window.location.href).searchParams.get("project_id") ?? "";
+        const projectScope = /^proj_[0-9a-f]{32}$/.test(projectParam) ? projectParam : "demo";
+        localStorage.removeItem(`openmathmodel.paperDraft.v1.${projectScope}`);
+      } catch {}
       paperDirty = false;
       renderFormulas(page);
       refreshPaperStatus(page, "已恢复初始正文");
@@ -3808,9 +3930,42 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   function insertPaperCitation(anchor) {
     if (!paperPage()) { toast("请先进入论文编辑页"); return; }
     popupMenu(anchor, PAPER_SOURCES, choice => {
-      insertPaperHtml(`<button class="source-chip" contenteditable="false" data-action="source-detail">来源：${escapeHtml(choice)}　${icon("arrow-square-out")}</button>`);
+      insertPaperHtml(`<button class="source-chip" contenteditable="false" data-action="source-detail" title="点击引用到左侧对话，直接提问或要求修改">来源：${escapeHtml(choice)}　${icon("arrow-square-out")}</button>`);
       toast("已插入来源引用");
     });
+  }
+
+  /**
+   * 点击正文里的来源引用 → 变成左下角输入框上方的引用 chip（与「添加上下文」
+   * 同一通道，随下一条消息进入模型上下文），用户可直接对着它提问或要求修改。
+   * 上下文带上所在章节与相邻段落，Agent 能准确定位正文位置。
+   */
+  function quotePaperSourceToComposer(chip) {
+    const composerNode = $(".chat-pane .composer") || $(".composer");
+    const textarea = composerNode?.querySelector("textarea");
+    const label = chip.textContent.trim();
+    if (!composerNode || !textarea) { modal("引用来源", `<p>${escapeHtml(label)}。该结果已通过完整性和一致性校验。</p>`); return; }
+    let heading = "";
+    let paragraph = "";
+    for (let node = chip.previousElementSibling; node; node = node.previousElementSibling) {
+      if (!paragraph && node.matches("p")) { paragraph = node.textContent.trim(); continue; }
+      if (node.matches("h1, h2, h3")) { heading = node.textContent.trim(); break; }
+    }
+    const contextText = [
+      `论文正文中被点选的结果引用：${label}`,
+      heading ? `所在章节：${heading}` : "",
+      paragraph ? `相邻段落：${paragraph.slice(0, 600)}` : "",
+      "用户可能希望核对该来源、改写相关表述或更新引用的数据结果，请结合论文上下文回应。",
+    ].filter(Boolean).join("\n");
+    mountReferenceChips(composerNode);
+    const result = addComposerReference({ key: `quote:${label}`, kind: "quote", title: label, text: contextText });
+    if (result === "duplicate") toast("该来源已在引用列表中");
+    else if (result === "full") toast("最多引用 4 份资料，先移除一份再添加");
+    else toast("已引用到输入框，直接输入修改要求即可");
+    // 手机档此刻可能停在工作区一侧：切回 Agent 对话，让引用与输入框可见
+    const agentPaneSwitch = $('[data-modeling-pane="agent"]');
+    if (agentPaneSwitch && composerNode.offsetParent === null) agentPaneSwitch.click();
+    textarea.focus();
   }
 
   function runPaperCheck() {
@@ -3838,7 +3993,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const page = paperPage();
     if (!page) { toast("当前页面没有可导出的论文正文"); return; }
     const title = $("h1", page)?.textContent.trim() || "论文草稿";
-    const documentHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3{font-family:"Heiti SC",SimHei,"Microsoft YaHei",sans-serif;line-height:1.5}p{text-indent:2em;margin:0 0 18px}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px}img{max-width:100%}.editor-formula{text-align:center;margin:18px 0}.source-chip{border:1px solid #ccc;border-radius:6px;padding:4px 10px;background:#f5f5f5;font-size:12px}</style></head><body>${page.innerHTML}</body></html>`;
+    // 开源字体的 CDN 样式一并带上：HTML/打印导出里选用的思源宋体等照常渲染（Word 忽略无害）
+    const fontLinks = PAPER_WEBFONT_LINKS.map(href => `<link rel="stylesheet" href="${href}">`).join("");
+    const documentHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${fontLinks}<style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,"Noto Serif SC",serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3{font-family:"Heiti SC",SimHei,"Microsoft YaHei","Noto Sans SC",sans-serif;line-height:1.5}p{text-indent:2em;margin:0 0 18px}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px}img{max-width:100%}.editor-formula{text-align:center;margin:18px 0}.source-chip{border:1px solid #ddd;border-radius:6px;padding:4px 10px;background:#fff;font-size:12px}</style></head><body>${page.innerHTML}</body></html>`;
     const download = (blob, filename) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
@@ -3972,6 +4129,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     if (!page || page.dataset.editorReady === "true") return;
     page.dataset.editorReady = "true";
 
+    // 开源字体（思源宋体/黑体、霞鹜文楷）随编辑器挂载：草稿或字体菜单用到时已就绪
+    ensurePaperWebfonts();
+
     // 先记住初始正文，「恢复初始正文」以此为准
     paperInitialHtml = page.innerHTML;
 
@@ -4037,7 +4197,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         popupMenu(button, Object.keys(PAPER_FONTS), choice => {
           execPaperCommand("fontName", PAPER_FONTS[choice], true);
           if (label) label.textContent = choice;
-        });
+        }, (item, name) => { item.style.fontFamily = PAPER_FONTS[name]; });
       }
       if (kind === "size") {
         popupMenu(button, Object.keys(PAPER_SIZES), choice => {
@@ -4087,7 +4247,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         outlineSpyPending = true;
         window.requestAnimationFrame(() => {
           outlineSpyPending = false;
-          const anchors = outlineLinks
+          // 真实草稿会再生大纲行（stage-content），因此每帧都取当前 DOM 里的行
+          const liveLinks = $$(".paper-only-editor .outline a");
+          const anchors = liveLinks
             .map(link => ({ link, node: $(link.getAttribute("href"), page) }))
             .filter(item => item.node);
           if (!anchors.length) return;
@@ -4096,7 +4258,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           anchors.forEach(item => {
             if (item.node.getBoundingClientRect().top <= threshold) current = item;
           });
-          outlineLinks.forEach(link => link.classList.toggle("active", link === current.link));
+          liveLinks.forEach(link => link.classList.toggle("active", link === current.link));
         });
       }, { passive: true });
     }
@@ -4196,7 +4358,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (action === "download-data") toast("历史供需数据_2024Q4.xlsx 已加入下载队列");
       if (action === "continue-paper") { toast("正在生成第 4 章实证分析"); setTimeout(() => go("complete"), 520); }
       if (action === "export-paper") popupMenu(target, ["导出 Word (.doc)", "导出 LaTeX (.tex)", "导出 HTML", "打印 / PDF"], exportPaper);
-      if (action === "source-detail") modal("引用来源", "<p>来源：Run #04 · 结果表 2。该结果已通过完整性和一致性校验。</p>");
+      if (action === "source-detail") quotePaperSourceToComposer(target);
       if (action === "fake-close") toast("这是演示界面，窗口保持打开");
       if (action === "attach") target.closest(".composer")?.querySelector(".file-input")?.click();
       if (action === "reference") {
@@ -4479,6 +4641,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       const pageSize = kind === "paper" ? 10 : RESOURCE_PAGE_SIZE;
       const paperYearSelect = kind === "paper" ? $("[data-paper-year-select]") : null;
       const paperYearOptions = paperYearSelect ? $$("[data-select-option]", paperYearSelect) : [];
+      const paperCompetitionFilters = kind === "paper" ? $$('[data-paper-competition-filter]') : [];
       const paperGroupFilters = kind === "paper" ? $$('[data-paper-group-filter]') : [];
       const paperReset = kind === "paper" ? $("[data-paper-filter-reset]") : null;
       const problemFilterSelects = kind === "problem" ? $$("[data-problem-filter]") : [];
@@ -4516,6 +4679,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         const query = $(searchSelector)?.value.trim().toLowerCase() || "";
         const selected = tabs.find(tab => tab.classList.contains("active"))?.dataset.resourceTab || "";
         const selectedYear = paperYearOptions.find(option => option.getAttribute("aria-selected") === "true")?.dataset.selectOption || "";
+        const selectedCompetition = paperCompetitionFilters.find(button => button.classList.contains("active"))?.dataset.paperCompetitionFilter || "";
         const selectedGroup = paperGroupFilters.find(button => button.classList.contains("active"))?.dataset.paperGroupFilter || "";
         // 赛题库四个下拉的当前选中值；空值（「全部」）不参与过滤
         const problemFilters = problemFilterSelects.map(wrapper => ({
@@ -4528,6 +4692,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           const matchesCategory = selected === "全部赛题" || selected === "全部" || selected === "按赛题" || selected === "按模型"
             || (selected === "收藏" ? row.dataset.saved === "true" : row.dataset.resourceCategory === selected);
           const matchesYear = kind !== "paper" || !selectedYear || row.dataset.paperYear === selectedYear;
+          const matchesCompetition = kind !== "paper" || !selectedCompetition || row.dataset.paperCompetition === selectedCompetition;
           const matchesGroup = kind !== "paper" || !selectedGroup || row.dataset.paperGroup === selectedGroup;
           const matchesProblemFilters = problemFilters.every(({ field, value }) => {
             if (field === "competition") return row.dataset.problemCompetition === value;
@@ -4535,7 +4700,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             if (field === "type") return row.dataset.problemType === value;
             return (row.dataset.problemDirections || "").split("|").includes(value);
           });
-          if (matchesSearch && matchesCategory && matchesYear && matchesGroup && matchesProblemFilters) matches.push(row);
+          if (matchesSearch && matchesCategory && matchesYear && matchesCompetition && matchesGroup && matchesProblemFilters) matches.push(row);
           row.hidden = true;
         });
         const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
@@ -4548,6 +4713,32 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         const emptyRow = kind === "paper" ? $("[data-paper-empty]") : $("[data-problem-empty]");
         if (emptyRow) emptyRow.hidden = matches.length > 0;
         renderPagination(pageCount);
+      };
+      // 奖项、题组、年份都只存在于某一个比赛下（"Outstanding Winner" 只有美赛、2004 年只有研究生赛），
+      // 选定比赛后隐藏不属于它的选项；当前选中项若被隐藏就退回「全部」，否则会停在必定空列表的组合上。
+      // 题组文案也随比赛改写：美赛的 A/B/C 是 MCM、D/E/F 是 ICM。
+      const syncPaperScopes = () => {
+        const competition = paperCompetitionFilters.find(button => button.classList.contains("active"))?.dataset.paperCompetitionFilter || "";
+        const inScope = node => {
+          const scope = node.dataset.paperScope;
+          return !scope || !competition || scope.split(" ").includes(competition);
+        };
+        const resetToFirst = nodes => {
+          if (nodes.some(node => node.hidden && node.classList.contains("active"))) {
+            nodes.forEach((node, index) => node.classList.toggle("active", index === 0));
+          }
+        };
+        tabs.forEach(tab => { tab.hidden = !inScope(tab); });
+        resetToFirst(tabs);
+        paperGroupFilters.forEach(button => {
+          button.hidden = !inScope(button);
+          const group = button.dataset.paperGroupFilter;
+          if (group && group !== "—") button.textContent = paperGroupLabel(competition, group);
+        });
+        resetToFirst(paperGroupFilters);
+        paperYearOptions.forEach(option => { option.hidden = !inScope(option); });
+        const activeYear = paperYearOptions.find(option => option.getAttribute("aria-selected") === "true");
+        if (activeYear?.hidden && paperYearOptions.length) selectPaperYear(paperYearOptions[0]);
       };
 
       $(searchSelector)?.addEventListener("input", () => { currentPage = 1; applyResourceFilters(); });
@@ -4565,6 +4756,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         currentPage = 1;
         applyResourceFilters();
       }));
+      paperCompetitionFilters.forEach(button => button.addEventListener("click", () => {
+        paperCompetitionFilters.forEach(item => item.classList.toggle("active", item === button));
+        syncPaperScopes();
+        currentPage = 1;
+        applyResourceFilters();
+      }));
       paperGroupFilters.forEach(button => button.addEventListener("click", () => {
         paperGroupFilters.forEach(item => item.classList.toggle("active", item === button));
         currentPage = 1;
@@ -4575,7 +4772,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         if (search) search.value = "";
         if (paperYearOptions.length) selectPaperYear(paperYearOptions[0]);
         tabs.forEach((tab, index) => tab.classList.toggle("active", index === 0));
+        paperCompetitionFilters.forEach((button, index) => button.classList.toggle("active", index === 0));
         paperGroupFilters.forEach((button, index) => button.classList.toggle("active", index === 0));
+        syncPaperScopes();
         currentPage = 1;
         applyResourceFilters();
       });

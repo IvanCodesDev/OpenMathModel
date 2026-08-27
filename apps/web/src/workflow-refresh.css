@@ -799,12 +799,25 @@
   border-bottom: 1px solid #e2e2df;
 }
 
+/* 单字符按钮（B/I/U/ƒx）与图标按钮统一 flex 双向居中：
+   默认内联布局下字母贴左、基线不齐，正是「盒子与图标没对齐」的来源。 */
 .workflow-editor .editor-toolbar button {
   height: 34px;
   min-width: 34px;
   padding: 0 8px;
   border: 0;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  line-height: 1;
+}
+
+.workflow-editor .editor-toolbar button i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .workflow-editor .editor-page {
@@ -845,16 +858,41 @@
   color: inherit;
 }
 
+/* 来源引用 chip：白底描边卡片（非灰底），内容 flex 垂直居中；
+   点击引用到左侧对话输入框，hover 提亮提示可交互。 */
 .source-chip {
-  height: 46px;
+  height: 40px;
   margin: -15px 0 23px 75px;
-  padding: 0 18px;
-  border-color: #dededa;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e4e4e0;
   border-radius: 8px;
-  box-shadow: 0 4px 14px rgba(0,0,0,.06);
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(23,23,23,.05);
   color: #555551;
   font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .125s ease, color .125s ease, box-shadow .125s ease;
 }
+
+.source-chip:hover {
+  border-color: #c9c9c4;
+  color: #171717;
+  box-shadow: 0 2px 8px rgba(23,23,23,.08);
+}
+
+.source-chip i {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px !important;
+  color: #8a8a85;
+}
+
+.source-chip:hover i { color: #171717; }
 
 .workflow-editor .editor-formula {
   margin: 8px 0 23px;
@@ -1232,12 +1270,15 @@
 .focused-document-heading p { margin: 0; color: #777773; font-size: 14px; }
 .focused-document-heading > div:last-child { display: flex; gap: 13px; }
 
+/* 真实产出可能是多行长句：垂直内边距 + 行高保证不贴边，图标不被文字挤压 */
 .focused-conclusion-strip,
-.focused-report-conclusion { min-height: 60px; padding: 0 20px; display: flex; align-items: center; border: 1px solid #e6e6e3; border-radius: 10px; color: #3d3d39; background: #fff; font-size: 16px; }
+.focused-report-conclusion { min-height: 60px; padding: 13px 20px; display: flex; align-items: center; border: 1px solid #e6e6e3; border-radius: 10px; color: #3d3d39; background: #fff; font-size: 16px; line-height: 1.6; }
 .focused-conclusion-strip > i,
-.focused-report-conclusion > i { margin-right: 13px; font-size: 25px; }
+.focused-report-conclusion > i { margin-right: 13px; flex: 0 0 auto; font-size: 25px; }
 .focused-conclusion-strip strong,
-.focused-report-conclusion strong { margin-right: 5px; }
+.focused-report-conclusion strong { margin-right: 5px; flex: 0 0 auto; }
+.focused-conclusion-strip > span,
+.focused-report-conclusion > span { min-width: 0; }
 
 .focused-metrics { min-height: 91px; display: grid; }
 .focused-metrics.three { grid-template-columns: repeat(3, 1fr); }
@@ -1285,7 +1326,7 @@
 .model-plan-workspace .focused-workspace-panel.active { padding: 28px 26px 26px; }
 .focused-conclusion-strip.model-recommendation { width: fit-content; min-width: 67%; margin-bottom: 27px; }
 .focused-plan-list { display: flex; flex-direction: column; gap: 12px; }
-.focused-plan-row { width: 100%; min-height: 62px; padding: 0 18px; display: grid; grid-template-columns: 24px 205px 1.55fr .86fr 1.15fr 22px; align-items: center; gap: 14px; border: 1px solid #e4e4e1; border-radius: 9px; color: #4c4c48; background: #fff; text-align: left; font-size: 13px; }
+.focused-plan-row { width: 100%; min-height: 62px; padding: 12px 18px; display: grid; grid-template-columns: 24px 205px 1.55fr .86fr 1.15fr 22px; align-items: center; gap: 14px; border: 1px solid #e4e4e1; border-radius: 9px; color: #4c4c48; background: #fff; text-align: left; font-size: 13px; }
 .focused-plan-row strong { color: #30302d; font-size: 15px; }
 .focused-plan-row small { color: #777773; font-size: 12px; font-weight: 400; }
 .plan-radio { width: 20px; height: 20px; padding: 5px; border: 2px solid #aaa; border-radius: 50%; background: #fff; }
@@ -1302,7 +1343,7 @@
 .experiment-report-workspace .focused-workspace-panel.active { padding: 19px 25px; }
 .focused-report-card { min-height: 100%; padding: 19px 25px 0; border: 1px solid #e6e6e3; border-radius: 9px; }
 .focused-report-card > h1 { margin: 0 0 18px; font-size: 19px; }
-.focused-report-conclusion { min-height: 53px; padding: 0; border-width: 0 0 1px; border-radius: 0; }
+.focused-report-conclusion { min-height: 53px; padding: 12px 0; border-width: 0 0 1px; border-radius: 0; }
 .experiment-metrics { min-height: 116px; border-bottom: 1px solid #e7e7e4; }
 .experiment-metrics article { padding-top: 22px; }
 .focused-experiment-chart { padding: 19px 0 10px; border-bottom: 1px solid #e7e7e4; }
@@ -1508,7 +1549,7 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 .model-plan-workspace .focused-workspace-panel.active { padding: 18px 22px; }
 .focused-conclusion-strip.model-recommendation { margin-bottom: 15px; }
 .focused-plan-list { gap: 8px; }
-.focused-plan-row { min-height: 52px; padding: 0 14px; grid-template-columns: 20px 170px 1.45fr .78fr 1.05fr 18px; gap: 9px; font-size: 12px; }
+.focused-plan-row { min-height: 52px; padding: 10px 14px; grid-template-columns: 20px 170px 1.45fr .78fr 1.05fr 18px; gap: 9px; font-size: 12px; }
 .focused-plan-row strong { font-size: 14px; }
 .plan-radio { width: 17px; height: 17px; }
 .focused-plan-detail { margin-top: 12px; padding: 2px 20px; }
@@ -3065,7 +3106,7 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 .paper-only-editor .outline {
   min-width: 0;
   min-height: 0;
-  padding: 16px 12px;
+  padding: 14px 12px 18px;
   overflow: auto;
   border: 0;
   border-right: 1px solid #e3e3df;
@@ -3073,10 +3114,55 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   background: #fafaf8;
 }
 
+/* 大纲标题行：小号分组标签 + 细分隔线，三点图标收进 24px 可点击圆角热区 */
+.paper-only-editor .outline-heading {
+  height: auto;
+  margin: 0 0 10px;
+  padding: 2px 0 10px 7px;
+  border-bottom: 1px solid #ececea;
+}
+
+.paper-only-editor .outline-heading h3 {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  color: #8a8a85;
+}
+
+/* 三点图标目前是装饰位：只做视觉收纳（24px 盒 + 居中），不给假交互反馈 */
+.paper-only-editor .outline-heading > i {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #a2a29d;
+  font-size: 14px !important;
+}
+
 .paper-only-editor .outline a {
-  min-height: 48px;
-  padding: 0 7px;
+  min-height: 40px;
+  margin-bottom: 2px;
+  padding: 0 8px;
+  gap: 9px;
   font-size: 13px;
+  line-height: 1.45;
+}
+
+.paper-only-editor .outline .outline-status {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-color: #cfcfca;
+}
+
+.paper-only-editor .outline .outline-status.done {
+  border-color: currentColor;
+}
+
+.paper-only-editor .outline .outline-status i {
+  font-size: 10px !important;
 }
 
 .paper-only-editor .paper-editor {
@@ -3196,7 +3282,16 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   box-shadow: inset 0 0 0 1px #1c1c1a;
 }
 .focused-plan-row:focus-visible { outline: 2px solid #1c1c1a; outline-offset: 2px; }
-.focused-plan-row > span:not(.plan-radio) { color: #57574f; }
+/* 行内摘要（核心方法/主要风险）来自真实产出，可能很长：最多三行截断，
+   完整内容在下方方案详情里；不截断的话一行卡片会被撑成一面文字墙。 */
+.focused-plan-row > span:not(.plan-radio) {
+  color: #57574f;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  line-height: 1.55;
+}
 
 /* Plan detail card: the left column reads as labels; body copy one step more legible;
    rows hug their content instead of forcing tall empty bands. */
@@ -3214,7 +3309,11 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 }
 .focused-plan-detail p,
 .focused-plan-detail ul { color: #3f3f3b; font-size: 13px; line-height: 1.7; }
-.focused-plan-detail li + li { margin-top: 3px; }
+/* 真实思路/步骤是成段长文：限制行长保证可读性，列表项之间留出呼吸感 */
+.focused-plan-detail p,
+.focused-plan-detail ul,
+.focused-plan-detail .stage-rich-text { max-width: 720px; }
+.focused-plan-detail li + li { margin-top: 6px; }
 
 /* Experiment notes: hanging indent so wrapped lines no longer slide under the icon. */
 .focused-experiment-notes li { position: relative; padding-left: 24px; }
@@ -5000,10 +5099,18 @@ html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { backgro
   background: var(--ax-code-bg);
 }
 
+.focused-stage-pane .paper-only-editor .outline-heading {
+  border-bottom: 1px solid var(--ax-border);
+}
+
 .focused-stage-pane .paper-only-editor .outline-heading h3 {
   color: var(--ax-text-secondary);
   font-size: 12px;
   font-weight: 600;
+}
+
+.focused-stage-pane .paper-only-editor .outline-heading > i {
+  color: var(--ax-text-secondary);
 }
 
 .focused-stage-pane .paper-only-editor .outline a {
@@ -5064,17 +5171,43 @@ html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { backgro
   border-color: transparent;
 }
 
+/* 来源引用 chip 在工作台里同样保持白底描边（不用灰底），hover 只提亮描边与文字 */
 .focused-stage-pane .paper-only-editor .source-chip {
-  border: 0;
+  border: 1px solid var(--ax-border);
   border-radius: var(--ax-radius-inner);
   color: var(--ax-text-secondary);
-  background: var(--ax-muted);
+  background: #fff;
   font-size: 12px;
 }
 
 .focused-stage-pane .paper-only-editor .source-chip:hover {
   color: var(--ax-text-primary);
-  background: var(--ax-pressed);
+  border-color: var(--ax-text-secondary);
+  background: #fff;
+}
+
+/* ── 论文正文流式呈现：随写入进度移动的闪烁光标（编辑器内容为流式落点） ── */
+.editor-page .editor-stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 1px;
+  vertical-align: -0.18em;
+  border-radius: 1px;
+  background: #171717;
+  animation: editor-caret-blink .9s steps(2, start) infinite;
+}
+
+@keyframes editor-caret-blink {
+  50% { opacity: 0; }
+}
+
+html[data-reduce-motion="on"] .editor-page .editor-stream-caret {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-page .editor-stream-caret { animation: none; }
 }
 
 /* ── 移动端（≤820px）：页签回到文档流的既有约定必须保持（revision 33） ── */
@@ -5491,6 +5624,110 @@ html[data-theme="dark"] .todo-icon { color: #737373; }
 html[data-theme="dark"] .todo-icon-active.on { color: #f5f5f5; }
 html[data-theme="dark"] .todo-label { color: #737373; }
 html[data-theme="dark"] .todo-label::before { background: linear-gradient(90deg, #f5f5f5 0%, #f5f5f5 30%, rgba(245, 245, 245, .45) 45%, rgba(245, 245, 245, .45) 55%, #f5f5f5 70%, #f5f5f5 100%); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; }
+
+/* ── 首页轻量对话（对话优先接待的聊天态）───────────────────────────────
+   气泡、Agent 头（水母 Logo）、思考块、Markdown 正文全部复用执行页的
+   全局类（user-bubble / assistant-block / reply-thinking / analysis-copy），
+   这里只负责容器布局与对话态下的 hero 收纳，不重造任何气泡样式。 */
+.home-chat-thread {
+  width: min(865px, 90%);
+  margin: 26px auto 6px;
+  text-align: left;
+  align-self: center;
+}
+.home-chat-thread .user-message { justify-content: flex-end; display: flex; }
+.home-chat-thread .assistant-block { margin: 0 0 30px; }
+.home-chat-thread .assistant-id { display: flex; align-items: center; }
+.home-chat-error { color: #bd4840; font-size: 13px; }
+html[data-theme="dark"] .home-chat-error { color: #e2726a; }
+
+/* 执行轨迹里的进度叙述正文（阶段完成时智能体的一段话，叙述与过程行交替） */
+.agent-stream .stream-note { margin: 10px 0 12px; line-height: 1.7; }
+.agent-stream .stream-note p { margin: 0 0 8px; }
+
+/* 数据准备页真实正文：准备步骤与清洗策略列表（替换演示预览表的内容区） */
+.stage-step-list { margin: 12px 0 0; padding-left: 22px; line-height: 1.9; }
+.stage-step-list li + li { margin-top: 6px; }
+.stage-strategy-list { margin: 12px 0 0; padding-left: 22px; line-height: 1.9; color: #555551; }
+.stage-strategy-list li + li { margin-top: 6px; }
+html[data-theme="dark"] .stage-strategy-list { color: #b3b3ae; }
+
+/* ── 流程页真实产出的富文本（stage-content 的 richBlock/richInline）：
+   模型正文里的 markdown（加粗/代码/列表/表格/公式）在面板里也要有排版，
+   之前这些 md-* 类只在聊天气泡（.analysis-copy）下有样式。 ── */
+.stage-rich-text { min-width: 0; color: inherit; }
+.stage-rich-text > :first-child { margin-top: 0; }
+.stage-rich-text > :last-child { margin-bottom: 0; }
+.stage-rich-text p { margin: 0 0 10px; }
+.stage-rich-text ul,
+.stage-rich-text ol { margin: 0 0 10px; padding-left: 20px; }
+.stage-rich-text li + li { margin-top: 5px; }
+
+/* 面板槽位有自己的标题层级：正文内的 markdown 标题一律降为加粗小节名 */
+.stage-rich-text h1,
+.stage-rich-text h2,
+.stage-rich-text h3,
+.stage-rich-text h4 { margin: 14px 0 6px; color: inherit; font-size: 1em; font-weight: 650; line-height: 1.5; }
+
+.stage-rich-text blockquote { margin: 8px 0; padding: 2px 0 2px 12px; border-left: 3px solid #dededa; color: #6a6a65; }
+.stage-rich-text hr { margin: 12px 0; border: 0; border-top: 1px solid #e6e6e3; }
+
+.stage-rich-text .md-inline-code,
+.stage-rich-inline .md-inline-code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #f0f0ee;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: .92em;
+}
+
+.stage-rich-text pre.md-code,
+.stage-rich-inline pre.md-code {
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid #e6e6e3;
+  border-radius: 8px;
+  background: #fafaf8;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.stage-rich-text table.md-table,
+.stage-rich-inline table.md-table { margin: 8px 0; border-collapse: collapse; font-size: .95em; }
+.stage-rich-text table.md-table th,
+.stage-rich-text table.md-table td,
+.stage-rich-inline table.md-table th,
+.stage-rich-inline table.md-table td { padding: 5px 10px; border: 1px solid #e2e2df; text-align: left; }
+.stage-rich-text table.md-table th,
+.stage-rich-inline table.md-table th { background: #fafaf8; font-weight: 600; }
+
+.stage-rich-text .md-math-block,
+.stage-rich-inline .md-math-block { margin: 10px 0; overflow-x: auto; text-align: center; }
+
+/* 单句槽位里出现多块结构时退回块级排版（richInline 的 stage-rich-multi 分支） */
+.stage-rich-inline.stage-rich-multi { display: block; min-width: 0; }
+.stage-rich-inline.stage-rich-multi p { margin: 0 0 8px; }
+.stage-rich-inline.stage-rich-multi > :last-child { margin-bottom: 0; }
+
+html[data-theme="dark"] .stage-rich-text .md-inline-code,
+html[data-theme="dark"] .stage-rich-inline .md-inline-code { background: #2e2e2c; }
+html[data-theme="dark"] .stage-rich-text pre.md-code,
+html[data-theme="dark"] .stage-rich-inline pre.md-code { border-color: #3a3a37; background: #262624; }
+html[data-theme="dark"] .stage-rich-text blockquote { border-left-color: #3f3f3c; color: #a5a5a0; }
+html[data-theme="dark"] .stage-rich-text table.md-table th,
+html[data-theme="dark"] .stage-rich-text table.md-table td,
+html[data-theme="dark"] .stage-rich-inline table.md-table th,
+html[data-theme="dark"] .stage-rich-inline table.md-table td { border-color: #3a3a37; }
+html[data-theme="dark"] .stage-rich-text table.md-table th,
+html[data-theme="dark"] .stage-rich-inline table.md-table th { background: #262624; }
+
+/* 数据清单等真实表格：长字段名/风险描述允许任意断行，不许把表格挤出容器 */
+.focused-workspace .focused-table td { overflow-wrap: anywhere; }
+
+/* 真实实验总结无指标时隐藏指标带：.focused-metrics 的作者级 display:grid
+   会压过 UA 的 [hidden]，必须显式还原 display:none。 */
+.focused-metrics[hidden] { display: none; }
 
 html[data-reduce-motion="on"] .todo-list.todo-reveal .todo-item { animation: none; }
 html[data-reduce-motion="on"] .todo-icon,
