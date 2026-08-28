@@ -111,7 +111,12 @@ export const modelingWorkspaceApi = {
 
   /** 发送前接待判定（对话优先门控）：判定失败时服务端已放行，前端无需兜底分支。 */
   runTaskIntake(
-    input: { goal: string; has_attachments: boolean },
+    input: {
+      goal: string;
+      has_attachments: boolean;
+      /** 浏览器已解析的附件证据（名字+正文摘录）；有摘录时服务端按内容判定而非放行 */
+      attachments?: { name: string; excerpt: string; characters: number }[];
+    },
     signal?: AbortSignal,
   ): Promise<TaskIntakeResult> {
     return request<TaskIntakeResult>("/api/v1/task-intake", {

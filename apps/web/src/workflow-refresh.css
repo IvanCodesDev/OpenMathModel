@@ -80,7 +80,7 @@
 .modeling-agent-copy {
   margin-top: 26px;
   color: #4f4f4b;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 2;
 }
 
@@ -5949,4 +5949,133 @@ html[data-reduce-motion="on"] .todo-collapsible { transition: none; }
   .todo-item.active .todo-label::before { animation: none; }
   .roll-inner { transition: none; }
   .todo-collapsible { transition: none; }
+}
+
+/* ── 任务创建过场遮罩（task-launch-overlay）──────────────────────────────
+   接待判定放行后接管视口：创建项目 → 上传附件 → 启动 Agent 的真实进度
+   逐步打勾，成功后主视觉环收拢成对勾、定格一拍再进入运行工作台。
+   层级取 230：压过设置（180）与二级弹框（220），让位给 toast/菜单（260）。 */
+.task-launch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, .88);
+  backdrop-filter: blur(14px) saturate(1.1);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+.task-launch-overlay.is-open { opacity: 1; }
+
+.task-launch-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 34px 44px 30px;
+  animation: launch-panel-in 420ms cubic-bezier(.2, .8, .25, 1) backwards;
+}
+@keyframes launch-panel-in {
+  from { opacity: 0; transform: translateY(14px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 主视觉：进行中是旋转的弧线环，成功时交叉淡切为实心对勾 */
+.task-launch-visual { position: relative; width: 48px; height: 48px; color: #232320; }
+.task-launch-visual svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.launch-visual-ring { animation: launch-ring-spin 900ms linear infinite; }
+@keyframes launch-ring-spin { to { transform: rotate(360deg); } }
+.launch-visual-check { opacity: 0; transform: scale(.6); }
+.task-launch-overlay[data-state="done"] .launch-visual-ring { display: none; }
+.task-launch-overlay[data-state="done"] .launch-visual-check {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 200ms ease, transform 420ms cubic-bezier(.34, 1.56, .5, 1);
+}
+/* 对勾笔画从起点画到终点（pathLength 归一，长度吃满即隐藏） */
+.task-launch-overlay[data-state="done"] .launch-visual-tick {
+  stroke-dasharray: 26;
+  stroke-dashoffset: 26;
+  animation: launch-tick-draw 320ms 140ms ease-out forwards;
+}
+@keyframes launch-tick-draw { to { stroke-dashoffset: 0; } }
+
+.task-launch-title {
+  margin: 18px 0 0;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -.2px;
+  color: #232320;
+}
+
+.task-launch-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.task-launch-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  line-height: 18px;
+  color: #a1a1a1;
+  transition: color 300ms ease;
+}
+.task-launch-step[data-step-state="active"] { color: #232320; }
+.task-launch-step[data-step-state="done"] { color: #6f6f69; }
+
+.launch-icon-wrap { position: relative; width: 16px; height: 16px; flex: none; }
+.launch-icon { position: absolute; inset: 0; opacity: 0; transition: opacity 240ms ease; color: #b9b9b3; }
+.task-launch-step[data-step-state="pending"] .launch-icon-pending { opacity: 1; }
+.task-launch-step[data-step-state="active"] .launch-icon-active { opacity: 1; color: #232320; }
+.task-launch-step[data-step-state="done"] .launch-icon-done { opacity: 1; color: #232320; }
+.launch-icon-active { animation: launch-ring-spin 900ms linear infinite; }
+
+.task-launch-note {
+  min-height: 18px;
+  margin: 16px 0 0;
+  font-size: 13px;
+  color: #91918b;
+}
+
+html[data-theme="dark"] .task-launch-overlay { background: rgba(23, 23, 21, .88); }
+html[data-theme="dark"] .task-launch-visual,
+html[data-theme="dark"] .task-launch-title { color: #f5f5f5; }
+html[data-theme="dark"] .task-launch-overlay[data-state="done"] .launch-visual-tick { stroke: #171715; }
+html[data-theme="dark"] .task-launch-step { color: #737373; }
+html[data-theme="dark"] .task-launch-step[data-step-state="active"] { color: #f5f5f5; }
+html[data-theme="dark"] .task-launch-step[data-step-state="done"] { color: #a8a8a2; }
+html[data-theme="dark"] .task-launch-step[data-step-state="active"] .launch-icon-active,
+html[data-theme="dark"] .task-launch-step[data-step-state="done"] .launch-icon-done { color: #f5f5f5; }
+html[data-theme="dark"] .task-launch-note { color: #8c8c86; }
+
+html[data-reduce-motion="on"] .task-launch-overlay,
+html[data-reduce-motion="on"] .task-launch-panel,
+html[data-reduce-motion="on"] .launch-visual-ring,
+html[data-reduce-motion="on"] .launch-icon,
+html[data-reduce-motion="on"] .launch-icon-active,
+html[data-reduce-motion="on"] .task-launch-overlay[data-state="done"] .launch-visual-check,
+html[data-reduce-motion="on"] .task-launch-overlay[data-state="done"] .launch-visual-tick {
+  animation: none;
+  transition: none;
+}
+html[data-reduce-motion="on"] .task-launch-overlay { opacity: 1; }
+html[data-reduce-motion="on"] .task-launch-overlay[data-state="done"] .launch-visual-tick { stroke-dashoffset: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .task-launch-overlay,
+  .task-launch-panel,
+  .launch-visual-ring,
+  .launch-icon,
+  .launch-icon-active,
+  .task-launch-overlay[data-state="done"] .launch-visual-check,
+  .task-launch-overlay[data-state="done"] .launch-visual-tick {
+    animation: none;
+    transition: none;
+  }
+  .task-launch-overlay { opacity: 1; }
+  .task-launch-overlay[data-state="done"] .launch-visual-tick { stroke-dashoffset: 0; }
 }

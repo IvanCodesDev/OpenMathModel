@@ -9,6 +9,11 @@
  * 解析可能很慢（图片/扫描件首次走 VL 需数十秒），因此按「等待预算」工作：
  * 每轮对话只并入已就绪且未并入过的附件，没赶上的自动加入之后的轮次；
  * 服务端按内容寻址缓存正文，重复读取零成本。
+ *
+ * 开场分析的兜底（用户实测痛点）：服务端正文没赶上等待预算时，退回任务创建
+ * 时随 run 交接的「浏览器解析摘录」（见 persistTaskAttachmentExcerpts），保证
+ * 首条回复不会对着三个字的任务名说「没收到题面」；权威全文就绪后仍会并入
+ * 后续轮次。
  */
 
 export interface TaskAttachmentContext {
@@ -28,6 +33,11 @@ const TEXT_TIMEOUT_MS = 180_000;
 
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/;
 const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
+/** 任务创建时交接的浏览器解析摘录（按 run 隔离，sessionStorage）。 */
+const EXCERPT_HANDOFF_PREFIX = "openmathmodel.taskAttachmentExcerpts.";
+/** 单条摘录与合计的存储预算：与任务草稿的摘要上限（4000/24000）一致。 */
+const EXCERPT_HANDOFF_CHARS = 4_000;
+const EXCERPT_HANDOFF_TOTAL = 24_000;
 
 interface ArtifactTextPayload {
   artifact_id: string;
@@ -49,8 +59,16 @@ interface Entry {
   injected: boolean;
 }
 
-let entriesPromise: Promise<Entry[]> | null = null;
+interface ExcerptRecord {
+  name: string;
+  excerpt: string;
+  characters?: number;
+}
+
+let entriesPromise: Promise<Entry[] | null> | null = null;
 let firstCollect = true;
+/** 已用摘录顶上的附件名：摘录不重复注入；权威全文就绪后照常并入。 */
+const excerptInjectedNames = new Set<string>();
 
 function activeRunId(): string | null {
   const params = new URL(window.location.href).searchParams;
@@ -63,6 +81,61 @@ function activeRunId(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 任务创建成功后调用（task-start-controller）：把浏览器解析出的正文摘录按
+ * run 存进 sessionStorage。运行页的对话（尤其是开场分析）在服务端正文没赶上
+ * 等待预算时以它兜底。不做一次性消费：开场失败重试、刷新页面都还要用。
+ */
+export function persistTaskAttachmentExcerpts(
+  runId: string,
+  attachments: readonly { name: string; excerpt?: string; characters?: number }[],
+): void {
+  if (!RUN_ID_PATTERN.test(runId)) return;
+  let budget = EXCERPT_HANDOFF_TOTAL;
+  const records: ExcerptRecord[] = [];
+  for (const attachment of attachments) {
+    const excerpt = (attachment.excerpt ?? "").slice(0, Math.max(0, Math.min(EXCERPT_HANDOFF_CHARS, budget)));
+    if (!excerpt) continue;
+    budget -= excerpt.length;
+    records.push({
+      name: attachment.name,
+      excerpt,
+      ...(attachment.characters ? { characters: attachment.characters } : {}),
+    });
+  }
+  if (records.length === 0) return;
+  try {
+    sessionStorage.setItem(EXCERPT_HANDOFF_PREFIX + runId, JSON.stringify(records));
+  } catch {
+    // 会话存储不可用时没有兜底摘录，服务端正文仍是权威来源。
+  }
+}
+
+function readExcerptRecords(runId: string): Map<string, ExcerptRecord> {
+  const byName = new Map<string, ExcerptRecord>();
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(EXCERPT_HANDOFF_PREFIX + runId);
+  } catch {
+    return byName;
+  }
+  if (!raw) return byName;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return byName;
+  }
+  if (!Array.isArray(payload)) return byName;
+  for (const item of payload) {
+    const record = item as ExcerptRecord;
+    if (typeof record?.name === "string" && typeof record?.excerpt === "string" && record.excerpt) {
+      if (!byName.has(record.name)) byName.set(record.name, record);
+    }
+  }
+  return byName;
 }
 
 async function fetchJson<T>(path: string): Promise<T | null> {
@@ -86,14 +159,26 @@ interface WorkspaceArtifact {
   producer_node: string | null;
 }
 
-async function loadEntries(): Promise<Entry[]> {
+function fetchEntryText(entry: Entry): void {
+  entry.result = undefined;
+  entry.promise = fetchJson<ArtifactTextPayload>(
+    `/api/v1/artifacts/${encodeURIComponent(entry.id)}/text`,
+  );
+  void entry.promise.then(result => {
+    entry.result = result;
+  });
+}
+
+/** 返回 null = 工作台读取失败（与「确实没有附件」区分，失败不缓存）。 */
+async function loadEntries(): Promise<Entry[] | null> {
   const runId = activeRunId();
   if (!runId) return [];
   const view = await fetchJson<{ artifacts?: WorkspaceArtifact[] }>(
     `/api/v1/task-runs/${encodeURIComponent(runId)}/workspace`,
   );
+  if (view === null) return null;
   // 用户上传的附件没有 producer_node；Agent 产物不在此注入（它们由阶段正文承载）。
-  const uploads = (view?.artifacts ?? []).filter(
+  const uploads = (view.artifacts ?? []).filter(
     artifact => artifact.status === "READY" && !artifact.producer_node,
   );
   return uploads.map(artifact => {
@@ -101,13 +186,9 @@ async function loadEntries(): Promise<Entry[]> {
       id: artifact.id,
       name: artifact.name,
       injected: false,
-      promise: fetchJson<ArtifactTextPayload>(
-        `/api/v1/artifacts/${encodeURIComponent(artifact.id)}/text`,
-      ),
+      promise: Promise.resolve(null),
     };
-    void entry.promise.then(result => {
-      entry.result = result;
-    });
+    fetchEntryText(entry);
     return entry;
   });
 }
@@ -126,66 +207,108 @@ function sectionOf(payload: ArtifactTextPayload, budget: number): string {
   return `【任务附件：${payload.name}】${meta.length ? `（${meta.join("，")}）` : ""}\n${body}`;
 }
 
+function excerptSectionOf(record: ExcerptRecord, budget: number): string {
+  const body = record.excerpt.slice(0, Math.max(0, Math.min(PER_ATTACHMENT_CAP, budget)));
+  const meta = record.characters
+    ? `全文约 ${record.characters.toLocaleString("zh-CN")} 字，以下为开头摘录，`
+    : "";
+  return `【任务附件：${record.name}】（浏览器初步解析：${meta}完整正文稍后自动并入）\n${body}`;
+}
+
 /**
  * 取本轮可并入的任务附件上下文。没有新内容（无任务、无附件、都已并入、
- * 都还没解析完）时返回 null；调用方在消息发送成功后执行 commit()。
+ * 都还没解析完且没有摘录兜底）时返回 null；调用方在消息发送成功后执行 commit()。
  */
 export async function collectTaskAttachmentContext(): Promise<TaskAttachmentContext | null> {
+  const runId = activeRunId();
+  if (!runId) return null;
   entriesPromise ??= loadEntries();
   const entries = await entriesPromise;
-  const pending = entries.filter(entry => !entry.injected);
-  if (pending.length === 0) return null;
+  // 读取失败或列表为空时不缓存：失败要重试（否则整个页面会话都静默丢附件），
+  // 空列表也可能是附件对话框稍后补传，下一轮重新拉取的成本只是一个 GET。
+  if (entries === null || entries.length === 0) entriesPromise = null;
 
+  const excerpts = readExcerptRecords(runId);
   const waitBudget = firstCollect ? FIRST_WAIT_MS : LATER_WAIT_MS;
   firstCollect = false;
-  await Promise.race([
-    Promise.allSettled(pending.map(entry => entry.promise)),
-    delay(waitBudget),
-  ]);
+
+  const pending = (entries ?? []).filter(entry => !entry.injected);
+  if (pending.length > 0) {
+    await Promise.race([
+      Promise.allSettled(pending.map(entry => entry.promise)),
+      delay(waitBudget),
+    ]);
+  }
 
   let budget = TOTAL_BUDGET;
   const sections: string[] = [];
   const included: Entry[] = [];
-  let parsing = 0;
+  const excerptUsed: string[] = [];
+  /** 还没有任何内容可用（服务端解析中且无摘录）的附件名。 */
+  const stillParsing: string[] = [];
+
+  const injectExcerptFallback = (name: string): boolean => {
+    const record = excerpts.get(name);
+    if (!record || excerptInjectedNames.has(name) || budget <= 0) return false;
+    sections.push(excerptSectionOf(record, budget));
+    budget -= Math.min(PER_ATTACHMENT_CAP, budget);
+    excerptUsed.push(name);
+    return true;
+  };
+
   for (const entry of pending) {
     const payload = entry.result;
     if (payload === undefined) {
-      parsing += 1; // 还在解析，下一轮再补
+      // 服务端还在解析：有浏览器摘录先顶上，没有就记为解析中、下一轮再补
+      if (!injectExcerptFallback(entry.name)) stillParsing.push(entry.name);
       continue;
     }
     if (payload === null) {
-      // 读取失败：本轮跳过，下一轮 collect 时重试一次
-      entry.promise = fetchJson<ArtifactTextPayload>(
-        `/api/v1/artifacts/${encodeURIComponent(entry.id)}/text`,
-      );
-      entry.result = undefined;
-      void entry.promise.then(result => {
-        entry.result = result;
-      });
+      // 读取失败：立即安排重试；本轮同样先用摘录顶上
+      fetchEntryText(entry);
+      if (!injectExcerptFallback(entry.name)) stillParsing.push(entry.name);
       continue;
     }
-    const section = sectionOf(payload, budget);
+    // 摘录已在此前轮次注入且已覆盖全文：不再重复占上下文
+    const record = excerpts.get(entry.name);
+    if (
+      record
+      && excerptInjectedNames.has(entry.name)
+      && payload.characters <= record.excerpt.length
+    ) {
+      included.push(entry);
+      continue;
+    }
+    sections.push(sectionOf(payload, budget));
     budget -= Math.min(PER_ATTACHMENT_CAP, budget);
-    sections.push(section);
     included.push(entry);
   }
 
-  if (sections.length === 0 && parsing === 0) return null;
+  // 工作台读取失败（entries 为 null）时产物清单都拿不到：直接用交接摘录兜底，
+  // 开场分析不至于两手空空。
+  if (entries === null) {
+    for (const name of excerpts.keys()) injectExcerptFallback(name);
+  }
+
+  if (sections.length === 0 && stillParsing.length === 0) return null;
   const pieces: string[] = [];
   if (sections.length > 0) {
-    pieces.push(`用户为本任务上传了 ${sections.length} 个附件，内容如下：\n\n${sections.join("\n\n")}`);
+    pieces.push(`用户为本任务上传了附件，内容如下：\n\n${sections.join("\n\n")}`);
   }
-  if (parsing > 0) {
+  if (stillParsing.length > 0) {
+    const names = stillParsing.map(name => `「${name}」`).join("、");
     pieces.push(
       sections.length > 0
-        ? `（另有 ${parsing} 个附件仍在本机解析中，稍后的对话会自动补充其内容）`
-        : `（用户为本任务上传了 ${parsing} 个附件，仍在本机解析中，稍后的对话会自动补充其内容）`,
+        ? `（另有 ${stillParsing.length} 个附件 ${names} 仍在解析中，内容稍后自动并入，无需用户重新提供。）`
+        : `（用户已为本任务上传 ${stillParsing.length} 个附件：${names}，正文仍在解析中，稍后会自动并入对话。`
+          + `请勿因此断言缺少题面或要求用户补充材料；先基于任务描述与文件名说明即将执行的分析思路即可。）`,
     );
   }
   return {
     block: pieces.join("\n\n"),
     commit: () => {
       for (const entry of included) entry.injected = true;
+      for (const name of excerptUsed) excerptInjectedNames.add(name);
     },
   };
 }
@@ -194,4 +317,5 @@ export async function collectTaskAttachmentContext(): Promise<TaskAttachmentCont
 export function resetTaskAttachmentContext(): void {
   entriesPromise = null;
   firstCollect = true;
+  excerptInjectedNames.clear();
 }

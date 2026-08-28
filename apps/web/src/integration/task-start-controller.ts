@@ -4,6 +4,7 @@ import { toDraftAttachments, uploadStateOf } from "../attachments/draft";
 import { describeFormat } from "../attachments/formats";
 import { formatBytes } from "../attachments/limits";
 import type { AttachmentStore } from "../attachments/store";
+import { persistTaskAttachmentExcerpts } from "../attachments/task-attachment-context";
 import { uploadAttachments } from "../attachments/upload";
 import { fetchMe, invalidateMe } from "../auth/api";
 import { openAuthDialog } from "../auth/auth-dialog";
@@ -17,6 +18,11 @@ import {
 import { runHomeChatTurn, stopHomeChatGeneration } from "./home-chat";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
+  showTaskLaunchOverlay,
+  type TaskLaunchOverlay,
+  type TaskLaunchPhase,
+} from "./task-launch-overlay";
+import {
   buildRunningUrl,
   deriveProjectName,
   MAX_GOAL_LENGTH,
@@ -28,6 +34,8 @@ import {
 
 const DRAFT_KEY = "openmathmodel.taskDraft.v1";
 const LEGACY_PROMPT_KEY = "openmathmodelPrompt";
+/** 送入接待判定的单附件正文摘录上限（服务端提示词还会二次截断） */
+const INTAKE_EXCERPT_CHARS = 1200;
 const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
 const ACTIVE_PROJECT_KEY = "openmathmodel.activeProjectId";
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/;
@@ -118,6 +126,8 @@ interface SubmitOptions {
   attachments?: AttachmentStore;
   onProgress: (message: string) => void;
   onDraft: (draft: TaskDraft) => void;
+  /** 接待判定放行后各阶段真实开始时回调：过场遮罩据此推进步骤。 */
+  onPhase?: (phase: TaskLaunchPhase) => void;
   /** 首页对话已开启：接待判定的进度不再写状态行（气泡区自会反馈）。 */
   quietIntake?: () => boolean;
 }
@@ -137,15 +147,29 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   // 接待判定（对话优先，Codex/opencode 式门控）：闲聊或缺题面的输入不建任务、
   // 不产生垃圾项目，转入首页对话由用户配置的模型正常回应；判定异常由服务端
   // 放行，这里不会被卡住。已写回 project_id 的失败重试跳过判定——那份内容
-  // 此前已被放行过。@ 引用了赛题 = 带着题面来的（「做这道题」），与附件同权
-  // 直接放行；引用论文/方法不算题面，照常判定（多半是想聊方法）。
+  // 此前已被放行过。@ 引用了赛题 = 带着题面来的（「做这道题」），直接放行；
+  // 引用论文/方法不算题面，照常判定（多半是想聊方法）。附件不再无条件放行：
+  // 等浏览器解析完成后把文件名与正文摘录一并交给判定，内容与建模无关的文件
+  // 不该启动六阶段；解析不出文字的附件（纯图片/关闭自动解析/确认页只有
+  // 元数据）服务端维持放行，由问题分析节点的 viability 门兜底。
   if (!draft.project_id) {
     if (!options.quietIntake?.()) options.onProgress("正在确认任务类型…");
     const hasProblemReference = listComposerReferences().some(item => item.kind === "problem");
+    const store = options.attachments;
+    let intakeAttachments: { name: string; excerpt: string; characters: number }[] | undefined;
+    if (!hasProblemReference && store && store.list().length > 0) {
+      await store.settled();
+      intakeAttachments = store.list().map(attachment => ({
+        name: attachment.file.name,
+        excerpt: (attachment.parse?.text ?? "").slice(0, INTAKE_EXCERPT_CHARS),
+        characters: attachment.parse?.characters ?? 0,
+      }));
+    }
     const intake = await modelingWorkspaceApi.runTaskIntake(
       {
         goal: draft.description,
         has_attachments: draft.attachments.length > 0 || hasProblemReference,
+        ...(intakeAttachments ? { attachments: intakeAttachments } : {}),
       },
       options.signal,
     );
@@ -154,6 +178,8 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
     }
   }
 
+  // 判定已放行（或重试时此前放行过）：过场遮罩从这里接管视口
+  options.onPhase?.("project");
   let projectId = draft.project_id;
   if (!projectId) {
     const projectInput: CreateProjectInput = {
@@ -174,6 +200,7 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   // 晚到的附件进不了第一轮上下文。
   const store = options.attachments;
   if (store && store.list().length > 0) {
+    options.onPhase?.("attachments");
     await store.settled();
     const report = await uploadAttachments(store, projectId, options.signal, (done, total) => {
       options.onProgress(`正在上传附件 ${done}/${total}…`);
@@ -187,6 +214,7 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
     }
   }
 
+  options.onPhase?.("agent");
   options.onProgress(
     store && store.list().length > 0
       ? "附件已就位，正在启动 Agent 工作流…"
@@ -227,6 +255,9 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   sessionStorage.setItem(`openmathmodel.taskGoal.${run.id}`, draft.description);
   // 首页挂着的知识库引用 chips 随任务交接到运行页（按 run 存取，一次性消费）。
   persistPendingTaskReferences(run.id);
+  // 浏览器解析摘录随任务交接：运行页开场分析在服务端正文没赶上时以它兜底，
+  // 不至于对着任务名说「没收到题面」。
+  persistTaskAttachmentExcerpts(run.id, draft.attachments);
   sessionStorage.removeItem(DRAFT_KEY);
   return { status: "created", url: buildRunningUrl(run.id, projectId) };
 }
@@ -270,23 +301,38 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
     root.dataset.taskStartState = "loading";
     renderStatus(root, "正在验证登录状态并创建项目…");
     const sentText = draft.description;
+    // 过场遮罩：接待判定放行、第一个阶段真实开始时才出现（闲聊/缺题面转
+    // 首页对话的路径永远看不到它）；每次提交一个实例，失败即淡出。
+    let overlay: TaskLaunchOverlay | undefined;
+    const hasAttachments = (options.attachments?.list().length ?? 0) > 0
+      || draft.attachments.length > 0;
     void submitDraft(draft, {
       signal: options.signal,
       attachments: options.attachments,
-      onProgress: message => renderStatus(root, message),
+      onProgress: message => {
+        renderStatus(root, message);
+        overlay?.setNote(message);
+      },
       onDraft: updated => { draft = updated; },
+      onPhase: phase => {
+        if (options.isDisposed()) return;
+        overlay ??= showTaskLaunchOverlay({ hasAttachments });
+        overlay.setPhase(phase);
+      },
       quietIntake: options.quietIntake,
     }).then(outcome => {
       if (options.isDisposed()) return;
       if (outcome.status === "auth-required") {
         pending = false;
         options.setBusy(false);
+        overlay?.dismiss();
         requestAuthentication("请先登录，登录成功后会继续创建当前任务。");
         return;
       }
       if (outcome.status === "guidance") {
         pending = false;
         options.setBusy(false);
+        overlay?.dismiss();
         root.dataset.taskStartState = "guidance";
         if (options.onGuidance) {
           clearStatus(root);
@@ -298,11 +344,14 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
       }
       root.dataset.taskStartState = "created";
       renderStatus(root, "任务已创建，正在进入运行工作台…");
-      navigate(outcome.url);
+      // 成功：遮罩打勾定格后再导航；遮罩缺席（极端时序）直接导航兜底。
+      if (overlay) overlay.succeed(() => navigate(outcome.url));
+      else navigate(outcome.url);
     }, (error: unknown) => {
       if (options.isDisposed() || (error instanceof DOMException && error.name === "AbortError")) return;
       pending = false;
       options.setBusy(false);
+      overlay?.dismiss();
       if (error instanceof WorkspaceApiError && error.status === 401) {
         invalidateMe();
         requestAuthentication("登录状态已失效，请重新登录后继续。");

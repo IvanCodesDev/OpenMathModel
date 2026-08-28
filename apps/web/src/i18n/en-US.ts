@@ -185,6 +185,12 @@ const TASK_START: Record<string, string> = {
   "正在验证登录状态并创建项目…": "Checking your session and creating the project…",
   "项目已创建，正在启动 Agent 工作流…": "Project created. Starting the agent workflow…",
   "任务已创建，正在进入运行工作台…": "Task created. Opening the run workspace…",
+  "正在创建任务…": "Creating your task…",
+  "任务已创建": "Task created",
+  "正在进入运行工作台…": "Opening the run workspace…",
+  "创建项目": "Create project",
+  "上传附件": "Upload attachments",
+  "启动 Agent 工作流": "Start the agent workflow",
   "请先登录，登录成功后会继续创建当前任务。":
     "Please sign in first — the task will continue once you are signed in.",
   "登录状态已失效，请重新登录后继续。": "Your session expired. Please sign in again to continue.",
