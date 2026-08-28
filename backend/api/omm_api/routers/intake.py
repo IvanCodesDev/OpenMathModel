@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..api_models import TaskIntakeInput, TaskIntakeResult
 from ..db import get_db
 from ..deps import AuthContext, get_auth_context
-from ..intake import decide_intake
+from ..intake import IntakeAttachment, decide_intake
 from ..llm import is_third_party_host, parse_llm_config
 from ..usage import record_usage
 
@@ -32,6 +32,10 @@ def create_task_intake(
         config,
         body.goal,
         body.has_attachments,
+        attachments=[
+            IntakeAttachment(name=item.name, excerpt=item.excerpt, characters=item.characters)
+            for item in body.attachments
+        ],
         on_usage=lambda outcome: record_usage(
             db,
             user_id=ctx.user.id,

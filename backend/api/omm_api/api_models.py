@@ -102,11 +102,24 @@ class StageOutputs(BaseModel):
     delivery_manifest: Optional[DeliveryManifest] = None
 
 
+class TaskIntakeAttachment(BaseModel):
+    """接待判定可见的附件证据：文件名与浏览器已解析出的正文摘录。"""
+
+    name: str = Field(min_length=1, max_length=255)
+    excerpt: str = Field(default="", max_length=2000)
+    characters: int = Field(default=0, ge=0)
+
+
 class TaskIntakeInput(BaseModel):
-    """发送前接待判定的输入：首页/确认页的任务描述与是否带附件。"""
+    """发送前接待判定的输入：首页/确认页的任务描述与附件证据。
+
+    attachments 有正文摘录时，服务端把附件内容纳入判定；
+    没有摘录（未解析、纯图片、关闭了自动解析）才维持「带附件即放行」。
+    """
 
     goal: str = Field(min_length=1, max_length=4000)
     has_attachments: bool = False
+    attachments: list[TaskIntakeAttachment] = Field(default_factory=list, max_length=20)
 
 
 class TaskIntakeResult(BaseModel):
