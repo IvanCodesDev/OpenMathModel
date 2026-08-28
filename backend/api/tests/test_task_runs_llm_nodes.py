@@ -346,10 +346,12 @@ def test_plan_outline_personalizes_execution_plan(client, monkeypatch, validate_
     assert plan_by_key["running"] == "解析单车调度的子问题与容量约束", "计划文案来自问题分析的 plan_outline"
     assert plan_by_key["data"] == "构造历史订单数据并画像高峰需求"
     assert plan_by_key["model"] == "比较整数规划与启发式并请求确认"
-    # 方案已产出（等待确认中）：实验条目细化为选中方案的名称与步骤
-    assert "按方案「整数规划」实施" in plan_by_key["experiments"]
-    assert "定义变量" in plan_by_key["experiments"]
+    # 方案已产出（等待确认中）：实验条目细化为「按方案实施」短句——只点名方案，
+    # 不拼步骤明细，保持与其他条目等长感（步骤全文在建模方案页）。
+    assert plan_by_key["experiments"] == "按方案「整数规划」实施"
     assert plan_by_key["editor"] == "撰写含调度对比与检验结论的论文"
+    # 所有条目都是面板可容纳的单行短句
+    assert all(len(text) <= 40 for text in plan_by_key.values() if text)
     # 最终成果页不在 plan_outline 六阶段内：保持固定文案
     assert plan_by_key["complete"] is None
 
@@ -559,6 +561,13 @@ def test_reference_metadata_reaches_problem_analysis_prompt(client, monkeypatch)
     assert "【引用赛题】" in seen[0]
     assert "2024 APMCM C 共享单车调度" in seen[0]
     assert "容量约束下优化调度" in seen[0], "引用正文摘要应进入提示词"
+
+    # 材料读取要在执行轨迹留痕（工作台「已读取题目附件与引用材料」行的数据源）
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    ingested = [entry for entry in logs if entry.get("kind") == "materials_ingested"]
+    assert len(ingested) == 1, "材料读取事件应恰好一条（重试不重复）"
+    assert ingested[0]["references"] == ["2024 APMCM C 共享单车调度"]
 
 
 def test_insufficient_input_stops_at_first_stage_with_guidance(client, monkeypatch):

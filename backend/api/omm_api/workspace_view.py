@@ -103,12 +103,19 @@ def _page_for_node(node: str) -> dict[str, Any]:
     return PAGE_BY_NODE.get(node, PAGE_SPECS[0])
 
 
-#: plan_text 的展示上限（契约 maxLength 300 的保守余量）
-_PLAN_TEXT_LIMIT = 240
+#: plan_text 的展示上限。面板条目是单行短句（提示词约束 12~24 字），这里只是
+#: 防御模型跑长的兜底：超限的条目会明显长于其他条目，把执行计划面板撑破。
+_PLAN_TEXT_LIMIT = 40
+#: 细化文案里方案名的上限（「按方案「…」实施」整句须与其他条目等长感）。
+_PLAN_NAME_LIMIT = 18
 
 
 def _clip_plan(text: str) -> str:
     return text if len(text) <= _PLAN_TEXT_LIMIT else text[: _PLAN_TEXT_LIMIT - 1] + "…"
+
+
+def _clip_plan_name(name: str) -> str:
+    return name if len(name) <= _PLAN_NAME_LIMIT else name[: _PLAN_NAME_LIMIT - 1] + "…"
 
 
 def _chosen_plan(outputs: dict[str, Any]) -> dict[str, Any] | None:
@@ -125,7 +132,7 @@ def _plan_texts(stages: dict[str, StageState]) -> dict[str, str]:
     """页面 key → 本任务专属的计划短句（执行计划面板的渐进细化数据源）。
 
     初稿来自问题分析的 plan_outline（按 stage 一条本题化短句）；建模方案产出后，
-    「实验与验证」条目细化为选中方案的名称与步骤。状态不在这里派生——面板的
+    「实验与验证」条目细化为「按方案「名称」实施」。状态不在这里派生——面板的
     勾选只信 pages.status（引擎执行事实），计划文本只负责「说人话」。
     没有 plan_outline（模拟链/旧运行/模型未给）时返回空表，展示层回退固定 label。
     """
@@ -145,19 +152,24 @@ def _plan_texts(stages: dict[str, StageState]) -> dict[str, str]:
 
     texts: dict[str, str] = {}
     for spec in PAGE_SPECS:
-        parts = [outline[node] for node in spec["nodes"] if node in outline]
-        if parts:
-            texts[spec["key"]] = _clip_plan("；".join(parts))
+        # 面板条目是单行短句：覆盖多个阶段的页面（实验与验证）只取首个阶段的
+        # 短句，拼接两句会让该条目明显长于其他条目。后续阶段的细节在页面正文里。
+        for node in spec["nodes"]:
+            if node in outline:
+                texts[spec["key"]] = _clip_plan(outline[node])
+                break
 
     planning = stages.get("MODEL_PLANNING")
     if planning is not None:
         chosen = _chosen_plan(planning.outputs)
         if chosen is not None:
             name = str(chosen.get("name") or chosen.get("id") or "").strip()
-            steps = [str(step).strip() for step in chosen.get("steps") or [] if str(step).strip()]
-            lead = f"按方案「{name}」实施" if name else "按选定方案实施"
-            detail = "：" + "；".join(steps[:3]) if steps else ""
-            texts["experiments"] = _clip_plan(lead + detail)
+            # 细化只点名选中方案，不再拼接步骤明细——步骤是成句长文，拼进来
+            # 会把这一条撑成整段（用户反馈：第 4 条总是最长）。完整步骤在
+            # 建模方案页与「实现计划」分页。
+            texts["experiments"] = _clip_plan(
+                f"按方案「{_clip_plan_name(name)}」实施" if name else "按选定方案实施"
+            )
     return texts
 
 

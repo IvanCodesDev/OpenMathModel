@@ -1580,6 +1580,7 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
 
 .analysis-copy {
   margin: 0 0 18px;
+  font-size: 16px;
   line-height: 1.8;
 }
 
@@ -5504,7 +5505,7 @@ body.is-resizing-modeling * {
 .modeling-agent-copy {
   margin-top: 22px;
   color: #4b4b47;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.9;
 }
 

@@ -239,11 +239,12 @@ const STAGE_BY_PROMPT: Record<string, string> = {
   "model_planning.default": "建模方案",
   "experiment_code.default": "实验代码",
   "validating.default": "结果验证",
+  // 整篇回退路径（总编规划失败时的单次生成）
   "paper_writing.default": "论文撰写",
-  // 论文分章多轮管线（总编规划 → 逐章写作 → 统稿收口）同属论文撰写阶段
-  "paper_outline.default": "论文撰写",
-  "paper_section.default": "论文撰写",
-  "paper_finalize.default": "论文撰写",
+  // 论文分章多轮管线按环节区分：一个阶段里的多次调用各自说清在干什么
+  "paper_outline.default": "论文骨架规划",
+  "paper_section.default": "论文章节写作",
+  "paper_finalize.default": "论文统稿收口",
 };
 
 const STAGE_OUTPUT_LABELS: Record<string, string> = {
@@ -700,7 +701,8 @@ function ingestStreamEvent(
         // 替换（推理模型）或就地落定（无思考内容的模型）。
         const key = `llm:${String(payload.prompt_id)}`;
         const stage = STAGE_BY_PROMPT[String(payload.prompt_id)];
-        const title = `深度思考${stage ? ` · ${stage}` : ""}`;
+        // repair = 上次输出没过结构校验、这次带着错误反馈重生成：如实标注
+        const title = `深度思考${stage ? ` · ${stage}` : ""}${payload.repair === true ? "（修复输出格式）" : ""}`;
         // 同一提示词的上一次调用还没落定（调用失败重试、进程重启续跑、历史
         // 回放的孤儿行）：复用同一行推进尝试计数，绝不堆出一排相同的走秒行。
         const existing = state.pending.get(key);
@@ -773,6 +775,29 @@ function ingestStreamEvent(
         // 本身不进活动流；用量透明度只体现在设置中心的本机用量记录。早退避免落入下方
         // 通用 run.log 兜底把 payload（含模型名）原样展示出来。
         settleStreamRow(root, `llm:${String(payload.prompt_id)}`, eventMs);
+        return;
+      }
+      if (kind === "materials_ingested") {
+        // 题意解析开始前读取了哪些材料：用户最需要确认「智能体真的看了我的文件」
+        const attachments = Array.isArray(payload.attachments)
+          ? (payload.attachments as unknown[]).map(item => String(item ?? "")).filter(Boolean)
+          : [];
+        const references = Array.isArray(payload.references)
+          ? (payload.references as unknown[]).map(item => String(item ?? "")).filter(Boolean)
+          : [];
+        const total = attachments.length + references.length;
+        if (!total) return;
+        streamRow(root, {
+          icon: "paperclip",
+          title: `已读取题目附件与引用材料 ×${total}`,
+          detail: [...attachments, ...references.map(titleText => `@${titleText}`)].join("\n"),
+        });
+        return;
+      }
+      if (kind === "task_renamed" || kind === "budget_limit") {
+        // 有现成人话 message 的运营事件：以叙述行呈现，不落进原始 JSON 兜底
+        const message = String(payload.message ?? "").trim();
+        if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
         return;
       }
       if (payload.tool === "python_run") {

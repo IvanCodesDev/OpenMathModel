@@ -287,6 +287,34 @@ def _attachments_summary(params: dict[str, Any]) -> str:
 class _GoalProblemAnalysisNode(ProblemAnalysisNode):
     """把运行输入的 goal 映射成提示词需要的 problem_statement。"""
 
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        # 材料读取留痕（工作台执行轨迹的「已读取题目附件与引用材料」行）：
+        # 用户最需要确认的事实是"智能体真的看了我给的文件"。只在首次尝试发
+        # 一条，重试不重复；发送失败绝不影响分析本身。
+        if ctx.attempt == 1:
+            params = dict(ctx.inputs.get("params") or {})
+            attachments = [
+                str(entry.get("name"))
+                for entry in params.get("attachment_metadata") or []
+                if isinstance(entry, dict) and str(entry.get("name") or "").strip()
+            ]
+            references = [
+                str(entry.get("title"))
+                for entry in params.get("reference_metadata") or []
+                if isinstance(entry, dict) and str(entry.get("title") or "").strip()
+            ]
+            emit = (services.extras or {}).get("progress")
+            if (attachments or references) and callable(emit):
+                try:
+                    emit({
+                        "kind": "materials_ingested",
+                        "attachments": attachments[:20],
+                        "references": references[:20],
+                    })
+                except Exception:  # noqa: BLE001 - 过程展示绝不拖垮分析
+                    logger.exception("材料读取留痕事件发送失败")
+        return super().run(ctx, services)
+
     def build_variables(self, ctx: Any) -> dict[str, Any]:
         statement = ctx.inputs.get("problem_statement") or ctx.inputs.get("goal") or ""
         summary = str(ctx.inputs.get("attachments_summary") or "").strip()
