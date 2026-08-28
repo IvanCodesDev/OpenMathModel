@@ -1,0 +1,15 @@
+{
+  "status": "maybe",
+  "attempts": 1,
+  "final_code_artifact": "art_0f3a9b21c7de",
+  "produced_artifacts": [],
+  "metrics_source_artifact": null,
+  "assertions": [],
+  "seeds": {},
+  "env_fingerprint": {
+    "runtime": "python",
+    "version": "3.12.4",
+    "deps_hash": "9b74c9897bac770ffc029102a200c5de1a1b268d3ab7e4b1e5df1ee6cfcdd1f0"
+  },
+  "usage": { "runs": 1, "tokens": 100, "duration_ms": 50 }
+}

@@ -23,9 +23,16 @@ from .registry import (
     ToolSpec,
     tier_rank,
 )
+from .sandbox_tools import (
+    ENV_PROBE_PACKAGE_CANDIDATES,
+    WS_READ_MAX_CHARS,
+    env_fingerprint,
+    sandbox_workspace_specs,
+)
 from .workspace import TaskWorkspace, WorkspaceArtifactStore, WorkspaceViolation
 
 __all__ = [
+    "ENV_PROBE_PACKAGE_CANDIDATES",
     "EventRecorder",
     "IdempotencyCache",
     "MAX_TURN_PARALLELISM",
@@ -38,10 +45,13 @@ __all__ = [
     "ToolNotAllowed",
     "ToolRegistry",
     "ToolSpec",
+    "WS_READ_MAX_CHARS",
     "WorkspaceArtifactStore",
     "WorkspaceViolation",
     "args_fingerprint",
+    "env_fingerprint",
     "execute_parallel",
+    "sandbox_workspace_specs",
     "summarize",
     "tier_rank",
 ]

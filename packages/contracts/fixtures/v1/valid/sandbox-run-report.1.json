@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "attempts": 2,
+  "final_code_artifact": "art_0f3a9b21c7de",
+  "produced_artifacts": ["art_0f3a9b21c7de", "art_55aa0c9d11ee", "art_77bb2c4f33dd"],
+  "metrics_source_artifact": "art_55aa0c9d11ee",
+  "assertions": [
+    { "id": "a1", "passed": true, "detail": "metrics.json 存在且含 rmse 键" },
+    { "id": "a2", "passed": true, "detail": "rmse=0.5 落在 [0, 1] 合理区间" }
+  ],
+  "seeds": { "numpy": 42, "random": 42 },
+  "env_fingerprint": {
+    "runtime": "python",
+    "version": "3.12.4",
+    "deps_hash": "9b74c9897bac770ffc029102a200c5de1a1b268d3ab7e4b1e5df1ee6cfcdd1f0"
+  },
+  "usage": { "runs": 2, "tokens": 5400, "duration_ms": 8123 }
+}

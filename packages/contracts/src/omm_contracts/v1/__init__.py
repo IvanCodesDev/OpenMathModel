@@ -14,7 +14,8 @@ from .paper_export import PaperExport
 from .plan_proposal import PlanProposal
 from .problem_frame import ProblemFrame
 from .project import Project
+from .sandbox_run_report import SandboxRunReport
 from .step_run import StepRun
 from .task_run import TaskRun
 
-__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "DatasetProfile", "DeliveryManifest", "DocumentDraft", "ErrorEnvelope", "ExperimentSummary", "ModelingWorkspaceView", "PaperExport", "PlanProposal", "ProblemFrame", "Project", "StepRun", "TaskRun"]
+__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "DatasetProfile", "DeliveryManifest", "DocumentDraft", "ErrorEnvelope", "ExperimentSummary", "ModelingWorkspaceView", "PaperExport", "PlanProposal", "ProblemFrame", "Project", "SandboxRunReport", "StepRun", "TaskRun"]

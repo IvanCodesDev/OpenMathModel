@@ -17,5 +17,6 @@ export type { PaperExport } from "./paper-export";
 export type { PlanProposal } from "./plan-proposal";
 export type { ProblemFrame } from "./problem-frame";
 export type { Project } from "./project";
+export type { SandboxRunReport } from "./sandbox-run-report";
 export type { StepRun } from "./step-run";
 export type { TaskRun } from "./task-run";

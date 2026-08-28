@@ -45,6 +45,7 @@ from .v1 import (
     PlanProposal,
     ProblemFrame,
     Project,
+    SandboxRunReport,
     StepRun,
     TaskRun,
 )
@@ -86,6 +87,7 @@ __all__ = [
     "PlanProposal",
     "ProblemFrame",
     "Project",
+    "SandboxRunReport",
     "StepRun",
     "TaskRun",
 ]
