@@ -36,6 +36,12 @@ from .gateway import (
     request_fingerprint,
 )
 from .loops import LoopOutcome, LoopTask, run_inner_loop
+from .sandbox_agent import (
+    SandboxAssertion,
+    SandboxEvidence,
+    SandboxTask,
+    run_sandbox_task,
+)
 from .trace import Span, TraceHub
 
 __all__ = [
@@ -57,6 +63,9 @@ __all__ = [
     "Reply",
     "ReplayCassette",
     "RunBudget",
+    "SandboxAssertion",
+    "SandboxEvidence",
+    "SandboxTask",
     "Section",
     "Span",
     "ToolCall",
@@ -66,4 +75,5 @@ __all__ = [
     "httpx_sender",
     "request_fingerprint",
     "run_inner_loop",
+    "run_sandbox_task",
 ]
