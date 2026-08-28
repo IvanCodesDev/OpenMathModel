@@ -76,6 +76,133 @@ function shouldRender(panel: HTMLElement, key: string, stamp: string): boolean {
   return true;
 }
 
+// ── 版面精简规则：模型产出长度不可控，页面槽位按「精华上屏、细节收纳」处理 ──
+//
+// R1 结论条只放第一句（完整内容悬停可见）；
+// R2 表格里的字段清单渲染成「字段名」徽标，完整含义放悬停与字段说明页；
+// R3 长句列表项与策略段落按行数截断，点击展开全文；
+// R4 纯演示的子分页（无真实数据源）在真实数据到达后隐藏，不拿假数据示人。
+
+/** R1：取第一句（遇句读符号截断，过长再按字数截）；返回 [上屏文本, 是否截过]。 */
+function leadSentence(text: string, maxChars = 72): [string, boolean] {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const match = /[。！？!?；;]/.exec(compact);
+  let lead = match ? compact.slice(0, match.index + 1) : compact;
+  if ([...lead].length > maxChars) lead = [...lead].slice(0, maxChars).join("") + "…";
+  return [lead, lead !== compact];
+}
+
+/** R3：多行截断 + 点击展开收起。截断行数由 CSS 变量控制，展开态可再点回。 */
+function clampExpandable(node: HTMLElement, lines: number): HTMLElement {
+  node.classList.add("stage-clamp");
+  node.style.setProperty("--stage-clamp-lines", String(lines));
+  node.title = t("点击展开或收起全文");
+  node.addEventListener("click", () => node.classList.toggle("is-open"));
+  return node;
+}
+
+/** R3 收尾：渲染后把实际没溢出的条目摘掉截断态（不给短内容留误导的手型）。
+ *  隐藏面板（未激活的分页）量不到高度，保留截断态等下次展开时自然生效。 */
+function settleClamps(scope: HTMLElement): void {
+  window.requestAnimationFrame(() => {
+    scope.querySelectorAll<HTMLElement>(".stage-clamp:not(.is-open)").forEach(node => {
+      if (node.offsetParent === null) return;
+      if (node.scrollHeight <= node.clientHeight + 2) {
+        node.classList.remove("stage-clamp");
+        node.removeAttribute("title");
+      }
+    });
+  });
+}
+
+/** R2：字段字符串「名称：说明（单位）」→ 名称与说明两段（多种分隔符兼容）。 */
+function splitField(field: string): { name: string; note: string } {
+  const compact = field.replace(/\s+/g, " ").trim();
+  const separator = /[:：]/.exec(compact);
+  if (separator && separator.index > 0 && separator.index <= 32) {
+    return {
+      name: compact.slice(0, separator.index).trim(),
+      note: compact.slice(separator.index + 1).trim(),
+    };
+  }
+  const paren = /[（(]/.exec(compact);
+  if (paren && paren.index > 0 && paren.index <= 32) {
+    return {
+      name: compact.slice(0, paren.index).trim(),
+      note: compact.slice(paren.index).replace(/^[（(]|[）)]$/g, "").trim(),
+    };
+  }
+  return { name: compact, note: "" };
+}
+
+/** R2：字段名徽标墙（超出上限折叠为 +N，悬停看完整含义）。 */
+function fieldChips(fields: string[], maxVisible = 10): HTMLElement {
+  const host = el("span", "stage-field-chips");
+  fields.slice(0, maxVisible).forEach(field => {
+    const { name, note } = splitField(field);
+    const chip = el("span", "stage-field-chip", name);
+    chip.title = note ? `${name}：${note}` : name;
+    host.append(chip);
+  });
+  if (fields.length > maxVisible) {
+    const more = el("span", "stage-field-chip is-more", `+${fields.length - maxVisible}`);
+    more.title = t("完整字段清单见「字段说明」页");
+    host.append(more);
+  }
+  return host;
+}
+
+/** R4：隐藏子分页入口（撤走演示页，或可填充页在真实内容就绪前先藏起）。 */
+function hideWorkspaceTab(workspace: HTMLElement, key: string, fallbackKey: string): void {
+  const tab = workspace.querySelector<HTMLElement>(`[data-workspace-tab="${key}"]`);
+  const panel = workspace.querySelector<HTMLElement>(`[data-workspace-panel="${key}"]`);
+  if (tab && !tab.hidden) {
+    // 用户恰好停在该分页时先切回主页面，再撤走入口
+    if (tab.classList.contains("active")) {
+      workspace.querySelector<HTMLElement>(`[data-workspace-tab="${fallbackKey}"]`)?.click();
+    }
+    tab.hidden = true;
+  }
+  if (panel && tab?.hidden) panel.classList.remove("active");
+}
+
+/** 可填充分页的真实内容已就绪：放出被藏起的入口。 */
+function revealWorkspaceTab(root: HTMLElement, key: string): void {
+  const tab = root.querySelector<HTMLElement>(`[data-workspace-tab="${key}"]`);
+  if (tab) tab.hidden = false;
+}
+
+//: 各工作区的分页处置表：demo = 永远没有真实数据源的纯演示页（真实运行直接
+//: 撤走）；fillable = 有真实数据源、内容就绪后由渲染器放出的页。
+const STAGE_TAB_PLAN: Array<{
+  workspace: string;
+  primary: string;
+  demo: string[];
+  fillable: string[];
+}> = [
+  { workspace: ".data-report-workspace", primary: "data-report", demo: ["raw-data", "clean-data"], fillable: ["field-guide"] },
+  { workspace: ".model-plan-workspace", primary: "model-plan", demo: ["assumptions", "symbols"], fillable: ["implementation"] },
+];
+
+/**
+ * 真实运行的子分页纪律（R4）：进入真实任务即撤走纯演示分页（原始数据、
+ * 清洗数据、模型假设、符号表——当前契约下没有它们的真实数据源），可填充
+ * 分页（字段说明、实现计划）先藏起，等对应阶段的真实内容渲染后再放出。
+ * 幂等，控制器每次快照刷新都可安全调用；演示页（无运行身份）不受影响。
+ */
+export function prepareStageTabs(root: HTMLElement): void {
+  for (const plan of STAGE_TAB_PLAN) {
+    const workspace = root.querySelector<HTMLElement>(plan.workspace);
+    if (!workspace) continue;
+    for (const key of plan.demo) hideWorkspaceTab(workspace, key, plan.primary);
+    for (const key of plan.fillable) {
+      const filled = workspace.querySelector<HTMLElement>(`[data-workspace-panel="${key}"]`)
+        ?.dataset.stageContentSource === "api";
+      if (!filled) hideWorkspaceTab(workspace, key, plan.primary);
+    }
+  }
+}
+
 // ── 数据准备页（DatasetProfile → data-report 面板） ─────────────────────────
 
 function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
@@ -84,7 +211,10 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
 
   const conclusion = panel.querySelector<HTMLElement>(".focused-conclusion-strip");
   if (conclusion) {
-    conclusion.replaceChildren(icon("check-circle"), el("strong", "", `${t("数据画像")}：`), richInline(profile.profile_summary));
+    // R1：结论条只放画像的第一句，完整画像悬停可见（长段落会把横条顶成文字墙）
+    const [lead, trimmed] = leadSentence(profile.profile_summary);
+    conclusion.replaceChildren(icon("check-circle"), el("strong", "", `${t("数据画像")}：`), richInline(lead));
+    conclusion.title = trimmed ? profile.profile_summary : "";
   }
 
   const fieldsTotal = profile.datasets.reduce((total, item) => total + item.fields.length, 0);
@@ -103,10 +233,14 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
     );
   }
 
-  // 「数据问题与处理建议」表 → 真实数据清单（名称/来源/字段/质量风险）
+  // 「数据问题与处理建议」表 → 真实数据清单（名称/来源/字段/质量风险）。
+  // R2/R3：字段列渲染成字段名徽标（含义悬停 + 字段说明页），风险列逐条截断可展开，
+  // 长文本不再把表格行撑爆。
   const issueSection = panel.querySelector<HTMLElement>(".focused-section.compact:not(.raw-preview-section)");
   const issueTable = issueSection?.querySelector<HTMLElement>("table");
   if (issueSection && issueTable) {
+    issueTable.classList.remove("issue-table");
+    issueTable.classList.add("stage-dataset-table");
     issueSection.querySelector("h2")?.replaceChildren(t("数据清单与质量风险"));
     const thead = el("thead");
     const headRow = el("tr");
@@ -115,11 +249,18 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
     const tbody = el("tbody");
     for (const dataset of profile.datasets) {
       const row = el("tr");
+      const risks = el("td", "stage-risk-cell");
+      if (dataset.quality_risks.length === 0) risks.textContent = "—";
+      dataset.quality_risks.forEach(risk => {
+        risks.append(clampExpandable(el("div", "stage-risk-item", risk), 2));
+      });
+      const fieldsCell = el("td", "stage-fields-cell");
+      fieldsCell.append(fieldChips(dataset.fields));
       row.append(
         el("td", "", dataset.name),
         el("td", "", dataset.source),
-        el("td", "", dataset.fields.join("、")),
-        el("td", "", dataset.quality_risks.join("；") || "—"),
+        fieldsCell,
+        risks,
       );
       tbody.append(row);
     }
@@ -142,7 +283,11 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
     const strategies = el("ul", "stage-strategy-list");
     const strategyItem = (label: string, value: string): HTMLElement => {
       const item = el("li");
-      item.append(el("strong", "", `${label}：`), richInline(value));
+      const body = el("span", "stage-strategy-body");
+      body.append(richInline(value));
+      // R3：策略是最容易长成一面墙的槽位，默认三行截断、点击展开
+      clampExpandable(body, 3);
+      item.append(el("strong", "", `${label}：`), body);
       return item;
     };
     if (profile.missing_value_strategy) {
@@ -157,19 +302,74 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
     if (strategies.childElementCount) preview.append(strategies);
     preview.hidden = false;
   }
+
+  // 字段说明页用真实字段填充（纯演示分页由 prepareStageTabs 统一撤走）
+  renderFieldGuidePanel(root, profile);
+  settleClamps(panel);
   typesetMath(panel);
+}
+
+/** 「字段说明」分页：数据清单里的真实字段逐条列成表（名称/说明/所属数据集）。 */
+function renderFieldGuidePanel(root: HTMLElement, profile: DatasetProfile): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="field-guide"]');
+  if (!panel) return;
+  const fieldsTotal = profile.datasets.reduce((total, item) => total + item.fields.length, 0);
+  if (fieldsTotal === 0) return;
+  panel.dataset.stageContentSource = "api";
+
+  const header = el("header", "focused-template-heading");
+  const heading = el("div");
+  heading.append(el("h1", "", t("字段说明")), el("p", "", t("来自数据准备阶段的真实字段清单")));
+  header.append(heading, el("span", "focused-template-status neutral", `${fieldsTotal} ${t("个字段")}`));
+
+  const section = el("section", "focused-template-section");
+  const wrap = el("div", "focused-table-wrap");
+  const table = el("table", "focused-table focused-template-table stage-field-table");
+  const thead = el("thead");
+  const headRow = el("tr");
+  [t("字段"), t("说明"), t("所属数据集"), t("来源")].forEach(label => headRow.append(el("th", "", label)));
+  thead.append(headRow);
+  const tbody = el("tbody");
+  for (const dataset of profile.datasets) {
+    for (const field of dataset.fields) {
+      const { name, note } = splitField(field);
+      const row = el("tr");
+      const nameCell = el("td");
+      nameCell.append(el("strong", "", name));
+      row.append(
+        nameCell,
+        el("td", "", note || "—"),
+        el("td", "", dataset.name),
+        el("td", "", dataset.source),
+      );
+      tbody.append(row);
+    }
+  }
+  table.append(thead, tbody);
+  wrap.append(table);
+  section.append(wrap);
+
+  const template = el("section", "focused-template");
+  template.append(header, section);
+  panel.replaceChildren(template);
+  revealWorkspaceTab(root, "field-guide");
 }
 
 // ── 建模方案页（PlanProposal → model-plan 面板） ────────────────────────────
 
 function planDetail(plan: PlanProposal["plans"][number], rationale: string | null, recommended: boolean): HTMLElement {
   const detail = el("section", "focused-plan-detail selected-plan-overview");
-  const listBlock = (label: string, items: string[]): HTMLElement => {
+  const listBlock = (label: string, items: string[], clampLines?: number): HTMLElement => {
     const block = el("div");
     const list = el("ul");
     items.forEach(text => {
       const item = el("li");
-      item.append(richInline(text));
+      // R3：真实产出的步骤/风险可能是成段长文，默认截断、点击展开。
+      // 截断体包在内层（li 直接上 -webkit-box 会丢列表圆点）。
+      const body = el("span", "stage-clamp-body");
+      body.append(richInline(text));
+      if (clampLines) clampExpandable(body, clampLines);
+      item.append(body);
       list.append(item);
     });
     block.append(el("h2", "", label), list);
@@ -180,8 +380,8 @@ function planDetail(plan: PlanProposal["plans"][number], rationale: string | nul
   approach.append(el("h2", "", t("建模思路")), richBlock(plan.approach));
   detail.append(approach);
 
-  if (plan.steps.length) detail.append(listBlock(t("实验步骤"), plan.steps));
-  if (plan.risks.length) detail.append(listBlock(t("主要风险"), plan.risks));
+  if (plan.steps.length) detail.append(listBlock(t("实验步骤"), plan.steps, 3));
+  if (plan.risks.length) detail.append(listBlock(t("主要风险"), plan.risks, 3));
   if (recommended && rationale) {
     const why = el("div");
     why.append(el("h2", "", t("推荐理由")), richBlock(rationale));
@@ -215,41 +415,125 @@ function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
     detailHost.replaceChildren(
       ...planDetail(plan, proposal.rationale, plan.id === proposal.recommended_plan_id).children,
     );
+    settleClamps(detailHost);
     typesetMath(detailHost);
   };
 
+  // 行结构与演示行同构（radio + 标题 + 三个摘要 + 展开箭头）：
+  // 网格模板是 6 列，少一个子项会让「主要风险」掉进最窄的列、行尾留空。
   list.replaceChildren(
     ...proposal.plans.map(plan => {
       const row = el("button", "focused-plan-row");
       row.type = "button";
       row.dataset.stagePlanId = plan.id;
-      if (plan.id === recommendedPlan.id) row.classList.add("selected");
+      const selected = plan.id === recommendedPlan.id;
+      if (selected) row.classList.add("selected");
       const title = el("strong", "", `${t("方案")} ${plan.id} `);
       const small = el("small", "", plan.id === proposal.recommended_plan_id ? `（${t("推荐主方案")}）` : `（${t("备选方案")}）`);
       title.append(small);
+      // R1：行内摘要只放第一句，全文在下方方案详情（三行截断兜底仍在 CSS）
+      const [riskLead] = leadSentence(plan.risks[0] ?? "—", 48);
+      const riskCell = el("span", "", `${t("主要风险")}：${riskLead}`);
+      if (plan.risks[0]) riskCell.title = plan.risks.join("\n");
       row.append(
         el("span", "plan-radio"),
         title,
         el("span", "", `${t("核心方法")}：${plan.name}`),
-        el("span", "", `${t("主要风险")}：${plan.risks[0] ?? "—"}`),
+        el("span", "", `${t("实验步骤")}：${plan.steps.length}`),
+        riskCell,
+        icon(selected ? "caret-up" : "caret-down"),
       );
       row.addEventListener("click", () => {
-        list.querySelectorAll(".focused-plan-row").forEach(item => item.classList.toggle("selected", item === row));
+        list.querySelectorAll(".focused-plan-row").forEach(item => {
+          const on = item === row;
+          item.classList.toggle("selected", on);
+          const chevron = item.querySelector<HTMLElement>(":scope > i");
+          if (chevron) chevron.className = `ph ph-caret-${on ? "up" : "down"}`;
+        });
         renderDetail(plan);
       });
       return row;
     }),
   );
   renderDetail(recommendedPlan);
+
+  // 实现计划页用推荐方案的真实步骤填充（模型假设/符号表这类没有真实数据源的
+  // 演示分页由 prepareStageTabs 统一撤走）
+  renderImplementationPanel(root, proposal, recommendedPlan);
+}
+
+/** 「实现计划」分页：推荐方案的实验步骤 + 主要风险 + 推荐理由（真实产出）。 */
+function renderImplementationPanel(
+  root: HTMLElement,
+  proposal: PlanProposal,
+  plan: PlanProposal["plans"][number],
+): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="implementation"]');
+  if (!panel || plan.steps.length === 0) return;
+  panel.dataset.stageContentSource = "api";
+
+  const header = el("header", "focused-template-heading");
+  const heading = el("div");
+  heading.append(
+    el("h1", "", t("实现计划")),
+    el("p", "", `${t("来自方案")} ${plan.id}（${plan.name}）`),
+  );
+  header.append(heading, el("span", "focused-template-status neutral", `${plan.steps.length} ${t("步")}`));
+
+  const stepsSection = el("section", "focused-template-section");
+  const stepsTitle = el("div", "focused-template-section-title");
+  stepsTitle.append(el("h2", "", t("实验步骤")), el("span", "", t("按执行顺序")));
+  const steps = el("ol", "stage-step-list");
+  plan.steps.forEach(step => {
+    const item = el("li");
+    item.append(richInline(step));
+    steps.append(item);
+  });
+  stepsSection.append(stepsTitle, steps);
+
+  const template = el("section", "focused-template");
+  template.append(header, stepsSection);
+
+  if (plan.risks.length) {
+    const risksSection = el("section", "focused-template-section");
+    const risksTitle = el("div", "focused-template-section-title");
+    risksTitle.append(el("h2", "", t("主要风险")));
+    const risks = el("ul", "stage-strategy-list");
+    plan.risks.forEach(risk => {
+      const item = el("li");
+      item.append(richInline(risk));
+      risks.append(item);
+    });
+    risksSection.append(risksTitle, risks);
+    template.append(risksSection);
+  }
+
+  if (proposal.rationale && plan.id === proposal.recommended_plan_id) {
+    const callout = el("footer", "focused-template-callout");
+    callout.append(el("strong", "", t("推荐理由")), el("span", "", proposal.rationale));
+    template.append(callout);
+  }
+  panel.replaceChildren(template);
+  revealWorkspaceTab(root, "implementation");
+  typesetMath(panel);
 }
 
 // ── 实验与验证页（ExperimentSummary → experiment-report 面板） ──────────────
 
-const VERDICT_COPY: Record<string, { icon: string; label: string }> = {
-  pass: { icon: "check-circle", label: "结果通过" },
-  concerns: { icon: "warning-circle", label: "结果可用（有保留意见）" },
-  fail: { icon: "x-circle", label: "结果未通过" },
+const VERDICT_COPY: Record<string, { icon: string; label: string; tone: string }> = {
+  pass: { icon: "check-circle", label: "结果通过", tone: "pass" },
+  concerns: { icon: "warning-circle", label: "结果可用（有保留意见）", tone: "warn" },
+  fail: { icon: "x-circle", label: "结果未通过", tone: "fail" },
 };
+
+/** 指标值展示：千分位 + 有限小数；非数值原样。大数不带小数尾巴，小数保留 4 位。 */
+function formatMetricValue(value: unknown): string {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return num.toLocaleString("en-US", {
+    maximumFractionDigits: Math.abs(num) >= 100 ? 2 : 4,
+  });
+}
 
 function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="experiment-report"]');
@@ -258,12 +542,20 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   const validation = summary.validation;
   const conclusion = panel.querySelector<HTMLElement>(".focused-report-conclusion");
   if (conclusion) {
-    const verdict = VERDICT_COPY[validation?.verdict ?? ""] ?? { icon: "check-circle", label: "实验已完成" };
+    const verdict = VERDICT_COPY[validation?.verdict ?? ""]
+      ?? { icon: "check-circle", label: "实验已完成", tone: "pass" };
+    // 结论条按判定结果着色：未通过是红叉、保留意见是黄色警示，不能一律绿色
+    conclusion.classList.remove("is-pass", "is-warn", "is-fail");
+    conclusion.classList.add(`is-${verdict.tone}`);
+    // R1：结论条只放第一句，完整结论悬停可见（详情在下方稳健性小节）
+    const summaryText = validation?.validation_summary || summary.approach_summary;
+    const [lead, trimmed] = leadSentence(summaryText);
     conclusion.replaceChildren(
       icon(verdict.icon),
       el("strong", "", `${t(verdict.label)}：`),
-      richInline(validation?.validation_summary || summary.approach_summary),
+      richInline(lead),
     );
+    conclusion.title = trimmed ? summaryText : "";
   }
 
   const metricsHost = panel.querySelector<HTMLElement>(".focused-metrics");
@@ -273,7 +565,11 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
     metricsHost.replaceChildren(
       ...entries.slice(0, 6).map(([key, value]) => {
         const article = el("article");
-        article.append(el("span", "", key), el("strong", "", String(value)));
+        // 指标名来自实验代码的原始键：下划线换空格便于折行，数值做千分位格式化
+        article.append(
+          el("span", "", key.replace(/_/g, " ")),
+          el("strong", "", formatMetricValue(value)),
+        );
         return article;
       }),
     );
@@ -287,22 +583,26 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   const robustness = notes[0];
   if (robustness) {
     const list = el("ul");
-    const noteItem = (iconName: string, label: string, detail: string): HTMLElement => {
-      const item = el("li");
+    const noteItem = (tone: string, iconName: string, label: string, detail: string): HTMLElement => {
+      const item = el("li", `is-${tone}`);
       const body = richInline(detail);
       body.prepend(el("strong", "", `${label}：`));
+      // R3：检查备注可能成段，默认三行截断、点击展开
+      clampExpandable(body, 3);
       item.append(icon(iconName), body);
       return item;
     };
     for (const check of validation?.checks ?? []) {
+      const tone = check.result === "pass" ? "pass" : check.result === "warn" ? "warn" : "fail";
       list.append(noteItem(
-        check.result === "pass" ? "check-circle" : check.result === "warn" ? "warning-circle" : "x-circle",
+        tone,
+        tone === "pass" ? "check-circle" : tone === "warn" ? "warning-circle" : "x-circle",
         check.name,
         check.note,
       ));
     }
     for (const risk of validation?.risks ?? []) {
-      list.append(noteItem("shield-warning", t("风险"), risk));
+      list.append(noteItem("warn", "shield-warning", t("风险"), risk));
     }
     robustness.replaceChildren(el("h2", "", t("稳健性与风险结论")), list);
     robustness.hidden = list.childElementCount === 0;
@@ -311,6 +611,7 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   if (advice) {
     advice.replaceChildren(el("h2", "", t("实现思路")), richBlock(summary.approach_summary));
   }
+  settleClamps(panel);
   typesetMath(panel);
 }
 
@@ -338,41 +639,58 @@ function reduceMotion(): boolean {
 
 interface DraftBlock {
   element: HTMLElement;
-  /** 归属章节序号（标题/摘要/关键词为 null），流式过程中用于同步大纲状态。 */
-  sectionIndex: number | null;
+  /** 归属大纲条目序号（正文标题/关键词行为 null），流式过程中用于同步大纲状态。 */
+  outlineIndex: number | null;
 }
 
-function buildDraftBlocks(draft: DocumentDraft): DraftBlock[] {
+interface OutlineEntry {
+  href: string;
+  label: string;
+}
+
+/** 正文块 + 大纲条目（摘要与各章节；与优秀论文一致，摘要进大纲）。 */
+function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries: OutlineEntry[] } {
   const blocks: DraftBlock[] = [];
-  blocks.push({ element: el("h1", "", draft.title), sectionIndex: null });
+  const entries: OutlineEntry[] = [];
+  blocks.push({ element: el("h1", "", draft.title), outlineIndex: null });
   if (draft.abstract) {
-    blocks.push({ element: el("h2", "", t("摘要")), sectionIndex: null });
-    blocks.push({ element: el("p", "", draft.abstract), sectionIndex: null });
-  }
-  if (draft.keywords.length) {
-    const keywords = el("p");
+    const abstractIndex = entries.length;
+    entries.push({ href: "#section-abstract", label: t("摘要") });
+    const heading = el("h2", "paper-abstract-heading", t("摘要"));
+    heading.id = "section-abstract";
+    blocks.push({ element: heading, outlineIndex: abstractIndex });
+    blocks.push({ element: el("p", "paper-abstract", draft.abstract), outlineIndex: abstractIndex });
+    if (draft.keywords.length) {
+      const keywords = el("p", "paper-keywords");
+      keywords.append(el("strong", "", `${t("关键词")}：`), document.createTextNode(draft.keywords.join("；")));
+      blocks.push({ element: keywords, outlineIndex: abstractIndex });
+    }
+  } else if (draft.keywords.length) {
+    const keywords = el("p", "paper-keywords");
     keywords.append(el("strong", "", `${t("关键词")}：`), document.createTextNode(draft.keywords.join("；")));
-    blocks.push({ element: keywords, sectionIndex: null });
+    blocks.push({ element: keywords, outlineIndex: null });
   }
   draft.sections.forEach((section, index) => {
+    const outlineIndex = entries.length;
+    entries.push({ href: `#section-${index}`, label: section.heading });
     const heading = el("h2", "", section.heading);
     heading.id = `section-${index}`;
-    blocks.push({ element: heading, sectionIndex: index });
+    blocks.push({ element: heading, outlineIndex });
     const body = el("div");
     body.innerHTML = renderMarkdown(section.content);
-    [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, sectionIndex: index }));
+    [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
   });
-  return blocks;
+  return { blocks, entries };
 }
 
-function rebuildPaperOutline(root: HTMLElement, draft: DocumentDraft): HTMLAnchorElement[] {
+function rebuildPaperOutline(root: HTMLElement, entries: OutlineEntry[]): HTMLAnchorElement[] {
   const outline = root.querySelector<HTMLElement>(".paper-editor-workspace .outline");
   if (!outline) return [];
   const heading = outline.querySelector(".outline-heading");
-  const links = draft.sections.map((section, index) => {
+  const links = entries.map(entry => {
     const link = el("a") as HTMLAnchorElement;
-    link.setAttribute("href", `#section-${index}`);
-    link.append(el("span", "outline-status"), document.createTextNode(section.heading));
+    link.setAttribute("href", entry.href);
+    link.append(el("span", "outline-status"), document.createTextNode(entry.label));
     return link;
   });
   outline.replaceChildren(...(heading ? [heading] : []), ...links);
@@ -397,7 +715,9 @@ const outlineSpyBound = new WeakSet<HTMLElement>();
 function bindOutlineNavigation(editor: HTMLElement, links: HTMLAnchorElement[]): void {
   links.forEach(link => link.addEventListener("click", event => {
     event.preventDefault();
-    setOutlineActive(links, link);
+    // 兄弟链接在点击时现查：分章直播会陆续补挂新链接，闭包快照会漏掉它们
+    const siblings = [...(link.closest(".outline")?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+    setOutlineActive(siblings.length ? siblings : links, link);
     editor.querySelector<HTMLElement>(link.getAttribute("href") ?? "")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
@@ -434,6 +754,8 @@ function refreshPaperWordCount(editor: HTMLElement): void {
 
 interface PaperStream {
   cancel: () => void;
+  /** 立即整段放行余下内容并触发收尾（追加新章前对上一章调用）。 */
+  flush: () => void;
 }
 
 const activePaperStreams = new WeakMap<HTMLElement, PaperStream>();
@@ -442,17 +764,27 @@ const streamedDraftKeys = new Set<string>();
 /** 只对新鲜产出（论文刚写完）做流式呈现，重开历史任务时直接完整渲染。 */
 const STREAM_FRESH_WINDOW_MS = 10 * 60_000;
 
+interface StreamOptions {
+  /** true（默认）= 清空编辑器整篇播放；false = 追加模式（分章直播）。 */
+  replace?: boolean;
+  /** 播完后大纲高亮落点：first = 回到首项（整篇模式）；keep = 停在当前章。 */
+  activeOnSettle?: "first" | "keep";
+}
+
 /**
- * 把论文正文按打字机节奏渐进呈现（后端在论文节点完成时一次性给出定稿，
- * 流式是前端的呈现节奏）：块按顺序入文、文本逐字浮现、大纲随章节完成打勾；
- * 用户一旦开始编辑立即整段放行，绝不吃掉输入。
+ * 把论文正文按打字机节奏渐进呈现：块按顺序入文、文本逐字浮现、大纲随章节
+ * 完成打勾；用户一旦开始编辑立即整段放行，绝不吃掉输入。
+ * 整篇模式（replace）用于定稿一次性到达；追加模式用于分章直播
+ * （run.log 的 paper_section 事件逐章推送）。
  */
 function streamDraftIntoEditor(
   editor: HTMLElement,
   blocks: DraftBlock[],
   links: HTMLAnchorElement[],
   onSettled: () => void,
+  options: StreamOptions = {},
 ): void {
+  const { replace = true, activeOnSettle = "first" } = options;
   interface TypingUnit { node: Text; full: string; }
   const plan = blocks.map(block => {
     const walker = document.createTreeWalker(block.element, NodeFilter.SHOW_TEXT);
@@ -474,7 +806,7 @@ function streamDraftIntoEditor(
   caret.setAttribute("contenteditable", "false");
   caret.setAttribute("aria-hidden", "true");
 
-  editor.replaceChildren();
+  if (replace) editor.replaceChildren();
   editor.dataset.streaming = "true";
   let blockIndex = 0;
   let unitIndex = 0;
@@ -483,6 +815,12 @@ function streamDraftIntoEditor(
   const finishSection = (index: number | null): void => {
     if (index !== null) markOutlineDone(links[index]);
   };
+  const activateSection = (index: number | null): void => {
+    if (index !== null) setOutlineActive(links, links[index]);
+  };
+  const settleActive = (): void => {
+    if (activeOnSettle === "first") setOutlineActive(links, links[0]);
+  };
   const detach = (): void => {
     window.clearInterval(timer);
     caret.remove();
@@ -490,7 +828,7 @@ function streamDraftIntoEditor(
     editor.removeEventListener("beforeinput", flush);
     activePaperStreams.delete(editor);
   };
-  /** 用户开始编辑时：余下内容立即整段放行，再交还编辑权。 */
+  /** 用户开始编辑（或下一章到达）时：余下内容立即整段放行，再交还控制权。 */
   const flush = (): void => {
     for (; blockIndex < plan.length; blockIndex += 1) {
       const item = plan[blockIndex];
@@ -499,13 +837,13 @@ function streamDraftIntoEditor(
       }
       unitIndex = 0;
       if (!item.block.element.isConnected) editor.append(item.block.element);
-      finishSection(item.block.sectionIndex);
+      finishSection(item.block.outlineIndex);
     }
-    setOutlineActive(links, links[0]);
+    settleActive();
     detach();
     onSettled();
   };
-  activePaperStreams.set(editor, { cancel: detach });
+  activePaperStreams.set(editor, { cancel: detach, flush });
   editor.addEventListener("beforeinput", flush);
 
   timer = window.setInterval(() => {
@@ -518,11 +856,11 @@ function streamDraftIntoEditor(
         item.block.element.classList.add("stream-in");
         editor.append(item.block.element);
         item.block.element.insertAdjacentElement("afterend", caret);
-        if (item.block.sectionIndex !== null) setOutlineActive(links, links[item.block.sectionIndex]);
+        activateSection(item.block.outlineIndex);
       }
       const unit = item.units[unitIndex];
       if (!unit) {
-        finishSection(item.block.sectionIndex);
+        finishSection(item.block.outlineIndex);
         blockIndex += 1;
         unitIndex = 0;
         continue;
@@ -535,11 +873,106 @@ function streamDraftIntoEditor(
     }
     if (stick) editor.scrollTop = editor.scrollHeight;
     if (blockIndex >= plan.length) {
-      setOutlineActive(links, links[0]);
+      settleActive();
       detach();
       onSettled();
     }
   }, 16);
+}
+
+// ── 分章直播（run.log 的 paper_outline / paper_section 事件 → 编辑器实时上屏） ──
+
+interface LivePaperState {
+  total: number;
+  /** 已上屏的章节序号（1 起），SSE 重连重放靠它去重。 */
+  rendered: Set<number>;
+}
+
+const livePaperState = new WeakMap<HTMLElement, LivePaperState>();
+
+function liveEditor(root: HTMLElement): HTMLElement | null {
+  const editor = root.querySelector<HTMLElement>('.editor-page[contenteditable="true"]');
+  if (!editor) return null;
+  // 终稿已渲染（重看历史任务时事件重放）或用户已有草稿：直播一律不动编辑器
+  if (editor.dataset.stageDraftVersion !== undefined) return null;
+  if (hasUserPaperDraft()) return null;
+  return editor;
+}
+
+/** 论文骨架已定（paper_outline 事件）：清空演示正文，大纲预挂全部章节为待写。 */
+export function preparePaperOutline(
+  root: HTMLElement,
+  payload: { total: number; headings: string[] },
+): void {
+  const editor = liveEditor(root);
+  if (!editor || livePaperState.has(editor)) return;
+  livePaperState.set(editor, { total: payload.total, rendered: new Set() });
+  const entries = payload.headings.map((label, index) => ({
+    href: `#section-${index}`,
+    label,
+  }));
+  const links = rebuildPaperOutline(root, entries);
+  bindOutlineNavigation(editor, links);
+  editor.replaceChildren();
+  refreshPaperWordCount(editor);
+}
+
+/** 单章完成（paper_section 事件）：正文按打字机节奏追加，大纲随章打勾。 */
+export function appendPaperSection(
+  root: HTMLElement,
+  payload: { index: number; total: number; heading: string; content: string },
+  animate: boolean,
+): void {
+  const editor = liveEditor(root);
+  if (!editor) return;
+  let state = livePaperState.get(editor);
+  if (!state) {
+    // 没收到骨架事件（重连从中段开始等）：以本章信息补建直播状态
+    state = { total: payload.total, rendered: new Set() };
+    livePaperState.set(editor, state);
+    editor.replaceChildren();
+  }
+  if (state.rendered.has(payload.index)) return;
+  state.rendered.add(payload.index);
+
+  // 大纲缺项时按需补挂（骨架事件丢失的兜底），保持 href 与终稿一致
+  const outline = root.querySelector<HTMLElement>(".paper-editor-workspace .outline");
+  if (outline) {
+    const existing = outline.querySelectorAll("a").length;
+    for (let index = existing; index < payload.index; index += 1) {
+      const link = el("a") as HTMLAnchorElement;
+      link.setAttribute("href", `#section-${index}`);
+      link.append(el("span", "outline-status"), document.createTextNode(
+        index === payload.index - 1 ? payload.heading : `第 ${index + 1} 章`,
+      ));
+      outline.append(link);
+      bindOutlineNavigation(editor, [link]);
+    }
+  }
+  const links = outline ? [...outline.querySelectorAll<HTMLAnchorElement>("a")] : [];
+
+  const outlineIndex = payload.index - 1;
+  const heading = el("h2", "", payload.heading);
+  heading.id = `section-${outlineIndex}`;
+  const blocks: DraftBlock[] = [{ element: heading, outlineIndex }];
+  const body = el("div");
+  body.innerHTML = renderMarkdown(payload.content);
+  [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
+
+  const settle = (): void => {
+    typesetMath(editor);
+    refreshPaperWordCount(editor);
+  };
+  // 上一章还在打字：先整段放行，直播永远按章节顺序推进
+  activePaperStreams.get(editor)?.flush();
+  if (animate && editor.offsetParent !== null && !reduceMotion()) {
+    streamDraftIntoEditor(editor, blocks, links, settle, { replace: false, activeOnSettle: "keep" });
+    return;
+  }
+  blocks.forEach(block => editor.append(block.element));
+  markOutlineDone(links[outlineIndex]);
+  setOutlineActive(links, links[outlineIndex]);
+  settle();
 }
 
 function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
@@ -551,8 +984,8 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
   editor.dataset.stageDraftVersion = String(draft.version);
   activePaperStreams.get(editor)?.cancel();
 
-  const blocks = buildDraftBlocks(draft);
-  const links = rebuildPaperOutline(root, draft);
+  const { blocks, entries } = buildDraftBlocks(draft);
+  const links = rebuildPaperOutline(root, entries);
   bindOutlineNavigation(editor, links);
 
   const settle = (): void => {
@@ -560,10 +993,17 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
     refreshPaperWordCount(editor);
   };
 
+  // 分章直播已经把各章打字上屏：终稿只需一次性补齐标题/摘要/关键词并对齐
+  // 全文（内容与直播一致），不再重播整篇动画。
+  const live = livePaperState.get(editor);
+  const liveRendered = Boolean(live && live.rendered.size > 0);
+  livePaperState.delete(editor);
+
   const streamKey = `${draft.run_id}:${draft.version}`;
   const updatedMs = new Date(draft.updated_at).getTime();
   const fresh = Number.isFinite(updatedMs) && Date.now() - updatedMs < STREAM_FRESH_WINDOW_MS;
   const animate = fresh
+    && !liveRendered
     && !streamedDraftKeys.has(streamKey)
     && editor.offsetParent !== null
     && !reduceMotion();

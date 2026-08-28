@@ -14,7 +14,7 @@ import {
   listComposerReferences,
   persistPendingTaskReferences,
 } from "./composer-references";
-import { runHomeChatTurn } from "./home-chat";
+import { runHomeChatTurn, stopHomeChatGeneration } from "./home-chat";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
   buildRunningUrl,
@@ -430,6 +430,11 @@ function mountNewTask(root: HTMLElement): () => void {
     if (!submit) return;
     event.preventDefault();
     event.stopPropagation();
+    // 生成中发送键就是暂停键：点击中止当前回复流，不进入任务创建
+    if (submit.dataset.mode === "stop") {
+      stopHomeChatGeneration();
+      return;
+    }
     if (submitter.isPending()) return;
     const description = normalizeTaskDescription(textarea?.value ?? "");
     if (!description) {

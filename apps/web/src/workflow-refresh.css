@@ -820,36 +820,116 @@
   justify-content: center;
 }
 
+/* ── 论文纸面：排版对齐赛论范式（宋体正文两端对齐首行缩进、黑体编号标题、
+   居中摘要、三线感表格与居中公式由下方 md-* 规则承担） ── */
 .workflow-editor .editor-page {
   max-width: 940px;
   margin: 0 auto;
   padding: 38px 55px 80px;
+  font-family: "Songti SC", SimSun, "Noto Serif SC", serif;
+  font-size: 16px;
+  line-height: 2;
 }
 
 .workflow-editor .editor-page h1 {
-  margin: 0 0 43px;
+  margin: 0 0 34px;
   text-align: center;
   font-size: 27px;
   font-weight: 600;
   letter-spacing: 0;
+  line-height: 1.6;
 }
 
 .workflow-editor .editor-page h2 {
-  margin: 0 0 27px;
+  margin: 34px 0 18px;
+  font-family: "Heiti SC", SimHei, "Microsoft YaHei", "Noto Sans SC", sans-serif;
   font-size: 21px;
+  font-weight: 600;
+  line-height: 1.6;
 }
 
 .workflow-editor .editor-page h3 {
-  margin: 0 0 12px;
+  margin: 24px 0 14px;
+  font-family: "Heiti SC", SimHei, "Microsoft YaHei", "Noto Sans SC", sans-serif;
   font-size: 18px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.workflow-editor .editor-page h4 {
+  margin: 18px 0 10px;
+  font-family: "Heiti SC", SimHei, "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .workflow-editor .editor-page p {
-  margin: 0 0 24px;
-  font-family: "Songti SC", SimSun, serif;
+  margin: 0 0 16px;
+  font-family: "Songti SC", SimSun, "Noto Serif SC", serif;
   font-size: 16px;
   line-height: 2;
+  text-align: justify;
 }
+
+/* 摘要标题居中加字距；摘要正文与关键词行是论文头部的固定要素 */
+.workflow-editor .editor-page .paper-abstract-heading {
+  margin-top: 0;
+  text-align: center;
+  letter-spacing: .5em;
+  text-indent: .5em;
+}
+
+.workflow-editor .editor-page .paper-keywords {
+  text-indent: 0;
+  margin-bottom: 28px;
+}
+
+.workflow-editor .editor-page ul,
+.workflow-editor .editor-page ol {
+  margin: 0 0 16px;
+  padding-left: 2em;
+  text-align: justify;
+}
+
+.workflow-editor .editor-page li {
+  margin: 4px 0;
+}
+
+.workflow-editor .editor-page blockquote {
+  margin: 0 0 16px;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid #ddddd8;
+  color: #6a6a65;
+}
+
+.workflow-editor .editor-page .md-math-block {
+  margin: 12px 0 20px;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.workflow-editor .editor-page .md-inline-code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #f4f4f1;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: .85em;
+}
+
+.workflow-editor .editor-page pre.md-code {
+  margin: 4px 0 20px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid #e6e6e3;
+  border-radius: 8px;
+  background: #fafaf8;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+html[data-theme="dark"] .workflow-editor .editor-page .md-inline-code { background: #2e2e2c; }
+html[data-theme="dark"] .workflow-editor .editor-page pre.md-code { border-color: #3a3a37; background: #262624; }
+html[data-theme="dark"] .workflow-editor .editor-page blockquote { border-left-color: #3f3f3c; color: #a5a5a0; }
 
 .workflow-editor mark {
   padding: 3px 5px;
@@ -3636,13 +3716,39 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
   font-size: 12px;
   line-height: 1.65;
 }
+/* 实时生成区（llm_delta 增量流入）：更矮的视口，边生成边吸底 */
+.stream-detail.is-live pre {
+  max-height: 220px;
+  font-size: 12.5px;
+}
 .stream-in { animation: step-reveal-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* 过程行标题的入场扫光：与「思考中…」同款渐变，扫两遍后由 JS 摘除类恢复常规配色 */
+.stream-title.title-shine-once {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: linear-gradient(
+    90deg,
+    #a1a1a1 0%, #a1a1a1 30%,
+    rgba(161, 161, 161, 0.45) 45%, rgba(161, 161, 161, 0.45) 55%,
+    #a1a1a1 70%, #a1a1a1 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: thinking-shine 1.6s cubic-bezier(0.25, 0.1, 0.25, 1) 2;
+}
 html[data-theme="dark"] .stream-narration { color: #d0d0ca; }
 html[data-theme="dark"] .stream-row { color: #b9b9b2; }
 html[data-theme="dark"] .stream-detail { border-color: #3a3a37; background: #262624; }
 html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; }
 html[data-reduce-motion="on"] .stream-in,
 html[data-reduce-motion="on"] .stream-item.is-waiting .stream-row > i { animation: none; }
+html[data-reduce-motion="on"] .stream-title.title-shine-once {
+  animation: none;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+  background: none;
+}
 
 html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .activity-list::before { background: #3a3a37; }
 html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step { color: #d0d0ca; }
@@ -4392,6 +4498,8 @@ html[data-theme="dark"] .modeling-pane-switch button.active { background: #3a3a3
   --ax-success: #007004;
   --ax-success-bg: #c5e5c0;
   --ax-success-text: #0c5700;
+  --ax-warning: #a16207;
+  --ax-danger: #b3382c;
   --ax-gray-bg: #e5e5e5;
   --ax-gray-text: #262626;
   --ax-radius-inner: 6px;
@@ -4421,6 +4529,8 @@ html[data-theme="dark"] .focused-stage-pane {
   --ax-success: #9fe59b;
   --ax-success-bg: rgba(132, 201, 128, .24);
   --ax-success-text: #9fe59b;
+  --ax-warning: #e5b45b;
+  --ax-danger: #f19489;
   --ax-gray-bg: rgba(255, 255, 255, .10);
   --ax-gray-text: #e5e5e5;
 }
@@ -4624,6 +4734,12 @@ html[data-theme="dark"] .focused-stage-pane {
   color: var(--ax-success);
   font-size: 18px;
 }
+
+/* 检验判定按结果着色：保留意见黄色、未通过红色，不能一律报喜的绿色 */
+.focused-report-conclusion.is-warn > i { color: #a16207; }
+.focused-report-conclusion.is-fail > i { color: #b3382c; }
+.focused-stage-pane .focused-report-conclusion.is-warn > i { color: var(--ax-warning); }
+.focused-stage-pane .focused-report-conclusion.is-fail > i { color: var(--ax-danger); }
 
 /* ── 指标条：label 12 secondary / 值 24 semibold / 发丝分隔 ── */
 .focused-stage-pane .focused-metrics article span {
@@ -4962,6 +5078,14 @@ html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { backgro
 }
 
 .focused-stage-pane .focused-experiment-notes li > i { color: var(--ax-success); }
+/* 逐项检查按结果着色（renderExperimentsPanel 打 is-* 状态类），失败项不能顶着绿图标 */
+.focused-experiment-notes li.is-warn > i { color: #a16207; }
+.focused-experiment-notes li.is-fail > i { color: #b3382c; }
+.focused-stage-pane .focused-experiment-notes li.is-warn > i { color: var(--ax-warning); }
+.focused-stage-pane .focused-experiment-notes li.is-fail > i { color: var(--ax-danger); }
+
+/* 指标名是实验代码的原始键（可能较长）：允许断行，值列表格数字化 */
+.focused-stage-pane .focused-metrics article span { overflow-wrap: anywhere; }
 
 .focused-stage-pane .focused-experiment-notes p {
   color: var(--ax-text-primary);
@@ -5323,7 +5447,8 @@ html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
 }
 
 /* 4. 插入的表格与图片在纸面里的形态 */
-.editor-page .editor-table {
+.editor-page .editor-table,
+.editor-page .md-table {
   width: 100%;
   margin: 0 0 24px;
   border-collapse: collapse;
@@ -5332,13 +5457,17 @@ html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
 }
 
 .editor-page .editor-table th,
-.editor-page .editor-table td {
+.editor-page .editor-table td,
+.editor-page .md-table th,
+.editor-page .md-table td {
   border: 1px solid #d4d4d4;
   padding: 8px 12px;
   text-align: left;
+  text-indent: 0;
 }
 
-.editor-page .editor-table th {
+.editor-page .editor-table th,
+.editor-page .md-table th {
   background: #fafafa;
   font-weight: 600;
 }
@@ -5399,9 +5528,12 @@ html[data-theme="dark"] .editor-check-list li span,
 html[data-theme="dark"] .editor-check-note { color: #a3a3a3; }
 html[data-theme="dark"] .editor-check-list li.ok i { color: #9fe59b; }
 html[data-theme="dark"] .editor-check-list li.warn i { color: #fdcf4f; }
-html[data-theme="dark"] .editor-page .editor-table th { background: #1b1b1b; }
 html[data-theme="dark"] .editor-page .editor-table th,
-html[data-theme="dark"] .editor-page .editor-table td { border-color: #525252; }
+html[data-theme="dark"] .editor-page .md-table th { background: #1b1b1b; }
+html[data-theme="dark"] .editor-page .editor-table th,
+html[data-theme="dark"] .editor-page .editor-table td,
+html[data-theme="dark"] .editor-page .md-table th,
+html[data-theme="dark"] .editor-page .md-table td { border-color: #525252; }
 
 /* ─────────────────────────────────────────────────────────────
    revision 34 — 2026-08-21 H5 二轮：清点 revision 29–33 之后新增/漏网的拥挤点。
@@ -5724,6 +5856,81 @@ html[data-theme="dark"] .stage-rich-inline table.md-table th { background: #2626
 
 /* 数据清单等真实表格：长字段名/风险描述允许任意断行，不许把表格挤出容器 */
 .focused-workspace .focused-table td { overflow-wrap: anywhere; }
+
+/* 数据清单与质量风险表（renderDataPanel 替换演示问题清单后挂 stage-dataset-table）：
+   四列都是叙述性长内容——顶对齐、正常换行、不做省略号截断，列宽按内容职责分配 */
+.focused-workspace .stage-dataset-table th,
+.focused-workspace .stage-dataset-table td {
+  height: auto;
+  padding: 10px 14px;
+  overflow: visible;
+  vertical-align: top;
+  white-space: normal;
+  text-overflow: clip;
+  line-height: 1.6;
+}
+
+.focused-workspace .stage-dataset-table th { white-space: nowrap; }
+.focused-workspace .stage-dataset-table td:first-child { font-weight: 600; }
+.focused-workspace .stage-dataset-table th:first-child { width: 18%; }
+.focused-workspace .stage-dataset-table th:nth-child(2) { width: 16%; }
+.focused-workspace .stage-dataset-table th:last-child { width: 30%; }
+
+/* ── 版面精简规则（stage-content 的 R1-R3）───────────────────────────── */
+
+/* R4：撤走的子分页入口（作者级 display:inline-flex 会压过 UA 的 [hidden]） */
+.focused-workspace-tabs button[hidden] { display: none !important; }
+
+/* R3：多行截断 + 点击展开（行数由 --stage-clamp-lines 决定，默认 3） */
+.stage-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--stage-clamp-lines, 3);
+  overflow: hidden;
+  cursor: pointer;
+}
+.stage-clamp.is-open {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+/* R2：字段名徽标墙（完整含义在悬停提示与字段说明页） */
+.stage-field-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.stage-field-chip {
+  max-width: 100%;
+  padding: 2px 9px;
+  border: 1px solid #e4e4e1;
+  border-radius: 999px;
+  background: #fafaf8;
+  color: #55554f;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.stage-field-chip.is-more { color: #8c8c86; border-style: dashed; }
+html[data-theme="dark"] .stage-field-chip { border-color: #3a3a37; background: #262624; color: #b9b9b2; }
+
+/* 质量风险列逐条排布，条目间留缝 */
+.stage-risk-cell .stage-risk-item + .stage-risk-item { margin-top: 6px; }
+
+/* 策略段落的截断体（strong 标签留在行首，正文块级截断） */
+.stage-strategy-list .stage-strategy-body { display: block; }
+.stage-strategy-list .stage-strategy-body.stage-clamp { display: -webkit-box; }
+.stage-strategy-list .stage-strategy-body.stage-clamp.is-open { display: block; }
+
+/* 字段说明页的真实字段表：名称列不折行，说明列吃掉剩余宽度 */
+.focused-workspace .stage-field-table th { white-space: nowrap; }
+.focused-workspace .stage-field-table td { vertical-align: top; line-height: 1.6; white-space: normal; height: auto; padding: 9px 14px; }
+.focused-workspace .stage-field-table td:first-child { white-space: nowrap; font-variant-ligatures: none; }
+.focused-workspace .stage-field-table th:nth-child(2) { width: 46%; }
 
 /* 真实实验总结无指标时隐藏指标带：.focused-metrics 的作者级 display:grid
    会压过 UA 的 [hidden]，必须显式还原 display:none。 */

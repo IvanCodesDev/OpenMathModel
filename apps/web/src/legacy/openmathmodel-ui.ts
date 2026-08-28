@@ -74,6 +74,7 @@ import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { hydrateProjectsPage } from "../integration/projects-page";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
+import { createStreamingMarkdownRenderer, createThrottledTextSink } from "../text/stream-render";
 import {
   notificationsSupported,
   requestNotificationPermission,
@@ -3220,15 +3221,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       applyOpen();
       if (open) viewport.scrollTop = 0;
     });
+    // 文本赋值与布局读写按节流节奏合并：高频 reasoning 增量不再逐条触发重排
+    const sink = createThrottledTextSink(fullText => {
+      stream.textContent = fullText;
+      viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
+      viewport.scrollTop = viewport.scrollHeight;
+    });
     return {
       append(fullText) {
-        stream.textContent = fullText;
-        viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
-        viewport.scrollTop = viewport.scrollHeight;
+        sink.update(fullText);
       },
       finish() {
         if (done) return;
         done = true;
+        sink.flush();
         const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
         label.classList.remove("thinking-shimmer");
         label.innerHTML = `<span class="thinking-verb">${t("已思考")}</span> ${seconds} ${t("秒")}`;
@@ -3359,6 +3365,26 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return active ? { auto: false, host: endpointHost(active.base_url) } : null;
   }
 
+  // ── 暂停生成：回复流式期间发送键变为暂停键，点击中止当前这轮生成 ──────────
+  let activeChatAbort = null;
+
+  function setComposerGenerating(controller) {
+    activeChatAbort = controller;
+    $$('.composer [data-action="send"]').forEach(button => {
+      if (controller) {
+        button.dataset.mode = "stop";
+        button.innerHTML = '<i class="ph-fill ph-stop" aria-hidden="true"></i>';
+        button.title = t("暂停生成");
+        button.setAttribute("aria-label", t("暂停生成"));
+      } else {
+        delete button.dataset.mode;
+        button.innerHTML = icon("arrow-up");
+        button.title = t("发送（Enter）");
+        button.setAttribute("aria-label", t("发送"));
+      }
+    });
+  }
+
   /** 真实模型回复：思考块 + Markdown 正文流式渲染到回复气泡。
    *  对话页不暴露模型名；接口域名随「允许使用第三方中转站」开关：开启时在
    *  发送前显示本次请求的实际域名（含中转/备用标记）并把用量写入本机记录
@@ -3371,14 +3397,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const copy = replyBlock?.querySelector(".analysis-copy");
     if (!replyBlock || !copy) return false;
     const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
-    const render = value => {
-      copy.innerHTML = value
-        ? renderMarkdown(value)
-        : `<p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p>`;
-      // 已闭合的公式随增量立即排版：innerHTML 重建后旧节点作废，对新节点
-      // 同步补排（KaTeX 就绪后同帧完成无闪烁；加载前保留 LaTeX 源码回退）。
-      if (value) renderFormulas(copy);
-    };
+    // 流式正文渲染：节流 + 块级增量上屏（stream-render），公式排版随之削峰。
+    // 旧写法逐增量整段重建 innerHTML + 全量排版，长回复（尤其多公式）明显卡顿。
+    const renderer = createStreamingMarkdownRenderer(copy, { stickTo: scroll });
     const transparency = proxyTransparencyEnabled();
     // 「发送请求前显示实际域名」：开关开启时先显示预期目标，meta 到达后以实际为准
     let transparencySettled = false;
@@ -3406,6 +3427,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     // 生成计时行提升到 try 外：失败路径也要把它落定为中断态
     let generatingRow = null;
     let startedGeneratingAt = Date.now();
+    // 暂停生成：本轮的中止句柄挂到发送键（生成期间它就是暂停键）
+    const abortController = new AbortController();
+    setComposerGenerating(abortController);
     try {
       // 附件先解析再发消息：浏览器没抽到文字的（图片/扫描件）现场走服务端
       // 即席解析（含可选 VL），结果如实回写附件卡片；解析期间沿用「思考中…」占位。
@@ -3522,15 +3546,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         onDelta: (_piece, full) => {
           answerStarted = true;
           thinking?.finish();
-          const stick = nearBottom();
-          render(full);
-          if (stick) scroll.scrollTo({ top: scroll.scrollHeight });
+          renderer.update(full);
         },
       }, {
         attachmentContext: contextBlocks,
         openingAnalysis: options.opening === true,
         attachmentNames: [...attachmentNames, ...references.map(reference => `@${reference.title}`)],
         ...(passthroughImages.length ? { images: passthroughImages, pinEndpointId } : {}),
+        signal: abortController.signal,
       });
       // 附件与引用内容已随本条消息进入上下文；成功后清空托盘与引用 chips，
       // 失败路径保留以便重试。
@@ -3542,10 +3565,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         const generateElapsedMs = typeof meta.elapsed_ms === "number"
           ? meta.elapsed_ms
           : Date.now() - startedGeneratingAt;
-        generatingRow.settle({ title: "已生成回复", elapsedMs: generateElapsedMs });
-        traceLog.push({ icon: "check-circle", title: "已生成回复", elapsed: formatTraceElapsed(generateElapsedMs) });
+        const settledTitle = meta.stopped ? "已暂停（保留部分回复）" : "已生成回复";
+        generatingRow.settle({ title: settledTitle, elapsedMs: generateElapsedMs });
+        traceLog.push({ icon: "check-circle", title: settledTitle, elapsed: formatTraceElapsed(generateElapsedMs) });
       }
-      render(reply);
+      renderer.finish(reply);
       // 对话页不显示模型名；「记录接口用量」随开关开启才落本机记录
       if (transparency && (meta.host || meta.endpoint)) {
         recordLlmUsage({
@@ -3570,6 +3594,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
       return true;
     } catch (error) {
+      renderer.cancel();
+      // 用户主动暂停且一字未收：安静收尾，不按错误渲染
+      if (error?.code === "GENERATION_STOPPED") {
+        thinking?.finish();
+        generatingRow?.settle({ title: "已暂停生成" });
+        copy.innerHTML = `<p class="muted">${t("已暂停生成。")}</p>`;
+        return false;
+      }
       // 失败也要把生成行落定为中断态，不留走秒残影
       generatingRow?.settle({ title: "回复生成中断", failed: true });
       const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
@@ -3587,6 +3619,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       }
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
       return false;
+    } finally {
+      if (activeChatAbort === abortController) setComposerGenerating(null);
     }
   }
 
@@ -3993,9 +4027,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const page = paperPage();
     if (!page) { toast("当前页面没有可导出的论文正文"); return; }
     const title = $("h1", page)?.textContent.trim() || "论文草稿";
-    // 开源字体的 CDN 样式一并带上：HTML/打印导出里选用的思源宋体等照常渲染（Word 忽略无害）
-    const fontLinks = PAPER_WEBFONT_LINKS.map(href => `<link rel="stylesheet" href="${href}">`).join("");
-    const documentHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${fontLinks}<style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,"Noto Serif SC",serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3{font-family:"Heiti SC",SimHei,"Microsoft YaHei","Noto Sans SC",sans-serif;line-height:1.5}p{text-indent:2em;margin:0 0 18px}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px}img{max-width:100%}.editor-formula{text-align:center;margin:18px 0}.source-chip{border:1px solid #ddd;border-radius:6px;padding:4px 10px;background:#fff;font-size:12px}</style></head><body>${page.innerHTML}</body></html>`;
+    // 开源字体 + KaTeX 的 CDN 样式一并带上：HTML/打印导出里选用的思源宋体与
+    // 已排版的公式照常渲染（Word 忽略外链样式，正文仍完整）。
+    const fontLinks = [
+      ...PAPER_WEBFONT_LINKS,
+      "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css",
+    ].map(href => `<link rel="stylesheet" href="${href}">`).join("");
+    const documentHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${fontLinks}<style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,"Noto Serif SC",serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3,h4{font-family:"Heiti SC",SimHei,"Microsoft YaHei","Noto Sans SC",sans-serif;line-height:1.5}h2{margin:28px 0 14px}h3{margin:22px 0 12px}p{text-indent:2em;text-align:justify;margin:0 0 16px}.paper-abstract-heading{text-align:center;letter-spacing:.5em;text-indent:.5em}.paper-keywords{text-indent:0}ul,ol{margin:0 0 16px;padding-left:2em}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px;text-indent:0}img{max-width:100%}.editor-formula,.md-math-block{text-align:center;margin:18px 0;overflow-x:auto}pre{padding:10px 12px;border:1px solid #ddd;border-radius:6px;background:#fafafa;overflow-x:auto;font-size:13px}.md-inline-code{padding:1px 5px;border-radius:4px;background:#f0f0ee;font-size:.85em}.source-chip{border:1px solid #ddd;border-radius:6px;padding:4px 10px;background:#fff;font-size:12px}</style></head><body>${page.innerHTML}</body></html>`;
     const download = (blob, filename) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
@@ -4035,6 +4073,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   function latexInline(node) {
     if (node.nodeType === Node.TEXT_NODE) return latexEscape(node.textContent);
     if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    // 行内公式节点（markdown 渲染的 .md-math）：KaTeX 排版后 innerHTML 是排版
+    // 标记，必须取 data-tex 上的原始 LaTeX，不能往下取文本。
+    if (node.dataset?.tex) return `$${node.dataset.tex}$`;
     const inner = [...node.childNodes].map(latexInline).join("");
     switch (node.tagName) {
       case "STRONG": case "B": return `\\textbf{${inner}}`;
@@ -4056,9 +4097,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (node.matches("h1")) return;
       if (node.matches("h2")) { body.push(`\\section*{${latexInline(node)}}`); return; }
       if (node.matches("h3")) { body.push(`\\subsection*{${latexInline(node)}}`); return; }
-      if (node.matches(".editor-formula")) {
+      if (node.matches(".editor-formula, .md-math-block")) {
         const tex = node.dataset.tex || latexEscape(node.textContent.trim());
         body.push(`\\begin{equation}\n${tex}\n\\end{equation}`);
+        return;
+      }
+      if (node.matches("pre")) {
+        body.push(`\\begin{verbatim}\n${node.textContent.replace(/\n$/, "")}\n\\end{verbatim}`);
         return;
       }
       if (node.matches("button.source-chip")) {
@@ -4412,6 +4457,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         return;
       }
       if (action === "send") {
+        // 生成中发送键就是暂停键：点击中止当前这轮回复
+        if (target.dataset.mode === "stop") {
+          activeChatAbort?.abort();
+          return;
+        }
         const composer = target.closest(".composer");
         const textarea = composer?.querySelector("textarea");
         const text = textarea?.value.trim();
@@ -4578,8 +4628,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     bindPaperEditor();
     $$(".composer textarea").forEach(textarea => textarea.addEventListener("keydown", event => {
       if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+      const send = textarea.closest(".composer")?.querySelector('[data-action="send"]');
+      // 生成中发送键是暂停键：Enter 不触发它（回车照常换行），避免误停生成
+      if (send?.dataset.mode === "stop") return;
       event.preventDefault();
-      textarea.closest(".composer")?.querySelector('[data-action="send"]')?.click();
+      send?.click();
     }));
     $$("[data-task-type]").forEach(button => button.addEventListener("click", () => {
       $$("[data-task-type]").forEach(b => b.classList.remove("active")); button.classList.add("active");

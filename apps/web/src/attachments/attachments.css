@@ -45,6 +45,14 @@
   cursor: pointer;
 }
 
+/* 折叠头是 <button>，会吃到全局 button:hover 的浅灰底；这里明确按住透明，
+   悬停只靠回形针↔箭头的图标切换表达，不出现灰色背景盒子。 */
+.composer-attachments-head:hover,
+html[data-theme="dark"] .composer-attachments-head:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
 .composer-attachments-head-icon {
   position: relative;
   flex: none;

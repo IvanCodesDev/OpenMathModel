@@ -39,6 +39,8 @@ export interface ChatMeta {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
   elapsed_ms?: number;
   route?: ChatRouteMeta | null;
+  /** 用户中途暂停、已收到的部分按完整回复收尾时为 true。 */
+  stopped?: boolean;
 }
 
 export interface ChatHandlers {
@@ -228,6 +230,9 @@ export interface ChatTurnOptions {
   images?: ChatImagePayload[];
   /** 携图时钉住的接口 id：绕过 Auto 难度路由，确保图片落在视觉模型上。 */
   pinEndpointId?: string;
+  /** 暂停生成：中止后已收到的部分回复按完整回复处理；一字未收则抛
+   *  GENERATION_STOPPED，由调用方安静收尾（不按错误渲染）。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -266,6 +271,7 @@ export async function sendConversationTurn(
     response = await fetch("/api/chat", {
       method: "POST",
       credentials: "same-origin",
+      signal: options.signal,
       headers: { "Content-Type": "application/json", Accept: "text/event-stream, application/json" },
       body: JSON.stringify({
         messages: [...history],
@@ -274,8 +280,11 @@ export async function sendConversationTurn(
         ...(images ? { images } : {}),
       }),
     });
-  } catch {
+  } catch (error) {
     history.pop();
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ChatError("GENERATION_STOPPED", "已暂停生成");
+    }
     throw new ChatError("NETWORK_ERROR", "无法连接服务，请确认后端已启动");
   }
   if (!response.ok) {
@@ -293,8 +302,20 @@ export async function sendConversationTurn(
     const decoder = new TextDecoder();
     let buffer = "";
     let failure: ChatError | null = null;
+    let stopped = false;
     for (;;) {
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (error) {
+        // 用户点了暂停：已收到的部分按完整回复处理；一字未收按停止收尾
+        if (error instanceof DOMException && error.name === "AbortError") {
+          stopped = true;
+          break;
+        }
+        throw error;
+      }
       if (value) buffer += decoder.decode(value, { stream: true });
       const { events, rest } = parseSseChunk(done ? `${buffer}\n\n` : buffer);
       buffer = done ? "" : rest;
@@ -318,12 +339,26 @@ export async function sendConversationTurn(
       }
       if (done) break;
     }
+    if (stopped && !full) {
+      history.pop();
+      throw new ChatError("GENERATION_STOPPED", "已暂停生成");
+    }
+    if (stopped) meta.stopped = true;
     if (failure && !full) {
       history.pop();
       throw failure;
     }
   } else {
-    const payload = (await response.json()) as ChatMeta & { reply?: string; reasoning?: string };
+    let payload: ChatMeta & { reply?: string; reasoning?: string };
+    try {
+      payload = (await response.json()) as ChatMeta & { reply?: string; reasoning?: string };
+    } catch (error) {
+      history.pop();
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new ChatError("GENERATION_STOPPED", "已暂停生成");
+      }
+      throw new ChatError("CHAT_FAILED", "对话响应解析失败，请稍后再试");
+    }
     full = payload.reply ?? "";
     reasoning = payload.reasoning ?? "";
     Object.assign(meta, payload);

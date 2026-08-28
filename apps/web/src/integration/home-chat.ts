@@ -13,8 +13,7 @@
 
 import { openAuthDialog } from "../auth/auth-dialog";
 import { t } from "../i18n/locale";
-import { renderMarkdown } from "../text/markdown";
-import { typesetMath } from "../text/math-typeset";
+import { createStreamingMarkdownRenderer, createThrottledTextSink } from "../text/stream-render";
 import { ChatError, sendConversationTurn } from "./agent-chat";
 
 const AGENT_ID_HTML =
@@ -105,15 +104,20 @@ function createThinkingBlock(replyBlock: HTMLElement): {
     applyOpen();
     if (open) viewport.scrollTop = 0;
   });
+  // 文本赋值与布局读写按节流节奏合并：高频 reasoning 增量不再逐条触发重排
+  const sink = createThrottledTextSink(fullText => {
+    stream.textContent = fullText;
+    viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
+    viewport.scrollTop = viewport.scrollHeight;
+  });
   return {
     append(fullText: string): void {
-      stream.textContent = fullText;
-      viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
-      viewport.scrollTop = viewport.scrollHeight;
+      sink.update(fullText);
     },
     finish(): void {
       if (done) return;
       done = true;
+      sink.flush();
       const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
       label.classList.remove("thinking-shimmer");
       label.innerHTML = `<span class="thinking-verb">${t("已思考")}</span> ${seconds} ${t("秒")}`;
@@ -130,6 +134,33 @@ function scrollIntoView(element: HTMLElement): void {
 
 export function isHomeChatActive(root: HTMLElement): boolean {
   return root.dataset.homeChat === "on";
+}
+
+// ── 暂停生成：回复流式期间发送键变为暂停键（与执行页同语义） ────────────────
+
+let activeAbort: AbortController | null = null;
+
+/** 首页对话是否在生成中；点暂停键时由 task-start-controller 调用。 */
+export function stopHomeChatGeneration(): boolean {
+  if (!activeAbort) return false;
+  activeAbort.abort();
+  return true;
+}
+
+function setSendButtonGenerating(root: HTMLElement, on: boolean): void {
+  root.querySelectorAll<HTMLButtonElement>('.composer [data-action="send"]').forEach(button => {
+    if (on) {
+      button.dataset.mode = "stop";
+      button.innerHTML = '<i class="ph-fill ph-stop" aria-hidden="true"></i>';
+      button.title = t("暂停生成");
+      button.setAttribute("aria-label", t("暂停生成"));
+    } else {
+      delete button.dataset.mode;
+      button.innerHTML = '<i class="ph ph-arrow-up" aria-hidden="true"></i>';
+      button.title = t("发送（Enter）");
+      button.setAttribute("aria-label", t("发送"));
+    }
+  });
 }
 
 export interface HomeChatTurnOptions {
@@ -162,8 +193,13 @@ export async function runHomeChatTurn(
     thinking: ReturnType<typeof createThinkingBlock> | null;
     sawDelta: boolean;
   } = { thinking: null, sawDelta: false };
+  // 渲染节流 + 块级增量上屏（长回复不再逐增量整段重建），公式排版随之削峰
+  const renderer = createStreamingMarkdownRenderer(copy);
+  const abort = new AbortController();
+  activeAbort = abort;
+  setSendButtonGenerating(root, true);
   try {
-    await sendConversationTurn(
+    const { text: reply } = await sendConversationTurn(
       text,
       {
         onReasoning: (_delta, full) => {
@@ -175,21 +211,26 @@ export async function runHomeChatTurn(
             state.sawDelta = true;
             state.thinking?.finish();
           }
-          copy.innerHTML = renderMarkdown(full);
-          // 已闭合的公式随增量立即排版，与执行页对话同语义（实时渲染）
-          typesetMath(copy);
+          renderer.update(full);
         },
       },
       {
         ...(options.referenceContext ? { attachmentContext: options.referenceContext } : {}),
         ...(options.referenceTitles?.length ? { attachmentNames: options.referenceTitles } : {}),
+        signal: abort.signal,
       },
     );
     state.thinking?.finish();
+    renderer.finish(reply);
     scrollIntoView(block);
     return true;
   } catch (error) {
     state.thinking?.finish();
+    renderer.cancel();
+    if (error instanceof ChatError && error.code === "GENERATION_STOPPED") {
+      copy.innerHTML = `<p class="muted">${t("已暂停生成。")}</p>`;
+      return false;
+    }
     if (error instanceof ChatError && error.code === "AUTH_REQUIRED") {
       copy.innerHTML = `<p class="muted">${t("请先登录后再继续对话。")}</p>`;
       openAuthDialog({});
@@ -202,5 +243,8 @@ export async function runHomeChatTurn(
     failure.textContent = message;
     copy.append(failure);
     return false;
+  } finally {
+    if (activeAbort === abort) activeAbort = null;
+    setSendButtonGenerating(root, false);
   }
 }

@@ -14,7 +14,7 @@ import {
   WorkspaceApiError,
 } from "./modeling-workspace-api";
 import { hydrateRecentTasks } from "./recent-tasks";
-import { renderStageContent } from "./stage-content";
+import { appendPaperSection, preparePaperOutline, prepareStageTabs, renderStageContent } from "./stage-content";
 import { hideTaskTodos, renderTaskTodos, type TaskTodoItem } from "./task-todo-panel";
 import {
   openAttachmentsDialog,
@@ -240,6 +240,10 @@ const STAGE_BY_PROMPT: Record<string, string> = {
   "experiment_code.default": "实验代码",
   "validating.default": "结果验证",
   "paper_writing.default": "论文撰写",
+  // 论文分章多轮管线（总编规划 → 逐章写作 → 统稿收口）同属论文撰写阶段
+  "paper_outline.default": "论文撰写",
+  "paper_section.default": "论文撰写",
+  "paper_finalize.default": "论文撰写",
 };
 
 const STAGE_OUTPUT_LABELS: Record<string, string> = {
@@ -325,11 +329,27 @@ function formatStageOutputs(node: string, outputs: Record<string, unknown>): str
   return parts.filter(Boolean).join("\n\n");
 }
 
+interface PendingStreamRow {
+  element: HTMLElement;
+  sinceServerMs: number | null;
+  /** 行标题原文（重试计数、落定时的后缀都以它为基底）。 */
+  titleBase: string;
+  /** 同一 key 的第几次尝试（模型调用失败自动重试时递增，行复用不堆叠）。 */
+  attempts: number;
+  /** 实时生成区（llm_delta 事件流入的可展开详情），首个增量到达时创建。 */
+  livePre?: HTMLElement;
+  /** 实时生成区的文本节点：打字机逐字往里追加（appendData 摊销 O(1)）。 */
+  liveText?: Text;
+  /** 还没打上屏的增量（服务端按秒批量下发，前端逐字匀速消化）。 */
+  liveQueue?: string;
+  liveTimer?: number;
+}
+
 interface AgentStreamState {
   host: HTMLElement | null;
   seen: Set<number>;
-  /** 待落定的行（等待确认等）：key → 行元素与服务端开始时间 */
-  pending: Map<string, { element: HTMLElement; sinceServerMs: number | null }>;
+  /** 待落定的行（模型调用、等待确认等）：key → 行元素与状态 */
+  pending: Map<string, PendingStreamRow>;
   /** 当前处理的是首连回放的历史事件（决定落点，见 resolveStreamHost）。 */
   replaying: boolean;
 }
@@ -436,6 +456,100 @@ interface StreamRowOptions {
   mono?: boolean;
 }
 
+/** 给已有过程行补挂可展开详情区（创建时或实时增量首次到达时调用）。 */
+function attachRowDetail(
+  item: HTMLElement,
+  options: { mono?: boolean; live?: boolean; open?: boolean } = {},
+): HTMLElement {
+  const row = item.querySelector<HTMLElement>(".stream-row")!;
+  const detail = document.createElement("div");
+  detail.className = `stream-detail${options.mono ? " is-mono" : ""}${options.live ? " is-live" : ""}`;
+  detail.hidden = !options.open;
+  const pre = document.createElement("pre");
+  detail.append(pre);
+  item.append(detail);
+  row.classList.add("is-expandable");
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  row.setAttribute("aria-expanded", String(Boolean(options.open)));
+  row.insertAdjacentHTML("beforeend", '<i class="ph ph-caret-down stream-chevron" aria-hidden="true"></i>');
+  const toggle = (): void => {
+    detail.hidden = !detail.hidden;
+    row.setAttribute("aria-expanded", String(!detail.hidden));
+    // 生成中途展开实时区：直接跳到最新内容处继续跟随
+    if (options.live && !detail.hidden) pre.scrollTop = pre.scrollHeight;
+  };
+  row.addEventListener("click", toggle);
+  row.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle();
+    }
+  });
+  return pre;
+}
+
+// ── 实时生成区的打字机：服务端按秒批量下发增量，前端逐字匀速上屏 ────────────
+
+const LIVE_TYPE_TICK_MS = 24;
+
+function stopLiveTyping(entry: PendingStreamRow): void {
+  if (entry.liveTimer !== undefined) {
+    window.clearInterval(entry.liveTimer);
+    entry.liveTimer = undefined;
+  }
+}
+
+/** 把积压的增量一次性全部上屏（落定、行复用重置前调用）。 */
+function flushLiveTyping(entry: PendingStreamRow): void {
+  stopLiveTyping(entry);
+  if (entry.liveText && entry.liveQueue) {
+    entry.liveText.appendData(entry.liveQueue);
+    entry.liveQueue = "";
+  }
+}
+
+function liveTypeTick(entry: PendingStreamRow): void {
+  if (!entry.liveText || !entry.liveQueue) {
+    stopLiveTyping(entry);
+    return;
+  }
+  // 逐字输出；积压过大时按比例加速追赶（约 1.2 秒内消化完当前积压），
+  // 视觉上仍是打字节奏而不是整段闪现。
+  const take = Math.max(1, Math.round(entry.liveQueue.length / 50));
+  entry.liveText.appendData(entry.liveQueue.slice(0, take));
+  entry.liveQueue = entry.liveQueue.slice(take);
+  const detail = entry.livePre?.parentElement;
+  if (entry.livePre && detail instanceof HTMLElement && !detail.hidden) {
+    entry.livePre.scrollTop = entry.livePre.scrollHeight;
+  }
+  if (!entry.liveQueue) stopLiveTyping(entry);
+}
+
+function enqueueLiveDelta(entry: PendingStreamRow, text: string): void {
+  if (!entry.livePre) {
+    // 默认折叠：不打扰主流程，想看的用户自己展开（展开后自动吸底跟随）
+    entry.livePre = attachRowDetail(entry.element, { live: true, open: false });
+    entry.liveText = document.createTextNode("");
+    entry.livePre.append(entry.liveText);
+  }
+  entry.liveQueue = (entry.liveQueue ?? "") + text;
+  if (prefersReducedMotion() || document.documentElement.dataset.reduceMotion === "on") {
+    flushLiveTyping(entry);
+    return;
+  }
+  if (entry.liveTimer === undefined) {
+    entry.liveTimer = window.setInterval(() => liveTypeTick(entry), LIVE_TYPE_TICK_MS);
+  }
+}
+
+/** 标题入场扫光：与「思考中…」同款渐变从左到右扫两遍后恢复常规配色。 */
+function shineTitleOnce(title: HTMLElement): void {
+  if (prefersReducedMotion() || document.documentElement.dataset.reduceMotion === "on") return;
+  title.classList.add("title-shine-once");
+  title.addEventListener("animationend", () => title.classList.remove("title-shine-once"), { once: true });
+}
+
 function streamRow(root: HTMLElement, options: StreamRowOptions): void {
   const state = streamState(root);
   const item = document.createElement("div");
@@ -446,63 +560,71 @@ function streamRow(root: HTMLElement, options: StreamRowOptions): void {
       <span class="stream-title"></span>
       <time class="stream-elapsed"></time>
     </div>`;
-  item.querySelector<HTMLElement>(".stream-title")!.textContent = options.title;
+  const title = item.querySelector<HTMLElement>(".stream-title")!;
+  title.textContent = options.title;
   const timeCell = item.querySelector<HTMLElement>(".stream-elapsed")!;
   if (options.waitingSinceMs !== undefined) {
+    // 进行中的行：标题持续扫光（与「思考中…」同一动效语言），落定时移除
+    title.classList.add("thinking-shimmer");
     const localSince = Date.now();
     timeCell.dataset.elapsedSince = String(localSince);
     timeCell.textContent = formatElapsed(0);
     if (options.key) {
-      state.pending.set(options.key, { element: item, sinceServerMs: options.waitingSinceMs ?? null });
+      state.pending.set(options.key, {
+        element: item,
+        sinceServerMs: options.waitingSinceMs ?? null,
+        titleBase: options.title,
+        attempts: 1,
+      });
     }
   } else if (options.elapsedMs !== undefined) {
     timeCell.textContent = formatElapsed(options.elapsedMs);
   }
+  // 已落定的新行（阶段产出、沙箱执行等）：实时到达时标题扫光入场；
+  // 首连回放的历史行不重播动画。
+  if (options.waitingSinceMs === undefined && !state.replaying) shineTitleOnce(title);
   if (options.detail) {
-    const row = item.querySelector<HTMLElement>(".stream-row")!;
-    row.classList.add("is-expandable");
-    row.setAttribute("role", "button");
-    row.tabIndex = 0;
-    row.setAttribute("aria-expanded", "false");
-    row.insertAdjacentHTML("beforeend", '<i class="ph ph-caret-down stream-chevron" aria-hidden="true"></i>');
-    const detail = document.createElement("div");
-    detail.className = `stream-detail${options.mono ? " is-mono" : ""}`;
-    detail.hidden = true;
-    const pre = document.createElement("pre");
+    const pre = attachRowDetail(item, { mono: options.mono });
     pre.textContent = options.detail;
-    detail.append(pre);
-    item.append(detail);
-    const toggle = (): void => {
-      detail.hidden = !detail.hidden;
-      row.setAttribute("aria-expanded", String(!detail.hidden));
-    };
-    row.addEventListener("click", toggle);
-    row.addEventListener("keydown", event => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        toggle();
-      }
-    });
   }
   streamAppend(root, item);
 }
 
 /** 移除等待中的行：被信息更完整的行整体替换时用（与「落定」不同，不保留元素）。 */
-function dropPendingStreamRow(root: HTMLElement, key: string): void {
+function dropPendingStreamRow(root: HTMLElement, key: string): PendingStreamRow | undefined {
   const state = streamState(root);
   const entry = state.pending.get(key);
-  if (!entry) return;
+  if (!entry) return undefined;
   state.pending.delete(key);
+  stopLiveTyping(entry);
   entry.element.remove();
+  return entry;
 }
 
 /** 等待中的行落定：优先用服务端时间差，取不到再退回本地走秒值。 */
-function settleStreamRow(root: HTMLElement, key: string, endedServerMs: number | null): void {
+function settleStreamRow(
+  root: HTMLElement,
+  key: string,
+  endedServerMs: number | null,
+  options: { failed?: boolean; title?: string } = {},
+): void {
   const state = streamState(root);
   const entry = state.pending.get(key);
   if (!entry) return;
   state.pending.delete(key);
+  flushLiveTyping(entry);
   entry.element.classList.remove("is-waiting");
+  const title = entry.element.querySelector<HTMLElement>(".stream-title");
+  if (title) {
+    title.classList.remove("thinking-shimmer");
+    if (options.title) {
+      title.textContent = options.title;
+    } else if (entry.attempts > 1 && !options.failed) {
+      title.textContent = `${entry.titleBase}（第 ${entry.attempts} 次尝试成功）`;
+    } else {
+      title.textContent = entry.titleBase;
+    }
+  }
   const timeCell = entry.element.querySelector<HTMLElement>(".stream-elapsed");
   if (timeCell) {
     if (entry.sinceServerMs !== null && endedServerMs !== null) {
@@ -511,7 +633,30 @@ function settleStreamRow(root: HTMLElement, key: string, endedServerMs: number |
     delete timeCell.dataset.elapsedSince;
   }
   const icon = entry.element.querySelector<HTMLElement>(".stream-row > i");
-  if (icon) icon.className = "ph-fill ph-check-circle";
+  if (icon) icon.className = options.failed ? "ph-fill ph-warning-circle" : "ph-fill ph-check-circle";
+  // 实时生成区随落定收起（内容保留，可点击回看）
+  const live = entry.element.querySelector<HTMLElement>(".stream-detail.is-live");
+  if (live && !live.hidden) {
+    live.hidden = true;
+    entry.element.querySelector(".stream-row")?.setAttribute("aria-expanded", "false");
+  }
+}
+
+/** 把所有进行中的模型调用行落定（步骤失败、运行终态时调用，不碰审批行）。 */
+function settlePendingLlmRows(
+  root: HTMLElement,
+  endedServerMs: number | null,
+  failed: boolean,
+): void {
+  const state = streamState(root);
+  for (const key of [...state.pending.keys()]) {
+    if (!key.startsWith("llm:")) continue;
+    const entry = state.pending.get(key);
+    settleStreamRow(root, key, endedServerMs, {
+      failed,
+      ...(failed && entry ? { title: `${entry.titleBase}（本次调用中断）` } : {}),
+    });
+  }
 }
 
 /** 一条领域事件 → 活动流内容；step.* 归上方时间线，不在这里重复。
@@ -541,6 +686,10 @@ function ingestStreamEvent(
     case "run.status_changed": {
       const reason = String(payload.reason ?? "").trim();
       if (reason && reason !== "任务开始") streamNarration(root, `${reason}。`);
+      // 运行到达终态：所有还在走秒的模型调用行一并落定，不留永远转圈的僵尸行
+      const to = String(payload.to ?? "");
+      if (to === "FAILED" || to === "CANCELLED") settlePendingLlmRows(root, eventMs, true);
+      if (to === "COMPLETED") settlePendingLlmRows(root, eventMs, false);
       return;
     }
     case "run.log": {
@@ -549,20 +698,70 @@ function ingestStreamEvent(
         // 调用开始即出走秒行：一次模型调用动辄一两分钟，没有这行的话调用期间
         // 活动流完全静默、结束时整批闪现。结束事件到达时被 thinking 行整体
         // 替换（推理模型）或就地落定（无思考内容的模型）。
+        const key = `llm:${String(payload.prompt_id)}`;
         const stage = STAGE_BY_PROMPT[String(payload.prompt_id)];
+        const title = `深度思考${stage ? ` · ${stage}` : ""}`;
+        // 同一提示词的上一次调用还没落定（调用失败重试、进程重启续跑、历史
+        // 回放的孤儿行）：复用同一行推进尝试计数，绝不堆出一排相同的走秒行。
+        const existing = state.pending.get(key);
+        if (existing) {
+          existing.attempts += 1;
+          existing.sinceServerMs = eventMs;
+          const titleNode = existing.element.querySelector<HTMLElement>(".stream-title");
+          if (titleNode) titleNode.textContent = `${title}（第 ${existing.attempts} 次尝试）`;
+          const timeCell = existing.element.querySelector<HTMLElement>(".stream-elapsed");
+          if (timeCell) {
+            timeCell.dataset.elapsedSince = String(Date.now());
+            timeCell.textContent = formatElapsed(0);
+          }
+          // 新一次尝试是全新生成：上次失败尝试的半截增量不再保留
+          stopLiveTyping(existing);
+          existing.liveQueue = "";
+          if (existing.liveText) existing.liveText.data = "";
+          delete existing.element.dataset.lastChannel;
+          return;
+        }
         streamRow(root, {
-          key: `llm:${String(payload.prompt_id)}`,
+          key,
           icon: "sparkle",
-          title: `深度思考${stage ? ` · ${stage}` : ""}`,
+          title,
           waitingSinceMs: eventMs,
         });
         return;
       }
+      if (kind === "llm_delta") {
+        // 模型生成的实时增量：流入走秒行的可展开详情（默认折叠），逐字打上屏。
+        // 历史回放不重放增量——完整内容已在 thinking 行与阶段产出里。
+        if (replay) return;
+        const entry = state.pending.get(`llm:${String(payload.prompt_id)}`);
+        if (!entry) return;
+        const channel = String(payload.channel ?? "");
+        // 思考与正文之间空一行，阅读时能分清两段
+        const glue = channel === "text" && entry.element.dataset.lastChannel === "reasoning"
+          ? "\n\n"
+          : "";
+        entry.element.dataset.lastChannel = channel;
+        enqueueLiveDelta(entry, glue + String(payload.text ?? ""));
+        return;
+      }
+      if (kind === "llm_call_failed") {
+        // 一次调用失败（超时/限流/网关错误）：行保留并标注重试中；若这是
+        // 最后一次尝试，随后的 step.failed / 运行终态会把它彻底落定。
+        const entry = state.pending.get(`llm:${String(payload.prompt_id)}`);
+        if (entry) {
+          const titleNode = entry.element.querySelector<HTMLElement>(".stream-title");
+          if (titleNode) titleNode.textContent = `${entry.titleBase}（上次调用中断，自动重试中）`;
+        }
+        return;
+      }
       if (kind === "thinking") {
-        dropPendingStreamRow(root, `llm:${String(payload.prompt_id)}`);
+        const key = `llm:${String(payload.prompt_id)}`;
+        const dropped = dropPendingStreamRow(root, key);
+        const stage = STAGE_BY_PROMPT[String(payload.prompt_id)];
+        const retries = dropped && dropped.attempts > 1 ? `（第 ${dropped.attempts} 次尝试成功）` : "";
         streamRow(root, {
           icon: "sparkle",
-          title: `深度思考${STAGE_BY_PROMPT[String(payload.prompt_id)] ? ` · ${STAGE_BY_PROMPT[String(payload.prompt_id)]}` : ""}`,
+          title: `深度思考${stage ? ` · ${stage}` : ""}${retries}`,
           elapsedMs: Number(payload.elapsed_ms) || 0,
           detail: String(payload.text ?? ""),
         });
@@ -590,6 +789,34 @@ function ingestStreamEvent(
           ].filter(Boolean).join("\n"),
           mono: true,
         });
+        return;
+      }
+      // 论文分章直播：骨架事件预挂大纲，章节事件把正文实时推进编辑器
+      if (kind === "paper_outline") {
+        const headings = Array.isArray(payload.headings)
+          ? (payload.headings as unknown[]).map(item => String(item ?? ""))
+          : [];
+        streamNarration(root, `论文骨架已定：共 ${Number(payload.total) || headings.length} 章。`);
+        preparePaperOutline(root, {
+          total: Number(payload.total) || headings.length,
+          headings,
+        });
+        return;
+      }
+      if (kind === "paper_section") {
+        const index = Number(payload.index) || 0;
+        const total = Number(payload.total) || 0;
+        const heading = String(payload.heading ?? "");
+        streamRow(root, {
+          icon: "file-text",
+          title: `已完成章节 ${index}/${total}：${heading}`,
+        });
+        appendPaperSection(root, {
+          index,
+          total,
+          heading,
+          content: String(payload.content ?? ""),
+        }, !replay);
         return;
       }
       // 其他 run.log（未来的工具调用等）：原样以等宽详情展示
@@ -626,6 +853,12 @@ function ingestStreamEvent(
           detail,
         });
       }
+      return;
+    }
+    case "step.failed": {
+      // 阶段失败（含进程中断后的修复落定）：进行中的模型调用行一并按失败收尾，
+      // 后续重试会开新的走秒行。
+      settlePendingLlmRows(root, eventMs, true);
       return;
     }
     case "approval.requested": {
@@ -685,21 +918,27 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
   // 条目文案优先用服务端派生的本任务计划短句（问题分析的 plan_outline，
   // 方案确认后实验条目细化为选中方案），未产出时回退固定阶段名；
   // 勾选状态始终来自 pages.status（引擎执行事实），文本变化不影响状态语义。
-  renderTaskTodos(root, {
-    runId: view.run_id,
-    planning: planning || Boolean(openingPending),
-    items: view.pages.map(page => {
-      const display = pageStatusForDisplay(view, page);
-      const status: TaskTodoItem["status"] = display === "SUCCEEDED"
-        ? "done"
-        : display === "FAILED"
-          ? "failed"
-          : display === "RUNNING" || display === "WAITING_APPROVAL" || display === "PAUSED"
-            ? "active"
-            : "pending";
-      return { key: page.key, label: page.plan_text ?? page.label, status };
-    }),
-  });
+  // 「正在思考并规划…」只在真的有生成在进行时出现：排队等待执行器（QUEUED
+  // 且开场分析已结束）不是思考，此时整个面板隐藏，避免拿思考态糊弄等待。
+  if (view.run_status === "QUEUED" && !openingPending) {
+    hideTaskTodos(root);
+  } else {
+    renderTaskTodos(root, {
+      runId: view.run_id,
+      planning: planning || Boolean(openingPending),
+      items: view.pages.map(page => {
+        const display = pageStatusForDisplay(view, page);
+        const status: TaskTodoItem["status"] = display === "SUCCEEDED"
+          ? "done"
+          : display === "FAILED"
+            ? "failed"
+            : display === "RUNNING" || display === "WAITING_APPROVAL" || display === "PAUSED"
+              ? "active"
+              : "pending";
+        return { key: page.key, label: page.plan_text ?? page.label, status };
+      }),
+    });
+  }
 
   // 摘要区保持稳定的 title/paragraph 元素：文本未变时不重建，变化时打字机浮现，
   // 避免每次 SSE 刷新都重放动画。
@@ -861,6 +1100,8 @@ function renderWorkspace(root: HTMLElement, screen: ScreenId, view: ModelingWork
     delete element.dataset.workspaceLoading;
     if (element instanceof HTMLButtonElement) element.disabled = false;
   });
+  // 真实运行的子分页纪律：纯演示分页撤走，可填充分页待真实内容就绪再放出
+  prepareStageTabs(root);
   renderStatus(root, screen, view);
   renderHeaderAttachments(root, view);
   renderAgent(root, screen, view);
