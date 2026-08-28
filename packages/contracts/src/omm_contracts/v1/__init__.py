@@ -12,8 +12,9 @@ from .experiment_summary import ExperimentSummary
 from .modeling_workspace_view import ModelingWorkspaceView
 from .paper_export import PaperExport
 from .plan_proposal import PlanProposal
+from .problem_frame import ProblemFrame
 from .project import Project
 from .step_run import StepRun
 from .task_run import TaskRun
 
-__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "DatasetProfile", "DeliveryManifest", "DocumentDraft", "ErrorEnvelope", "ExperimentSummary", "ModelingWorkspaceView", "PaperExport", "PlanProposal", "Project", "StepRun", "TaskRun"]
+__all__ = ["AgentEvent", "ApprovalRequest", "Artifact", "DatasetProfile", "DeliveryManifest", "DocumentDraft", "ErrorEnvelope", "ExperimentSummary", "ModelingWorkspaceView", "PaperExport", "PlanProposal", "ProblemFrame", "Project", "StepRun", "TaskRun"]

@@ -1,0 +1,14 @@
+{
+  "run_id": "run_0123456789abcdef0123456789abcdef",
+  "title": "运量预测与车辆配置优化",
+  "problem_type": "预测+优化",
+  "objectives": ["预测下季度运量", "给出车辆配置方案"],
+  "constraints": ["车辆总数不超过 50", "预算上限 200 万"],
+  "data_requirements": ["历史运量时间序列", "车辆成本表"],
+  "key_assumptions": ["运量趋势短期线性"],
+  "subquestions": [
+    { "id": "q1", "text": "基于历史序列预测下季度运量", "depends_on": [] },
+    { "id": "q2", "text": "按预测运量求最优车辆配置", "depends_on": ["q1"] }
+  ],
+  "updated_at": "2026-08-28T04:00:00Z"
+}
