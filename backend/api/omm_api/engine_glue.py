@@ -68,6 +68,7 @@ from omm_contracts import (
 
 from .blobstore import ArtifactBlobStore, LocalContentStore
 from .config import get_settings
+from .errors import ApiError
 from .events import append_event
 from .ids import new_id
 from .llm import EngineLlmPort, config_usable, is_third_party_host, parse_llm_config
@@ -463,8 +464,14 @@ def _budget_stop_message(error: AgentError) -> str:
 
 
 class _BudgetGuardedNode:
-    """把节点内抛出的预算硬停（AgentError E31x/E32x）转成干净的步骤失败信息，
-    避免引擎兜底把整段 traceback 当失败原因展示给用户。"""
+    """把节点内抛出的已知基础设施错误转成干净的步骤失败信息（D2.1：UI 只显示
+    人话文案），避免引擎兜底把整段 traceback 当失败原因展示给用户。
+
+    - AgentError（预算硬停 E31x/E32x）：带用量快照与追加通道指引；
+    - ApiError（模型接口错误：余额不足/配额/网络/网关异常，E140 家族）：
+      接口侧的原因本身已是人话（如「接口 X 返回 HTTP 402: Insufficient
+      Balance」），附上可行动指引后作为步骤失败上报，走标准 retry 路径。
+    """
 
     def __init__(self, inner: Any) -> None:
         self._inner = inner
@@ -474,6 +481,11 @@ class _BudgetGuardedNode:
             return self._inner.run(ctx, services)
         except AgentError as error:
             return NodeResult.failed(_budget_stop_message(error))
+        except ApiError as error:
+            return NodeResult.failed(
+                f"模型接口调用失败：{error.message}。"
+                "请在设置中心检查该接口的余额与可用性，充值或更换/追加备用接口后重试。"
+            )
 
 
 class _BudgetedInvoker:

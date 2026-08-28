@@ -235,6 +235,30 @@ def _configure_llm(client, monkeypatch, handler=_stage_router) -> None:
     assert saved.status_code == 200, saved.text
 
 
+def test_provider_billing_error_fails_cleanly_without_traceback(client, monkeypatch):
+    """供应商侧计费错误（HTTP 402 余额不足）→ 人话步骤失败并走标准 retry 路径。
+
+    D2.1 纪律：UI 只显示人话文案——接口侧异常绝不允许以裸 traceback 上屏
+    （曾在真实运行中把整段调用栈打给用户看）。
+    """
+
+    def broke(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, json={"error": {"message": "Insufficient Balance"}})
+
+    project = create_project(client)
+    _configure_llm(client, monkeypatch, handler=broke)
+    run = create_run(client, project["id"], goal="优化共享单车调度")
+
+    failed = wait_until(client, run["id"], run_status_is(client, run["id"], "FAILED"))
+    message = failed["failure"]["message"]
+    assert "Traceback" not in message and "node raised" not in message
+    assert "402" in message
+    assert "设置中心" in message, "失败信息必须给出可行动指引"
+
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    assert steps and steps[0]["status"] == "FAILED"
+
+
 def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch):
     """全链真实节点：审批前三个阶段 + 审批后实验（沙箱真跑代码）/检验/论文。"""
     project = create_project(client)
