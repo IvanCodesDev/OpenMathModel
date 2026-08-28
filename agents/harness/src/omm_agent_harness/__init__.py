@@ -1,8 +1,10 @@
 """omm-agent-harness: 模型外围自研运行时基座（设计文档 §4）。
 
 H0 批次交付三个组件：ModelGateway（执行面唯一 LLM 出口）、BudgetGovernor
-（四级预算硬停）、TraceHub（运行跟踪与报告）。Loop/Subagent 等组件随
-H1/H2 批次进入本包。依赖方向：harness → core, tools；禁止 import omm_api。
+（四级预算硬停）、TraceHub（运行跟踪与报告）。H1 批次新增两个组件：
+run_inner_loop（L-I 内环引擎，§5.2/§5.3）与 ContextAssembler（分节装配，
+§4.2）。Subagent 组件随 H2 进入本包。依赖方向：harness → core, tools；
+禁止 import omm_api、禁止 import skills（parser/validator 由调用方注入）。
 """
 
 from .budget import (
@@ -11,6 +13,13 @@ from .budget import (
     LoopBudget,
     NodeBudget,
     RunBudget,
+)
+from .context import (
+    STANDARD_SECTION_ORDER,
+    AssembledPrompt,
+    AssemblyError,
+    ContextAssembler,
+    Section,
 )
 from .gateway import (
     CallBudget,
@@ -26,14 +35,21 @@ from .gateway import (
     httpx_sender,
     request_fingerprint,
 )
+from .loops import LoopOutcome, LoopTask, run_inner_loop
 from .trace import Span, TraceHub
 
 __all__ = [
     "SUBAGENT_MAX_FRACTION",
+    "STANDARD_SECTION_ORDER",
+    "AssembledPrompt",
+    "AssemblyError",
     "BudgetGovernor",
     "CallBudget",
+    "ContextAssembler",
     "GatewayConfig",
     "LoopBudget",
+    "LoopOutcome",
+    "LoopTask",
     "Message",
     "ModelGateway",
     "ModelRouting",
@@ -41,6 +57,7 @@ __all__ = [
     "Reply",
     "ReplayCassette",
     "RunBudget",
+    "Section",
     "Span",
     "ToolCall",
     "TraceHub",
@@ -48,4 +65,5 @@ __all__ = [
     "Usage",
     "httpx_sender",
     "request_fingerprint",
+    "run_inner_loop",
 ]

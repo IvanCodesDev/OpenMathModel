@@ -96,6 +96,29 @@ class BudgetGovernor:
         self._node_budgets[node_id] = budget or NodeBudget()
         self._node_tokens.setdefault(node_id, 0)
 
+    # -- durable rebuild ---------------------------------------------------------
+
+    def seed_usage(
+        self,
+        *,
+        total_tokens: int = 0,
+        llm_calls: int = 0,
+        sandbox_runs: int = 0,
+        node_tokens: dict[str, int] | None = None,
+    ) -> None:
+        """Seed ledgers from the executor's durable usage records.
+
+        The governor itself is in-memory; executors that rebuild per advance
+        (engine glue rebuilds from run.log events) call this once right after
+        construction so limits keep holding across process restarts. Seeding
+        REPLACES the ledgers — it is a rebuild entry point, not a charge.
+        """
+        self._total_tokens = max(int(total_tokens), 0)
+        self._llm_calls = max(int(llm_calls), 0)
+        self._sandbox_runs = max(int(sandbox_runs), 0)
+        for node_id, tokens in (node_tokens or {}).items():
+            self._node_tokens[node_id] = max(int(tokens), 0)
+
     # -- checks & charges --------------------------------------------------------
 
     def check_llm_call(self, node_id: str | None = None) -> None:
