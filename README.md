@@ -57,13 +57,15 @@ py -3.12 -m venv .venv
 
 ### 2. 启动完整联调（推荐）
 
+数据库限定 PostgreSQL：首次 `.\tools\pg-dev.ps1 init`（免安装用户级实例，port 5433，随后跑一次 Alembic 迁移，见 [`backend/api/README.md`](./backend/api/README.md)）。之后不必再手动启动数据库：统一入口会自动拉起。
+
 登录、账户设置和建模工作台都依赖 API。推荐从仓库根运行统一入口：
 
 ```powershell
 npm run dev
 ```
 
-该命令启动或复用 `127.0.0.1:8000` 的 API，等待健康检查成功，再启动 Web 开发服务器。浏览器地址以终端输出为准，默认为 [http://localhost:5183](http://localhost:5183)（本项目固定端口，避免与其他本地 Vite 项目挤占默认 5173）。
+该命令自动确保本地 PostgreSQL（5433）在运行（未运行则拉起），启动或复用 `127.0.0.1:8000` 的 API，等待健康检查成功，再启动 Web 开发服务器。浏览器地址以终端输出为准，默认为 [http://localhost:5183](http://localhost:5183)（本项目固定端口，避免与其他本地 Vite 项目挤占默认 5173）。
 
 启动后可单独确认 API：
 
@@ -88,7 +90,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 npm run dev:web
 ```
 
-默认使用本地 SQLite，无需先启动数据库服务。API 文档位于 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)，完整配置见 [`backend/api/README.md`](./backend/api/README.md)。
+数据库限定 PostgreSQL：默认连 `tools/pg-dev.ps1` 的本地实例（port 5433），Docker 底座（port 5432）需显式覆盖 `OMM_DATABASE_URL`。手动路径不经过统一入口的自动拉起，启动 API 前先 `.\tools\pg-dev.ps1 start`。API 文档位于 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)，完整配置见 [`backend/api/README.md`](./backend/api/README.md)。
 
 ### 4. 用真实 `run_id` 验证工作台
 
@@ -142,7 +144,7 @@ npm run build
 
 ### 6. 启动开发基础设施（可选）
 
-PostgreSQL、Redis 与 MinIO 用于目标部署兼容性验证，并非默认 SQLite 联调的前置条件。安装 Docker Desktop 或兼容 Docker Compose v2 的运行时后：
+PostgreSQL 已随[快速开始](#快速开始)成为必需依赖（免安装路径 `tools/pg-dev.ps1`，无 Docker 即可用）。本节的 Docker 底座提供另一个 PostgreSQL 实例（port 5432，需显式覆盖连接串）以及仅用于目标部署兼容性验证的 Redis 与 MinIO。安装 Docker Desktop 或兼容 Docker Compose v2 的运行时后：
 
 ```powershell
 .\tools\dev-up.ps1
@@ -157,7 +159,7 @@ PostgreSQL、Redis 与 MinIO 用于目标部署兼容性验证，并非默认 SQ
 
 _架构图同时呈现当前模块和演进方向；当前实际调用链以文字说明与[系统架构](./docs/architecture/system-overview.md)为准。_
 
-当前 API 使用进程内 `RunnerThread`、SQLite 和本地 Artifact Store。独立 Worker、PostgreSQL、队列与 S3 兼容存储是目标部署方向；Agent 内核保持框架无关，跨模块协议由 Contracts 统一约束。
+当前 API 使用进程内 `RunnerThread`、PostgreSQL（限定数据库；SQLite 仅测试夹具，schema 一致性由同一测试套件守护）和本地 Artifact Store。独立 Worker、队列与 S3 兼容存储是目标部署方向；Agent 内核保持框架无关，跨模块协议由 Contracts 统一约束。
 
 ## 仓库导航
 

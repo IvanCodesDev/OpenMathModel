@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
@@ -28,6 +29,53 @@ function pythonExecutable() {
         join(repositoryRoot, "backend", "api", ".venv", "bin", "python"),
       ];
   return candidates.find(existsSync);
+}
+
+const localPgScript = join(repositoryRoot, "tools", "pg-dev.ps1");
+const localPgPort = 5433;
+
+// 仅当数据库目标是 tools/pg-dev.ps1 的本地实例（默认连接串）时才代管；
+// 显式覆盖 OMM_DATABASE_URL 到 Docker/远端库的场景不插手。
+function usesLocalPg() {
+  const url = process.env.OMM_DATABASE_URL;
+  if (!url) return true;
+  return url.includes(`127.0.0.1:${localPgPort}/`) || url.includes(`localhost:${localPgPort}/`);
+}
+
+function pgReachable(timeoutMs) {
+  return new Promise(resolveDone => {
+    const socket = createConnection({ host: "127.0.0.1", port: localPgPort });
+    const finish = ok => {
+      socket.destroy();
+      resolveDone(ok);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
+// PG 未运行是本地最常见的启动失败原因（免安装实例不随机器自启）：
+// 起 API 前自动拉起，让 `npm run dev` 成为唯一需要记住的启动命令。
+// pg_ctl 启动的 postgres 自行驻留，不进 children，Ctrl+C 不随开发进程停库。
+async function ensureLocalPostgres() {
+  if (process.platform !== "win32" || !existsSync(localPgScript) || !usesLocalPg()) return;
+  if (await pgReachable(800)) return;
+  console.log(`[dev] 本地 PostgreSQL（127.0.0.1:${localPgPort}）未运行，自动启动…`);
+  const exitCode = await new Promise(resolveDone => {
+    const child = spawn(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", localPgScript, "start"],
+      { cwd: repositoryRoot, stdio: "inherit", windowsHide: true },
+    );
+    child.once("exit", code => resolveDone(code ?? 1));
+    child.once("error", () => resolveDone(1));
+  });
+  if (exitCode !== 0 || !(await pgReachable(2_000))) {
+    console.warn(
+      "[dev] PostgreSQL 自动启动未成功；首次使用请先执行 .\\tools\\pg-dev.ps1 init。API 仍将启动，连库失败时见其报错。",
+    );
+  }
 }
 
 function localApiBinding() {
@@ -235,6 +283,7 @@ async function main() {
       }
     }
     if (!(await apiHealthy())) {
+      await ensureLocalPostgres();
       const python = pythonExecutable();
       if (!python) {
         throw new Error("未找到 Python 虚拟环境。请先按 README 安装根目录 .venv 依赖。");

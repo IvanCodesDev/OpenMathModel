@@ -8,7 +8,7 @@ FastAPI + SQLAlchemy 2 + Alembic。契约见 `packages/contracts`（事实来源
 
 ### 完整 Web + API 联调（推荐）
 
-首次在仓库根安装依赖后，统一启动入口会启动或复用 API，健康检查成功后再启动 Web：
+首次在仓库根安装依赖后，统一启动入口会自动确保本地 PostgreSQL 在运行（未运行则拉起），再启动或复用 API，健康检查成功后启动 Web：
 
 ```powershell
 # 仓库根
@@ -24,7 +24,7 @@ npm run dev
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
 
-# 启动：默认 SQLite，启动时 create_all 建立本地开发表
+# 启动：数据库为 PostgreSQL，先确保其在运行（见下节；自动拉起仅在 `npm run dev`，单独起 uvicorn 前需手动 start）
 .venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --port 8000
 ```
 
@@ -35,28 +35,31 @@ py -3.12 -m venv .venv
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
 
-默认数据库为 `backend/api/data/dev.db`，Artifact 存放于 `backend/api/data/artifacts/`。二者都是本地运行数据。
+数据库为本地 PostgreSQL（默认 `127.0.0.1:5433`），Artifact 存放于 `backend/api/data/artifacts/`。
 
-### 切 PostgreSQL（两条路径任选）
+### 数据库：限定 PostgreSQL
+
+`OMM_DATABASE_URL` 的代码默认值即路径 A 的本地实例，正常情况无需设置任何环境变量。SQLite 不再是任何默认路径（仅测试夹具的临时隔离库使用，见下文「测试」）。
 
 ```powershell
-# A. 免安装用户级 PG（tools/pg-dev.ps1，port 5433）
-.\tools\pg-dev.ps1 init      # 之后日常 .\tools\pg-dev.ps1 start
-$env:OMM_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel"
+# A. 免安装用户级 PG（tools/pg-dev.ps1，port 5433；默认连接目标，无 Docker 即可用）
+.\tools\pg-dev.ps1 init      # 首次；之后 npm run dev 会自动拉起（仅单独起 uvicorn 时需手动 start）
 
-# B. Docker 底座（tools/dev-up.ps1，port 5432，见 infra/docker/compose.dev.yaml）
+# B. Docker 底座（tools/dev-up.ps1，port 5432，见 infra/docker/compose.dev.yaml）——需显式覆盖连接串
 $env:OMM_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel-dev@127.0.0.1:5432/openmathmodel"
 
-# PostgreSQL 部署路径使用 Alembic 迁移
+# schema 以 Alembic 迁移为准（启动时 create_all 仅兜底建缺失表）
 cd backend/api
 ..\..\.venv\Scripts\python -m alembic upgrade head
 ```
+
+路径 A 已在 Windows PowerShell 5.1 下端到端验证：init → Alembic 迁移 → API 连接 → 全量测试套件通过。历史 SQLite 数据可用 `tools/migrate-sqlite-to-pg.py` 整库迁入（含 timestamptz 补时区与孤儿行过滤）。
 
 ## 环境变量（前缀 OMM_）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `OMM_DATABASE_URL` | `sqlite:///<repo>/backend/api/data/dev.db` | 切 PostgreSQL 见上文两条路径 |
+| `OMM_DATABASE_URL` | `postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel` | 数据库限定 PostgreSQL；仅端口/凭据不同（如 Docker 底座 5432）时覆盖 |
 | `OMM_SECRET_KEY` | `dev-secret-change-me` | 2FA 挑战令牌签名密钥，生产必须覆盖 |
 | `OMM_RUNNER_ENABLED` | `true` | API 进程内推进线程；当前由 `agents/core` 与 `SimStageNode` 驱动 |
 | `OMM_RUNNER_TICK_SECONDS` | `1.2` | 推进节奏 |
@@ -68,7 +71,7 @@ cd backend/api
 ## 测试
 
 ```powershell
-# 默认 SQLite 临时库（快，确定性 tick 驱动）
+# 测试夹具默认用 SQLite 临时库（仅测试隔离用途，快且零依赖；产品运行限定 PostgreSQL）
 .venv\Scripts\python -m pytest backend/api/tests -q
 
 # 对真实 PostgreSQL 实跑同一套件（每用例独立 schema，用完清理）
@@ -94,13 +97,13 @@ $env:OMM_TEST_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel@127
 - **Artifact 存储闭环（B4）**：二进制内容按 sha256 内容寻址存放在 `data/artifacts/`（协议可替换，MinIO/S3 待底座就绪）；上传 `POST /api/v1/projects/{id}/artifacts`（multipart，服务端重算哈希），下载 `GET /api/v1/artifacts/{id}/download`（下载即核验，哈希不一致返回 `ARTIFACT_CORRUPTED`）；模拟工作流产物经同一存储端口真实落盘、可下载。
 - **附件正文抽取**：`GET /api/v1/artifacts/{id}/text` 返回 Agent 可读的纯文本。抽取放在读取时而不是上传时——上传要对用户即时响应，而几十兆的 PDF 抽一遍要好几秒；产物内容寻址、字节不可变，因此结果缓存在 `artifact_texts` 表里长期复用，服务端补装依赖后用 `?refresh=true` 重跑。`status` 五档：`ready`/`partial`/`empty`/`unsupported`/`failed`，后三档也是 200，调用方要的是原因而不是错误码。docx/pptx/xlsx/ODF/压缩包/纯文本全部用标准库 `zipfile` + `ElementTree` 解（零额外依赖），PDF 用 `pypdf`；旧版 `.doc`（按 FIB 分片表抽正文）、`.xls`、RTF 需要 `pip install -e "backend/api[legacy-docs]"`，图片 OCR 需要 `[ocr]` 附加项**外加**系统里装有 Tesseract 与语言包。缺依赖时返回 `unsupported` 并说明原因，不抛 500。
 - **用户头像**：`POST /api/account/avatar`（multipart）、`DELETE /api/account/avatar`、`GET /api/account/avatar`。内容走与 Artifact 相同的内容寻址实现但独立目录 `data/avatars/`（归属与回收边界不同），`users` 表只存 `avatar_sha256` 与服务端识别的 `avatar_media_type`。格式按**文件魔数**判定（PNG/JPEG/WebP/GIF），声明的 Content-Type 不作数——头像以同源 URL 回给浏览器，放行 SVG 等同于同源脚本注入；响应固定带 `X-Content-Type-Options: nosniff`。读取只按当前会话返回本人头像，不提供按 user_id 的公开地址。`user_payload.avatar_url` 带内容摘要查询串，换图后 URL 自动变化。
-- **SQLite 开发库补列**：本地默认链路用 `create_all` 建表且从不跑 Alembic，而 `create_all` 不会改已存在的表。启动时对 SQLite 额外补齐模型新增的**可空**列（`omm_api/db.py`），使已有 `dev.db` 不必删库重来；PostgreSQL 仍以 Alembic 为准，两者一致性由 `tests/test_migrations.py` 守住。
+- **SQLite 补列机制（仅显式 SQLite 路径生效）**：`create_all` 只建新表、不改已存在的表，因此对 SQLite 库启动时额外补齐模型新增的**可空**列（`omm_api/db.py`）。数据库已限定 PostgreSQL（以 Alembic 为准）后，该机制只服务测试夹具与应急排查场景；两种方言的 schema 一致性由 `tests/test_migrations.py` 守住。
 
 ## 当前与目标边界
 
 | 维度 | 当前默认 | 目标演进 |
 |---|---|---|
-| 数据库 | SQLite | PostgreSQL |
+| 数据库 | PostgreSQL（已限定，开发与部署统一；SQLite 仅测试夹具） | PostgreSQL |
 | 工作流推进 | API 进程内 `RunnerThread` | API 发布幂等任务，独立 Worker 消费 |
 | 阶段节点 | `agents/core` + `SimStageNode` | 版本化真实 Skills 节点 |
 | 文件存储 | 本地内容寻址目录 | S3 兼容对象存储 |
