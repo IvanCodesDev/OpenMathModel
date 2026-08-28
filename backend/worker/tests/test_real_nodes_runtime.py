@@ -36,6 +36,7 @@ ANALYSIS_OK = {
     "constraints": ["车辆容量有限"],
     "data_requirements": ["历史订单数据"],
     "key_assumptions": ["需求平稳"],
+    "subquestions": [{"id": "q1", "text": "给出调度方案", "depends_on": []}],
 }
 
 PREPARATION_OK = {
@@ -117,6 +118,10 @@ def stage_responses(**overrides):
         "model_planning.default": stub_response(PLANNING_OK),
         "experiment_code.default": stub_response(EXPERIMENT_OK),
         "validating.default": stub_response(VALIDATION_OK),
+        # 论文阶段是分章多轮管线：总编规划（paper_outline）在本桩给非法输出，
+        # 节点走「总编失败回退整篇单次生成」路径消费 paper_writing 桩——worker
+        # 套件因此锚定回退路径，完整分章路径由 backend/api 的 e2e 桩锚定，互补。
+        "paper_outline.default": "（本环境无分章规划桩，验证回退整篇生成路径）",
         "paper_writing.default": stub_response(PAPER_OK),
     }
     responses.update(overrides)

@@ -33,6 +33,7 @@ from .blobstore import LocalContentStore
 from .config import Settings
 from .db import Database
 from .models import User, utcnow
+from .serialize import as_utc
 from .orm import (
     AgentEventRow,
     ApprovalRequestRow,
@@ -100,7 +101,14 @@ def _expired_run_ids(session: Session, user: User, retention: str) -> list[str]:
         )
     ).all()
     # ended_at 理应存在；历史数据缺失时退回 updated_at，避免永远清不掉。
-    return [run_id for run_id, ended_at, updated_at in rows if (ended_at or updated_at) < cutoff]
+    # 比较前统一补 UTC 时区：SQLite 取回 naive、PostgreSQL 取回 aware（timestamptz），
+    # 裸比较在 PG 下抛 TypeError——CI 的 api-postgres job 曾因此翻车。
+    cutoff_utc = as_utc(cutoff)
+    return [
+        run_id
+        for run_id, ended_at, updated_at in rows
+        if as_utc(ended_at or updated_at) < cutoff_utc
+    ]
 
 
 def _delete_artifacts(
