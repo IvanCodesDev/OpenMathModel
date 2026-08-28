@@ -2521,6 +2521,81 @@
         "title": "PrivacySettingsUpdateRequest",
         "type": "object"
       },
+      "ProblemFrame": {
+        "additionalProperties": false,
+        "description": "读题结果正文投影：PROBLEM_ANALYSIS 阶段真实 LLM 节点的最新成功输出（run_domain_events 的 STEP_SUCCEEDED）。subquestions 是后续子问题并行（map lane）的展开依据。模拟链或阶段未完成时该投影整体为 null，由 stage-outputs 端点表达。",
+        "properties": {
+          "constraints": {
+            "description": "题目明确给出的约束与边界条件列表；无则为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "data_requirements": {
+            "description": "完成建模需要的数据清单（含题目附带与需自行收集）；无则为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Data Requirements",
+            "type": "array"
+          },
+          "key_assumptions": {
+            "description": "为使问题可解而显式声明的关键假设列表；无则为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Key Assumptions",
+            "type": "array"
+          },
+          "objectives": {
+            "description": "需要回答的目标问题列表，逐条对应题目小问。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Objectives",
+            "type": "array"
+          },
+          "problem_type": {
+            "description": "问题类型（如 优化 / 预测 / 评价 / 机理建模 / 混合）。",
+            "title": "Problem Type",
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "subquestions": {
+            "description": "子问题分解（子问题并行 lane 的展开依据）；题目不可分解时为覆盖全题的单条；旧运行未产出时为空列表。",
+            "items": {
+              "$ref": "#/components/schemas/Subquestion"
+            },
+            "title": "Subquestions",
+            "type": "array"
+          },
+          "title": {
+            "description": "不超过 20 字的任务标题，概括实际要解决的核心问题。",
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "run_id",
+          "title",
+          "problem_type",
+          "objectives",
+          "constraints",
+          "data_requirements",
+          "key_assumptions",
+          "subquestions",
+          "updated_at"
+        ],
+        "title": "ProblemFrame",
+        "type": "object"
+      },
       "ProfileUpdateRequest": {
         "properties": {
           "email": {
@@ -2835,6 +2910,69 @@
         "title": "RunId",
         "type": "string"
       },
+      "RunNote": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "text",
+          "scope",
+          "created_at"
+        ],
+        "title": "RunNote",
+        "type": "object"
+      },
+      "RunNoteInput": {
+        "description": "运行中补充要求（§11.3 方案 A）：POST /v1/task-runs/{run_id}/notes。",
+        "properties": {
+          "scope": {
+            "default": "global",
+            "enum": [
+              "global",
+              "PROBLEM_ANALYSIS",
+              "DATA_PREPARATION",
+              "MODEL_PLANNING",
+              "EXPERIMENTING",
+              "VALIDATING",
+              "PAPER_WRITING"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "RunNoteInput",
+        "type": "object"
+      },
       "RunStatus": {
         "enum": [
           "QUEUED",
@@ -2867,7 +3005,7 @@
         "type": "string"
       },
       "StageOutputs": {
-        "description": "五类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。\n\n每个字段是对应阶段（DATA_PREPARATION/MODEL_PLANNING/EXPERIMENTING+VALIDATING/\nPAPER_WRITING）真实节点的最新成功输出投影；阶段尚未成功完成时对应字段为\nnull（不是 404——运行本身存在，只是该阶段的正文还没有）。delivery_manifest\n在运行尚无任何可交付内容（无产物且五个阶段均未产出）时也为 null。",
+        "description": "六类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。\n\n每个字段是对应阶段（PROBLEM_ANALYSIS/DATA_PREPARATION/MODEL_PLANNING/\nEXPERIMENTING+VALIDATING/PAPER_WRITING）真实节点的最新成功输出投影；阶段\n尚未成功完成时对应字段为 null（不是 404——运行本身存在，只是该阶段的正文\n还没有）。delivery_manifest 在运行尚无任何可交付内容时也为 null。",
         "properties": {
           "dataset_profile": {
             "anyOf": [
@@ -2913,6 +3051,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/PlanProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problem_frame": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProblemFrame"
               },
               {
                 "type": "null"
@@ -3040,6 +3188,36 @@
           "items"
         ],
         "title": "StepRunList",
+        "type": "object"
+      },
+      "Subquestion": {
+        "additionalProperties": false,
+        "properties": {
+          "depends_on": {
+            "description": "依赖的子问题 id 列表；无依赖为空列表。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "id": {
+            "description": "子问题标识（如 q1）。",
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "description": "子问题的一句话描述。",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "depends_on"
+        ],
+        "title": "Subquestion",
         "type": "object"
       },
       "TaskAgentAction": {
@@ -5954,6 +6132,59 @@
         "summary": "List Run Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/api/v1/task-runs/{run_id}/notes": {
+      "post": {
+        "description": "运行中追加补充要求（§11.3 方案 A）：落行 + run.log 回执，不打断当前执行。\n\n备注在下一次节点执行时注入提示词（EngineLlmPort 构建时读取本表）；scope\n指向已完成阶段时回执附带回退引导——重做由人显式操作，绝不由备注文本触发。",
+        "operationId": "post_run_note_api_v1_task_runs__run_id__notes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunNoteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunNote"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Run Note",
+        "tags": [
+          "task-runs"
         ]
       }
     },
