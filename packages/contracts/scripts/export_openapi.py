@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import sys
 from pathlib import Path
@@ -46,6 +47,20 @@ def main() -> int:
         current = BASELINE.read_text(encoding="utf-8")
         if current != rendered:
             print("CONTRACTS_OPENAPI_STALE OpenAPI 与基线不一致：接口变更须重跑 export_openapi.py 刷新基线并随代码提交评审")
+            # 差异摘要（前 40 行）：远程 CI 环境无法交互调试，漂移必须可归因——
+            # 是接口真变了、还是依赖渲染细节变了，看差异行一目了然。
+            diff = difflib.unified_diff(
+                current.splitlines(),
+                rendered.splitlines(),
+                fromfile="baseline",
+                tofile="rendered",
+                lineterm="",
+            )
+            for index, line in enumerate(diff):
+                if index >= 40:
+                    print("  ...(diff truncated)")
+                    break
+                print(f"  {line}")
             return 1
         print('CONTRACTS_OPENAPI_OK {"baseline":"openapi/v1/openapi.api.json"}')
         return 0
