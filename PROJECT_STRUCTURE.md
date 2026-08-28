@@ -54,7 +54,7 @@ flowchart LR
     WEB["apps/web\n14 个页面"] -->|"fetch / EventSource"| API["backend/api\nFastAPI"]
     API --> RUNNER["进程内 RunnerThread"]
     RUNNER --> CORE["agents/core\n状态机 + 真实/模拟节点"]
-    API --> SQLITE[("SQLite")]
+    API --> SQLITE[("PostgreSQL")]
     API --> BLOB["本地 Artifact Store"]
     CONTRACTS["packages/contracts"] --> WEB
     CONTRACTS --> API
@@ -110,12 +110,12 @@ flowchart TB
 
 | 场景 | 当前默认 | 目标部署 |
 |---|---|---|
-| 元数据与领域事件 | SQLite | PostgreSQL |
+| 元数据与领域事件 | PostgreSQL（限定；SQLite 仅测试夹具） | PostgreSQL |
 | 运行推进 | API 进程内 RunnerThread | 独立 Worker + 队列 |
 | Artifact 二进制 | 本地内容寻址目录 | S3 兼容对象存储 |
 | 实时页面通知 | 数据库事件表 + SSE | 持久事件 + 可扩展通知通道 |
 
-PostgreSQL、Redis 和 MinIO 已有本地基础设施定义，可用于兼容性验证；默认开发链仍以 SQLite 和本地文件为准。
+数据库限定 PostgreSQL：代码默认连 `tools/pg-dev.ps1` 的免安装本地实例（port 5433），Docker 底座（port 5432）经 `OMM_DATABASE_URL` 覆盖，schema 以 Alembic 为准；SQLite 仅作为测试夹具的临时隔离库保留（完整 API 测试套件在两种方言上均通过）。Redis 和 MinIO 仍仅用于兼容性验证。
 
 ## Agent 状态与页面
 

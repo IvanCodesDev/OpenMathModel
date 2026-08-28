@@ -20,10 +20,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 默认 SQLite 零依赖起步（backend/api/data/dev.db）。
-    # 切 PostgreSQL：先起本地底座（tools/dev-up.ps1，定义见 infra/docker/compose.dev.yaml），再设
-    #   OMM_DATABASE_URL=postgresql+psycopg://openmathmodel:openmathmodel-dev@127.0.0.1:5432/openmathmodel
-    database_url: str = f"sqlite:///{(SERVICE_ROOT / 'data' / 'dev.db').as_posix()}"
+    # 数据库限定 PostgreSQL（2026-08-28 起）：默认连本地免安装实例
+    # （tools/pg-dev.ps1，port 5433；Docker 底座为 5432，见 infra/docker/compose.dev.yaml）。
+    # SQLite 不再是任何默认路径：仅测试夹具显式传入临时库，或应急排查时显式覆盖本变量。
+    database_url: str = "postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel"
 
     # 内嵌模拟工作流推进器（T5 将替换为 agents/core 驱动的 worker）。
     # tick 即模拟阶段的停留时长：每 tick 完成一个阶段。1.2s 会让审批后的

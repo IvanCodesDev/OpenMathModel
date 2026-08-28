@@ -9,7 +9,7 @@
 | 了解现在实际运行什么 | [系统架构](./architecture/system-overview.md) | 明确区分当前 API 内嵌 Runner、独立 Worker 原型和目标部署架构 |
 | 了解目录与依赖 | [项目结构](../PROJECT_STRUCTURE.md) | npm/Python workspace、包布局与当前依赖方向 |
 | 启动完整本地联调 | [根 README](../README.md#快速开始) | 推荐 `npm run dev` 同时管理 API 与 Web |
-| 配置 API 环境与数据库 | [`backend/api/README.md`](../backend/api/README.md) | `OMM_*` 环境变量、SQLite/PostgreSQL 切换与测试方式 |
+| 配置 API 环境与数据库 | [`backend/api/README.md`](../backend/api/README.md) | `OMM_*` 环境变量、PostgreSQL 配置与测试方式 |
 | 对接 Web、API 与 Agent | [工作台对接规范](./development/frontend-backend-agent-integration.md) | 运行身份、快照、SSE、动作、DOM 投影和正文契约顺序 |
 | 修改现有 Web 页面 | [Web 页面基线](./development/web-ui-baseline-and-api-integration.md) | 14 条路由、稳定槽位、视觉与浏览器验收门禁 |
 | 查看下一阶段 | [产品路线图](./product/roadmap.md) | Phase 状态、退出标准和当前优先级 |
@@ -28,7 +28,7 @@
 | 右侧阶段详细正文 | 模板为主 | 数据指标、角色化方案、实验图表、论文正文与成果摘要等待五类版本化契约 |
 | 当前执行链 | 可运行的模拟闭环 | API 进程内 `RunnerThread` + `agents/core` + `SimStageNode` |
 | 独立 Worker | 原型已验证、尚未接线 | 文件队列、租约、恢复、沙箱和产物能力未进入 API 请求链 |
-| 目标数据面 | 待迁移 | 默认 SQLite + 本地 Artifact Store；目标为 PostgreSQL + 队列 + S3 兼容存储 |
+| 目标数据面 | 数据库已限定 PostgreSQL，其余待迁移 | PostgreSQL 为唯一开发与部署数据库（`pg-dev.ps1`/Docker + Alembic，SQLite 仅测试夹具）；队列与 S3 兼容存储仍为目标 |
 
 ## 事实来源优先级
 

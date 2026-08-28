@@ -1,4 +1,4 @@
-# OpenMathModel 本地 PostgreSQL（免安装二进制，用户级，无系统服务）管理脚本
+﻿# OpenMathModel 本地 PostgreSQL（免安装二进制，用户级，无系统服务）管理脚本
 #
 # 用法：
 #   .\tools\pg-dev.ps1 init     # 首次初始化数据目录并启动、建库建用户（幂等）
