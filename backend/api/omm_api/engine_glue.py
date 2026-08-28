@@ -19,11 +19,12 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,6 +43,8 @@ from omm_agent_core import (
     TaskState,
     replay_events,
 )
+from omm_agent_core.errors import AgentError
+from omm_agent_harness import BudgetGovernor, NodeBudget, RunBudget
 from omm_agent_skills import (
     DataPreparationNode,
     ExperimentExecutionNode,
@@ -70,14 +73,18 @@ from .ids import new_id
 from .llm import EngineLlmPort, config_usable, is_third_party_host, parse_llm_config
 from .models import User
 from .orm import (
+    AgentEventRow,
     ApprovalRequestRow,
     ArtifactRow,
     DomainEventRow,
     ProjectRow,
+    RunNoteRow,
+    StageOutputRow,
     StepRunRow,
     TaskRunRow,
 )
 from .serialize import utcnow
+from .stage_outputs import REQUIRED_OUTPUT_KEYS, STAGE_OUTPUT_SCHEMA_IDS
 from .usage import budget_exhausted, is_free_endpoint, record_usage
 from .workflow import NODE_COMPLETED, STAGE_LABELS
 
@@ -328,6 +335,8 @@ def _sandbox_packages() -> str:
 
 #: 六个阶段的模板齐套才启用真实链路：缺一个就整链回落模拟，
 #: 避免「前两个阶段真实、后四个阶段无声退化」的混合链误导用户。
+#: 论文阶段是分章多轮管线（doc/paper-multipass-generation-plan.md）：
+#: 总编/章节/统稿三个模板与回退用的整篇模板都必须在场。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
@@ -335,6 +344,9 @@ _REQUIRED_PROMPTS = frozenset(
         "model_planning.default",
         "experiment_code.default",
         "validating.default",
+        "paper_outline.default",
+        "paper_section.default",
+        "paper_finalize.default",
         "paper_writing.default",
     }
 )
@@ -354,20 +366,243 @@ def _prompt_registry() -> Optional[PromptRegistry]:
     return registry
 
 
+# ── 预算治理接线（§4.7 C9）：run/node 级硬停在执行面生效 ────────────────────
+#
+# 治理器每次装配引擎时重建，账本从 run.log 事件（llm_call 用量、python_run
+# 工具审计）持久重建——跨 advance、跨进程重启限额都成立。墙钟预算按执行
+# 时间的口径需要跨事件求和（审批等待不计时），本批次明确延后不启用。
+
+#: prompt_id → 预算记账的节点归属（论文分章管线的三个 prompt 同属论文节点）。
+_PROMPT_NODE_IDS = {
+    "problem_analysis.default": TaskState.PROBLEM_ANALYSIS.value,
+    "data_preparation.default": TaskState.DATA_PREPARATION.value,
+    "model_planning.default": TaskState.MODEL_PLANNING.value,
+    "experiment_code.default": TaskState.EXPERIMENTING.value,
+    "validating.default": TaskState.VALIDATING.value,
+    "paper_outline.default": TaskState.PAPER_WRITING.value,
+    "paper_section.default": TaskState.PAPER_WRITING.value,
+    "paper_finalize.default": TaskState.PAPER_WRITING.value,
+    "paper_writing.default": TaskState.PAPER_WRITING.value,
+}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _run_budget_from_env() -> RunBudget:
+    """§4.7 拍板默认值 + 环境变量覆盖（预算追加的临时通道，GB 闸门后续批次）。"""
+    defaults = RunBudget()
+    return RunBudget(
+        max_total_tokens=_env_int("OMM_RUN_MAX_TOKENS", defaults.max_total_tokens),
+        max_llm_calls=_env_int("OMM_RUN_MAX_LLM_CALLS", defaults.max_llm_calls),
+        max_sandbox_runs=_env_int("OMM_RUN_MAX_SANDBOX_RUNS", defaults.max_sandbox_runs),
+        # 墙钟按执行时间计的语义未实现：治理器按进程内时钟计会把审批等待也算进去，
+        # 宁可不启用也不误伤（禁用 = 上限无穷大）。
+        max_wall_clock_s=float("inf"),
+    )
+
+
+def _build_budget_governor(session: Session, run: TaskRunRow) -> BudgetGovernor:
+    """账本从事件重建：llm_call 事件累计次数与 tokens（按 prompt 归属节点），
+    python_run 工具审计累计沙箱次数。数据源与断点续写同为 run.log（事件即账本）。"""
+    governor = BudgetGovernor(run_budget=_run_budget_from_env())
+    node_cap = _env_int("OMM_NODE_MAX_TOKENS", NodeBudget().max_tokens)
+    for node_id in set(_PROMPT_NODE_IDS.values()):
+        governor.open_node(node_id, NodeBudget(max_tokens=node_cap))
+
+    total_tokens = 0
+    llm_calls = 0
+    sandbox_runs = 0
+    node_tokens: dict[str, int] = {}
+    rows = session.execute(
+        select(AgentEventRow.payload)
+        .where(
+            AgentEventRow.run_id == run.id,
+            AgentEventRow.type == AgentEventType.run_log.value,
+        )
+        .order_by(AgentEventRow.sequence.asc())
+    ).scalars()
+    for payload in rows:
+        data = payload or {}
+        if data.get("kind") == "llm_call":
+            llm_calls += 1
+            tokens = int(data.get("prompt_tokens") or 0) + int(data.get("completion_tokens") or 0)
+            total_tokens += tokens
+            node_id = _PROMPT_NODE_IDS.get(str(data.get("prompt_id") or ""))
+            if node_id is not None:
+                node_tokens[node_id] = node_tokens.get(node_id, 0) + tokens
+        elif data.get("tool") == PythonSandbox.TOOL_NAME:
+            sandbox_runs += 1
+    governor.seed_usage(
+        total_tokens=total_tokens,
+        llm_calls=llm_calls,
+        sandbox_runs=sandbox_runs,
+        node_tokens=node_tokens,
+    )
+    return governor
+
+
+def _budget_stop_message(error: AgentError) -> str:
+    """预算硬停 → 用户可行动的失败信息（错误码保留在文首供日志与聚合）。"""
+    context = error.context or {}
+    used = (
+        f"已用 tokens {context.get('total_tokens', '?')}、"
+        f"LLM 调用 {context.get('llm_calls', '?')} 次、"
+        f"沙箱运行 {context.get('sandbox_runs', '?')} 次"
+    )
+    return (
+        f"{error}。{used}。这是失控保护：确需继续，可提高环境变量上限"
+        "（OMM_RUN_MAX_TOKENS / OMM_RUN_MAX_LLM_CALLS / OMM_RUN_MAX_SANDBOX_RUNS / "
+        "OMM_NODE_MAX_TOKENS）后重试，或取消任务；GB 预算追加闸门在后续批次提供。"
+    )
+
+
+class _BudgetGuardedNode:
+    """把节点内抛出的预算硬停（AgentError E31x/E32x）转成干净的步骤失败信息，
+    避免引擎兜底把整段 traceback 当失败原因展示给用户。"""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        try:
+            return self._inner.run(ctx, services)
+        except AgentError as error:
+            return NodeResult.failed(_budget_stop_message(error))
+
+
+class _BudgetedInvoker:
+    """沙箱运行按次预付计费（§4.7：started run is spent money），其余委托原样。"""
+
+    def __init__(self, inner: Any, governor: BudgetGovernor) -> None:
+        self._inner = inner
+        self._governor = governor
+
+    def invoke(self, run_id: str, step_id: str, tool_name: str, arguments: dict) -> Any:
+        if tool_name == PythonSandbox.TOOL_NAME:
+            self._governor.charge_sandbox_run()
+        return self._inner.invoke(run_id, step_id, tool_name, arguments)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+def _paper_resume_reader(session: Session, run_id: str) -> Callable[[], Optional[dict]]:
+    """论文分章管线的断点数据：从 run.log 事件重建「最新骨架 + 其后已完成章节」。
+
+    检查点就是事件日志本身（paper_outline 事件带 inputs_hash 与完整骨架，
+    paper_section 事件带全文与摘要）：零新增表、零新端口，持久性与事件同级。
+    数据一致性（哈希匹配、章节前缀连续、标题对得上）由节点侧校验。
+    """
+
+    def read() -> Optional[dict]:
+        rows = session.execute(
+            select(AgentEventRow.payload)
+            .where(
+                AgentEventRow.run_id == run_id,
+                AgentEventRow.type == AgentEventType.run_log.value,
+            )
+            .order_by(AgentEventRow.sequence.asc())
+        ).scalars()
+        outline_payload: Optional[dict] = None
+        sections: dict[int, dict] = {}
+        for payload in rows:
+            data = payload or {}
+            kind = data.get("kind")
+            if kind == "paper_outline" and isinstance(data.get("outline"), dict):
+                # 新一轮骨架出现（重试且输入变化时）：旧章节随旧骨架一起作废
+                outline_payload = data
+                sections = {}
+            elif kind == "paper_section" and outline_payload is not None:
+                index = data.get("index")
+                if isinstance(index, int):
+                    sections[index] = data
+        if outline_payload is None:
+            return None
+        return {
+            "inputs_hash": outline_payload.get("inputs_hash"),
+            "outline": outline_payload.get("outline"),
+            "sections": [sections[index] for index in sorted(sections)],
+        }
+
+    return read
+
+
+# ── 装配档位（§4.9 profiles）：OMM_AGENT_NODES=sim|real|mixed ────────────────
+
+_NODES_MODE_ENV = "OMM_AGENT_NODES"
+_VALID_NODE_MODES = frozenset({"sim", "real", "mixed"})
+
+
+def _nodes_mode() -> str:
+    """节点档位开关；默认 mixed=按运行归属自动装配（现状行为）。
+
+    非法值按 mixed 处理并留警告日志：环境变量没有"启动即报错"的落点
+    （per-run 装配发生在每次 tick），拼写错误不允许把行为静默切到别的档位。
+    """
+    raw = os.environ.get(_NODES_MODE_ENV, "mixed").strip().lower() or "mixed"
+    if raw not in _VALID_NODE_MODES:
+        logger.warning(
+            "%s=%r 不是合法档位（sim|real|mixed），按 mixed 处理", _NODES_MODE_ENV, raw
+        )
+        return "mixed"
+    return raw
+
+
+class _RealModeUnavailableNode:
+    """`OMM_AGENT_NODES=real` 而真实链路不可用时的显式失败节点。
+
+    §4.9：real 档位绝不静默回落模拟——静默降级正是"半真实磨损信任"（R-C）
+    的温床。失败走既有 STEP_FAILED→RUN_FAILED 路径，UI 提供 retry。
+    """
+
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        return NodeResult.failed(
+            "OMM_AGENT_NODES=real 要求全真实节点，但本次运行无可用 LLM 链路"
+            "（未配置自定义 API、配置不可用、预算受限且无免费接口，或提示词模板不齐）。"
+            "请在设置中心配置可用的模型接口后重试，或移除该环境变量按运行归属自动装配。"
+        )
+
+
 def _llm_wiring(
     session: Session, run: TaskRunRow, checkpoint: bool = False
-) -> tuple[Optional[EngineLlmPort], dict]:
-    """按运行归属解析自定义 API 配置：可用则换上真实 LLM 节点。"""
+) -> tuple[Optional[EngineLlmPort], dict, dict[str, Any]]:
+    """档位开关包装：sim 强制整链模拟；real 禁止静默回落；mixed=自动装配。"""
+    mode = _nodes_mode()
+    if mode == "sim":
+        # 强制模拟：SimStageNode 的产出自带"（模拟）"标注（原则 10），
+        # 与 mixed 档位"配置不可用回落"走完全相同的展示路径。
+        return None, {}, {}
+    port, overrides, extras = _llm_wiring_impl(session, run, checkpoint=checkpoint)
+    if mode == "real" and port is None:
+        failure = _RealModeUnavailableNode()
+        return None, {state: failure for state in SIM_NODES}, {}
+    return port, overrides, extras
+
+
+def _llm_wiring_impl(
+    session: Session, run: TaskRunRow, checkpoint: bool = False
+) -> tuple[Optional[EngineLlmPort], dict, dict[str, Any]]:
+    """按运行归属解析自定义 API 配置：可用则换上真实 LLM 节点。
+
+    第三个返回值是 NodeServices.extras：节点内进度事件的落库回调（progress，
+    run.log 旁路观测通道）与论文断点续写的读取器（paper_resume）。
+    """
     owner = session.execute(
         select(ProjectRow.owner).where(ProjectRow.id == run.project_id)
     ).scalar_one_or_none()
     user = session.get(User, owner) if owner else None
     if user is None:
-        return None, {}
+        return None, {}, {}
     config = parse_llm_config(user.llm_config)
     registry = _prompt_registry()
     if not config_usable(config) or registry is None:
-        return None, {}
+        return None, {}, {}
     # 预算硬限制（设置中心「用量监控」）：达标后只留本地/免费接口；
     # 一个不剩则整条链回落模拟节点，并在 run.log 留痕说明原因。
     if budget_exhausted(session, user):
@@ -383,7 +618,7 @@ def _llm_wiring(
                     "本次任务改用模拟节点推进；可在设置中心「用量监控」调整预算或关闭硬限制",
                 },
             )
-            return None, {}
+            return None, {}, {}
         config = replace(config, endpoints=free)
     # 模型调用的过程事件（调用开始/思考内容/调用摘要）进 run.log，SSE 转发给
     # 工作台的执行轨迹逐条展示。推进线程（checkpoint 模式）下每条过程事件在
@@ -396,6 +631,18 @@ def _llm_wiring(
         if checkpoint:
             session.commit()
 
+    # 预算治理（C9 接线）：账本从事件重建，run/node 级硬停在真实链路生效
+    governor = _build_budget_governor(session, run)
+    # 运行中用户备注（§11.3 方案 A）：端口按 tick 重建，构造时快照本表——
+    # 新备注在下一次节点执行自然生效，正在执行中的节点不被打断。
+    user_notes = tuple(
+        (row.scope, row.text)
+        for row in session.execute(
+            select(RunNoteRow)
+            .where(RunNoteRow.run_id == run.id)
+            .order_by(RunNoteRow.created_at.asc(), RunNoteRow.id.asc())
+        ).scalars()
+    )
     port = EngineLlmPort(
         config,
         registry,
@@ -408,18 +655,32 @@ def _llm_wiring(
             third_party=is_third_party_host(outcome.endpoint.host),
             run_id=run.id,
         ),
+        budget=governor,
+        node_for_prompt=_PROMPT_NODE_IDS,
+        user_notes=user_notes,
     )
     overrides = {
-        TaskState.PROBLEM_ANALYSIS: _GoalProblemAnalysisNode(registry),
-        TaskState.DATA_PREPARATION: _ParamsDataPreparationNode(registry),
-        TaskState.MODEL_PLANNING: ModelPlanningNode(registry),
-        TaskState.EXPERIMENTING: ExperimentExecutionNode(
-            registry, available_packages=_sandbox_packages()
-        ),
-        TaskState.VALIDATING: ValidationNode(registry),
-        TaskState.PAPER_WRITING: PaperWritingNode(registry),
+        state: _BudgetGuardedNode(node)
+        for state, node in {
+            TaskState.PROBLEM_ANALYSIS: _GoalProblemAnalysisNode(registry),
+            TaskState.DATA_PREPARATION: _ParamsDataPreparationNode(registry),
+            TaskState.MODEL_PLANNING: ModelPlanningNode(registry),
+            TaskState.EXPERIMENTING: ExperimentExecutionNode(
+                registry, available_packages=_sandbox_packages()
+            ),
+            TaskState.VALIDATING: ValidationNode(registry),
+            TaskState.PAPER_WRITING: PaperWritingNode(registry),
+        }.items()
     }
-    return port, overrides
+    extras: dict[str, Any] = {
+        # 节点内进度事件（论文分章管线逐章上报）与模型过程事件同路落 run.log
+        "progress": _process_event,
+        # 论文断点续写：重试时从事件日志重建已完成章节，跳过总编与已写章节
+        "paper_resume": _paper_resume_reader(session, run.id),
+        # 沙箱计费与运行报告共用同一治理器（open_engine 里包装工具端口）
+        "budget_governor": governor,
+    }
+    return port, overrides, extras
 
 
 # ── 领域事件 → v1 投影 ─────────────────────────────────────────────────────
@@ -517,6 +778,50 @@ def _input_hash(run: TaskRunRow, node: str, attempt: int) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _record_stage_output(
+    session: Session,
+    run: TaskRunRow,
+    step: StepRunRow,
+    outputs: dict[str, Any],
+    at: datetime,
+) -> None:
+    """STEP_SUCCEEDED → stage_outputs 版本化落行（设计 §10.2，H1）。
+
+    只落有契约实质内容的输出（与读侧空投影同一门槛，模拟节点的 {"label"}
+    不落行）；同节点旧 current 置 superseded，version 跨重试单调递增——
+    「重做产生 v2 且 v1 superseded」由此成为持久事实。
+    """
+    required_key = REQUIRED_OUTPUT_KEYS.get(step.node)
+    if required_key is None or required_key not in outputs:
+        return
+    latest_version = 0
+    for row in session.execute(
+        select(StageOutputRow).where(
+            StageOutputRow.run_id == run.id,
+            StageOutputRow.node == step.node,
+        )
+    ).scalars():
+        latest_version = max(latest_version, int(row.version))
+        if row.status == "current":
+            row.status = "superseded"
+    canonical = json.dumps(outputs, ensure_ascii=False, sort_keys=True)
+    session.add(
+        StageOutputRow(
+            id=new_id("sout"),
+            run_id=run.id,
+            node=step.node,
+            lane_id=None,
+            version=latest_version + 1,
+            schema_id=STAGE_OUTPUT_SCHEMA_IDS[step.node],
+            content=outputs,
+            content_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            producer_step_id=step.id,
+            status="current",
+            created_at=at,
+        )
+    )
+
+
 def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
     """把一条领域事件翻译成 v1 行与 v1 事件（agent_events 自己维护 sequence）。"""
     kind = event.event_type
@@ -573,6 +878,7 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             step.status = StepRunStatus.SUCCEEDED.value
             step.ended_at = at
             outputs = dict(payload.get("outputs") or {})
+            _record_stage_output(session, run, step, outputs, at)
             append_event(
                 session,
                 run.id,
@@ -797,12 +1103,13 @@ def _load_core_events(session: Session, run_id: str) -> list[CoreEvent]:
 def _build_engine(
     session: Session, run: TaskRunRow, checkpoint: bool = False
 ) -> tuple[TaskRunEngine, NodeServices]:
-    llm_port, node_overrides = _llm_wiring(session, run, checkpoint=checkpoint)
+    llm_port, node_overrides, extras = _llm_wiring(session, run, checkpoint=checkpoint)
     services = NodeServices(
         clock=_ApiClock(),
         ids=_ApiIds(),
         artifacts=ApiArtifactStore(get_blobstore()),
         llm=llm_port,
+        extras=extras,
     )
     engine = TaskRunEngine(
         sink=_ProjectingSink(session, run, checkpoint=checkpoint),
@@ -852,7 +1159,10 @@ def open_engine(
     snapshot = replay_events(run.id, run.project_id, events)
     if services.llm is not None:
         # 工具事件要挂在当前快照的事件序列上，因此在快照重放之后绑定。
-        services.tools = _build_tool_invoker(engine, snapshot, run)
+        invoker = _build_tool_invoker(engine, snapshot, run)
+        governor = services.extras.get("budget_governor")
+        # 沙箱运行按次预付计费：越线的那次运行根本不会启动（§4.7）
+        services.tools = _BudgetedInvoker(invoker, governor) if governor else invoker
     return engine, snapshot
 
 
@@ -887,6 +1197,11 @@ def advance_run(session: Session, run: TaskRunRow) -> None:
     if run.status in idle:
         return
     engine, snapshot = open_engine(session, run, checkpoint=True)
+    # 进程中途死亡（开发期热重载、崩溃）会留下悬挂 RUNNING 的步骤：先按引擎的
+    # 修复语义把它们落定为 STEP_FAILED（"executor lost"），事件日志与 step_runs
+    # 才是闭合的；随后的 advance 以 attempt+1 重跑该阶段。进程内互斥由唯一的
+    # 推进线程保证（本函数是 checkpoint 模式的唯一入口）。
+    engine.heal_interrupted(snapshot)
     engine.advance(snapshot)
 
 

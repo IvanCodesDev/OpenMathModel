@@ -8,29 +8,34 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from omm_contracts import (
+    AgentEventType,
     CreateTaskRunInput,
+    StepRunStatus,
     TaskRun,
     TaskRunActionInput,
     TaskRunStatus,
+    TERMINAL_TASK_RUN_STATUSES,
 )
 
 from ..actions import execute_action
-from ..api_models import ApprovalList, StepRunList, TaskRunList
+from ..api_models import ApprovalList, RunNote, RunNoteInput, StepRunList, TaskRunList
 from ..config import DEFAULT_MAX_CONCURRENT_RUNS
 from ..db import get_session
 from ..deps import AuthContext, get_auth_context
 from ..engine_glue import create_run_events
 from ..errors import ApiError, NotFoundError
+from ..events import append_event
 from ..idempotency import with_idempotency
 from ..ids import new_id
-from ..orm import ApprovalRequestRow, ProjectRow, StepRunRow, TaskRunRow
+from ..orm import ApprovalRequestRow, ProjectRow, RunNoteRow, StepRunRow, TaskRunRow
 from ..serialize import (
     approval_to_contract,
+    iso_z,
     step_run_to_contract,
     task_run_to_contract,
     utcnow,
 )
-from ..workflow import NODE_CREATED
+from ..workflow import NODE_CREATED, STAGE_LABELS
 
 router = APIRouter(prefix="/v1/task-runs", tags=["task-runs"])
 
@@ -196,6 +201,75 @@ def list_task_run_approvals(
         .order_by(ApprovalRequestRow.requested_at.asc())
     ).scalars()
     return ApprovalList(items=[approval_to_contract(r) for r in rows])
+
+
+_TERMINAL_STATUSES = frozenset(status.value for status in TERMINAL_TASK_RUN_STATUSES)
+
+
+@router.post("/{run_id}/notes", response_model=RunNote, status_code=201)
+def post_run_note(
+    run_id: str,
+    payload: RunNoteInput,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> RunNote:
+    """运行中追加补充要求（§11.3 方案 A）：落行 + run.log 回执，不打断当前执行。
+
+    备注在下一次节点执行时注入提示词（EngineLlmPort 构建时读取本表）；scope
+    指向已完成阶段时回执附带回退引导——重做由人显式操作，绝不由备注文本触发。
+    """
+    run = get_owned_run(session, ctx, run_id)
+    if run.status in _TERMINAL_STATUSES:
+        raise ApiError(409, "RUN_FINISHED", "运行已结束，无法追加补充要求；请在新任务中提出")
+    text = payload.text.strip()
+    if not text:
+        raise ApiError(422, "EMPTY_TEXT", "补充要求不能为空")
+
+    note = RunNoteRow(
+        id=new_id("note"),
+        run_id=run.id,
+        text=text,
+        scope=payload.scope,
+        created_at=utcnow(),
+    )
+    session.add(note)
+
+    if payload.scope == "global":
+        message = "已记录补充要求，将在后续每次节点执行时提供给智能体"
+    else:
+        label = STAGE_LABELS.get(payload.scope, payload.scope)
+        message = f"已记录补充要求，将在「{label}」阶段的节点执行时提供给智能体"
+        stage_done = session.execute(
+            select(StepRunRow).where(
+                StepRunRow.run_id == run.id,
+                StepRunRow.node == payload.scope,
+                StepRunRow.status == StepRunStatus.SUCCEEDED.value,
+            )
+        ).scalars().first()
+        if stage_done is not None:
+            message += (
+                "；该阶段已完成，备注不会自动触发重做——"
+                "如需按新要求重做，请在时间线对相应阶段发起重试或回退"
+            )
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_log.value,
+        {
+            "kind": "user_note",
+            "note_id": note.id,
+            "scope": payload.scope,
+            "text": text[:500],
+            "message": message,
+        },
+    )
+    return RunNote(
+        id=note.id,
+        run_id=run.id,
+        text=text,
+        scope=payload.scope,
+        created_at=iso_z(note.created_at),
+    )
 
 
 @router.post("/{run_id}/actions", response_model=TaskRun)

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 from conftest import (
@@ -30,6 +31,7 @@ ANALYSIS_OUTPUT = {
     "constraints": ["车辆容量有限"],
     "data_requirements": ["历史订单数据"],
     "key_assumptions": ["需求平稳"],
+    "subquestions": [{"id": "q1", "text": "给出调度方案", "depends_on": []}],
     "plan_outline": [
         {"stage": "PROBLEM_ANALYSIS", "text": "解析单车调度的子问题与容量约束"},
         {"stage": "DATA_PREPARATION", "text": "构造历史订单数据并画像高峰需求"},
@@ -111,6 +113,57 @@ PAPER_OUTPUT = {
     ],
 }
 
+# 论文阶段是分章多轮管线（总编规划 → 逐章写作 → 统稿收口）；标题与关键词
+# 与 PAPER_OUTPUT 保持一致，stage-outputs 等下游断言不因此漂移。
+PAPER_OUTLINE_OUTPUT = {
+    "title": PAPER_OUTPUT["title"],
+    "keywords": PAPER_OUTPUT["keywords"],
+    "notation": "| 符号 | 含义 | 单位 |\n| --- | --- | --- |\n| $x_{ij}$ | 时段调度量 | 辆 |",
+    "chapters": [
+        {
+            "heading": "1 问题重述",
+            "brief": "背景与逐条任务要求",
+            "target_chars": 600,
+            "source_keys": ["problem_analysis"],
+        },
+        {
+            "heading": "2 模型建立与求解",
+            "brief": "整数规划建模与求解，引用 rmse=0.5",
+            "target_chars": 1200,
+            "source_keys": ["chosen_plan", "experiment_summary"],
+        },
+        {
+            "heading": "3 模型检验",
+            "brief": "检验结论与保留意见如实呈现",
+            "target_chars": 700,
+            "source_keys": ["validation_summary"],
+        },
+    ],
+}
+
+SECTION_LEAD = "围绕 rmse=0.5 与需求率敏感性的分析正文。"
+
+PAPER_SECTION_OUTPUT = {
+    "content": SECTION_LEAD,
+    "digest": "本章围绕 rmse=0.5 完成分析",
+}
+
+
+def _section_reply(prompt: str) -> dict:
+    """章节回复按提示词里的目标字数填充：达标稿不触发字数有界重写，调用数确定。"""
+    matched = re.search(r"目标字数 (\d+) 字", prompt)
+    target = int(matched.group(1)) if matched else 600
+    return {
+        "content": SECTION_LEAD + "析" * max(target - len(SECTION_LEAD), 0),
+        "digest": PAPER_SECTION_OUTPUT["digest"],
+    }
+
+PAPER_FINALIZE_OUTPUT = {
+    "abstract": PAPER_OUTPUT["abstract"],
+    "keywords": PAPER_OUTPUT["keywords"],
+    "progress_note": "论文已按三章完成，可在论文页查看与导出。",
+}
+
 
 def _llm_reply(payload: dict) -> httpx.Response:
     return httpx.Response(
@@ -146,7 +199,18 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
     if "评审专家" in prompt:
         assert '"rmse": 0.5' in prompt, "检验节点应携带实验指标"
         return _llm_reply(VALIDATION_OUTPUT)
+    # 论文分章多轮管线的三个角色锚点（总编 → 章节写手 → 统稿人）
+    if "论文的总编" in prompt:
+        assert VALIDATION_OUTPUT["validation_summary"] in prompt, "总编规划应携带检验结论"
+        return _llm_reply(PAPER_OUTLINE_OUTPUT)
+    if "章节写手" in prompt:
+        assert PAPER_OUTLINE_OUTPUT["notation"] in prompt, "章节写作应携带全文符号约定"
+        return _llm_reply(_section_reply(prompt))
+    if "统稿人" in prompt:
+        assert "本章围绕 rmse=0.5 完成分析" in prompt, "统稿应携带各章摘要"
+        return _llm_reply(PAPER_FINALIZE_OUTPUT)
     if "论文写手" in prompt:
+        # 回退路径（总编失败时整篇单次生成）；happy path 不应走到这里
         assert VALIDATION_OUTPUT["validation_summary"] in prompt, "论文节点应携带检验结论"
         return _llm_reply(PAPER_OUTPUT)
     raise AssertionError(f"unexpected prompt: {prompt[:120]}")
@@ -214,7 +278,17 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch):
     assert paper_download.status_code == 200
     paper_text = paper_download.content.decode("utf-8")
     assert "# 基于整数规划的共享单车调度优化" in paper_text
-    assert "## 模型检验" in paper_text
+    assert "## 3 模型检验" in paper_text, "章节骨架来自总编规划（分章多轮管线）"
+
+    # 分章直播的进度事件（骨架 + 每章一条）应落入 run.log
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    outline_events = [entry for entry in logs if entry.get("kind") == "paper_outline"]
+    assert outline_events and outline_events[0]["total"] == 3
+    section_events = [entry for entry in logs if entry.get("kind") == "paper_section"]
+    assert [entry["index"] for entry in section_events] == [1, 2, 3]
+    assert section_events[0]["heading"] == "1 问题重述"
+    assert "rmse=0.5" in section_events[0]["content"]
 
     # 工具调用留痕：python_run 的 TOOL_CALLED 事件投影到 run.log
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
@@ -301,6 +375,79 @@ def test_llm_process_events_land_in_run_log(client, monkeypatch):
     assert calls[0]["model"] == "gpt-test"
     assert calls[0]["endpoint"] == "测试网关"
     assert calls[0]["prompt_tokens"] == 10
+    # D2.2 审计：llm.chat 类调用必须带最终 prompt 指纹（64 位 sha256 hex）
+    assert re.fullmatch(r"[0-9a-f]{64}", calls[0]["prompt_hash"])
+
+
+def _sse_from_reply(reply: httpx.Response) -> httpx.Response:
+    """把非流式 stub 响应转成 OpenAI 形状的 SSE 流（思考帧 + 两段正文帧）。"""
+    message = reply.json()["choices"][0]["message"]
+    content = message.get("content") or ""
+    half = max(1, len(content) // 2)
+    frames: list[dict] = []
+    if message.get("reasoning_content"):
+        frames.append({"choices": [{"delta": {"reasoning_content": message["reasoning_content"]}}]})
+    for piece in (content[:half], content[half:]):
+        if piece:
+            frames.append({"choices": [{"delta": {"content": piece}}]})
+    frames.append({
+        "choices": [{"delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+    })
+    body = "".join(f"data: {json.dumps(f, ensure_ascii=False)}\n\n" for f in frames) + "data: [DONE]\n\n"
+    return httpx.Response(
+        200,
+        headers={"Content-Type": "text/event-stream"},
+        content=body.encode("utf-8"),
+    )
+
+
+def test_streaming_llm_emits_delta_events(client, monkeypatch):
+    """真流式网关：思考与正文增量应作为 llm_delta 过程事件进入 run.log
+    （工作台「实时查看生成内容」的数据源），且开始/思考/摘要事件次序不变。"""
+    _configure_llm(client, monkeypatch, handler=lambda request: _sse_from_reply(_stage_router(request)))
+    run = create_run(client, create_project(client)["id"], goal="优化共享单车调度")
+    wait_until(client, run["id"], pending_approval(client, run["id"]))
+
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+
+    deltas = [entry for entry in logs if entry.get("kind") == "llm_delta"]
+    assert deltas, "流式调用应产生 llm_delta 过程事件"
+    analysis_deltas = [d for d in deltas if d["prompt_id"] == "problem_analysis.default"]
+    assert {d["channel"] for d in analysis_deltas} == {"reasoning", "text"}
+    joined = "".join(d["text"] for d in analysis_deltas if d["channel"] == "text")
+    assert '"title"' in joined, "正文增量拼接后应是模型原始输出"
+
+    started = next(entry for entry in logs if entry.get("kind") == "llm_call_started")
+    thinking = next(entry for entry in logs if entry.get("kind") == "thinking")
+    assert logs.index(started) < logs.index(analysis_deltas[0]) < logs.index(thinking), (
+        "增量事件应在调用开始之后、思考摘要之前"
+    )
+    calls = [entry for entry in logs if entry.get("kind") == "llm_call"]
+    assert calls and calls[0]["prompt_tokens"] == 10, "流式调用摘要应携带用量"
+
+
+def test_failed_llm_call_emits_terminal_event(client, monkeypatch):
+    """调用失败必须给事件流一个收尾（llm_call_failed）：没有它，工作台的
+    走秒思考行会永远悬挂，页面重进时堆出一排僵尸行。"""
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: httpx.Response(500, json={"error": {"message": "boom"}}),
+    )
+    run = create_run(client, create_project(client)["id"])
+    wait_until(client, run["id"], run_status_is(client, run["id"], "FAILED"))
+
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    started = [entry for entry in logs if entry.get("kind") == "llm_call_started"]
+    failed = [entry for entry in logs if entry.get("kind") == "llm_call_failed"]
+    settled = [entry for entry in logs if entry.get("kind") == "llm_call"]
+    assert failed, "失败的调用应留下 llm_call_failed 事件"
+    assert failed[0]["prompt_id"] == "problem_analysis.default"
+    assert "boom" in failed[0]["error"]
+    assert len(started) == len(failed) + len(settled), "每个开始事件都要有终结事件配对"
 
 
 def test_analysis_title_renames_auto_named_project(client, monkeypatch):
@@ -408,6 +555,7 @@ def test_insufficient_input_stops_at_first_stage_with_guidance(client, monkeypat
                     "constraints": [],
                     "data_requirements": [],
                     "key_assumptions": [],
+                    "subquestions": [],
                     "plan_outline": [],
                 }
             )
@@ -428,6 +576,54 @@ def test_insufficient_input_stops_at_first_stage_with_guidance(client, monkeypat
     # 项目名不被「赛题信息缺失」这类占位标题改写（失败路径不触发自动改名）
     project = client.get(f"/api/v1/projects/{run['project_id']}").json()
     assert project["name"] != "赛题信息缺失"
+
+
+def test_paper_stage_retry_resumes_from_completed_chapters(client, monkeypatch):
+    """论文断点续写：第 3 章首轮尝试失败 → 运行失败；重试后总编不重跑、
+    前两章直接复用事件检查点，只补写失败的章节并完整收尾。"""
+    section_prompts: list[str] = []
+    recovered: list[bool] = []
+
+    def router(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.content)["messages"][-1]["content"]
+        if "章节写手" in prompt:
+            section_prompts.append(prompt)
+            if "「3 模型检验」" in prompt and not recovered:
+                return _llm_reply({"digest": "缺 content 字段"})  # 校验失败 → 修复后仍失败
+            return _llm_reply(_section_reply(prompt))
+        return _stage_router(request)
+
+    _configure_llm(client, monkeypatch, handler=router)
+    run = create_run(client, create_project(client)["id"])
+
+    approve_when_asked(client, run["id"], option_id="approve")
+    failed = wait_until(client, run["id"], run_status_is(client, run["id"], "FAILED"))
+    assert "第 3/3 章" in failed["failure"]["message"], "失败必须可归因到章节号"
+
+    recovered.append(True)
+    retried = client.post(f"/api/v1/task-runs/{run['id']}/actions", json={"action": "retry"})
+    assert retried.status_code == 200, retried.text
+    final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
+    assert final["status"] == "COMPLETED"
+
+    # 章节调用分布：首轮 第1章 + 第2章 + 第3章×2（含修复）；重试轮只补第 3 章
+    def chapter_calls(heading: str) -> int:
+        return sum(1 for prompt in section_prompts if f"「{heading}」" in prompt)
+
+    assert chapter_calls("1 问题重述") == 1, "已完成章节不得重写"
+    assert chapter_calls("2 模型建立与求解") == 1, "已完成章节不得重写"
+    assert chapter_calls("3 模型检验") == 3
+
+    # 重试轮跳过总编：整个运行只规划过一次骨架
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    outline_events = [entry for entry in logs if entry.get("kind") == "paper_outline"]
+    assert len(outline_events) == 1
+
+    # 续写轮的执行事实进入 step 指标
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    paper_steps = [step for step in steps if step["node"] == "PAPER_WRITING"]
+    assert [step["status"] for step in paper_steps] == ["FAILED", "SUCCEEDED"]
 
 
 def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatch):

@@ -15,6 +15,7 @@ from omm_contracts import (
     DocumentDraft,
     ExperimentSummary,
     PlanProposal,
+    ProblemFrame,
     Project,
     StepRun,
     TaskRun,
@@ -56,16 +57,44 @@ class ArtifactList(BaseModel):
     total: int
 
 
-class StageOutputs(BaseModel):
-    """五类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。
+#: run_notes 的合法 scope：global=后续全部阶段；某阶段值=只作用于该阶段的调用。
+RunNoteScope = Literal[
+    "global",
+    "PROBLEM_ANALYSIS",
+    "DATA_PREPARATION",
+    "MODEL_PLANNING",
+    "EXPERIMENTING",
+    "VALIDATING",
+    "PAPER_WRITING",
+]
 
-    每个字段是对应阶段（DATA_PREPARATION/MODEL_PLANNING/EXPERIMENTING+VALIDATING/
-    PAPER_WRITING）真实节点的最新成功输出投影；阶段尚未成功完成时对应字段为
-    null（不是 404——运行本身存在，只是该阶段的正文还没有）。delivery_manifest
-    在运行尚无任何可交付内容（无产物且五个阶段均未产出）时也为 null。
+
+class RunNoteInput(BaseModel):
+    """运行中补充要求（§11.3 方案 A）：POST /v1/task-runs/{run_id}/notes。"""
+
+    text: str = Field(min_length=1, max_length=2000)
+    scope: RunNoteScope = "global"
+
+
+class RunNote(BaseModel):
+    id: str
+    run_id: str
+    text: str
+    scope: str
+    created_at: str
+
+
+class StageOutputs(BaseModel):
+    """六类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。
+
+    每个字段是对应阶段（PROBLEM_ANALYSIS/DATA_PREPARATION/MODEL_PLANNING/
+    EXPERIMENTING+VALIDATING/PAPER_WRITING）真实节点的最新成功输出投影；阶段
+    尚未成功完成时对应字段为 null（不是 404——运行本身存在，只是该阶段的正文
+    还没有）。delivery_manifest 在运行尚无任何可交付内容时也为 null。
     """
 
     run_id: str
+    problem_frame: Optional[ProblemFrame] = None
     dataset_profile: Optional[DatasetProfile] = None
     plan_proposal: Optional[PlanProposal] = None
     experiment_summary: Optional[ExperimentSummary] = None

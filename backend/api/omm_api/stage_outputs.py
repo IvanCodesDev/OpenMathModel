@@ -20,11 +20,18 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from omm_contracts import DatasetProfile, DeliveryManifest, DocumentDraft, ExperimentSummary, PlanProposal
+from omm_contracts import (
+    DatasetProfile,
+    DeliveryManifest,
+    DocumentDraft,
+    ExperimentSummary,
+    PlanProposal,
+    ProblemFrame,
+)
 
 from .api_models import StageOutputs
 from .blobstore import ArtifactBlobStore, has_readable_local_content
-from .orm import ArtifactRow, DomainEventRow, TaskRunRow
+from .orm import ArtifactRow, DomainEventRow, StageOutputRow, TaskRunRow
 from .serialize import as_utc, iso_z
 
 _PROBLEM_ANALYSIS = "PROBLEM_ANALYSIS"
@@ -36,6 +43,23 @@ _PAPER_WRITING = "PAPER_WRITING"
 
 #: 契约 verdict 枚举（experiment-summary / delivery-manifest 共用 $defs）。
 _VERDICTS = frozenset({"pass", "concerns", "fail"})
+
+#: 各节点「有契约实质内容」的判定键（读侧空投影与写侧落行共用同一门槛，
+#: 见各节点 prompt output_schema 的必填键）：模拟节点只有 {"label"} 不落行。
+REQUIRED_OUTPUT_KEYS: dict[str, str] = {
+    _PROBLEM_ANALYSIS: "title",
+    _DATA_PREPARATION: "profile_summary",
+    _MODEL_PLANNING: "plans",
+    _EXPERIMENTING: "approach_summary",
+    _VALIDATING: "verdict",
+    _PAPER_WRITING: "title",
+}
+
+#: stage_outputs 表的 schema_id：标注 content 是「该节点 outputs 原文」的形状
+#: 版本；六类页面正文契约（dataset-profile.v1 等）由读侧投影组装，不在此处。
+STAGE_OUTPUT_SCHEMA_IDS: dict[str, str] = {
+    node: f"{node.lower().replace('_', '-')}.outputs.v1" for node in REQUIRED_OUTPUT_KEYS
+}
 
 
 class StageState:
@@ -88,10 +112,67 @@ def replay_stage_outputs(
     return stages, step_nodes
 
 
+def overlay_stage_output_rows(
+    session: Session, run_id: str, stages: dict[str, StageState]
+) -> None:
+    """stage_outputs 表的 current 行覆盖事件重放结果（表是版本化的持久事实）。
+
+    旧运行没有行（表晚于运行上线）→ 重放结果原样保留；新运行两者一致，
+    表行额外带上跨重试的版本号（count=version，superseded 历史可审计）。
+    """
+    rows = session.execute(
+        select(StageOutputRow).where(
+            StageOutputRow.run_id == run_id,
+            StageOutputRow.status == "current",
+        )
+    ).scalars()
+    for row in rows:
+        state = stages.setdefault(row.node, StageState())
+        state.outputs = dict(row.content or {})
+        state.at = as_utc(row.created_at)
+        state.count = max(state.count, int(row.version))
+
+
 def _strs(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(v) for v in values]
+
+
+def _problem_frame(run_id: str, state: Optional[StageState]) -> Optional[ProblemFrame]:
+    """读题正文投影（problem-frame.v1，H1）。
+
+    门槛=objectives 在场（prompt v5 起 required；只有 title 的远古输出投影为
+    null）。subquestions 是 v6 新增字段——旧运行未产出时如实给空列表（契约
+    required 但允许空，消费方以空列表理解「未分解」）。
+    """
+    if state is None:
+        return None
+    outputs = state.outputs
+    if "title" not in outputs or "objectives" not in outputs:
+        return None
+    subquestions = []
+    for entry in outputs.get("subquestions") or []:
+        if not isinstance(entry, dict):
+            continue
+        subquestions.append(
+            {
+                "id": str(entry.get("id") or ""),
+                "text": str(entry.get("text") or ""),
+                "depends_on": _strs(entry.get("depends_on")),
+            }
+        )
+    return ProblemFrame(
+        run_id=run_id,
+        title=str(outputs.get("title") or ""),
+        problem_type=str(outputs.get("problem_type") or ""),
+        objectives=_strs(outputs.get("objectives")),
+        constraints=_strs(outputs.get("constraints")),
+        data_requirements=_strs(outputs.get("data_requirements")),
+        key_assumptions=_strs(outputs.get("key_assumptions")),
+        subquestions=subquestions,
+        updated_at=iso_z(state.at),
+    )
 
 
 def _dataset_profile(run_id: str, state: Optional[StageState]) -> Optional[DatasetProfile]:
@@ -326,6 +407,7 @@ def build_stage_outputs(
     session: Session, run: TaskRunRow, blobs: ArtifactBlobStore
 ) -> StageOutputs:
     stages, step_nodes = replay_stage_outputs(session, run.id)
+    overlay_stage_output_rows(session, run.id, stages)
     artifact_rows = list(
         session.execute(
             select(ArtifactRow)
@@ -336,6 +418,7 @@ def build_stage_outputs(
 
     return StageOutputs(
         run_id=run.id,
+        problem_frame=_problem_frame(run.id, stages.get(_PROBLEM_ANALYSIS)),
         dataset_profile=_dataset_profile(run.id, stages.get(_DATA_PREPARATION)),
         plan_proposal=_plan_proposal(run.id, stages.get(_MODEL_PLANNING)),
         experiment_summary=_experiment_summary(

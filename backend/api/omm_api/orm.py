@@ -125,6 +125,59 @@ class ArtifactRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class StageOutputRow(Base):
+    """阶段输出的版本化落库（设计文档 §10.2 / D1.6，H1 批次）。
+
+    STEP_SUCCEEDED 投影时按节点写入：新版本置 current、旧版本置 superseded，
+    重试/退回重做的历史版本因此可审计、可回溯。content 是节点 outputs 原文
+    （六类页面正文契约由读侧投影组装，schema_id 标注 outputs 形状的版本）；
+    模拟节点没有契约实质字段，不落行（与读侧投影的空判定同一门槛）。
+    lane_id 为 Graph v2 的子问题并行预留，线性图恒为空。
+    """
+
+    __tablename__ = "stage_outputs"
+    __table_args__ = (
+        UniqueConstraint("run_id", "node", "version", name="uq_stage_outputs_run_node_version"),
+        Index("ix_stage_outputs_run_node_status", "run_id", "node", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("task_runs.id"), nullable=False, index=True
+    )
+    node: Mapped[str] = mapped_column(String(50), nullable=False)
+    lane_id: Mapped[Optional[str]] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    producer_step_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("step_runs.id")
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RunNoteRow(Base):
+    """运行中用户备注（设计 §11.3 方案 A，H1 批次）。
+
+    append-only：备注一经记录不改不删，在**下一次节点执行**时注入提示词
+    （scope=global 注入全部后续调用，scope=某阶段只注入该阶段的调用）。
+    时间线回执经 run.log 事件下发，本表是注入的数据源而非展示源。
+    """
+
+    __tablename__ = "run_notes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("task_runs.id"), nullable=False, index=True
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    #: "global" 或六个工作阶段之一（TaskState 值）。
+    scope: Mapped[str] = mapped_column(String(50), nullable=False, default="global")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ArtifactTextRow(Base):
     """附件正文抽取结果缓存。
 

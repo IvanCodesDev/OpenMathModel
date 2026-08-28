@@ -16,11 +16,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlsplit
@@ -90,7 +91,9 @@ _WEBSITE_TO_API = {
 }
 
 #: Anthropic 要求显式 max_tokens；其余协议不传则由服务端决定。
-ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
+# Anthropic 协议必须显式 max_tokens。8192 是 Claude 3.5+ 全系支持的输出上限：
+# 论文撰写等长产出节点（4500-6000 字 JSON）在 4096 下会被拦腰截断导致解析失败。
+ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 
 CONNECT_TIMEOUT_S = 10.0
 CHAT_READ_TIMEOUT_S = 120.0
@@ -750,6 +753,10 @@ def parse_stream_data(protocol: str, payload: str) -> tuple[str, str, bool, dict
             if delta_obj.get("type") == "thinking_delta":
                 return "", str(delta_obj.get("thinking") or ""), False, {}
             return str(delta_obj.get("text") or ""), "", False, {}
+        if kind == "message_start":
+            # 输入 tokens 只出现在 message_start：不读它流式调用会丢 prompt 用量
+            message = data.get("message") or {}
+            return "", "", False, _normalize_usage(protocol, message.get("usage"))
         if kind == "message_delta":
             return "", "", False, _normalize_usage(protocol, data.get("usage"))
         return "", "", kind == "message_stop", {}
@@ -932,6 +939,121 @@ def complete_with_fallback(
                 logger.warning("llm fallback: %s -> %s (%s)", endpoint.name, chain[index + 1].name, error)
                 continue
             raise
+    raise last_error if last_error else AssertionError("unreachable")
+
+
+def stream_complete_with_fallback(
+    config: LlmConfig,
+    messages: list[dict[str, str]],
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    chain: Optional[list[LlmEndpoint]] = None,
+    on_delta: Optional[Callable[[str, str], None]] = None,
+) -> ChatOutcome:
+    """流式补全并聚合成 ChatOutcome（任务引擎的 LLM 节点用）。
+
+    与 complete_with_fallback 同一回退语义（仅在还没吐出任何增量之前切换备用），
+    额外通过 on_delta(channel, text) 逐块回调增量：channel 为 "reasoning"（思考）
+    或 "text"（正文）。流式的读超时按块计而不是按整个响应计——长产出（论文、
+    实验代码）不会再因为总时长超过读超时而被误判为超时。
+    """
+    chain = list(chain) if chain is not None else config.chain()
+    if not chain:
+        raise ApiError(400, "LLM_NOT_CONFIGURED", "尚未配置模型接口，请在设置中心「自定义 API」中保存")
+    last_error: Exception | None = None
+    for index, endpoint in enumerate(chain):
+        ensure_proxy_allowed(endpoint, config.allow_proxy)
+        url, headers, body = build_chat_request(
+            endpoint, messages, stream=True, model=model, max_tokens=max_tokens
+        )
+        started = time.monotonic()
+        emitted = False
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        usage: dict[str, int] = {}
+        plain_lines: list[str] = []
+        actual_model = ""
+        try:
+            with _client(CHAT_READ_TIMEOUT_S) as client, client.stream(
+                "POST", url, headers=headers, json=body
+            ) as response:
+                if response.status_code == 429:
+                    raise ApiError(429, "LLM_RATE_LIMITED", f"接口「{endpoint.name}」触发限流（HTTP 429）")
+                if response.status_code >= 400:
+                    response.read()
+                    raise _upstream_error(endpoint, response)
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        # 个别网关忽略 stream 标志直接回整段 JSON：攒下来按非流式解析
+                        if line.strip():
+                            plain_lines.append(line)
+                        continue
+                    delta, reasoning, done, usage_update = parse_stream_data(
+                        endpoint.protocol, line[5:].strip()
+                    )
+                    usage.update(usage_update)
+                    if reasoning:
+                        emitted = True
+                        reasoning_parts.append(reasoning)
+                        if on_delta is not None:
+                            on_delta("reasoning", reasoning)
+                    if delta:
+                        emitted = True
+                        text_parts.append(delta)
+                        if on_delta is not None:
+                            on_delta("text", delta)
+                    if done:
+                        break
+            if not emitted and plain_lines:
+                # 非流式兜底：网关无视 stream=true 时按普通响应解析，不让整次调用报废
+                try:
+                    data = json.loads("\n".join(plain_lines))
+                except json.JSONDecodeError:
+                    data = None
+                if isinstance(data, dict):
+                    text, reasoning, usage, actual_model = parse_chat_response(endpoint.protocol, data)
+                    if reasoning:
+                        reasoning_parts.append(reasoning)
+                        if on_delta is not None:
+                            on_delta("reasoning", reasoning)
+                    if text:
+                        text_parts.append(text)
+                        if on_delta is not None:
+                            on_delta("text", text)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            outcome = ChatOutcome(
+                text="".join(text_parts),
+                model=actual_model or (model or endpoint.model),
+                endpoint=endpoint,
+                reasoning="".join(reasoning_parts),
+                usage=usage,
+                elapsed_ms=elapsed_ms,
+                fallback_used=index > 0,
+            )
+            _log_call(endpoint, outcome.model, "ok", elapsed_ms, usage)
+            return outcome
+        except Exception as error:  # noqa: BLE001 - 统一走回退判定
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            _log_call(endpoint, model or endpoint.model, "error", elapsed_ms, usage)
+            should_fall_back = not emitted and index + 1 < len(chain) and _should_fall_back(error)
+            # 网络层异常归一成可执行的错误信封（与 _post 同语义），不裸露 traceback
+            if isinstance(error, httpx.TimeoutException):
+                error = ApiError(
+                    504,
+                    "LLM_TIMEOUT",
+                    f"接口「{endpoint.name}」流式响应中断超过 {int(CHAT_READ_TIMEOUT_S)} 秒（{endpoint.host}），请重试或换用更稳定的接口",
+                )
+            elif isinstance(error, httpx.TransportError):
+                error = ApiError(
+                    502,
+                    "LLM_UNREACHABLE",
+                    f"无法连接接口「{endpoint.name}」（{endpoint.host}）：{error}",
+                )
+            last_error = error
+            if should_fall_back:
+                logger.warning("llm fallback: %s -> %s (%s)", endpoint.name, chain[index + 1].name, error)
+                continue
+            raise error
     raise last_error if last_error else AssertionError("unreachable")
 
 
@@ -1126,6 +1248,80 @@ def list_models(endpoint: LlmEndpoint, allow_proxy: bool) -> list[str]:
 #: 思考内容进事件流的截断上限：事件是过程展示不是正文存储，防止巨型 payload。
 THINKING_EVENT_MAX_CHARS = 6000
 
+#: llm_delta 过程事件的节流与总量上限：事件表是过程观测通道，增量按秒级
+#: 批量下发（工作台实时可见），超过总量后停发增量（结尾的 thinking/llm_call
+#: 摘要事件不受影响）。
+DELTA_EVENT_FLUSH_SECONDS = 1.0
+DELTA_EVENT_MAX_TOTAL_CHARS = 24_000
+
+
+class _DeltaEventBuffer:
+    """把逐 token 的流式增量攒成秒级 llm_delta 事件（顺序保留、总量封顶）。"""
+
+    def __init__(self, emit: Callable[[dict[str, Any]], None], prompt_id: str) -> None:
+        self._emit = emit
+        self._prompt_id = prompt_id
+        self._chunks: list[tuple[str, str]] = []
+        self._last_flush = time.monotonic()
+        self._emitted_chars = 0
+
+    def push(self, channel: str, text: str) -> None:
+        if self._emitted_chars >= DELTA_EVENT_MAX_TOTAL_CHARS:
+            return
+        self._chunks.append((channel, text))
+        if time.monotonic() - self._last_flush >= DELTA_EVENT_FLUSH_SECONDS:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._chunks:
+            self._last_flush = time.monotonic()
+            return
+        # 合并相邻同通道块：一次 flush 通常只产出一两条事件
+        merged: list[tuple[str, list[str]]] = []
+        for channel, text in self._chunks:
+            if merged and merged[-1][0] == channel:
+                merged[-1][1].append(text)
+            else:
+                merged.append((channel, [text]))
+        self._chunks = []
+        self._last_flush = time.monotonic()
+        for channel, texts in merged:
+            budget = DELTA_EVENT_MAX_TOTAL_CHARS - self._emitted_chars
+            if budget <= 0:
+                return
+            text = "".join(texts)[:budget]
+            self._emitted_chars += len(text)
+            self._emit({
+                "kind": "llm_delta",
+                "prompt_id": self._prompt_id,
+                "channel": channel,
+                "text": text,
+            })
+
+
+def _estimate_tokens(text: str) -> int:
+    """无用量数据时的粗估（中英混排按 2 字符 ≈ 1 token）：预算治理与用量
+    监控需要一个量级正确的数字，0 会让 token 上限形同虚设。"""
+    return max(1, len(text) // 2)
+
+
+def notes_prompt_block(
+    notes: Sequence[tuple[str, str]], node_id: Optional[str]
+) -> str:
+    """运行中用户备注 → 提示词「用户补充要求」段（设计 §11.3 方案 A 注入点）。
+
+    scope=global 对全部节点生效；scope=某阶段只对该阶段的调用生效。备注是
+    append-only 的累积补充（全部有效，按时间序展示）；无匹配备注返回空串。
+    注入发生在模板渲染之后、修复反馈之前——它属于任务上下文而非本轮对话。
+    ContextAssembler 接线生产后，本逻辑迁移为 TaskFrame 的「用户补充要求」节。
+    """
+    selected = [text for scope, text in notes if scope == "global" or scope == node_id]
+    if not selected:
+        return ""
+    lines = "\n".join(f"- {text}" for text in selected)
+    return f"\n\n## 用户补充要求（运行中追加，必须遵守）\n{lines}"
+
+
 class EngineLlmPort:
     """omm_agent_core.LlmPort 实现：渲染提示词模板后走同一条回退链。
 
@@ -1143,11 +1339,21 @@ class EngineLlmPort:
         registry: Any,
         on_event: Optional[Callable[[dict[str, Any]], None]] = None,
         on_usage: Optional[Callable[[ChatOutcome], None]] = None,
+        budget: Optional[Any] = None,
+        node_for_prompt: Optional[dict[str, str]] = None,
+        user_notes: Sequence[tuple[str, str]] = (),
     ) -> None:
         self._config = config
         self._registry = registry
         self._on_event = on_event
         self._on_usage = on_usage
+        # 预算治理（鸭子类型，避免本模块硬依赖 harness）：调用前 check_llm_call
+        # 预检、拿到回复后 charge_llm 记账；超限由治理器抛 AgentError 硬停。
+        self._budget = budget
+        self._node_for_prompt = dict(node_for_prompt or {})
+        # 运行中用户备注（(scope, text) 时间序）：端口按 tick 重建，新备注在
+        # 下一次节点执行自然生效（§11.3「下一次节点执行注入」的落点）。
+        self._user_notes = tuple(user_notes)
 
     def _emit(self, payload: dict[str, Any]) -> None:
         if self._on_event is None:
@@ -1160,6 +1366,9 @@ class EngineLlmPort:
     def complete(self, prompt_id: str, variables: dict[str, Any]) -> str:
         template = self._registry.get(prompt_id)
         prompt = template.render(variables)
+        node_id = self._node_for_prompt.get(prompt_id)
+        # 运行中用户备注（§11.3）：属任务上下文，拼在修复反馈之前。
+        prompt += notes_prompt_block(self._user_notes, node_id)
         # 技能节点的一次修复重试通过 __repair_error/__previous_output 传入；
         # 模板正文没有这两个占位符，必须在这里显式拼接，否则「把错误反馈给
         # 模型」退化成盲目原样重发。
@@ -1172,6 +1381,10 @@ class EngineLlmPort:
                 f"上次输出（节选）：\n{previous[:2000]}\n\n"
                 "请修正以上问题，重新只输出一个符合输出要求的 JSON 对象。"
             )
+        # 预算预检（失控保护）：超限在花钱之前拦下，AgentError 上抛由节点层
+        # 转成带 E31x/E32x 错误码的干净失败信息。
+        if self._budget is not None:
+            self._budget.check_llm_call(node_id)
         # 调用开始即发过程事件：模型一次调用动辄一两分钟，没有这条事件的话
         # 工作台在整个阶段里收不到任何东西，结束时才一次性收到全部过程行。
         self._emit({
@@ -1179,10 +1392,44 @@ class EngineLlmPort:
             "prompt_id": prompt_id,
             "repair": bool(repair_error),
         })
-        outcome = complete_with_fallback(
-            self._config,
-            [{"role": "user", "content": prompt}],
-        )
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            if self._config.stream:
+                # 流式：思考与正文增量按秒级批量进事件流，工作台实时可见；
+                # 读超时按块计，长产出不再被总时长误杀。
+                deltas = _DeltaEventBuffer(self._emit, prompt_id)
+                outcome = stream_complete_with_fallback(
+                    self._config, messages, on_delta=deltas.push
+                )
+                deltas.flush()
+            else:
+                outcome = complete_with_fallback(self._config, messages)
+        except Exception as error:
+            # 失败也要给事件流一个收尾：没有这条事件，工作台的走秒思考行会
+            # 永远悬挂（页面重进时还会堆出一排同秒走时的僵尸行）。
+            message = error.message if isinstance(error, ApiError) else str(error)
+            self._emit({
+                "kind": "llm_call_failed",
+                "prompt_id": prompt_id,
+                "error": message[:300],
+            })
+            raise
+        # 部分网关的流式响应不带用量：按字符粗估补齐，预算硬停与用量监控
+        # 需要量级正确的数字（0 会让 token 上限形同虚设）。
+        estimated = False
+        if not outcome.usage.get("prompt_tokens"):
+            outcome.usage["prompt_tokens"] = _estimate_tokens(prompt)
+            estimated = True
+        if not outcome.usage.get("completion_tokens"):
+            outcome.usage["completion_tokens"] = _estimate_tokens(
+                outcome.text + outcome.reasoning
+            )
+            estimated = True
+        if self._budget is not None:
+            tokens = int(outcome.usage.get("prompt_tokens") or 0) + int(
+                outcome.usage.get("completion_tokens") or 0
+            )
+            self._budget.charge_llm(tokens, node_id)
         if self._on_usage is not None:
             try:
                 self._on_usage(outcome)
@@ -1203,5 +1450,9 @@ class EngineLlmPort:
             "elapsed_ms": outcome.elapsed_ms,
             "prompt_tokens": outcome.usage.get("prompt_tokens"),
             "completion_tokens": outcome.usage.get("completion_tokens"),
+            # D2.2 审计规格：最终发出 prompt 的指纹（渲染+备注+修复拼接之后）。
+            # 「同输入同 prompt」的纯函数纪律由此可在事件日志层面被 evals 断言。
+            "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            **({"tokens_estimated": True} if estimated else {}),
         })
         return outcome.text

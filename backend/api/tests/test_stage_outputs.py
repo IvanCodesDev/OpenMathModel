@@ -47,6 +47,14 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     payload = _stage_outputs(client, run["id"])
     assert payload["run_id"] == run["id"]
 
+    problem_frame = payload["problem_frame"]
+    validate_contract("problem-frame.schema.json", problem_frame)
+    assert problem_frame["run_id"] == run["id"]
+    assert problem_frame["title"] == ANALYSIS_OUTPUT["title"]
+    assert problem_frame["objectives"] == ANALYSIS_OUTPUT["objectives"]
+    assert problem_frame["subquestions"] == ANALYSIS_OUTPUT["subquestions"]
+    assert "viability" not in problem_frame, "准入判定等过程字段不得进入投影"
+
     dataset_profile = payload["dataset_profile"]
     validate_contract("dataset-profile.schema.json", dataset_profile)
     assert dataset_profile["run_id"] == run["id"]
@@ -95,6 +103,7 @@ def test_stage_outputs_null_before_stage_completes(client, make_run, tick):
     empty = _stage_outputs(client, run["id"])
     assert empty["run_id"] == run["id"]
     for key in (
+        "problem_frame",
         "dataset_profile",
         "plan_proposal",
         "experiment_summary",
@@ -104,10 +113,11 @@ def test_stage_outputs_null_before_stage_completes(client, make_run, tick):
         assert empty[key] is None, f"{key} 应为 null"
 
     # 未配置自定义 API：sim 节点完成 PROBLEM_ANALYSIS，但产出不含 title 等契约字段，
-    # 五类正文（含成果清单）仍应保持 null。
+    # 六类正文（含成果清单）仍应保持 null。
     assert tick(run["id"]) == "RUNNING"
     still_empty = _stage_outputs(client, run["id"])
     for key in (
+        "problem_frame",
         "dataset_profile",
         "plan_proposal",
         "experiment_summary",
