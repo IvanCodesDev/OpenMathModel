@@ -40,6 +40,8 @@ from omm_agent_tools import (
     TaskWorkspace,
     ToolRegistry,
     WorkspaceArtifactStore,
+    sandbox_workspace_specs,
+    table_profile_spec,
 )
 
 from .event_store import JsonlEventStore
@@ -231,10 +233,24 @@ class WorkerRuntime:
         )
         registry = ToolRegistry()
         registry.register(sandbox.spec())
-        # 最小授权：允许列表只放 python_run，调用方层级封顶 execute；工具事件
+        # 数据阶段工具（与 API 侧 _build_tool_invoker 保持同构）：table_profile
+        # 确定性画像 + 工作区四件套（ws_list 是数据节点画像前置的入口）。
+        registry.register(table_profile_spec(workspace))
+        for spec in sandbox_workspace_specs(workspace):
+            registry.register(spec)
+        # 最小授权：允许列表与调用方层级封顶 execute；工具事件
         # 经引擎 record_external 落日志（序列分配必须留在引擎单路径上）。
         services.tools = RecordingInvoker(
-            registry.with_allowlist({PythonSandbox.TOOL_NAME}),
+            registry.with_allowlist(
+                {
+                    PythonSandbox.TOOL_NAME,
+                    "table_profile",
+                    "ws_list",
+                    "ws_read",
+                    "ws_write",
+                    "env_probe",
+                }
+            ),
             recorder=lambda event_type, payload: engine.record_external(
                 snapshot, event_type, payload
             ),

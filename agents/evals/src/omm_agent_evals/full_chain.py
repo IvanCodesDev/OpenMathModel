@@ -245,6 +245,12 @@ class FakeToolInvoker:
         arguments: dict[str, Any],
     ) -> ToolResult:
         self.calls.append((run_id, step_id, tool_name, dict(arguments)))
+        if tool_name == "ws_list":
+            # 数据准备节点的画像前置（v3.18）：本评测无附件下发，工作区为空
+            # ——返回空清单（节点如实退回摘要路径），照常审计，不消费沙箱脚本。
+            result = ToolResult(status="succeeded", output={"files": []})
+            self._record(step_id, tool_name, arguments, result)
+            return result
         run = self._runs.pop(0) if len(self._runs) > 1 else self._runs[0]
         if run.ok:
             refs: tuple[ArtifactRef, ...] = ()
@@ -271,22 +277,32 @@ class FakeToolInvoker:
                 error=run.error or "python exited with code 1",
                 output={"exit_code": 1, "stdout": run.stdout, "stderr": run.stderr},
             )
-        if self.recorder is not None:
-            self.recorder(
-                EventType.TOOL_CALLED,
-                {
-                    "step_id": step_id,
-                    "tool": tool_name,
-                    "status": result.status,
-                    "duration_ms": result.duration_ms,
-                    "input_summary": summarize(arguments),
-                    "output_summary": summarize(
-                        result.output if result.ok else result.error
-                    ),
-                    "artifact_ids": [ref.artifact_id for ref in result.artifacts],
-                },
-            )
+        self._record(step_id, tool_name, arguments, result)
         return result
+
+    def _record(
+        self,
+        step_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+    ) -> None:
+        if self.recorder is None:
+            return
+        self.recorder(
+            EventType.TOOL_CALLED,
+            {
+                "step_id": step_id,
+                "tool": tool_name,
+                "status": result.status,
+                "duration_ms": result.duration_ms,
+                "input_summary": summarize(arguments),
+                "output_summary": summarize(
+                    result.output if result.ok else result.error
+                ),
+                "artifact_ids": [ref.artifact_id for ref in result.artifacts],
+            },
+        )
 
 
 # -- session assembly ----------------------------------------------------------
@@ -407,6 +423,7 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> DATA_PREPARATION
     EventType.STEP_STARTED,
+    EventType.TOOL_CALLED,  # ws_list（画像前置：本评测无数据文件，空清单退回摘要路径）
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> MODEL_PLANNING
     EventType.STEP_STARTED,

@@ -102,15 +102,24 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     assert [event.event_type for event in events] == FULL_CHAIN_GOLDEN_EVENT_TYPES
 
-    # The tool call was recorded through the engine with production payload.
-    (tool_event,) = tool_events(completed_session)
+    # Tool calls recorded through the engine with production payload:
+    # ws_list belongs to the data stage (profiling preflight, empty here),
+    # python_run to the experiment stage.
+    all_tool_events = tool_events(completed_session)
     experiment_step = steps_for(completed_session, TaskState.EXPERIMENTING)[0]
+    data_step = steps_for(completed_session, TaskState.DATA_PREPARATION)[0]
+
+    ws_event, tool_event = all_tool_events
+    assert ws_event.payload["tool"] == "ws_list"
+    assert ws_event.payload["step_id"] == data_step.step_id
     assert tool_event.payload["tool"] == PYTHON_TOOL_NAME
     assert tool_event.payload["status"] == "succeeded"
     assert tool_event.payload["step_id"] == experiment_step.step_id
 
     # And the invoker itself saw exactly one python_run call with the code.
-    (call,) = completed_session.tools.calls
+    (call,) = [
+        entry for entry in completed_session.tools.calls if entry[2] == PYTHON_TOOL_NAME
+    ]
     run_id, step_id, tool_name, arguments = call
     assert (run_id, step_id, tool_name) == (
         completed_session.snapshot.run_id,
@@ -173,9 +182,14 @@ def test_experiment_repair_round_feeds_error_back_and_completes():
     assert experiment_step.status is StepStatus.SUCCEEDED
     assert experiment_step.metrics == {"llm_attempts": 2, "code_rounds": 2}
 
-    # Two sandbox invocations: the failing one, then the regenerated one.
-    assert [call[2] for call in session.tools.calls] == [PYTHON_TOOL_NAME] * 2
-    recorded = tool_events(session)
+    # Two sandbox invocations: the failing one, then the regenerated one
+    # (the data stage's ws_list profiling preflight is filtered out here).
+    sandbox_calls = [call for call in session.tools.calls if call[2] == PYTHON_TOOL_NAME]
+    assert [call[2] for call in sandbox_calls] == [PYTHON_TOOL_NAME] * 2
+    recorded = [
+        event for event in tool_events(session)
+        if event.payload["tool"] == PYTHON_TOOL_NAME
+    ]
     assert [event.payload["status"] for event in recorded] == ["failed", "succeeded"]
     assert all(
         event.payload["step_id"] == experiment_step.step_id for event in recorded
@@ -253,7 +267,11 @@ def test_experiment_double_failure_fails_run_then_retry_recovers():
     assert snapshot.failure.state is TaskState.EXPERIMENTING
     assert "after 2 rounds" in snapshot.failure.error
     assert "NameError" in snapshot.failure.error
-    assert len(session.tools.calls) == 2  # both rounds of attempt 1
+
+    def sandbox_calls():
+        return [call for call in session.tools.calls if call[2] == PYTHON_TOOL_NAME]
+
+    assert len(sandbox_calls()) == 2  # both rounds of attempt 1
 
     engine.retry(snapshot)
     assert snapshot.state is TaskState.EXPERIMENTING
@@ -268,8 +286,12 @@ def test_experiment_double_failure_fails_run_then_retry_recovers():
         StepStatus.FAILED,
         StepStatus.SUCCEEDED,
     ]
-    assert len(session.tools.calls) == 3
-    assert [event.payload["status"] for event in tool_events(session)] == [
+    assert len(sandbox_calls()) == 3
+    sandbox_events = [
+        event for event in tool_events(session)
+        if event.payload["tool"] == PYTHON_TOOL_NAME
+    ]
+    assert [event.payload["status"] for event in sandbox_events] == [
         "failed",
         "failed",
         "succeeded",

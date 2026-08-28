@@ -29,11 +29,13 @@ from .sandbox_tools import (
     env_fingerprint,
     sandbox_workspace_specs,
 )
+from .table_profile import PROFILE_MAX_ROWS, profile_csv_text, table_profile_spec
 from .workspace import TaskWorkspace, WorkspaceArtifactStore, WorkspaceViolation
 
 __all__ = [
     "ENV_PROBE_PACKAGE_CANDIDATES",
     "EventRecorder",
+    "PROFILE_MAX_ROWS",
     "IdempotencyCache",
     "MAX_TURN_PARALLELISM",
     "PythonSandbox",
@@ -51,7 +53,9 @@ __all__ = [
     "args_fingerprint",
     "env_fingerprint",
     "execute_parallel",
+    "profile_csv_text",
     "sandbox_workspace_specs",
     "summarize",
+    "table_profile_spec",
     "tier_rank",
 ]

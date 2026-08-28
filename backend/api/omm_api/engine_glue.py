@@ -55,7 +55,14 @@ from omm_agent_skills import (
     ValidationNode,
     load_default_registry,
 )
-from omm_agent_tools import PythonSandbox, RecordingInvoker, TaskWorkspace, ToolRegistry
+from omm_agent_tools import (
+    PythonSandbox,
+    RecordingInvoker,
+    TaskWorkspace,
+    ToolRegistry,
+    sandbox_workspace_specs,
+    table_profile_spec,
+)
 from omm_contracts import (
     AgentEventType,
     ApprovalDecisionType,
@@ -1161,10 +1168,66 @@ def _build_engine(
     return engine, services
 
 
+#: 附件数据下发：单运行至多 5 个 CSV、单文件 ≤10MB（画像判读用，超限不下发）。
+_TABLE_FILE_LIMIT = 5
+_TABLE_BYTES_LIMIT = 10 * 1024 * 1024
+
+
+def _stage_attachment_tables(
+    session: Session, run: TaskRunRow, workspace: TaskWorkspace
+) -> None:
+    """把运行附件里的 CSV 数据文件下发到工作区 data/（幂等）。
+
+    这是「附件 → 沙盒可见数据」的链路（§9.1 数据阶段前置）：数据准备节点
+    经 ws_list 发现文件、table_profile 产出确定性画像。名称经 basename 清洗，
+    归属经 project_id 校验；任何一步不满足就跳过该附件，绝不让下发失败拖垮
+    tick（画像缺席时节点如实走"仅附件摘要"路径）。
+    """
+    entries = (run.params or {}).get("attachment_metadata")
+    if not isinstance(entries, list):
+        return
+    blobs = get_blobstore()
+    staged = 0
+    for entry in entries:
+        if staged >= _TABLE_FILE_LIMIT:
+            break
+        if not isinstance(entry, dict):
+            continue
+        artifact_id = str(entry.get("artifact_id") or "")
+        name = str(entry.get("name") or "")
+        if not artifact_id or not name.lower().endswith(".csv"):
+            continue
+        safe_name = name.replace("\\", "/").rsplit("/", 1)[-1]
+        target = f"data/{safe_name}"
+        if workspace.exists(target):
+            staged += 1
+            continue
+        row = session.execute(
+            select(ArtifactRow).where(
+                ArtifactRow.id == artifact_id,
+                ArtifactRow.project_id == run.project_id,
+            )
+        ).scalar_one_or_none()
+        if row is None or not row.sha256:
+            continue
+        if (row.size_bytes or 0) > _TABLE_BYTES_LIMIT:
+            continue
+        handle = blobs.open(row.sha256)
+        if handle is None:
+            continue
+        try:
+            with handle:
+                workspace.write_bytes(target, handle.read())
+        except Exception:  # noqa: BLE001 - 单个附件下发失败不拖垮 tick
+            logger.exception("附件数据下发失败：%s", artifact_id)
+            continue
+        staged += 1
+
+
 def _build_tool_invoker(
-    engine: TaskRunEngine, snapshot: TaskRunSnapshot, run: TaskRunRow
+    session: Session, engine: TaskRunEngine, snapshot: TaskRunSnapshot, run: TaskRunRow
 ) -> RecordingInvoker:
-    """实验节点的工具端口：python 沙箱 + 允许列表 + execute 最小授权。
+    """真实节点的工具端口：沙箱 + 工作区五件套 + table_profile，execute 最小授权。
 
     产物存储注入 ApiArtifactStore：实验代码创建的文件直接进内容寻址存储，
     与其他产物同一条下载链路；工作区目录只是执行暂存。
@@ -1173,6 +1236,7 @@ def _build_tool_invoker(
     """
     settings = get_settings()
     workspace = TaskWorkspace(settings.workspaces_dir, run.id)
+    _stage_attachment_tables(session, run, workspace)
     sandbox = PythonSandbox(
         workspace,
         timeout_s=settings.experiment_timeout_seconds,
@@ -1180,12 +1244,24 @@ def _build_tool_invoker(
     )
     registry = ToolRegistry()
     registry.register(sandbox.spec())
+    registry.register(table_profile_spec(workspace))
+    for spec in sandbox_workspace_specs(workspace):
+        registry.register(spec)
 
     def record(event_type: EventType, payload: dict[str, Any]) -> CoreEvent:
         return engine.record_external(snapshot, event_type, payload)
 
     return RecordingInvoker(
-        registry.with_allowlist({PythonSandbox.TOOL_NAME}),
+        registry.with_allowlist(
+            {
+                PythonSandbox.TOOL_NAME,
+                "table_profile",
+                "ws_list",
+                "ws_read",
+                "ws_write",
+                "env_probe",
+            }
+        ),
         record,
         caller_max_tier="execute",
     )
@@ -1199,7 +1275,7 @@ def open_engine(
     snapshot = replay_events(run.id, run.project_id, events)
     if services.llm is not None:
         # 工具事件要挂在当前快照的事件序列上，因此在快照重放之后绑定。
-        invoker = _build_tool_invoker(engine, snapshot, run)
+        invoker = _build_tool_invoker(session, engine, snapshot, run)
         governor = services.extras.get("budget_governor")
         # 沙箱运行按次预付计费：越线的那次运行根本不会启动（§4.7）
         services.tools = _BudgetedInvoker(invoker, governor) if governor else invoker

@@ -88,12 +88,13 @@ def make_ctx(state, inputs=None, prior=None):
     )
 
 
-def make_services(llm):
+def make_services(llm, tools=None):
     return NodeServices(
         clock=FixedClock(),
         ids=SequentialIdGenerator(),
         artifacts=InMemoryArtifactStore(),
         llm=llm,
+        tools=tools,
     )
 
 
@@ -475,6 +476,65 @@ def test_data_preparation_happy_path(registry):
     sent = llm.calls[0].variables["problem_analysis"]
     assert "泊松分布" in sent
     assert llm.calls[0].variables["attachments_summary"] == "无"
+
+
+class RoutingToolInvoker:
+    """按工具名路由的假执行器（数据阶段画像前置用）。"""
+
+    def __init__(self, responses):
+        self._responses = dict(responses)
+        self.calls: list[tuple[str, dict]] = []
+
+    def invoke(self, run_id, step_id, tool_name, arguments):
+        self.calls.append((tool_name, dict(arguments)))
+        return self._responses[tool_name]
+
+
+def test_data_preparation_profiles_workspace_tables(registry):
+    """工作区有 CSV：确定性画像先行，画像数字进提示词（原则 5 的数据阶段落点）。"""
+    llm = StubLlmPort({"data_preparation.default": stub_response(PREPARATION_OK)})
+    tools = RoutingToolInvoker({
+        "ws_list": ToolResult(
+            status="succeeded",
+            output={"files": ["data/orders.csv", "data/readme.txt"]},
+        ),
+        "table_profile": ToolResult(
+            status="succeeded",
+            output={
+                "path": "data/orders.csv",
+                "rows": 4,
+                "columns": [
+                    {"name": "volume", "type": "float", "missing": 1, "mean": 133.6667}
+                ],
+                "truncated": False,
+            },
+        ),
+    })
+    node = DataPreparationNode(registry)
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_services(llm, tools=tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    summary = llm.calls[0].variables["attachments_summary"]
+    assert "确定性画像" in summary
+    assert "133.6667" in summary, "画像统计数字必须原样进入提示词"
+    profiled = [args["path"] for tool, args in tools.calls if tool == "table_profile"]
+    assert profiled == ["data/orders.csv"], "只画像 CSV，readme.txt 不进画像"
+
+
+def test_data_preparation_falls_back_when_listing_fails(registry):
+    llm = StubLlmPort({"data_preparation.default": stub_response(PREPARATION_OK)})
+    tools = RoutingToolInvoker({
+        "ws_list": ToolResult(status="failed", error="workspace unavailable"),
+    })
+    node = DataPreparationNode(registry)
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_services(llm, tools=tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert llm.calls[0].variables["attachments_summary"] == "无", "画像缺席如实退回摘要路径"
 
 
 def test_data_preparation_requires_prior_analysis(registry):

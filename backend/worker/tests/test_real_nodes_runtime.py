@@ -220,10 +220,11 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     events = runtime.events.load(run_id)
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     tool_events = [e for e in events if e.event_type is EventType.TOOL_CALLED]
-    assert len(tool_events) == 1
-    assert tool_events[0].payload["tool"] == "python_run"
-    assert tool_events[0].payload["status"] == "succeeded"
-    assert tool_events[0].payload["artifact_ids"], "沙箱捕获的产物要进工具事件"
+    # 数据阶段的画像前置留一条 ws_list（本测试无数据文件，空清单），实验阶段一条 python_run
+    assert [e.payload["tool"] for e in tool_events] == ["ws_list", "python_run"]
+    sandbox_event = tool_events[1]
+    assert sandbox_event.payload["status"] == "succeeded"
+    assert sandbox_event.payload["artifact_ids"], "沙箱捕获的产物要进工具事件"
 
 
 def test_unattended_mode_completes_without_review(tmp_path):
@@ -274,11 +275,12 @@ def test_experiment_runtime_failure_regenerates_with_feedback(tmp_path):
     assert experiment_step.status is StepStatus.SUCCEEDED
     assert experiment_step.metrics["code_rounds"] == 2, "节点内自愈，不产生额外步骤尝试"
 
-    # 两轮沙箱执行都留 TOOL_CALLED 痕：先失败后成功
+    # 两轮沙箱执行都留 TOOL_CALLED 痕：先失败后成功（画像前置的 ws_list 除外）
     tool_events = [
         e
         for e in runtime.events.load(run_id)
         if e.event_type is EventType.TOOL_CALLED
+        and e.payload["tool"] == "python_run"
     ]
     assert [e.payload["status"] for e in tool_events] == ["failed", "succeeded"]
 

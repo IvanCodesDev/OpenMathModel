@@ -235,6 +235,63 @@ def _configure_llm(client, monkeypatch, handler=_stage_router) -> None:
     assert saved.status_code == 200, saved.text
 
 
+def test_attachment_csv_is_profiled_into_data_stage_prompt(client, monkeypatch):
+    """附件 CSV → 工作区下发 → table_profile 确定性画像 → 数据准备提示词。
+
+    原则 5 的数据阶段落点：画像统计数字（行数/均值）由代码产出并原样进
+    prompt，LLM 只判读；附件经 artifact_id 归属校验后按 basename 落入 data/。
+    """
+    from omm_api.engine_glue import get_blobstore
+    from omm_api.ids import new_id
+    from omm_api.orm import ArtifactRow
+    from omm_api.serialize import utcnow
+
+    project = create_project(client)
+    csv_bytes = "quarter,volume\n1,120.5\n2,130.0\n".encode("utf-8")
+    sha256, size = get_blobstore().put(csv_bytes)
+    artifact_id = new_id("art")
+    with client.app.state.db.session_factory() as session:
+        session.add(
+            ArtifactRow(
+                id=artifact_id,
+                project_id=project["id"],
+                run_id=None,
+                kind="dataset",
+                name="orders.csv",
+                uri=f"local://{sha256}/orders.csv",
+                sha256=sha256,
+                size_bytes=size,
+                media_type="text/csv",
+                status="READY",
+                created_at=utcnow(),
+            )
+        )
+        session.commit()
+
+    seen: dict[str, str] = {}
+
+    def router(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.content)["messages"][-1]["content"]
+        if "数据工程师" in prompt:
+            seen["data_prompt"] = prompt
+        return _stage_router(request)
+
+    _configure_llm(client, monkeypatch, handler=router)
+    run = create_run(
+        client,
+        project["id"],
+        goal="优化共享单车调度",
+        params={"attachment_metadata": [{"name": "orders.csv", "artifact_id": artifact_id}]},
+    )
+    wait_until(client, run["id"], pending_approval(client, run["id"]))
+
+    prompt = seen["data_prompt"]
+    assert "确定性画像" in prompt
+    assert '"rows": 2' in prompt, "行数由 table_profile 统计"
+    assert "120.5" in prompt and "130.0" in prompt, "数值统计原样进入提示词"
+    assert "data/orders.csv" in prompt
+
+
 def test_provider_billing_error_fails_cleanly_without_traceback(client, monkeypatch):
     """供应商侧计费错误（HTTP 402 余额不足）→ 人话步骤失败并走标准 retry 路径。
 

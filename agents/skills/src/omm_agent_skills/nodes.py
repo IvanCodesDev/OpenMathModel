@@ -24,6 +24,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from omm_agent_core import NodeContext, NodeResult, NodeServices, TaskState
@@ -288,16 +289,72 @@ def chosen_plan(planning: Mapping[str, Any]) -> dict[str, Any]:
     raise KeyError("'MODEL_PLANNING outputs.plans'")
 
 
+#: 数据阶段工具名（装配期契约，与 omm_agent_tools 的注册名对齐，不 import）。
+TABLE_PROFILE_TOOL = "table_profile"
+WS_LIST_TOOL = "ws_list"
+
+#: 执行侧把附件数据文件下发到工作区的目录约定。
+DATA_DIR_PREFIX = "data/"
+
+#: 单次画像的表格文件上限（更多文件只会稀释判读信号）。
+_PROFILE_FILE_LIMIT = 5
+
+
+def _profile_data_tables(ctx: NodeContext, services: NodeServices) -> str:
+    """工作区 data/ 下 CSV 的确定性画像 → 提示词附注段；无工具/无文件给空串。
+
+    画像数字由 table_profile 代码统计产出（§1.3 原则 5），LLM 只判读质量与
+    就绪度；工具缺席或失败时如实退回"仅附件摘要"路径，不静默编造。
+    """
+    if services.tools is None:
+        return ""
+    listing = services.tools.invoke(
+        ctx.run_id, ctx.step_id, WS_LIST_TOOL, {"prefix": DATA_DIR_PREFIX}
+    )
+    if not listing.ok:
+        return ""
+    tables = [
+        path
+        for path in listing.output.get("files") or []
+        if str(path).lower().endswith(".csv")
+    ][:_PROFILE_FILE_LIMIT]
+    notes: list[str] = []
+    for path in tables:
+        result = services.tools.invoke(
+            ctx.run_id, ctx.step_id, TABLE_PROFILE_TOOL, {"path": str(path)}
+        )
+        if result.ok:
+            notes.append(
+                f"### {path}\n" + json.dumps(result.output, ensure_ascii=False)
+            )
+    if not notes:
+        return ""
+    return (
+        "以下为数据文件的确定性画像（由代码统计产出，判读与引用时不得改写数字）：\n"
+        + "\n".join(notes)
+    )
+
+
 class DataPreparationNode(LlmSkillNode):
     prompt_id = "data_preparation.default"
     state = TaskState.DATA_PREPARATION
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
+        summary = str(ctx.inputs.get("attachments_summary") or "无")
+        profile_note = str(ctx.inputs.get("table_profile_note") or "")
+        if profile_note:
+            summary = profile_note if summary in ("", "无") else f"{profile_note}\n\n{summary}"
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
-            "attachments_summary": str(ctx.inputs.get("attachments_summary") or "无"),
+            "attachments_summary": summary,
         }
+
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        note = _profile_data_tables(ctx, services)
+        if note:
+            ctx = replace(ctx, inputs={**dict(ctx.inputs), "table_profile_note": note})
+        return super().run(ctx, services)
 
 
 class ExperimentExecutionNode(LlmSkillNode):
