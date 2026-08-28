@@ -42,9 +42,18 @@ from .sandbox_agent import (
     SandboxTask,
     run_sandbox_task,
 )
+from .subagents import (
+    CONTEXT_SLICE_MAX_CHARS,
+    MAX_SUBAGENT_CONCURRENCY,
+    ResultEnvelope,
+    SpawnSpec,
+    SubagentSupervisor,
+)
 from .trace import Span, TraceHub
 
 __all__ = [
+    "CONTEXT_SLICE_MAX_CHARS",
+    "MAX_SUBAGENT_CONCURRENCY",
     "SUBAGENT_MAX_FRACTION",
     "STANDARD_SECTION_ORDER",
     "AssembledPrompt",
@@ -62,12 +71,15 @@ __all__ = [
     "NodeBudget",
     "Reply",
     "ReplayCassette",
+    "ResultEnvelope",
     "RunBudget",
     "SandboxAssertion",
     "SandboxEvidence",
     "SandboxTask",
     "Section",
     "Span",
+    "SpawnSpec",
+    "SubagentSupervisor",
     "ToolCall",
     "TraceHub",
     "TransportFailure",
