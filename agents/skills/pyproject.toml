@@ -9,7 +9,8 @@ description = "建模技能：Prompt 注册表（frontmatter 版本与 IO Schema
 # 与 omm-agent-core 同理：纯标准库 + 惰性注解，运行时兼容 3.10（backend/api 当前 venv）；
 # 3.12 仍是 uv workspace 目标（ADR-0003）
 requires-python = ">=3.10"
-dependencies = ["omm-agent-core"]
+# 依赖方向（设计 §3.1）：skills → harness, core（tools 是装配期契约不 import）
+dependencies = ["omm-agent-core", "omm-agent-harness"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

@@ -90,7 +90,8 @@ def test_happy_path_all_six_stages_succeed(completed_session):
     assert snapshot.outputs[TaskState.VALIDATING.value]["verdict"] == "pass"
     assert snapshot.outputs[TaskState.PAPER_WRITING.value]["title"] == CANNED_PAPER["title"]
 
-    # Each stage consulted the LLM exactly once, in stage order.
+    # Prompt sequence in stage order：前五阶段各一次，论文阶段为
+    # 总编规划 → 逐章写作 ×3 → 统稿收口的多轮管线。
     assert [call.prompt_id for call in completed_session.llm.calls] == (
         FULL_CHAIN_PROMPT_SEQUENCE
     )
@@ -139,7 +140,7 @@ def test_happy_path_publishes_real_artifacts(completed_session):
     assert paper_ref.media_type == "text/markdown"
     markdown = blobs[paper_ref.uri].decode("utf-8")
     assert f"# {CANNED_PAPER['title']}" in markdown
-    assert "## 模型检验" in markdown
+    assert "## 3 模型检验" in markdown
 
     # Artifacts are referenced from outputs-facing events too.
     produced = [

@@ -39,6 +39,7 @@ ANALYSIS_OK = {
     "constraints": ["预算不超过 100 万"],
     "data_requirements": ["历史销量数据"],
     "key_assumptions": ["需求服从泊松分布"],
+    "subquestions": [{"id": "q1", "text": "确定最优布局", "depends_on": []}],
 }
 
 ANALYSIS_INSUFFICIENT = {
@@ -50,6 +51,7 @@ ANALYSIS_INSUFFICIENT = {
     "constraints": [],
     "data_requirements": [],
     "key_assumptions": [],
+    "subquestions": [],
 }
 
 PLANNING_OK = {
@@ -335,6 +337,55 @@ PAPER_OK = {
     ],
 }
 
+PAPER_OUTLINE_OK = {
+    "title": "基于整数规划的门店选址优化",
+    "keywords": ["整数规划", "选址"],
+    "notation": "| 符号 | 含义 | 单位 |\n| --- | --- | --- |\n| $x_i$ | 是否在点 i 选址 | 0/1 |",
+    "chapters": [
+        {
+            "heading": "1 问题重述",
+            "brief": "背景与逐条任务要求",
+            "target_chars": 600,
+            "source_keys": ["problem_analysis"],
+        },
+        {
+            "heading": "2 模型建立与求解",
+            "brief": "整数规划模型构建与求解，引用 rmse=0.12",
+            "target_chars": 1200,
+            "source_keys": ["chosen_plan", "experiment_summary"],
+        },
+        # 故意不带 source_keys：材料路由应回落到全量四份材料
+        {"heading": "3 结果分析与检验", "brief": "指标对比与检验结论", "target_chars": 800},
+    ],
+}
+
+PAPER_FINALIZE_OK = {
+    "abstract": "本文建立整数规划模型，rmse=0.12，结论对需求率参数敏感。",
+    "keywords": ["整数规划", "选址", "0-1 规划"],
+    "progress_note": "论文已按三章完成，可在论文页查看与导出。",
+}
+
+
+def multipass_paper_stub(finalize=None):
+    """三段式论文管线的脚本化 LLM：章节回复按 chapter_heading 生成，便于断言顺序。
+
+    正文填充到本章目标字数：达标稿不触发字数有界重写，调用序列保持确定。
+    """
+
+    def section_reply(variables):
+        lead = f"围绕 rmse=0.12 展开的正文。（{variables['chapter_heading']}）"
+        target = int(variables["target_chars"])
+        return stub_response({
+            "content": lead + "析" * max(target - len(lead), 0),
+            "digest": f"{variables['chapter_heading']}摘要",
+        })
+
+    return StubLlmPort({
+        "paper_outline.default": stub_response(PAPER_OUTLINE_OK),
+        "paper_section.default": section_reply,
+        "paper_finalize.default": stub_response(finalize or PAPER_FINALIZE_OK),
+    })
+
 
 class FakeToolInvoker:
     """Scripted ToolInvoker: returns queued results (repeats the last one)."""
@@ -585,8 +636,79 @@ def paper_prior():
     return prior
 
 
-def test_paper_writing_publishes_markdown_artifact(registry):
-    llm = StubLlmPort({"paper_writing.default": stub_response(PAPER_OK)})
+def test_paper_writing_multipass_publishes_markdown_artifact(registry):
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    services = make_services(llm)
+    progress = []
+    services.extras["progress"] = progress.append
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior())
+
+    result = node.run(ctx, services)
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["title"] == PAPER_OUTLINE_OK["title"]
+    # 章节顺序与总编规划一致；摘要与关键词来自统稿调用
+    assert [s["heading"] for s in result.outputs["sections"]] == [
+        "1 问题重述", "2 模型建立与求解", "3 结果分析与检验",
+    ]
+    assert result.outputs["abstract"] == PAPER_FINALIZE_OK["abstract"]
+    assert result.outputs["keywords"] == PAPER_FINALIZE_OK["keywords"]
+    assert result.outputs["progress_note"] == PAPER_FINALIZE_OK["progress_note"]
+    assert result.metrics["chapters"] == 3
+    # 调用序列：总编 → 三章 → 统稿
+    assert [call.prompt_id for call in llm.calls] == [
+        "paper_outline.default",
+        "paper_section.default",
+        "paper_section.default",
+        "paper_section.default",
+        "paper_finalize.default",
+    ]
+    # 进度事件：骨架一条 + 每章一条，index/total 正确
+    assert [event["kind"] for event in progress] == [
+        "paper_outline", "paper_section", "paper_section", "paper_section",
+    ]
+    assert progress[0]["total"] == 3
+    assert [event["index"] for event in progress[1:]] == [1, 2, 3]
+    assert progress[2]["heading"] == "2 模型建立与求解"
+    # 产物：markdown 草稿
+    assert len(result.artifacts) == 1
+    ref = result.artifacts[0]
+    assert ref.kind == "paper"
+    assert ref.media_type == "text/markdown"
+    stored = services.artifacts.blobs[ref.uri].decode("utf-8")
+    assert "# 基于整数规划的门店选址优化" in stored
+    assert "## 2 模型建立与求解" in stored
+    assert "**关键词**：整数规划；选址；0-1 规划" in stored
+
+
+def test_paper_writing_sections_receive_rolling_digests_and_materials(registry):
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior())
+
+    result = node.run(ctx, make_services(llm))
+
+    assert result.status == NodeResult.SUCCEEDED
+    section_calls = [call for call in llm.calls if call.prompt_id == "paper_section.default"]
+    # 滚动摘要：第一章无前文，第三章能看到前两章摘要
+    assert section_calls[0].variables["previous_digests"] == "无（本章是全文第一章）"
+    assert "第1章《1 问题重述》" in section_calls[2].variables["previous_digests"]
+    assert "第2章《2 模型建立与求解》" in section_calls[2].variables["previous_digests"]
+    # 材料路由：第一章只带 problem_analysis；第三章未指定 source_keys → 全量四份
+    assert "问题分析结果" in section_calls[0].variables["materials"]
+    assert "已确认的建模方案" not in section_calls[0].variables["materials"]
+    for label in ("问题分析结果", "已确认的建模方案", "实验过程摘要", "检验结论"):
+        assert label in section_calls[2].variables["materials"]
+    # 符号表逐章注入
+    assert "$x_i$" in section_calls[1].variables["notation"]
+
+
+def test_paper_writing_outline_failure_falls_back_to_single_call(registry):
+    llm = ScriptedLlmPort({
+        "paper_outline.default": ["不是 JSON", "还是不是 JSON"],
+        "paper_writing.default": [stub_response(PAPER_OK)],
+    })
     node = PaperWritingNode(registry)
     services = make_services(llm)
     ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior())
@@ -595,20 +717,66 @@ def test_paper_writing_publishes_markdown_artifact(registry):
 
     assert result.status == NodeResult.SUCCEEDED
     assert result.outputs["title"] == PAPER_OK["title"]
+    assert result.metrics["fallback"] == "single_call"
     assert len(result.artifacts) == 1
-    ref = result.artifacts[0]
-    assert ref.kind == "paper"
-    assert ref.media_type == "text/markdown"
-    stored = services.artifacts.blobs[ref.uri].decode("utf-8")
-    assert "# 基于整数规划的门店选址优化" in stored
-    assert "## 模型检验" in stored
-    assert "**关键词**：整数规划；选址" in stored
-    # 检验结论进入了提示词变量
-    assert "需求率参数敏感" in llm.calls[0].variables["validation_summary"]
+    # 总编两次尝试（含修复）后才回退
+    outline_calls = [c for c in llm.calls if c.prompt_id == "paper_outline.default"]
+    assert len(outline_calls) == 2
+
+
+def test_paper_writing_degenerate_outline_falls_back(registry):
+    # 章数低于带宽下限（3）：结构准入不通过，同样回退单次调用
+    degenerate = dict(PAPER_OUTLINE_OK, chapters=PAPER_OUTLINE_OK["chapters"][:1])
+    llm = StubLlmPort({
+        "paper_outline.default": stub_response(degenerate),
+        "paper_writing.default": stub_response(PAPER_OK),
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.metrics["fallback"] == "single_call"
+    assert "章节数" in result.metrics["fallback_reason"]
+
+
+def test_paper_writing_section_failure_names_chapter(registry):
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(PAPER_OUTLINE_OK)],
+        "paper_section.default": ["坏输出"],  # 反复返回坏输出：第一章修复后仍失败
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.FAILED
+    assert "第 1/3 章" in result.error
+
+
+def test_paper_writing_finalize_failure_assembles_abstract(registry):
+    def section_reply(variables):
+        return stub_response({
+            "content": f"正文。（{variables['chapter_heading']}）",
+            "digest": f"{variables['chapter_heading']}摘要",
+        })
+
+    llm = StubLlmPort({
+        "paper_outline.default": stub_response(PAPER_OUTLINE_OK),
+        "paper_section.default": section_reply,
+        "paper_finalize.default": "不是 JSON",  # 统稿两次尝试均失败
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["abstract"]  # 摘要由各章摘要拼接，不弃全文
+    assert result.outputs["keywords"] == PAPER_OUTLINE_OK["keywords"]
+    assert any("统稿调用失败" in w for w in result.metrics["quality_warnings"])
 
 
 def test_paper_writing_without_artifact_store_fails(registry):
-    llm = StubLlmPort({"paper_writing.default": stub_response(PAPER_OK)})
+    llm = StubLlmPort({})
     node = PaperWritingNode(registry)
     services = NodeServices(
         clock=FixedClock(), ids=SequentialIdGenerator(), artifacts=None, llm=llm
@@ -619,6 +787,98 @@ def test_paper_writing_without_artifact_store_fails(registry):
 
     assert result.status == NodeResult.FAILED
     assert "artifact" in result.error
+    assert llm.calls == []  # 提前失败：一次模型调用都不该发生
+
+
+def _paper_inputs_hash(registry):
+    """与节点相同的输入指纹算法（tests 直接取模块内实现，避免复刻漂移）。"""
+    from omm_agent_skills.nodes import _inputs_hash
+
+    node = PaperWritingNode(registry)
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior())
+    return _inputs_hash(node.build_variables(ctx))
+
+
+def test_paper_writing_resumes_from_event_checkpoint(registry):
+    """断点续写：输入未变时跳过总编调用与已完成章节，只写剩余章节。"""
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    services = make_services(llm)
+    services.extras["paper_resume"] = lambda: {
+        "inputs_hash": _paper_inputs_hash(registry),
+        "outline": PAPER_OUTLINE_OK,
+        "sections": [
+            {
+                "index": 1,
+                "heading": "1 问题重述",
+                "content": "第一次尝试已写完的第一章正文。",
+                "digest": "第一章摘要（来自检查点）",
+                "truncated": False,
+            },
+        ],
+    }
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior())
+
+    result = node.run(ctx, services)
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.metrics["resumed_chapters"] == 1
+    # 总编不再调用；章节只写第 2、3 章
+    assert [call.prompt_id for call in llm.calls] == [
+        "paper_section.default",
+        "paper_section.default",
+        "paper_finalize.default",
+    ]
+    assert llm.calls[0].variables["chapter_heading"] == "2 模型建立与求解"
+    # 续写章节能看到检查点章节的滚动摘要
+    assert "第一章摘要（来自检查点）" in llm.calls[0].variables["previous_digests"]
+    # 检查点正文原样进入最终成稿
+    assert result.outputs["sections"][0]["content"] == "第一次尝试已写完的第一章正文。"
+
+
+def test_paper_writing_stale_checkpoint_regenerates(registry):
+    """输入指纹对不上（题面/方案变了）：作废检查点，整篇重来。"""
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    services = make_services(llm)
+    services.extras["paper_resume"] = lambda: {
+        "inputs_hash": "0" * 64,
+        "outline": PAPER_OUTLINE_OK,
+        "sections": [],
+    }
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), services)
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert "resumed_chapters" not in result.metrics
+    assert [call.prompt_id for call in llm.calls][0] == "paper_outline.default"
+
+
+def test_paper_writing_length_revision_is_bounded(registry):
+    """字数带宽越界触发一次有界重写；全文额度用完后只记警告不再加调用。"""
+    good = "字" * 600  # 恰为第一章目标 600 的带宽中心
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(PAPER_OUTLINE_OK)],
+        "paper_section.default": [
+            stub_response({"content": "太短。", "digest": "d1"}),  # 第 1 章首稿越界
+            stub_response({"content": good, "digest": "d2"}),      # 重写后达标；之后重复
+        ],
+        "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.SUCCEEDED
+    # 第 1 章重写并被采纳；第 2 章（目标 1200）600 字仍越界，用掉第二次额度但
+    # 重写结果没有更接近目标 → 保留原稿并记警告；第 3 章（目标 700）600 字在带宽内。
+    assert result.metrics["length_revisions"] == 2
+    assert result.outputs["sections"][0]["content"] == good
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    assert len(section_calls) == 5  # 3 章正稿 + 2 次重写
+    # 重写调用带上了字数偏差反馈
+    assert "超出目标带宽" in section_calls[1].variables["__repair_error"]
+    assert any("字数" in w for w in result.metrics["quality_warnings"])
 
 
 def test_render_paper_markdown_skips_blank_sections():

@@ -119,6 +119,56 @@ CANNED_PAPER = {
     ],
 }
 
+# 论文阶段的分章多轮管线（doc/paper-multipass-generation-plan.md）：总编规划 →
+# 逐章写作 → 统稿收口。标题与摘要沿用 CANNED_PAPER，既有断言不因此漂移；
+# CANNED_PAPER 本体保留为回退单次调用（paper_writing.default）的保底答案。
+
+CANNED_PAPER_OUTLINE = {
+    "title": CANNED_PAPER["title"],
+    "keywords": ["运量预测", "线性回归"],
+    "notation": "| 符号 | 含义 | 单位 |\n| --- | --- | --- |\n| $y_t$ | 第 t 季度运量 | 万吨 |",
+    "chapters": [
+        {
+            "heading": "1 问题重述",
+            "brief": "背景与逐条任务要求",
+            "target_chars": 600,
+            "source_keys": ["problem_analysis"],
+        },
+        {
+            "heading": "2 模型建立与求解",
+            "brief": "线性趋势拟合与整数规划配置，引用 rmse=0.042",
+            "target_chars": 1200,
+            "source_keys": ["chosen_plan", "experiment_summary"],
+        },
+        {
+            "heading": "3 模型检验",
+            "brief": "检验结论与外推风险",
+            "target_chars": 700,
+            "source_keys": ["validation_summary"],
+        },
+    ],
+}
+
+CANNED_PAPER_FINALIZE = {
+    "abstract": CANNED_PAPER["abstract"],
+    "keywords": CANNED_PAPER["keywords"],
+    "progress_note": "论文已按三章完成，可在论文页查看与导出。",
+}
+
+
+def canned_paper_section(variables: dict[str, Any]) -> str:
+    """章节写作的脚本化回复：按 chapter_heading 生成，便于断言调用顺序。
+
+    正文填充到本章目标字数：达标稿不触发节点的字数有界重写，调用序列确定。
+    """
+    heading = str(variables.get("chapter_heading") or "")
+    lead = f"围绕 rmse=0.042 与基线 0.31 的对比展开。（{heading}）"
+    target = int(variables.get("target_chars") or 600)
+    return stub_response({
+        "content": lead + "析" * max(target - len(lead), 0),
+        "digest": f"{heading}已完成",
+    })
+
 #: results.csv content the scripted sandbox publishes on success.
 FULL_CHAIN_RESULTS_CSV = b"quarter,volume_pred\n9,108.4\n"
 
@@ -243,7 +293,12 @@ class FakeToolInvoker:
 
 
 def build_full_chain_llm() -> StubLlmPort:
-    """Stub responses for all six prompt ids of the default registry."""
+    """Stub responses for every prompt id the six real nodes may consult.
+
+    The paper stage is a multipass pipeline (outline → sections → finalize);
+    ``paper_writing.default`` stays stubbed so the single-call fallback path
+    remains exercisable from evals.
+    """
     return StubLlmPort(
         {
             "problem_analysis.default": stub_response(CANNED_ANALYSIS, fenced=True),
@@ -251,6 +306,9 @@ def build_full_chain_llm() -> StubLlmPort:
             "model_planning.default": stub_response(CANNED_PLANNING),
             "experiment_code.default": stub_response(CANNED_EXPERIMENT),
             "validating.default": stub_response(CANNED_VALIDATION),
+            "paper_outline.default": stub_response(CANNED_PAPER_OUTLINE),
+            "paper_section.default": canned_paper_section,
+            "paper_finalize.default": stub_response(CANNED_PAPER_FINALIZE),
             "paper_writing.default": stub_response(CANNED_PAPER),
         }
     )
@@ -324,14 +382,19 @@ def build_full_chain_session(
     )
 
 
-#: Prompt ids in stage order — the happy path calls each exactly once.
+#: Prompt ids in stage order. The first five stages call once each; the paper
+#: stage is a multipass pipeline: outline → one call per chapter → finalize.
 FULL_CHAIN_PROMPT_SEQUENCE = [
     "problem_analysis.default",
     "data_preparation.default",
     "model_planning.default",
     "experiment_code.default",
     "validating.default",
-    "paper_writing.default",
+    "paper_outline.default",
+    "paper_section.default",
+    "paper_section.default",
+    "paper_section.default",
+    "paper_finalize.default",
 ]
 
 #: Exact event-type trajectory of the full-chain happy path (review gate,

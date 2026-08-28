@@ -46,6 +46,10 @@ CANNED_ANALYSIS = {
     "constraints": ["车辆总数不超过 50", "预算上限 200 万"],
     "data_requirements": ["历史运量时间序列", "车辆成本表"],
     "key_assumptions": ["运量趋势短期线性"],
+    "subquestions": [
+        {"id": "q1", "text": "基于历史序列预测下季度运量", "depends_on": []},
+        {"id": "q2", "text": "按预测运量求最优车辆配置", "depends_on": ["q1"]},
+    ],
 }
 
 CANNED_PLANNING = {

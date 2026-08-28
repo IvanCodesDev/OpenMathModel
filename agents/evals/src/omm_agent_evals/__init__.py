@@ -14,6 +14,8 @@
 from .full_chain import (
     CANNED_EXPERIMENT,
     CANNED_PAPER,
+    CANNED_PAPER_FINALIZE,
+    CANNED_PAPER_OUTLINE,
     CANNED_PREPARATION,
     CANNED_VALIDATION,
     FULL_CHAIN_GOLDEN_EVENT_TYPES,
@@ -25,6 +27,7 @@ from .full_chain import (
     ScriptedRun,
     build_full_chain_llm,
     build_full_chain_session,
+    canned_paper_section,
     sandbox_failure,
     sandbox_success,
 )
@@ -42,6 +45,8 @@ __all__ = [
     "CANNED_ANALYSIS",
     "CANNED_EXPERIMENT",
     "CANNED_PAPER",
+    "CANNED_PAPER_FINALIZE",
+    "CANNED_PAPER_OUTLINE",
     "CANNED_PLANNING",
     "CANNED_PREPARATION",
     "CANNED_VALIDATION",
@@ -59,6 +64,7 @@ __all__ = [
     "build_full_chain_session",
     "build_llm",
     "build_runtime",
+    "canned_paper_section",
     "sandbox_failure",
     "sandbox_success",
 ]

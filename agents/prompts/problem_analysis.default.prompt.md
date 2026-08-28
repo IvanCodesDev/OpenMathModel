@@ -2,9 +2,9 @@
 id: problem_analysis.default
 stage: PROBLEM_ANALYSIS
 variant: default
-version: 5
+version: 6
 input_schema: {"type": "object", "required": ["problem_statement"], "properties": {"problem_statement": {"type": "string"}, "attachments_summary": {"type": "string"}}}
-output_schema: {"type": "object", "required": ["viability", "title", "problem_type", "objectives", "constraints", "data_requirements"], "properties": {"viability": {"type": "string", "enum": ["ok", "insufficient"]}, "missing_info": {"type": "array", "items": {"type": "string"}}, "title": {"type": "string"}, "problem_type": {"type": "string"}, "objectives": {"type": "array", "items": {"type": "string"}}, "constraints": {"type": "array", "items": {"type": "string"}}, "data_requirements": {"type": "array", "items": {"type": "string"}}, "key_assumptions": {"type": "array", "items": {"type": "string"}}, "plan_outline": {"type": "array", "items": {"type": "object", "required": ["stage", "text"], "properties": {"stage": {"type": "string", "enum": ["PROBLEM_ANALYSIS", "DATA_PREPARATION", "MODEL_PLANNING", "EXPERIMENTING", "VALIDATING", "PAPER_WRITING"]}, "text": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
+output_schema: {"type": "object", "required": ["viability", "title", "problem_type", "objectives", "constraints", "data_requirements", "subquestions"], "properties": {"viability": {"type": "string", "enum": ["ok", "insufficient"]}, "missing_info": {"type": "array", "items": {"type": "string"}}, "title": {"type": "string"}, "problem_type": {"type": "string"}, "objectives": {"type": "array", "items": {"type": "string"}}, "constraints": {"type": "array", "items": {"type": "string"}}, "data_requirements": {"type": "array", "items": {"type": "string"}}, "key_assumptions": {"type": "array", "items": {"type": "string"}}, "subquestions": {"type": "array", "items": {"type": "object", "required": ["id", "text", "depends_on"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "depends_on": {"type": "array", "items": {"type": "string"}}}}}, "plan_outline": {"type": "array", "items": {"type": "object", "required": ["stage", "text"], "properties": {"stage": {"type": "string", "enum": ["PROBLEM_ANALYSIS", "DATA_PREPARATION", "MODEL_PLANNING", "EXPERIMENTING", "VALIDATING", "PAPER_WRITING"]}, "text": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的资深教练。请先判定下面的输入是否足以启动一次建模任务，再提取建模所需的结构化信息并给出针对本题的执行计划。
 
@@ -35,5 +35,6 @@ output_schema: {"type": "object", "required": ["viability", "title", "problem_ty
 - `constraints`：题目明确给出的约束与边界条件列表。
 - `data_requirements`：完成建模需要的数据清单（含题目附带与需自行收集）。
 - `key_assumptions`：为使问题可解而需要显式声明的关键假设列表。
+- `subquestions`：把题目分解为可独立推进的子问题列表，每条含 `id`（如 "q1"、"q2"，按序编号）、`text`（子问题的一句话描述，应与 objectives 对应）、`depends_on`（依赖的其他子问题 id 列表，无依赖给空数组）。题目无法分解时给恰好一条覆盖全题（depends_on 为空数组）；insufficient 时给空数组。
 - `plan_outline`：viability 为 "ok" 时给出针对本题的执行计划，恰好 6 条、按顺序对应 stage 枚举 PROBLEM_ANALYSIS / DATA_PREPARATION / MODEL_PLANNING / EXPERIMENTING / VALIDATING / PAPER_WRITING 各一条；每条 `text` 是本题专属的行动短句（12~24 字，须点名本题的对象与关键约束，如「解析单车调度的三个子问题与容量约束」，禁止「进行问题分析」这类通用套话，不含句号）。insufficient 时给空数组。
 - `progress_note`：两三句面向用户的进度汇报（本阶段读出了什么问题、关键难点在哪、接下来先做什么），口语化、说人话，不要罗列字段清单；它会直接显示在任务页的执行过程里。
