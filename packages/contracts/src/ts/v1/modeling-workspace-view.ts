@@ -119,4 +119,8 @@ export interface ApprovalOption {
   id: string;
   label: string;
   description?: string | null;
+  /**
+   * AI 推荐项标记：多正向选项的闸门（如 G2 数据闸门）用它声明默认选择；至多一个选项为 true，null/缺省等价于 false。
+   */
+  recommended?: boolean | null;
 }

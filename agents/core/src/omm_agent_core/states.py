@@ -13,6 +13,9 @@ Design decisions (kept deliberately small for the MVP loop):
   suspend into it, and resolving the review resumes an explicit target state.
 - FAILED is terminal for the engine loop but retryable through an explicit
   ``retry`` action, which re-enters the state that failed (attempt + 1).
+- COMPLETED is terminal for the loop too; the only way out is an explicit
+  ``request_revision`` (ADR-0013), which suspends into NEEDS_REVIEW carrying
+  the stage the user wants redone.
 - Pause/cancel are control flags on the run, not states: they gate scheduling
   without exploding the transition matrix.
 """
@@ -47,7 +50,9 @@ WORK_SEQUENCE: tuple[TaskState, ...] = (
 
 WORK_STATES: frozenset[TaskState] = frozenset(WORK_SEQUENCE)
 
-#: Terminal for the scheduling loop. FAILED can still be left via `retry`.
+#: Terminal for the scheduling loop: ``advance`` is a no-op here. Neither is
+#: a dead end for the user — FAILED is left via `retry`, COMPLETED via
+#: `request_revision` (ADR-0013); both need an explicit action, never the loop.
 TERMINAL_STATES: frozenset[TaskState] = frozenset(
     {TaskState.COMPLETED, TaskState.FAILED}
 )
@@ -85,12 +90,26 @@ def can_transition(source: TaskState, target: TaskState) -> bool:
         return target is next_work_state(source)
     if source is TaskState.NEEDS_REVIEW:
         # Approve resumes any work state (reviewer may send the run backwards);
-        # reject fails the run.
-        return target in WORK_STATES or target is TaskState.FAILED
+        # reject fails the run. COMPLETED is reachable ONLY to undo a revision
+        # request on an already-finished run (ADR-0013) — declining that gate
+        # restores the terminal state instead of failing a run that never
+        # broke. The matrix cannot tell the two gates apart (it sees only the
+        # state pair), so the reducer is what keeps a node-raised gate from
+        # ever landing here; see ``_on_review_resolved``.
+        return (
+            target in WORK_STATES
+            or target is TaskState.FAILED
+            or target is TaskState.COMPLETED
+        )
     if source is TaskState.FAILED:
         # Explicit retry re-enters the work state that failed.
         return target in WORK_STATES
-    return False  # COMPLETED is fully terminal.
+    if source is TaskState.COMPLETED:
+        # 修订回合（ADR-0013）：跑完之后用户还能要求返工。唯一出边是评审门，
+        # 由 REVISION_REQUESTED 显式打开——批准后从选定阶段回退重做，
+        # 拒绝则维持已完成。除此之外 COMPLETED 仍然封死。
+        return target is TaskState.NEEDS_REVIEW
+    return False
 
 
 def assert_transition(source: TaskState, target: TaskState) -> None:

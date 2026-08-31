@@ -31,6 +31,12 @@ from .registry import ToolCallContext, ToolNotAllowed, ToolRegistry
 
 _SUMMARY_LIMIT = 512
 
+#: Failed calls carry a bounded stderr/stdout tail in the event payload.
+#: Without it the audit trail only says "exited with code 1" — the actual
+#: crash reason lived solely in the in-memory repair loop and was lost to
+#: both the UI trace and post-hoc diagnosis.
+_FAILURE_DETAIL_LIMIT = 2000
+
 #: §4.3: at most this many tool calls run concurrently within one turn.
 MAX_TURN_PARALLELISM = 2
 
@@ -54,6 +60,23 @@ def summarize(value: Any, limit: int = _SUMMARY_LIMIT) -> str:
         return text
     suffix = f"...(+{len(text) - limit} chars)"
     return text[: max(limit - len(suffix), 0)] + suffix
+
+
+def failure_detail(result: ToolResult, limit: int = _FAILURE_DETAIL_LIMIT) -> str:
+    """Crash evidence for a failed/timeout call: stderr tail, else stdout tail.
+
+    Tail, not head — Python tracebacks put the failing frame and exception
+    type at the end. Bounded so a runaway print loop cannot flood the event
+    table.
+    """
+    output = result.output if isinstance(result.output, dict) else {}
+    stderr = str(output.get("stderr") or "").strip()
+    if stderr:
+        return stderr[-limit:]
+    stdout = str(output.get("stdout") or "").strip()
+    if stdout:
+        return stdout[-limit:]
+    return ""
 
 
 class RecordingInvoker:
@@ -201,6 +224,10 @@ class RecordingInvoker:
             ),
             "artifact_ids": [ref.artifact_id for ref in result.artifacts],
         }
+        if not result.ok:
+            detail = failure_detail(result)
+            if detail:
+                payload["failure_detail"] = detail
         if idempotent_replay:
             payload["idempotent_replay"] = True
         self._recorder(EventType.TOOL_CALLED, payload)

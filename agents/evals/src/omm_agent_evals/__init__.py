@@ -13,11 +13,14 @@
 
 from .full_chain import (
     CANNED_EXPERIMENT,
+    CANNED_EXPERIMENT_CODE,
     CANNED_PAPER,
     CANNED_PAPER_FINALIZE,
     CANNED_PAPER_OUTLINE,
     CANNED_PREPARATION,
     CANNED_VALIDATION,
+    FULL_CHAIN_CHAT_SEQUENCE,
+    FULL_CHAIN_ENV,
     FULL_CHAIN_GOLDEN_EVENT_TYPES,
     FULL_CHAIN_METRICS,
     FULL_CHAIN_PROMPT_SEQUENCE,
@@ -28,6 +31,7 @@ from .full_chain import (
     build_full_chain_llm,
     build_full_chain_session,
     canned_paper_section,
+    canned_sandbox_agent,
     sandbox_failure,
     sandbox_success,
 )
@@ -44,6 +48,7 @@ from .scenario import (
 __all__ = [
     "CANNED_ANALYSIS",
     "CANNED_EXPERIMENT",
+    "CANNED_EXPERIMENT_CODE",
     "CANNED_PAPER",
     "CANNED_PAPER_FINALIZE",
     "CANNED_PAPER_OUTLINE",
@@ -51,6 +56,8 @@ __all__ = [
     "CANNED_PREPARATION",
     "CANNED_VALIDATION",
     "EXPERIMENT_CODE",
+    "FULL_CHAIN_CHAT_SEQUENCE",
+    "FULL_CHAIN_ENV",
     "FULL_CHAIN_GOLDEN_EVENT_TYPES",
     "FULL_CHAIN_METRICS",
     "FULL_CHAIN_PROMPT_SEQUENCE",
@@ -65,6 +72,7 @@ __all__ = [
     "build_llm",
     "build_runtime",
     "canned_paper_section",
+    "canned_sandbox_agent",
     "sandbox_failure",
     "sandbox_success",
 ]

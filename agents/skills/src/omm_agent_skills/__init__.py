@@ -4,11 +4,15 @@
 不在 Prompt 里隐式约定。
 """
 
-from .llm import LlmCall, ScriptedLlmPort, StubLlmPort, stub_response
+from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
+from .llm import ChatCall, LlmCall, ScriptedLlmPort, StubLlmPort, stub_response
 from .nodes import (
+    CLEANING_PROMPT_ID,
     DEFAULT_AVAILABLE_PACKAGES,
     DEFAULT_HARDWARE_NOTE,
+    G2_ROW_DELETION_THRESHOLD,
     PYTHON_TOOL_NAME,
+    SANDBOX_TOOL_NAMES,
     DataPreparationNode,
     ExperimentExecutionNode,
     LlmSkillNode,
@@ -33,10 +37,14 @@ from .prompt_registry import (
 from .schema import validate
 
 __all__ = [
+    "CLEANING_PROMPT_ID",
     "DEFAULT_AVAILABLE_PACKAGES",
     "DEFAULT_HARDWARE_NOTE",
     "DEFAULT_PROMPTS_DIR",
+    "G2_ROW_DELETION_THRESHOLD",
     "PYTHON_TOOL_NAME",
+    "SANDBOX_TOOL_NAMES",
+    "ChatCall",
     "DataPreparationNode",
     "ExperimentExecutionNode",
     "LlmCall",
@@ -58,5 +66,8 @@ __all__ = [
     "parse_prompt_text",
     "render_paper_markdown",
     "stub_response",
+    "supports_chat",
+    "text_protocol_chat",
+    "tool_protocol_note",
     "validate",
 ]

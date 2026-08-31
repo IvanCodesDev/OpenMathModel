@@ -119,6 +119,14 @@ def test_timeout_reaps_to_envelope_not_exception() -> None:
     assert envelope.error_code == "E530"
 
 
+def test_infinite_wall_clock_means_no_timeout_not_overflow() -> None:
+    """控制面墙钟未启用（inf）时：join 按无超时等待而非 OverflowError。"""
+    supervisor = SubagentSupervisor()
+    spec = make_spec(budgets=RunBudget(max_wall_clock_s=float("inf")))
+    envelope = supervisor.spawn(spec, done_runner, parent_tier="execute")
+    assert envelope.ok and envelope.output == {"ok": True}
+
+
 # -- E520：Envelope 输出违约 ------------------------------------------------------
 
 

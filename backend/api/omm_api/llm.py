@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -775,9 +776,48 @@ def parse_stream_data(protocol: str, payload: str) -> tuple[str, str, bool, dict
 # ── HTTP 执行与备用回退 ─────────────────────────────────────────────────────
 
 
-def _client(read_timeout: float) -> httpx.Client:
+def bypasses_http_proxy(host: str) -> bool:
+    """本机 / 私网 / 链路本地地址：经系统代理转发没有意义，必须直连。
+
+    httpx 的 trust_env 只认 NO_PROXY 环境变量，不读 Windows 注册表的
+    ProxyOverride——即便系统自己的 proxy_bypass('127.0.0.1') 返回 True、
+    绕过列表里明明写着 127.*，httpx 照样把请求塞进系统代理。真实后果：
+    开着系统代理时，本机 Ollama / vLLM / 自建网关的调用被送进代理，用户
+    拿到的是代理返回的「接口 X 返回 HTTP 502」，与接口本身毫无关系。
+    """
+    host = host.strip().strip("[]").lower()
+    if not host:
+        return False
+    if host == "localhost" or host.endswith((".localhost", ".local")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+def _direct_mounts(url: str) -> dict[str, Optional[httpx.BaseTransport]]:
+    """只把该直连的目标摘出系统代理，而不是整体关掉 trust_env。
+
+    境内访问官方厂商多半依赖系统代理，一刀切关掉会把能用的接口打死；按目标
+    主机挂一条更具体的空代理规则，httpx 取最具体匹配，官方域名照走代理。
+    """
+    host = urlsplit(url).hostname or ""
+    if not bypasses_http_proxy(host):
+        return {}
+    pattern_host = f"[{host}]" if ":" in host else host
+    return {f"all://{pattern_host}": None}
+
+
+def _client(read_timeout: float, url: str = "") -> httpx.Client:
     timeout = httpx.Timeout(read_timeout, connect=CONNECT_TIMEOUT_S)
-    return httpx.Client(timeout=timeout, transport=_transport_factory(), follow_redirects=False)
+    return httpx.Client(
+        timeout=timeout,
+        transport=_transport_factory(),
+        follow_redirects=False,
+        mounts=_direct_mounts(url),
+    )
 
 
 def _upstream_error(endpoint: LlmEndpoint, response: httpx.Response) -> ApiError:
@@ -837,7 +877,7 @@ def _is_transient(error: Exception) -> bool:
 def _post(endpoint: LlmEndpoint, url: str, headers: dict[str, str], body: dict[str, Any], read_timeout: float) -> httpx.Response:
     """一次出网调用：网络层异常归一成可执行的错误信封，绝不以 500 裸露给页面。"""
     try:
-        with _client(read_timeout) as client:
+        with _client(read_timeout, url) as client:
             return client.post(url, headers=headers, json=body)
     except httpx.TimeoutException as error:
         raise ApiError(
@@ -1002,7 +1042,7 @@ def stream_complete_with_fallback(
         plain_lines: list[str] = []
         actual_model = ""
         try:
-            with _client(CHAT_READ_TIMEOUT_S) as client, client.stream(
+            with _client(CHAT_READ_TIMEOUT_S, url) as client, client.stream(
                 "POST", url, headers=headers, json=body
             ) as response:
                 if response.status_code == 429:
@@ -1114,7 +1154,7 @@ def stream_events(
         emitted = False
         usage: dict[str, int] = {}
         try:
-            with _client(CHAT_READ_TIMEOUT_S) as client, client.stream("POST", url, headers=headers, json=body) as response:
+            with _client(CHAT_READ_TIMEOUT_S, url) as client, client.stream("POST", url, headers=headers, json=body) as response:
                 if response.status_code == 429:
                     raise ApiError(429, "LLM_RATE_LIMITED", f"接口「{endpoint.name}」触发限流（HTTP 429）")
                 if response.status_code >= 400:
@@ -1245,7 +1285,7 @@ def list_models(endpoint: LlmEndpoint, allow_proxy: bool) -> list[str]:
     ensure_proxy_allowed(endpoint, allow_proxy)
     url, headers = build_models_request(endpoint)
     try:
-        with _client(MODELS_READ_TIMEOUT_S) as client:
+        with _client(MODELS_READ_TIMEOUT_S, url) as client:
             response = client.get(url, headers=headers)
     except httpx.TimeoutException as error:
         raise ApiError(
@@ -1273,14 +1313,31 @@ def list_models(endpoint: LlmEndpoint, allow_proxy: bool) -> list[str]:
 # ── 任务引擎的 LlmPort 适配 ────────────────────────────────────────────────
 
 
-#: 思考内容进事件流的截断上限：事件是过程展示不是正文存储，防止巨型 payload。
-THINKING_EVENT_MAX_CHARS = 6000
+#: 思考内容进事件流的截断上限。取值要能装下推理模型一次调用的完整思考链
+#: （论文写作、方案规划这类长任务的 reasoning 常有数万字），超出才截断并在
+#: 末尾留可见标记——静默砍断会让工作台的「深度思考」盒子看起来是坏的。
+THINKING_EVENT_MAX_CHARS = 200_000
 
 #: llm_delta 过程事件的节流与总量上限：事件表是过程观测通道，增量按秒级
-#: 批量下发（工作台实时可见），超过总量后停发增量（结尾的 thinking/llm_call
-#: 摘要事件不受影响）。
+#: 批量下发（工作台实时可见）。上限只作为异常输出（模型进入重复循环等）的
+#: 兜底闸门，正常长文生成不该碰到它；触顶时补发一条 notice 增量说明原因，
+#: 而不是让实时盒子无声停住。结尾的 thinking/llm_call 摘要事件不受影响。
 DELTA_EVENT_FLUSH_SECONDS = 1.0
-DELTA_EVENT_MAX_TOTAL_CHARS = 24_000
+DELTA_EVENT_MAX_TOTAL_CHARS = 800_000
+
+#: 触顶时补发的说明文案（channel=notice，前端原样追加到实时盒子末尾）。
+DELTA_EVENT_TRUNCATED_NOTICE = (
+    "\n\n[本次生成的实时增量已达 {limit:,} 字上限，后续内容不再逐字推送；"
+    "完整结果以本步骤的最终产出为准。]"
+)
+
+#: 任务引擎一次 LLM 调用的最大尝试数（1 次正常 + 至多 2 次瞬态故障重试）。
+#: 只重试 _is_transient 认定的瞬态类（断连 / 超时 / 限流）；402 余额不足是
+#: 确定性失败（链内回退已试过备用接口），不烧重试预算。输出结构校验失败的
+#: 修复重试是 harness 内环的另一套预算，与这里无关。
+ENGINE_CALL_MAX_ATTEMPTS = 3
+#: 第 1、2 次重试前的退避秒数：给上游网关一点恢复时间，也避免限流下连环撞墙。
+ENGINE_CALL_RETRY_BACKOFF_S = (2.0, 5.0)
 
 
 class _DeltaEventBuffer:
@@ -1292,9 +1349,11 @@ class _DeltaEventBuffer:
         self._chunks: list[tuple[str, str]] = []
         self._last_flush = time.monotonic()
         self._emitted_chars = 0
+        self._notice_sent = False
 
     def push(self, channel: str, text: str) -> None:
         if self._emitted_chars >= DELTA_EVENT_MAX_TOTAL_CHARS:
+            self._notify_truncated()
             return
         self._chunks.append((channel, text))
         if time.monotonic() - self._last_flush >= DELTA_EVENT_FLUSH_SECONDS:
@@ -1316,8 +1375,10 @@ class _DeltaEventBuffer:
         for channel, texts in merged:
             budget = DELTA_EVENT_MAX_TOTAL_CHARS - self._emitted_chars
             if budget <= 0:
+                self._notify_truncated()
                 return
-            text = "".join(texts)[:budget]
+            joined = "".join(texts)
+            text = joined[:budget]
             self._emitted_chars += len(text)
             self._emit({
                 "kind": "llm_delta",
@@ -1325,6 +1386,35 @@ class _DeltaEventBuffer:
                 "channel": channel,
                 "text": text,
             })
+            if len(text) < len(joined):
+                self._notify_truncated()
+                return
+
+    def _notify_truncated(self) -> None:
+        """触顶只说明一次：让实时盒子有明确结尾，而不是无声定格。"""
+        if self._notice_sent:
+            return
+        self._notice_sent = True
+        self._emit({
+            "kind": "llm_delta",
+            "prompt_id": self._prompt_id,
+            "channel": "notice",
+            "text": DELTA_EVENT_TRUNCATED_NOTICE.format(
+                limit=DELTA_EVENT_MAX_TOTAL_CHARS
+            ),
+        })
+
+
+def _clip_thinking(reasoning: str) -> str:
+    """思考内容进事件流前的封顶：正常长度原样保留，触顶才截断并标明，
+    让工作台展开后能分清「思考就这么长」和「被平台截断了」。"""
+    if len(reasoning) <= THINKING_EVENT_MAX_CHARS:
+        return reasoning
+    return (
+        reasoning[:THINKING_EVENT_MAX_CHARS]
+        + f"\n\n[思考内容超过 {THINKING_EVENT_MAX_CHARS:,} 字上限，"
+        f"此处已截断（原文共 {len(reasoning):,} 字）。]"
+    )
 
 
 def _estimate_tokens(text: str) -> int:
@@ -1391,6 +1481,71 @@ class EngineLlmPort:
         except Exception:  # noqa: BLE001 - 过程展示事件绝不允许影响执行本身
             logger.exception("llm 过程事件回调失败")
 
+    def _complete_with_transport_retry(
+        self,
+        prompt_id: str,
+        node_id: Optional[str],
+        messages: list[dict[str, str]],
+        repair: bool,
+    ) -> ChatOutcome:
+        """整次调用粒度的瞬态故障自愈：断连 / 超时 / 限流时重来一次调用。
+
+        流式生成中途上游断连（peer closed connection 等）在传输层不做接口
+        回退——增量已经吐出，换接口续写会内容重复；但在任务引擎里一次调用
+        失败会让整个任务直接 FAILED（真实案例：论文章节写到一半 DeepSeek 断
+        连，任务死亡、页面实时盒子定格在半截）。这里按「整次调用」重试：
+        部分增量作废、从头重新生成。前端对重复的 llm_call_started 会复用同
+        一行、清空实时区并把标题标成「第 N 次尝试」，事件语义现成。
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, ENGINE_CALL_MAX_ATTEMPTS + 1):
+            # 预算预检（失控保护）：超限在花钱之前拦下（重试轮也要过这道门，
+            # 墙钟 / 调用数达限时绝不靠重试续命），AgentError 上抛由节点层
+            # 转成带 E31x/E32x 错误码的干净失败信息。
+            if self._budget is not None:
+                self._budget.check_llm_call(node_id)
+            # 调用开始即发过程事件：模型一次调用动辄一两分钟，没有这条事件的话
+            # 工作台在整个阶段里收不到任何东西，结束时才一次性收到全部过程行。
+            self._emit({
+                "kind": "llm_call_started",
+                "prompt_id": prompt_id,
+                "repair": repair,
+            })
+            try:
+                if self._config.stream:
+                    # 流式：思考与正文增量按秒级批量进事件流，工作台实时可见；
+                    # 读超时按块计，长产出不再被总时长误杀。每次尝试用全新的
+                    # 增量缓冲，截断预算随尝试重置。
+                    deltas = _DeltaEventBuffer(self._emit, prompt_id)
+                    outcome = stream_complete_with_fallback(
+                        self._config, messages, on_delta=deltas.push
+                    )
+                    deltas.flush()
+                    return outcome
+                return complete_with_fallback(self._config, messages)
+            except Exception as error:
+                # 失败也要给事件流一个收尾：没有这条事件，工作台的走秒思考行会
+                # 永远悬挂（页面重进时还会堆出一排同秒走时的僵尸行）。
+                message = error.message if isinstance(error, ApiError) else str(error)
+                self._emit({
+                    "kind": "llm_call_failed",
+                    "prompt_id": prompt_id,
+                    "error": message[:300],
+                })
+                last_error = error
+                if attempt < ENGINE_CALL_MAX_ATTEMPTS and _is_transient(error):
+                    backoff = ENGINE_CALL_RETRY_BACKOFF_S[
+                        min(attempt - 1, len(ENGINE_CALL_RETRY_BACKOFF_S) - 1)
+                    ]
+                    logger.warning(
+                        "llm engine call retry: prompt=%s attempt=%d/%d backoff=%.0fs (%s)",
+                        prompt_id, attempt, ENGINE_CALL_MAX_ATTEMPTS, backoff, message,
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise
+        raise last_error if last_error else AssertionError("unreachable")
+
     def complete(self, prompt_id: str, variables: dict[str, Any]) -> str:
         template = self._registry.get(prompt_id)
         prompt = template.render(variables)
@@ -1409,44 +1564,56 @@ class EngineLlmPort:
                 f"上次输出（节选）：\n{previous[:2000]}\n\n"
                 "请修正以上问题，重新只输出一个符合输出要求的 JSON 对象。"
             )
-        # 预算预检（失控保护）：超限在花钱之前拦下，AgentError 上抛由节点层
-        # 转成带 E31x/E32x 错误码的干净失败信息。
-        if self._budget is not None:
-            self._budget.check_llm_call(node_id)
-        # 调用开始即发过程事件：模型一次调用动辄一两分钟，没有这条事件的话
-        # 工作台在整个阶段里收不到任何东西，结束时才一次性收到全部过程行。
-        self._emit({
-            "kind": "llm_call_started",
-            "prompt_id": prompt_id,
-            "repair": bool(repair_error),
-        })
         messages = [{"role": "user", "content": prompt}]
-        try:
-            if self._config.stream:
-                # 流式：思考与正文增量按秒级批量进事件流，工作台实时可见；
-                # 读超时按块计，长产出不再被总时长误杀。
-                deltas = _DeltaEventBuffer(self._emit, prompt_id)
-                outcome = stream_complete_with_fallback(
-                    self._config, messages, on_delta=deltas.push
-                )
-                deltas.flush()
+        outcome = self._complete_with_transport_retry(
+            prompt_id, node_id, messages, repair=bool(repair_error)
+        )
+        return self._account_and_emit(prompt_id, node_id, outcome, prompt_text=prompt)
+
+    def chat_text(self, messages: list[dict[str, str]], *, label: str) -> str:
+        """会话式调用（skills 侧 chat_adapter 的鸭子契约）：沙盒执行体的多轮
+        写码/跑码会话经此出网。
+
+        与 ``complete`` 同一条出口纪律：传输层瞬态重试、预算预检与记账、过程
+        事件（llm_call_started/thinking/llm_call）、用量监控全部在端口内完成。
+        ``label`` 即提示词 id（experiment_code.sandbox / data_cleaning.sandbox），
+        事件展示与预算记账按 ``node_for_prompt`` 归属到节点。运行中用户备注
+        （§11.3）拼进系统消息——实验阶段迁到沙盒会话后该特性不随 complete
+        路径退场；沙盒任务卡属任务上下文，备注拼接位置与模板渲染路径同义。
+        """
+        node_id = self._node_for_prompt.get(label)
+        wire = [dict(message) for message in messages]
+        notes = notes_prompt_block(self._user_notes, node_id)
+        if notes:
+            for message in wire:
+                if message.get("role") == "system":
+                    message["content"] = str(message.get("content") or "") + notes
+                    break
             else:
-                outcome = complete_with_fallback(self._config, messages)
-        except Exception as error:
-            # 失败也要给事件流一个收尾：没有这条事件，工作台的走秒思考行会
-            # 永远悬挂（页面重进时还会堆出一排同秒走时的僵尸行）。
-            message = error.message if isinstance(error, ApiError) else str(error)
-            self._emit({
-                "kind": "llm_call_failed",
-                "prompt_id": prompt_id,
-                "error": message[:300],
-            })
-            raise
+                wire.insert(0, {"role": "system", "content": notes.strip()})
+        outcome = self._complete_with_transport_retry(label, node_id, wire, repair=False)
+        # 会话没有单条 prompt 文本：指纹与用量粗估都以整个消息序列的规范化
+        # 序列化为准（与 ContextAssembler 的 prompt_hash 同一构造思路）。
+        canonical = json.dumps(
+            [[str(m.get("role") or ""), str(m.get("content") or "")] for m in wire],
+            ensure_ascii=False,
+        )
+        return self._account_and_emit(label, node_id, outcome, prompt_text=canonical)
+
+    def _account_and_emit(
+        self,
+        prompt_id: str,
+        node_id: Optional[str],
+        outcome: ChatOutcome,
+        prompt_text: str,
+    ) -> str:
+        """调用成功后的统一出口（complete 与 chat_text 共用）：用量补齐与
+        记账、思考/调用摘要事件、prompt 指纹。"""
         # 部分网关的流式响应不带用量：按字符粗估补齐，预算硬停与用量监控
         # 需要量级正确的数字（0 会让 token 上限形同虚设）。
         estimated = False
         if not outcome.usage.get("prompt_tokens"):
-            outcome.usage["prompt_tokens"] = _estimate_tokens(prompt)
+            outcome.usage["prompt_tokens"] = _estimate_tokens(prompt_text)
             estimated = True
         if not outcome.usage.get("completion_tokens"):
             outcome.usage["completion_tokens"] = _estimate_tokens(
@@ -1468,7 +1635,7 @@ class EngineLlmPort:
                 "kind": "thinking",
                 "prompt_id": prompt_id,
                 "elapsed_ms": outcome.elapsed_ms,
-                "text": outcome.reasoning[:THINKING_EVENT_MAX_CHARS],
+                "text": _clip_thinking(outcome.reasoning),
             })
         self._emit({
             "kind": "llm_call",
@@ -1480,7 +1647,7 @@ class EngineLlmPort:
             "completion_tokens": outcome.usage.get("completion_tokens"),
             # D2.2 审计规格：最终发出 prompt 的指纹（渲染+备注+修复拼接之后）。
             # 「同输入同 prompt」的纯函数纪律由此可在事件日志层面被 evals 断言。
-            "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "prompt_hash": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(),
             **({"tokens_estimated": True} if estimated else {}),
         })
         return outcome.text

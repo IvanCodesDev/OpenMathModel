@@ -11,6 +11,7 @@ from .invoker import (
     RecordingInvoker,
     args_fingerprint,
     execute_parallel,
+    failure_detail,
     summarize,
 )
 from .python_runner import PythonSandbox, probe_sandbox_gpu
@@ -53,6 +54,7 @@ __all__ = [
     "args_fingerprint",
     "env_fingerprint",
     "execute_parallel",
+    "failure_detail",
     "probe_sandbox_gpu",
     "profile_csv_text",
     "sandbox_workspace_specs",

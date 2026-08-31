@@ -26,6 +26,10 @@ class NodeContext:
     inputs: Mapping[str, Any]
     #: Outputs of previously completed states, keyed by state value.
     prior_outputs: Mapping[str, Mapping[str, Any]]
+    #: Approved gate decisions (option ids) keyed by the requesting state
+    #: value — e.g. the G2 data-gate choice ("adopt_cleaned"/"use_raw") made
+    #: after DATA_PREPARATION succeeded. Empty for runs without resolved gates.
+    review_decisions: Mapping[str, str] = field(default_factory=dict)
 
     @staticmethod
     def for_step(
@@ -39,6 +43,7 @@ class NodeContext:
             attempt=attempt,
             inputs=dict(snapshot.inputs),
             prior_outputs={key: dict(value) for key, value in snapshot.outputs.items()},
+            review_decisions=dict(snapshot.review_decisions),
         )
 
 
@@ -50,6 +55,11 @@ class NodeResult:
     artifacts: tuple[ArtifactRef, ...] = ()
     error: str | None = None
     review_reason: str | None = None
+    #: Optional gate metadata for NEEDS_REVIEW results (gate id, options,
+    #: evidence...). The engine copies it into the REVIEW_REQUESTED payload
+    #: under "gate" — absent when None, so legacy flows keep their payload
+    #: shape byte-identical (golden traces unaffected).
+    review_meta: dict[str, Any] | None = None
 
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -74,12 +84,19 @@ class NodeResult:
 
     @staticmethod
     def needs_review(
-        reason: str, outputs: dict[str, Any] | None = None
+        reason: str,
+        outputs: dict[str, Any] | None = None,
+        review_meta: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+        artifacts: tuple[ArtifactRef, ...] = (),
     ) -> "NodeResult":
         return NodeResult(
             status=NodeResult.NEEDS_REVIEW,
             review_reason=reason,
             outputs=outputs or {},
+            metrics=metrics or {},
+            artifacts=artifacts,
+            review_meta=review_meta,
         )
 
 

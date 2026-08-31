@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Callable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from omm_agent_core import (
@@ -44,7 +44,7 @@ from omm_agent_core import (
     replay_events,
 )
 from omm_agent_core.errors import AgentError
-from omm_agent_harness import BudgetGovernor, NodeBudget, RunBudget
+from omm_agent_harness import BudgetGovernor, NodeBudget, RunBudget, SubagentSupervisor
 from omm_agent_skills import (
     DEFAULT_HARDWARE_NOTE,
     DataPreparationNode,
@@ -97,12 +97,16 @@ from .orm import (
 from .serialize import utcnow
 from .stage_outputs import REQUIRED_OUTPUT_KEYS, STAGE_OUTPUT_SCHEMA_IDS
 from .usage import budget_exhausted, is_free_endpoint, record_usage
-from .workflow import NODE_COMPLETED, STAGE_LABELS
+from .workflow import NODE_COMPLETED, STAGE_LABELS, STAGES
 
 logger = logging.getLogger("omm.engine")
 
 CANCELLED_ERROR = "cancelled by user"
 REJECT_OPTION_ID = "reject"
+#: 修订审批里「从某阶段重做」选项的 id 前缀，后接 TaskState 值（ADR-0013）。
+REDO_OPTION_PREFIX = "redo:"
+#: 单个 run 允许发起的修订轮数上限（ADR-0013 §3.1）。
+MAX_REVISION_ROUNDS = 3
 
 _ARTIFACT_NAMES = {
     "figure": "基线实验结果图（模拟）",
@@ -391,12 +395,15 @@ def _sandbox_hardware() -> str:
 #: 避免「前两个阶段真实、后四个阶段无声退化」的混合链误导用户。
 #: 论文阶段是分章多轮管线（doc/paper-multipass-generation-plan.md）：
 #: 总编/章节/统稿三个模板与回退用的整篇模板都必须在场。
+#: H3 前置刀起实验阶段走沙盒执行体（experiment_code.sandbox 会话模板），
+#: 数据准备的清洗派发用 data_cleaning.sandbox——两者缺一同样回落模拟。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
         "data_preparation.default",
+        "data_cleaning.sandbox",
         "model_planning.default",
-        "experiment_code.default",
+        "experiment_code.sandbox",
         "validating.default",
         "paper_outline.default",
         "paper_section.default",
@@ -426,12 +433,16 @@ def _prompt_registry() -> Optional[PromptRegistry]:
 # 工具审计）持久重建——跨 advance、跨进程重启限额都成立。墙钟预算按执行
 # 时间的口径需要跨事件求和（审批等待不计时），本批次明确延后不启用。
 
-#: prompt_id → 预算记账的节点归属（论文分章管线的三个 prompt 同属论文节点）。
+#: prompt_id → 预算记账的节点归属（论文分章管线的三个 prompt 同属论文节点；
+#: 两个 sandbox 会话标签是 H3 前置刀的沙盒执行体调用；experiment_code.default
+#: 已不再被节点消费，保留是为了历史运行的事件账本重建仍能按节点归账）。
 _PROMPT_NODE_IDS = {
     "problem_analysis.default": TaskState.PROBLEM_ANALYSIS.value,
     "data_preparation.default": TaskState.DATA_PREPARATION.value,
+    "data_cleaning.sandbox": TaskState.DATA_PREPARATION.value,
     "model_planning.default": TaskState.MODEL_PLANNING.value,
     "experiment_code.default": TaskState.EXPERIMENTING.value,
+    "experiment_code.sandbox": TaskState.EXPERIMENTING.value,
     "validating.default": TaskState.VALIDATING.value,
     "paper_outline.default": TaskState.PAPER_WRITING.value,
     "paper_section.default": TaskState.PAPER_WRITING.value,
@@ -448,24 +459,51 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-def _run_budget_from_env() -> RunBudget:
-    """§4.7 拍板默认值 + 环境变量覆盖（预算追加的临时通道，GB 闸门后续批次）。"""
+def _run_budget_from_env(quota_multiple: int = 1) -> RunBudget:
+    """§4.7 拍板默认值 + 环境变量覆盖（预算追加的临时通道，GB 闸门后续批次）。
+
+    ``quota_multiple`` 是修订回合的配额份数（ADR-0013 §3.1）。
+    """
     defaults = RunBudget()
     return RunBudget(
-        max_total_tokens=_env_int("OMM_RUN_MAX_TOKENS", defaults.max_total_tokens),
-        max_llm_calls=_env_int("OMM_RUN_MAX_LLM_CALLS", defaults.max_llm_calls),
-        max_sandbox_runs=_env_int("OMM_RUN_MAX_SANDBOX_RUNS", defaults.max_sandbox_runs),
+        max_total_tokens=_env_int("OMM_RUN_MAX_TOKENS", defaults.max_total_tokens) * quota_multiple,
+        max_llm_calls=_env_int("OMM_RUN_MAX_LLM_CALLS", defaults.max_llm_calls) * quota_multiple,
+        max_sandbox_runs=_env_int("OMM_RUN_MAX_SANDBOX_RUNS", defaults.max_sandbox_runs)
+        * quota_multiple,
         # 墙钟按执行时间计的语义未实现：治理器按进程内时钟计会把审批等待也算进去，
         # 宁可不启用也不误伤（禁用 = 上限无穷大）。
         max_wall_clock_s=float("inf"),
     )
 
 
+def revision_rounds(session: Session, run_id: str) -> int:
+    """该运行已发起过的修订轮数（ADR-0013）。
+
+    直接数领域事件而不读快照：预算治理器在 ``open_engine`` 重放快照之前就要
+    建好，那时还没有 ``snapshot.revision_round`` 可读。
+    """
+    return int(
+        session.execute(
+            select(func.count())
+            .select_from(DomainEventRow)
+            .where(
+                DomainEventRow.run_id == run_id,
+                DomainEventRow.event_type == EventType.REVISION_REQUESTED.value,
+            )
+        ).scalar_one()
+    )
+
+
 def _build_budget_governor(session: Session, run: TaskRunRow) -> BudgetGovernor:
     """账本从事件重建：llm_call 事件累计次数与 tokens（按 prompt 归属节点），
-    python_run 工具审计累计沙箱次数。数据源与断点续写同为 run.log（事件即账本）。"""
-    governor = BudgetGovernor(run_budget=_run_budget_from_env())
-    node_cap = _env_int("OMM_NODE_MAX_TOKENS", NodeBudget().max_tokens)
+    python_run 工具审计累计沙箱次数。数据源与断点续写同为 run.log（事件即账本）。
+
+    每发起一轮修订就把 run/node 两级上限各追加一份（ADR-0013 §3.1）：账本是
+    全 run 累计的，不追加的话第二轮做到一半必然撞上首轮的额度而硬停。
+    """
+    quota_multiple = 1 + revision_rounds(session, run.id)
+    governor = BudgetGovernor(run_budget=_run_budget_from_env(quota_multiple))
+    node_cap = _env_int("OMM_NODE_MAX_TOKENS", NodeBudget().max_tokens) * quota_multiple
     for node_id in set(_PROMPT_NODE_IDS.values()):
         governor.open_node(node_id, NodeBudget(max_tokens=node_cap))
 
@@ -499,6 +537,35 @@ def _build_budget_governor(session: Session, run: TaskRunRow) -> BudgetGovernor:
         node_tokens=node_tokens,
     )
     return governor
+
+
+#: 失败文案 → v1 failure_class 的判定规则（按序匹配，先中先得）。
+#: STEP_FAILED/RUN_FAILED 载荷里只有人话文案，结构化错误码以 [Exxx] 前缀
+#: 内嵌其中，所以按稳定前缀/关键词归类；没命中的一律 CODE_DEFECT——宁可
+#: 保守，也不把真代码缺陷标成「重试就能过」的瞬态。
+_FAILURE_CLASS_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # 传输层/进程层瞬态（§8.6 TRANSIENT）：重试大概率能过
+    ("TRANSIENT", (
+        "模型接口调用失败",  # _CleanFailureNode 包装的 ApiError（断连/超时/限流/网关）
+        "interrupted: executor lost",  # 进程重启留下的悬挂步骤（heal_interrupted）
+        "无法连接接口",  # ApiError 未经包装直达时的兜底关键词
+        "未响应",
+        "触发限流",
+    )),
+    # 失控保护（预算硬停 E31x/E32x）：策略拦截而非代码缺陷
+    ("POLICY_BLOCK", ("[E31", "[E32")),
+    # 内环无进展（E33x：max_turns/修复预算耗尽、同工具连败）
+    ("NON_PROGRESS", ("[E33",)),
+)
+
+
+def _classify_failure(error: str) -> str:
+    """按失败文案归类 v1 failure_class（旧行为无脑 CODE_DEFECT，网络断连也
+    被标成代码缺陷，误导用户去查代码而不是重试）。"""
+    for failure_class, markers in _FAILURE_CLASS_RULES:
+        if any(marker in error for marker in markers):
+            return failure_class
+    return "CODE_DEFECT"
 
 
 def _budget_stop_message(error: AgentError) -> str:
@@ -768,6 +835,9 @@ def _llm_wiring_impl(
         "paper_resume": _paper_resume_reader(session, run.id),
         # 沙箱计费与运行报告共用同一治理器（open_engine 里包装工具端口）
         "budget_governor": governor,
+        # 清洗沙盒执行（H3 前置刀）：数据准备节点经监督者派发沙盒执行体；
+        # spawn/结果审计与模型过程事件同路落 run.log（工作台执行轨迹可见）。
+        "subagents": SubagentSupervisor(audit=_process_event),
     }
     return port, overrides, extras
 
@@ -911,6 +981,31 @@ def _record_stage_output(
     )
 
 
+def _gate_options(raw: Any) -> list[dict[str, Any]]:
+    """闸门元数据里的选项 → 契约形状（approval-request.options 的白名单键）。
+
+    review_meta 是节点侧的自由 dict；进 v1 审批行前按契约收敛：id/label 必填
+    （缺失即整项丢弃），description 可选，recommended 只在显式 True 时保留
+    （AI 推荐项标记，供 CTA 预选）。杂键一律不透传（additionalProperties: false）。
+    """
+    options: list[dict[str, Any]] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        option_id = str(entry.get("id") or "").strip()
+        label = str(entry.get("label") or "").strip()
+        if not option_id or not label:
+            continue
+        option: dict[str, Any] = {"id": option_id, "label": label}
+        description = entry.get("description")
+        if description is not None:
+            option["description"] = str(description)
+        if entry.get("recommended") is True:
+            option["recommended"] = True
+        options.append(option)
+    return options
+
+
 def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
     """把一条领域事件翻译成 v1 行与 v1 事件（agent_events 自己维护 sequence）。"""
     kind = event.event_type
@@ -983,15 +1078,17 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
     if kind is EventType.STEP_FAILED:
         step = session.get(StepRunRow, str(payload["step_id"]))
         if step is not None:
+            error = str(payload.get("error") or "step failed")
+            failure_class = _classify_failure(error)
             step.status = StepRunStatus.FAILED.value
-            step.failure_class = "CODE_DEFECT"
-            step.detail = str(payload.get("error") or "step failed")
+            step.failure_class = failure_class
+            step.detail = error
             step.ended_at = at
             append_event(
                 session,
                 run.id,
                 AgentEventType.step_failed.value,
-                {"node": step.node, "attempt": step.attempt, "failure_class": "CODE_DEFECT"},
+                {"node": step.node, "attempt": step.attempt, "failure_class": failure_class},
             )
         return
 
@@ -1035,18 +1132,106 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         return
 
     if kind is EventType.REVIEW_REQUESTED:
+        # 闸门元数据（G2 数据闸门等）由节点经 NodeResult.review_meta 声明、
+        # 引擎透传在 payload.gate；缺省（G1 方案确认）保持既有硬编码选项与
+        # 文案，载荷逐字节兼容（金轨迹与既有测试不漂移）。
+        gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else None
+        gate_options = _gate_options(gate.get("options")) if gate else []
+        if gate and gate_options:
+            try:
+                decision_type = ApprovalDecisionType(
+                    str(gate.get("decision_type") or "")
+                ).value
+            except ValueError:
+                # 未来闸门带来的新决策类型对旧控制面按 generic 投影，不炸投影
+                decision_type = ApprovalDecisionType.generic.value
+            title = str(gate.get("title") or payload.get("reason") or "请确认后继续")[:200]
+            options = gate_options
+            evidence: dict[str, Any] = {
+                "note": str(payload.get("reason") or title),
+                "requested_by_step": str(payload.get("requested_by_step") or ""),
+            }
+            if gate.get("gate"):
+                evidence["gate"] = str(gate.get("gate"))
+            if isinstance(gate.get("impact"), dict):
+                evidence["impact"] = dict(gate["impact"])
+            status_reason = "等待人工确认"
+        else:
+            decision_type = ApprovalDecisionType.confirm_plan.value
+            title = str(payload.get("reason") or "确认建模方案后继续实验")
+            options = [
+                {"id": "approve", "label": "采用当前方案", "description": "确认方案并进入实验阶段"},
+                {"id": "reject", "label": "退回重做方案", "description": "重新执行建模方案阶段并再次确认"},
+            ]
+            evidence = {
+                "note": str(payload.get("reason") or "建模方案确认请求"),
+                "requested_by_step": str(payload.get("requested_by_step") or ""),
+            }
+            status_reason = "等待方案确认"
         approval = ApprovalRequestRow(
             id=new_id("appr"),
             run_id=run.id,
-            decision_type=ApprovalDecisionType.confirm_plan.value,
-            title=str(payload.get("reason") or "确认建模方案后继续实验"),
-            options=[
-                {"id": "approve", "label": "采用当前方案", "description": "确认方案并进入实验阶段"},
-                {"id": "reject", "label": "退回重做方案", "description": "重新执行建模方案阶段并再次确认"},
-            ],
+            decision_type=decision_type,
+            title=title,
+            options=options,
+            evidence=evidence,
+            status=ApprovalStatus.PENDING.value,
+            requested_at=at,
+        )
+        session.add(approval)
+        append_event(
+            session,
+            run.id,
+            AgentEventType.approval_requested.value,
+            {
+                "approval_id": approval.id,
+                "decision_type": approval.decision_type,
+                "title": approval.title,
+            },
+        )
+        _project_status(session, run, TaskRunStatus.WAITING_APPROVAL.value, status_reason)
+        return
+
+    if kind is EventType.REVISION_REQUESTED:
+        # 修订回合（ADR-0013）：已完成的运行重新打开，先挂审批门等用户确认重做
+        # 起点。六个阶段全列为候选、服务端的建议只标成 recommended——同一句
+        # 「结论不够有力」既可能只重写论文、也可能要重做实验，差一个数量级的
+        # 花费，不替用户默选（_preferred_option 只认唯一 recommended）。
+        target = str(payload.get("target_state") or "")
+        round_no = int(payload.get("round") or 1)
+        note = str(payload.get("reason") or "")
+        # 与节点自提闸门共用 _gate_options 这一个契约收敛口：形状要变时两类
+        # 审批门一起变。它只在 recommended 显式为 True 时写该键，六个非建议项
+        # 因而不带这个键（契约里缺省等价于 false）。
+        options = _gate_options(
+            [
+                {
+                    "id": f"{REDO_OPTION_PREFIX}{stage}",
+                    "label": f"从「{STAGE_LABELS.get(stage, stage)}」重做",
+                    "description": f"重跑「{STAGE_LABELS.get(stage, stage)}」及其之后的全部阶段",
+                    "recommended": stage == target,
+                }
+                for stage in STAGES
+            ]
+            + [
+                {
+                    "id": REJECT_OPTION_ID,
+                    "label": "撤回本次修改要求",
+                    "description": "保留现有结果，运行回到已完成状态",
+                }
+            ]
+        )
+        approval = ApprovalRequestRow(
+            id=new_id("appr"),
+            run_id=run.id,
+            decision_type=ApprovalDecisionType.generic.value,
+            title=f"第 {round_no} 轮修改：请确认从哪个阶段重做",
+            options=options,
             evidence={
-                "note": str(payload.get("reason") or "建模方案确认请求"),
-                "requested_by_step": str(payload.get("requested_by_step") or ""),
+                "note": note,
+                "requested_by_step": "",
+                "revision_round": round_no,
+                "suggested_stage": target,
             },
             status=ApprovalStatus.PENDING.value,
             requested_at=at,
@@ -1062,20 +1247,50 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 "title": approval.title,
             },
         )
-        _project_status(session, run, TaskRunStatus.WAITING_APPROVAL.value, "等待方案确认")
+        # 运行不再是「已结束」：清掉终态时间戳，否则列表与详情仍按已完成排布，
+        # 而它此刻正等着用户确认重做起点。
+        run.ended_at = None
+        _project_status(
+            session, run, TaskRunStatus.WAITING_APPROVAL.value, f"等待确认第 {round_no} 轮修改的重做起点"
+        )
         return
 
     if kind is EventType.REVIEW_RESOLVED:
         # 审批行更新与 v1 approval.resolved 事件由动作层完成（它持有 option/comment）
+        revision_round = int(payload.get("revision_round") or 0)
         if payload.get("approved"):
-            _project_status(session, run, TaskRunStatus.RUNNING.value, "方案已确认")
+            resume = str(payload.get("resume_state") or "")
+            label = STAGE_LABELS.get(resume, resume)
+            if revision_round > 0:
+                # 回退重做：current_node 此刻还停在 COMPLETED，先摆回目标阶段，
+                # 免得下个 tick 起步前工作台把重开的运行画成已完成。
+                _project_node(session, run, resume, f"第 {revision_round} 轮修改重做")
+                reason = f"第 {revision_round} 轮修改：从「{label}」重做"
+            else:
+                reason = (
+                    "方案已确认"
+                    if resume in ("", TaskState.MODEL_PLANNING.value)
+                    else f"「{label}」阶段已确认"
+                )
+            _project_status(session, run, TaskRunStatus.RUNNING.value, reason)
+        elif revision_round > 0:
+            # 撤回修订：运行回到它本来的终态。这里不能沿用节点自提闸门的「拒绝
+            # =失败」——什么都没跑坏，用户只是改了主意。
+            run.ended_at = at
+            _project_status(session, run, TaskRunStatus.COMPLETED.value, "已撤回本次修改要求")
         return
 
     if kind is EventType.RUN_RETRIED:
         run.failure_class = None
         run.failure_message = None
         if run.status == TaskRunStatus.WAITING_APPROVAL.value:
-            _project_status(session, run, TaskRunStatus.RUNNING.value, "方案退回重做")
+            target = str(payload.get("target_state") or "")
+            reason = (
+                "方案退回重做"
+                if target in ("", TaskState.MODEL_PLANNING.value)
+                else f"「{STAGE_LABELS.get(target, target)}」退回重做"
+            )
+            _project_status(session, run, TaskRunStatus.RUNNING.value, reason)
         elif run.status != TaskRunStatus.RUNNING.value:
             _project_status(session, run, TaskRunStatus.RUNNING.value, "重试失败阶段")
         return
@@ -1124,9 +1339,18 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             run.ended_at = now
             _project_status(session, run, TaskRunStatus.CANCELLED.value, "用户取消")
             return
-        run.failure_class = "CODE_DEFECT"
+        run.failure_class = _classify_failure(error)
         run.failure_message = error
-        _project_status(session, run, TaskRunStatus.FAILED.value, "实验步骤失败")
+        # 失败原因带真实阶段名（旧文案硬编码「实验步骤失败」——论文写作阶段
+        # 断连也报成实验失败，用户按错误的方向排查）。failed_state 由引擎在
+        # RUN_FAILED 载荷里给出（engine.advance 的失败路径）。
+        stage = STAGE_LABELS.get(str(payload.get("failed_state") or ""))
+        _project_status(
+            session,
+            run,
+            TaskRunStatus.FAILED.value,
+            f"「{stage}」阶段失败" if stage else "任务失败",
+        )
         return
 
     if kind is EventType.TOOL_CALLED:
@@ -1384,16 +1608,93 @@ def retry_run(session: Session, run: TaskRunRow) -> None:
     engine.retry(snapshot)
 
 
-def resolve_approval(session: Session, run: TaskRunRow, option_id: str) -> None:
-    """approve 动作的引擎侧：批准=继续下一阶段；拒绝=重做 MODEL_PLANNING 并再次请求确认。
+def _redo_target(option_id: str) -> TaskState | None:
+    """修订审批的「从某阶段重做」选项 → 目标阶段；不是这类选项则返回 None。"""
+    if not option_id.startswith(REDO_OPTION_PREFIX):
+        return None
+    try:
+        return TaskState(option_id[len(REDO_OPTION_PREFIX) :])
+    except ValueError:
+        return None
 
-    两个分支都只落「审批已解决」的状态（投影把 run 置回 RUNNING），实际推进
-    交给 RunnerThread 的下一个 tick：真实节点是分钟级长任务（LLM 调用 +
-    实验代码执行），不允许在 HTTP 动作请求里同步执行。
+
+def resolve_approval(session: Session, run: TaskRunRow, option_id: str) -> None:
+    """approve 动作的引擎侧：批准=继续推进；拒绝=退回重做请求确认的那个阶段。
+
+    G1（方案确认）与 G2（数据闸门）同构：批准时所选 option_id 作为 reason 进
+    REVIEW_RESOLVED，由 reducer 折进快照的 review_decisions 台账（下游节点读
+    「采用清洗结果/改用原始数据」等决策就从这里来）；拒绝时 failure.state 指向
+    请求确认的阶段，立即 retry 以 attempt+1 重跑。两个分支都只落「审批已解决」
+    的状态（投影把 run 置回 RUNNING），实际推进交给 RunnerThread 的下一个
+    tick：真实节点是分钟级长任务，不允许在 HTTP 动作请求里同步执行。
     """
     engine, snapshot = open_engine(session, run)
+    revision_round = snapshot.review.revision_round if snapshot.review else 0
     if option_id == REJECT_OPTION_ID:
-        engine.resolve_review(snapshot, approved=False, reason="方案退回重做")
-        engine.retry(snapshot)  # RUN_RETRIED 投影置回 RUNNING；下个 tick 重跑 MODEL_PLANNING
+        if revision_round > 0:
+            # 撤回修订（ADR-0013）：运行回到 COMPLETED，既没有失败也没有阶段要
+            # 重跑，因此不能跟着走 retry——那条路只接受失败的运行。
+            engine.resolve_review(snapshot, approved=False, reason="用户撤回本次修改要求")
+            return
+        resume = snapshot.review.resume_state.value if snapshot.review else ""
+        reason = (
+            "方案退回重做"
+            if resume in ("", TaskState.MODEL_PLANNING.value)
+            else f"「{STAGE_LABELS.get(resume, resume)}」退回重做"
+        )
+        engine.resolve_review(snapshot, approved=False, reason=reason)
+        engine.retry(snapshot)  # RUN_RETRIED 投影置回 RUNNING；下个 tick 重跑该阶段
         return
-    engine.resolve_review(snapshot, approved=True, reason=option_id)  # 下个 tick 进入 EXPERIMENTING
+    redo = _redo_target(option_id)
+    if redo is not None:
+        # 修订审批选了重做起点：以所选阶段覆盖请求里的建议值，引擎据此回退并
+        # 丢弃该阶段及其下游的旧产出。
+        engine.resolve_review(snapshot, approved=True, reason=option_id, resume_state=redo)
+        return
+    engine.resolve_review(snapshot, approved=True, reason=option_id)  # 决策台账：option_id 进 review_decisions
+
+
+#: 修改要求正文 → 建议重做起点的关键词。按 STAGES 顺序匹配、先中先得：
+#: 一句话同时点到实验与论文时，从更靠前的阶段重做才能真正满足要求（下游本来
+#: 就会一并重跑）。
+_REVISION_STAGE_HINTS: dict[str, tuple[str, ...]] = {
+    "PROBLEM_ANALYSIS": ("题意", "审题", "问题理解", "理解错", "假设", "目标不对"),
+    "DATA_PREPARATION": ("数据", "样本", "缺失", "异常值", "清洗", "预处理", "口径"),
+    "MODEL_PLANNING": ("模型", "方案", "算法", "思路", "方法"),
+    "EXPERIMENTING": ("实验", "代码", "参数", "跑一遍", "重跑", "复现", "调参"),
+    "VALIDATING": ("验证", "误差", "灵敏度", "稳健", "检验", "对照"),
+    "PAPER_WRITING": ("论文", "行文", "文字", "表述", "排版", "摘要", "结论", "图表"),
+}
+
+
+def suggest_revision_stage(text: str) -> str:
+    """按正文里最早触及的阶段给出建议重做起点。
+
+    一个关键词都不命中时建议「论文撰写」：那是花费最小的解释，猜大了要用户
+    白付一次全链路的钱；猜小了他在审批门里往前挪一格即可。
+    """
+    for stage in STAGES:
+        if any(word in text for word in _REVISION_STAGE_HINTS.get(stage, ())):
+            return stage
+    return "PAPER_WRITING"
+
+
+def request_revision(session: Session, run: TaskRunRow, text: str, note_id: str) -> tuple[int, str]:
+    """修订回合的引擎侧（ADR-0013）：开审批门等用户确认重做起点，不立即重跑。
+
+    返回 ``(轮次, 审批 id)``。审批行由 REVISION_REQUESTED 的投影建出，这里回查
+    一次拿它的 id 做回执——重做起点要人确认，接口回执必须能把用户带到那个门前。
+    """
+    engine, snapshot = open_engine(session, run)
+    engine.request_revision(
+        snapshot, TaskState(suggest_revision_stage(text)), reason=text, note_id=note_id
+    )
+    approval = session.execute(
+        select(ApprovalRequestRow)
+        .where(
+            ApprovalRequestRow.run_id == run.id,
+            ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+        )
+        .order_by(ApprovalRequestRow.requested_at.desc())
+    ).scalars().first()
+    return snapshot.revision_round, approval.id if approval is not None else ""

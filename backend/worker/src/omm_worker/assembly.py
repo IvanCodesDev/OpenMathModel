@@ -32,13 +32,17 @@ from omm_agent_skills import (
 
 from .runtime import WorkerConfig, WorkerRuntime
 
-#: 六阶段模板必须齐套才允许装配（与 engine_glue._REQUIRED_PROMPTS 同一清单）。
+#: 六阶段模板必须齐套才允许装配（engine_glue._REQUIRED_PROMPTS 的执行面子集：
+#: 论文分章三件套 API 侧另有强制，worker 装配只查节点直接引用的模板）。
+#: H3 前置刀后实验与清洗都走沙盒会话模板（experiment_code.sandbox /
+#: data_cleaning.sandbox），experiment_code.default 退役。
 REQUIRED_PROMPT_IDS = frozenset(
     {
         "problem_analysis.default",
         "data_preparation.default",
+        "data_cleaning.sandbox",
         "model_planning.default",
-        "experiment_code.default",
+        "experiment_code.sandbox",
         "validating.default",
         "paper_writing.default",
     }

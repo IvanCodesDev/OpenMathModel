@@ -2,7 +2,7 @@
 id: problem_analysis.default
 stage: PROBLEM_ANALYSIS
 variant: default
-version: 6
+version: 7
 input_schema: {"type": "object", "required": ["problem_statement"], "properties": {"problem_statement": {"type": "string"}, "attachments_summary": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["viability", "title", "problem_type", "objectives", "constraints", "data_requirements", "subquestions"], "properties": {"viability": {"type": "string", "enum": ["ok", "insufficient"]}, "missing_info": {"type": "array", "items": {"type": "string"}}, "title": {"type": "string"}, "problem_type": {"type": "string"}, "objectives": {"type": "array", "items": {"type": "string"}}, "constraints": {"type": "array", "items": {"type": "string"}}, "data_requirements": {"type": "array", "items": {"type": "string"}}, "key_assumptions": {"type": "array", "items": {"type": "string"}}, "subquestions": {"type": "array", "items": {"type": "object", "required": ["id", "text", "depends_on"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "depends_on": {"type": "array", "items": {"type": "string"}}}}}, "plan_outline": {"type": "array", "items": {"type": "object", "required": ["stage", "text"], "properties": {"stage": {"type": "string", "enum": ["PROBLEM_ANALYSIS", "DATA_PREPARATION", "MODEL_PLANNING", "EXPERIMENTING", "VALIDATING", "PAPER_WRITING"]}, "text": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
@@ -18,10 +18,12 @@ output_schema: {"type": "object", "required": ["viability", "title", "problem_ty
 
 ## 准入判定（先做这一步）
 
+这道门只拦**真的无从下手**的输入，拿不准一律判 `ok`：判成 `insufficient` 会让用户已经发起的任务直接失败，而信息不全的题目完全可以靠显式假设开工——缺的数据写进 `data_requirements`，缺的前提写进 `key_assumptions`。
+
 `viability` 的判定标准：
 
-- `ok`：输入（正文或附件）包含可以着手建模的实质内容——有明确的问题对象、求解目标，题面信息即使不完整也足以做出合理假设后开工。
-- `insufficient`：输入不构成可建模的问题——闲聊、寒暄、单句口语指令（如「帮我做个建模」）、只有标题没有题面、或完全缺少问题背景与求解目标。此时在 `missing_info` 中列出缺失项（如「题目正文」「数据文件或数据说明」「求解目标」），`title` 概括缺失状况（如「赛题信息缺失」），其余列表字段给空数组，不得虚构题目内容。
+- `ok`：能看出**要解决的对象**与**求解/优化/预测目标**就算，哪怕只有一句话、没有数据、没有完整题面。**不要因为「描述太简略」「没有给数据附件」「没有具体数值」改判 `insufficient`**——这些缺口用 `key_assumptions` 声明假设即可推进。例：「帮我做一个共享单车调度优化模型」有对象（共享单车调度）有目标（优化），判 `ok`。
+- `insufficient`：**对象与目标都缺到无从下手**——闲聊寒暄；只报话题不说对象（如「帮我做个建模」）；只有指代而没有被指代物（如「解决这道题」但正文与附件里都没有题）；只有标题没有题面。此时在 `missing_info` 中列出缺失项（如「题目正文」「数据文件或数据说明」「求解目标」），`title` 概括缺失状况（如「赛题信息缺失」），其余列表字段给空数组，不得虚构题目内容。
 
 ## 输出要求
 

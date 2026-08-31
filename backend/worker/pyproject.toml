@@ -7,7 +7,12 @@ name = "omm-worker"
 version = "0.1.0"
 description = "执行面：JSONL 事件日志、文件队列、运行租约与幂等 Worker 运行时（驱动 Agent 状态机）"
 requires-python = ">=3.12"
-dependencies = ["omm-agent-core", "omm-agent-skills", "omm-agent-tools"]
+dependencies = [
+    "omm-agent-core",
+    "omm-agent-harness",
+    "omm-agent-skills",
+    "omm-agent-tools",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

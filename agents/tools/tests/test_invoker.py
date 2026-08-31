@@ -121,3 +121,57 @@ def test_summarize_truncates_large_values():
     text = summarize({"blob": "x" * 5000})
     assert len(text) <= 512
     assert "chars)" in text
+
+
+def test_failed_call_records_stderr_tail_as_failure_detail():
+    """失败事件必须带崩溃证据（stderr 尾部）——否则界面与事后诊断只剩一行 exit code。"""
+
+    def handler(args, ctx):
+        return ToolResult(
+            status="failed",
+            error="python exited with code 1",
+            output={
+                "exit_code": 1,
+                "stdout": "partial output",
+                "stderr": "Traceback (most recent call last):\nNameError: name 'H' is not defined",
+            },
+        )
+
+    registry = ToolRegistry()
+    registry.register(echo_spec(handler=handler))
+    invoker, recorder = build(registry)
+
+    invoker.invoke("run_1", "step_1", "echo", {"message": "x"})
+
+    payload = recorder.records[0][1]
+    assert payload["status"] == "failed"
+    assert "NameError: name 'H' is not defined" in payload["failure_detail"]
+
+
+def test_failure_detail_falls_back_to_stdout_and_stays_bounded():
+    def handler(args, ctx):
+        return ToolResult(
+            status="failed",
+            error="python exited with code 1",
+            output={"exit_code": 1, "stdout": "x" * 5000 + "TAIL", "stderr": ""},
+        )
+
+    registry = ToolRegistry()
+    registry.register(echo_spec(handler=handler))
+    invoker, recorder = build(registry)
+
+    invoker.invoke("run_1", "step_1", "echo", {"message": "x"})
+
+    detail = recorder.records[0][1]["failure_detail"]
+    assert detail.endswith("TAIL")
+    assert len(detail) <= 2000
+
+
+def test_successful_call_carries_no_failure_detail():
+    registry = ToolRegistry()
+    registry.register(echo_spec())
+    invoker, recorder = build(registry)
+
+    invoker.invoke("run_1", "step_1", "echo", {"message": "hi"})
+
+    assert "failure_detail" not in recorder.records[0][1]

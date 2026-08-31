@@ -12,6 +12,7 @@ backend/api/tests/test_task_runs_llm_nodes.py 的六阶段常量），python 沙
 - 审批语义：批准续跑下一阶段；拒绝退回重做规划并再次请求确认。
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,14 @@ from omm_agent_core import (
     StepStatus,
     TaskState,
 )
-from omm_agent_skills import PromptRegistry, StubLlmPort, stub_response
+from omm_agent_skills import (
+    CLEANING_PROMPT_ID,
+    PYTHON_TOOL_NAME,
+    ExperimentExecutionNode,
+    PromptRegistry,
+    StubLlmPort,
+    stub_response,
+)
 from omm_worker import WorkerConfig, WorkerLoop, build_real_nodes, create_real_runtime
 
 # -- 六阶段 stub 输出（形状与 skills / api 参考测试一致） ----------------------
@@ -85,9 +93,11 @@ EXPERIMENT_CODE = (
     "print('OMM_METRICS_JSON: ' + json.dumps({'rmse': 0.5}))\n"
 )
 
+#: 沙盒执行体的终答（代码经 python_run 信封提交，终答只报告叙事字段）。
 EXPERIMENT_OK = {
+    "summary": "贪心近似跑通，rmse 0.5 达标并写出结果表",
     "approach_summary": "构造合成需求数据，贪心近似求解并与随机基线对比",
-    "code": EXPERIMENT_CODE,
+    "progress_note": "实验代码已跑通，核心指标 rmse=0.5，下一步进入结果检验。",
 }
 
 VALIDATION_OK = {
@@ -116,7 +126,6 @@ def stage_responses(**overrides):
         "problem_analysis.default": stub_response(ANALYSIS_OK),
         "data_preparation.default": stub_response(PREPARATION_OK),
         "model_planning.default": stub_response(PLANNING_OK),
-        "experiment_code.default": stub_response(EXPERIMENT_OK),
         "validating.default": stub_response(VALIDATION_OK),
         # 论文阶段是分章多轮管线：总编规划（paper_outline）在本桩给非法输出，
         # 节点走「总编失败回退整篇单次生成」路径消费 paper_writing 桩——worker
@@ -126,6 +135,47 @@ def stage_responses(**overrides):
     }
     responses.update(overrides)
     return responses
+
+
+def tool_envelope(name, **arguments):
+    """模型侧的工具信封文本（chat_adapter 的文本协议）。"""
+    return json.dumps({"tool": name, "arguments": arguments}, ensure_ascii=False)
+
+
+def _saw_observation(messages):
+    return any("[工具执行结果]" in message["content"] for message in messages)
+
+
+def sandbox_script(final, code=EXPERIMENT_CODE):
+    """一波会话：先发 python_run 信封，收到观察后给终答。
+
+    按会话内容而非调用序号判断，同一份脚本可服务多波修复（每波观察清零）。
+    """
+
+    def reply(messages):
+        if _saw_observation(messages):
+            return stub_response(final)
+        return tool_envelope(PYTHON_TOOL_NAME, code=code)
+
+    return [reply]
+
+
+def stage_chat_scripts(**overrides):
+    """沙盒两节点的会话脚本。worker 运行不下发附件数据（data/ 为空），
+    清洗如实跳过，清洗脚本仅作兜底不应被消费。"""
+    scripts = {
+        CLEANING_PROMPT_ID: sandbox_script({"summary": "无数据文件，不应走到这里"}),
+        ExperimentExecutionNode.prompt_id: sandbox_script(EXPERIMENT_OK),
+    }
+    scripts.update(overrides)
+    return scripts
+
+
+def stage_llm(chat_overrides=None, **overrides):
+    return StubLlmPort(
+        stage_responses(**overrides),
+        chat_scripts=stage_chat_scripts(**(chat_overrides or {})),
+    )
 
 
 def make_runtime(tmp_path, llm, unattended=False, worker_id="worker_real", **config_kwargs):
@@ -155,8 +205,8 @@ def prompt_calls(llm, prompt_id):
 
 
 def test_build_real_nodes_requires_complete_prompt_set():
-    with pytest.raises(ValueError, match=r"experiment_code\.default"):
-        build_real_nodes(prompts=PromptRegistry())  # 空注册表：缺全部六个模板
+    with pytest.raises(ValueError, match=r"experiment_code\.sandbox"):
+        build_real_nodes(prompts=PromptRegistry())  # 空注册表：缺全部模板
 
 
 def test_build_real_nodes_covers_all_work_states():
@@ -168,7 +218,7 @@ def test_build_real_nodes_covers_all_work_states():
 
 
 def test_full_chain_review_gate_then_approval_completes(tmp_path):
-    llm = StubLlmPort(stage_responses())
+    llm = stage_llm()
     runtime = make_runtime(tmp_path, llm)
     loop = WorkerLoop(runtime)
 
@@ -220,15 +270,25 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     events = runtime.events.load(run_id)
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     tool_events = [e for e in events if e.event_type is EventType.TOOL_CALLED]
-    # 数据阶段的画像前置留一条 ws_list（本测试无数据文件，空清单），实验阶段一条 python_run
-    assert [e.payload["tool"] for e in tool_events] == ["ws_list", "python_run"]
-    sandbox_event = tool_events[1]
+    # 数据阶段画像前置一条 ws_list（无数据文件，清洗如实跳过）；实验阶段依次：
+    # 任务卡数据清单 ws_list → 节点侧 env_probe（复现指纹）→ 沙盒 python_run
+    # → 断言取证 ws_list（验收基于工作区证据而非模型自述）。
+    assert [e.payload["tool"] for e in tool_events] == [
+        "ws_list",
+        "ws_list",
+        "env_probe",
+        "python_run",
+        "ws_list",
+    ]
+    (sandbox_event,) = [
+        e for e in tool_events if e.payload["tool"] == "python_run"
+    ]
     assert sandbox_event.payload["status"] == "succeeded"
     assert sandbox_event.payload["artifact_ids"], "沙箱捕获的产物要进工具事件"
 
 
 def test_unattended_mode_completes_without_review(tmp_path):
-    llm = StubLlmPort(stage_responses())
+    llm = stage_llm()
     runtime = make_runtime(tmp_path, llm, unattended=True)
 
     run_id = runtime.create_run("proj_1", inputs={"goal": "优化共享单车调度"})
@@ -246,34 +306,44 @@ def test_unattended_mode_completes_without_review(tmp_path):
 
 
 def test_experiment_runtime_failure_regenerates_with_feedback(tmp_path):
-    experiment_calls = []
+    bad_code = "raise RuntimeError('bad seed')"
+    envelopes_sent = []
 
-    def experiment_reply(variables):
-        experiment_calls.append(dict(variables))
-        if len(experiment_calls) == 1:
-            return stub_response(
-                {"approach_summary": "首版实现", "code": "raise RuntimeError('bad seed')"}
-            )
-        return stub_response(EXPERIMENT_OK)
+    def experiment_reply(messages):
+        if _saw_observation(messages):
+            return stub_response(EXPERIMENT_OK)
+        code = bad_code if not envelopes_sent else EXPERIMENT_CODE
+        envelopes_sent.append(code)
+        return tool_envelope(PYTHON_TOOL_NAME, code=code)
 
-    llm = StubLlmPort(
-        stage_responses(**{"experiment_code.default": experiment_reply})
+    llm = stage_llm(
+        chat_overrides={ExperimentExecutionNode.prompt_id: [experiment_reply]}
     )
     runtime = make_runtime(tmp_path, llm, unattended=True)
 
     run_id = runtime.create_run("proj_1", inputs={"goal": "优化共享单车调度"})
     assert drain(WorkerLoop(runtime)) == [AdvanceOutcome.COMPLETED]
 
-    # 第二轮生成必须携带第一轮的运行时错误与上一版代码
-    assert len(experiment_calls) == 2
-    retry_vars = experiment_calls[1]
-    assert "bad seed" in retry_vars["error_feedback"]
-    assert retry_vars["previous_code"] == "raise RuntimeError('bad seed')"
+    # 第二波会话的开场用户消息必须携带第一波的运行时错误与上一版代码
+    assert envelopes_sent == [bad_code, EXPERIMENT_CODE]
+    experiment_chats = [
+        call
+        for call in llm.chat_calls
+        if call.label == ExperimentExecutionNode.prompt_id
+    ]
+    second_wave_open = next(
+        m["content"]
+        for m in experiment_chats[2].messages
+        if m["role"] == "user"
+    )
+    assert "bad seed" in second_wave_open
+    assert bad_code in second_wave_open
 
     snapshot = runtime.get_snapshot(run_id)
     (experiment_step,) = steps_for(snapshot, TaskState.EXPERIMENTING)
     assert experiment_step.status is StepStatus.SUCCEEDED
-    assert experiment_step.metrics["code_rounds"] == 2, "节点内自愈，不产生额外步骤尝试"
+    assert experiment_step.metrics["waves"] == 2, "节点内按波自愈，不产生额外步骤尝试"
+    assert experiment_step.metrics["code_rounds"] == 2
 
     # 两轮沙箱执行都留 TOOL_CALLED 痕：先失败后成功（画像前置的 ws_list 除外）
     tool_events = [
@@ -299,7 +369,7 @@ def test_crash_midway_fresh_runtime_resumes_to_completion(tmp_path):
             raise SystemExit("simulated worker death")
         return stub_response(VALIDATION_OK)
 
-    llm = StubLlmPort(stage_responses(**{"validating.default": validating_reply}))
+    llm = stage_llm(**{"validating.default": validating_reply})
     config = WorkerConfig(root=tmp_path / "rt")
 
     runtime1 = create_real_runtime(config, llm, unattended=True, worker_id="worker_a")
@@ -334,11 +404,17 @@ def test_crash_midway_fresh_runtime_resumes_to_completion(tmp_path):
         "problem_analysis.default": 1,
         "data_preparation.default": 1,
         "model_planning.default": 1,
-        "experiment_code.default": 1,
         "validating.default": 2,
         "paper_writing.default": 1,
     }.items():
         assert len(prompt_calls(llm, prompt_id)) == expected, prompt_id
+    # 实验沙盒会话同样不重跑：一波两次调用（信封 + 终答），续跑后无新增
+    experiment_chats = [
+        call
+        for call in llm.chat_calls
+        if call.label == ExperimentExecutionNode.prompt_id
+    ]
+    assert len(experiment_chats) == 2
 
     # 续跑追加的事件仍然无洞（幂等去重 + 单调序列）
     seqs = [e.seq for e in runtime2.events.load(run_id)]
@@ -349,7 +425,7 @@ def test_crash_midway_fresh_runtime_resumes_to_completion(tmp_path):
 
 
 def test_reject_redoes_planning_and_asks_again(tmp_path):
-    llm = StubLlmPort(stage_responses())
+    llm = stage_llm()
     runtime = make_runtime(tmp_path, llm)
     loop = WorkerLoop(runtime)
 

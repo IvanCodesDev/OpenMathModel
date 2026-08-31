@@ -1,12 +1,17 @@
 """自定义模型接口：协议映射、对话回复、流式输出、备用回退与中转站门控。
 
 上游一律用 httpx.MockTransport 模拟（经 omm_api.llm._transport_factory 注入），
-测试不出网；SSE 由 TestClient 缓冲后按行解析。
+测试不出网；SSE 由 TestClient 缓冲后按行解析。唯一的例外是文末「系统代理绕过」
+一节——代理挂载只在真实 transport 上才生效（注入 MockTransport 时 httpx 根本
+不读环境代理），所以那几例用 127.0.0.1 上的临时 HTTP 服务器验证，仍不出网。
 """
 
 from __future__ import annotations
 
 import json
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
@@ -1184,3 +1189,82 @@ def test_pick_by_difficulty_uses_absolute_strength_targets():
     four = _endpoint(id="ep_4", weight=4)
     six = _endpoint(id="ep_6", weight=6)
     assert pick([four, six], 3) is six
+
+
+# ── 系统代理绕过：本机接口必须直连 ─────────────────────────────────────────
+
+
+class _LocalUpstream(BaseHTTPRequestHandler):
+    def log_message(self, *_args) -> None:  # 保持测试输出干净
+        pass
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的约定命名
+        body = json.dumps({"choices": [{"message": {"content": "本机接口应答"}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture()
+def local_upstream():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _LocalUpstream)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _point_system_proxy_at_a_dead_port(monkeypatch) -> None:
+    """把系统代理指向一个没人监听的端口：请求只要真走了代理就必然连不上，
+    「有没有绕过代理」因此成为可断言的事实，而不是靠读 httpx 私有属性猜。"""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, dead)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_bypasses_http_proxy_covers_loopback_private_and_link_local():
+    bypass = llm_module.bypasses_http_proxy
+    for host in (
+        "localhost", "ollama.localhost", "nas.local",
+        "127.0.0.1", "127.1.2.3", "::1",
+        "10.0.0.5", "172.16.0.9", "172.31.255.254", "192.168.2.70",
+        "169.254.1.1", "fe80::1", "fd00::1",
+    ):
+        assert bypass(host), f"{host} 是本机/私网地址，必须直连"
+    for host in ("", "api.openai.com", "api.deepseek.com", "gateway.test", "8.8.8.8", "172.32.0.1"):
+        assert not bypass(host), f"{host} 不是本机地址，不该被摘出代理"
+
+
+def test_local_endpoint_bypasses_system_proxy(local_upstream, monkeypatch):
+    """本机接口（Ollama / vLLM / 自建网关）必须直连，不能被塞进系统代理。
+
+    httpx 的 trust_env 只认 NO_PROXY 环境变量，不读 Windows 注册表的
+    ProxyOverride：即便系统自己的 proxy_bypass('127.0.0.1') 返回 True，
+    httpx 照样走代理，用户拿到的是代理返回的「接口 X 返回 HTTP 502」——
+    与接口本身毫无关系，排查会一路查错方向（真实事故）。
+    """
+    _point_system_proxy_at_a_dead_port(monkeypatch)
+
+    with llm_module._client(5.0, local_upstream) as client:
+        response = client.post(local_upstream, json={"model": "m"})
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "本机接口应答"
+
+
+def test_public_endpoint_still_goes_through_system_proxy(monkeypatch):
+    """反向对照：官方厂商域名照旧走系统代理——境内访问多半依赖它，
+    绕过规则必须只摘本机地址，不能顺手把所有出网都改成直连。"""
+    _point_system_proxy_at_a_dead_port(monkeypatch)
+    url = "https://api.deepseek.com/v1/chat/completions"
+
+    with llm_module._client(5.0, url) as client, pytest.raises(httpx.TransportError):
+        client.post(url, json={"model": "m"})

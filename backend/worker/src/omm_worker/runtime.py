@@ -24,6 +24,7 @@ from typing import Any
 
 from omm_agent_core import (
     Clock,
+    EventType,
     IdGenerator,
     LlmPort,
     NodeRegistry,
@@ -34,6 +35,7 @@ from omm_agent_core import (
     UuidIdGenerator,
     replay_events,
 )
+from omm_agent_harness import SubagentSupervisor
 from omm_agent_tools import (
     PythonSandbox,
     RecordingInvoker,
@@ -255,6 +257,14 @@ class WorkerRuntime:
                 snapshot, event_type, payload
             ),
             caller_max_tier="execute",
+        )
+        # 沙盒执行体（H3）：清洗/实验节点经监督者派发子代理；spawn 与结果
+        # 审计走 record_external 落 TOOL_CALLED（payload.tool="subagent:<kind>"，
+        # §8.3），与工具调用同一条事件序列（与 API 侧落 run.log 的定位同构）。
+        services.extras["subagents"] = SubagentSupervisor(
+            audit=lambda payload: engine.record_external(
+                snapshot, EventType.TOOL_CALLED, payload
+            )
         )
         return engine, snapshot
 

@@ -18,18 +18,45 @@ class LlmCall:
     variables: dict[str, Any]
 
 
+@dataclass
+class ChatCall:
+    """One ``chat_text`` invocation: label + the full wire message list."""
+
+    label: str
+    messages: list[dict[str, str]]
+
+
+#: A chat script entry: literal reply text, or callable(messages) -> str for
+#: scripts that need to react to the conversation (e.g. echo an observation).
+ChatEntry = str | Callable[[list[dict[str, str]]], str]
+
+
+def _play_entry(entry: ChatEntry, messages: list[dict[str, str]]) -> str:
+    return entry(messages) if callable(entry) else entry
+
+
 class StubLlmPort:
     """Deterministic responses keyed by prompt_id.
 
     A response may be a string or a callable(variables) -> str, so tests can
     react to inputs. Every call is recorded for assertions.
+
+    Conversational calls (``chat_text``) are scripted per label with queue
+    semantics (consume in order, repeat the last) — the same duck contract
+    EngineLlmPort exposes, so sandbox-agent nodes run against this stub.
     """
 
     def __init__(
-        self, responses: Mapping[str, str | Callable[[dict[str, Any]], str]]
+        self,
+        responses: Mapping[str, str | Callable[[dict[str, Any]], str]],
+        chat_scripts: Mapping[str, list[ChatEntry]] | None = None,
     ) -> None:
         self._responses = dict(responses)
+        self._chat_scripts = {
+            key: list(value) for key, value in (chat_scripts or {}).items()
+        }
         self.calls: list[LlmCall] = []
+        self.chat_calls: list[ChatCall] = []
 
     def complete(self, prompt_id: str, variables: dict[str, Any]) -> str:
         self.calls.append(LlmCall(prompt_id=prompt_id, variables=dict(variables)))
@@ -41,16 +68,35 @@ class StubLlmPort:
             return response(variables)
         return response
 
+    def chat_text(self, messages: list[dict[str, str]], *, label: str) -> str:
+        self.chat_calls.append(
+            ChatCall(label=label, messages=[dict(m) for m in messages])
+        )
+        queue = self._chat_scripts.get(label)
+        if not queue:
+            raise KeyError(f"StubLlmPort has no chat script for label {label!r}")
+        entry = queue.pop(0) if len(queue) > 1 else queue[0]
+        return _play_entry(entry, messages)
+
 
 class ScriptedLlmPort:
     """Returns queued responses per prompt_id in order (repeats the last one).
 
     Useful for repair-path tests: first response malformed, second valid.
+    ``chat_text`` follows the same queue discipline, keyed by label.
     """
 
-    def __init__(self, scripts: Mapping[str, list[str]]) -> None:
+    def __init__(
+        self,
+        scripts: Mapping[str, list[str]],
+        chat_scripts: Mapping[str, list[ChatEntry]] | None = None,
+    ) -> None:
         self._scripts = {key: list(value) for key, value in scripts.items()}
+        self._chat_scripts = {
+            key: list(value) for key, value in (chat_scripts or {}).items()
+        }
         self.calls: list[LlmCall] = []
+        self.chat_calls: list[ChatCall] = []
 
     def complete(self, prompt_id: str, variables: dict[str, Any]) -> str:
         self.calls.append(LlmCall(prompt_id=prompt_id, variables=dict(variables)))
@@ -60,6 +106,18 @@ class ScriptedLlmPort:
         if len(queue) > 1:
             return queue.pop(0)
         return queue[0]
+
+    def chat_text(self, messages: list[dict[str, str]], *, label: str) -> str:
+        self.chat_calls.append(
+            ChatCall(label=label, messages=[dict(m) for m in messages])
+        )
+        queue = self._chat_scripts.get(label)
+        if not queue:
+            raise KeyError(
+                f"ScriptedLlmPort has no chat script for label {label!r}"
+            )
+        entry = queue.pop(0) if len(queue) > 1 else queue[0]
+        return _play_entry(entry, messages)
 
 
 def stub_response(payload: dict[str, Any], fenced: bool = False) -> str:

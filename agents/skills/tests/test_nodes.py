@@ -13,10 +13,13 @@ from omm_agent_core import (
     TaskState,
     ToolResult,
 )
+from omm_agent_harness import SubagentSupervisor
 from omm_agent_skills import (
+    CLEANING_PROMPT_ID,
     DEFAULT_HARDWARE_NOTE,
     PYTHON_TOOL_NAME,
     DataPreparationNode,
+    LlmCall,
     ExperimentExecutionNode,
     ModelPlanningNode,
     PaperWritingNode,
@@ -315,9 +318,13 @@ PREPARATION_OK = {
     "derived_features": ["7 日移动平均"],
 }
 
-EXPERIMENT_OK = {
+EXPERIMENT_CODE = "print('OMM_METRICS_JSON: {\"rmse\": 0.12}')"
+
+#: 沙盒执行体的终答（summary + 节点声明的两个叙事键）。
+EXPERIMENT_FINAL = {
+    "summary": "贪心近似跑通，rmse 0.12 优于随机基线 0.31",
     "approach_summary": "构造泊松需求数据，MILP 简化为贪心近似并与随机基线对比",
-    "code": "print('OMM_METRICS_JSON: {\"rmse\": 0.12}')",
+    "progress_note": "实验代码已跑通，rmse 0.12 明显优于随机基线，下一步检验对需求率的敏感性。",
 }
 
 VALIDATION_OK = {
@@ -430,6 +437,93 @@ def tool_failure(stderr="Traceback: NameError: x is not defined"):
         error="python exited with code 1",
         output={"exit_code": 1, "stdout": "", "stderr": stderr},
     )
+
+
+# -- 沙盒执行体的会话脚本（文本协议） -------------------------------------------
+
+
+def tool_envelope(name, **arguments):
+    """模型侧的工具信封：适配器据此合成 ToolCall。"""
+    return json.dumps({"tool": name, "arguments": arguments}, ensure_ascii=False)
+
+
+def _saw_observation(messages):
+    return any("[工具执行结果]" in message["content"] for message in messages)
+
+
+def sandbox_script(final, code=EXPERIMENT_CODE):
+    """一波会话：先发 python_run 信封，收到观察后给终答。
+
+    按会话内容而非调用序号判断，所以同一份脚本能原样服务多波修复——每波
+    都是全新装配的内环（观察清零），不必为波数手工排队。
+    """
+
+    def reply(messages):
+        if _saw_observation(messages):
+            return stub_response(final)
+        return tool_envelope(PYTHON_TOOL_NAME, code=code)
+
+    return [reply]
+
+
+class CompleteOnlyPort:
+    """只有模板式 complete 的端口（没有会话扩展）：沙盒执行体的装配缺陷面。"""
+
+    def __init__(self, responses=None):
+        self._responses = dict(responses or {})
+        self.calls: list[LlmCall] = []
+
+    def complete(self, prompt_id, variables):
+        self.calls.append(LlmCall(prompt_id=prompt_id, variables=dict(variables)))
+        return self._responses[prompt_id]
+
+
+class SandboxToolInvoker:
+    """沙盒节点的假工具面：python_run 走队列，ws_list/env_probe/ws_read 固定应答。
+
+    ``files_after_run`` 模拟脚本真的产出了文件——清洗断言看的是工作区清单，
+    先跑后有才是诚实的时序。
+    """
+
+    def __init__(self, runs, files=(), files_after_run=(), texts=None, profiles=None):
+        self._runs = list(runs)
+        self._files = list(files)
+        self._files_after_run = list(files_after_run)
+        self._texts = dict(texts or {})
+        self._profiles = dict(profiles or {})
+        self._ran = False
+        self.calls: list[tuple[str, dict]] = []
+        self.python_calls: list[tuple[str, str, str, dict]] = []
+
+    def invoke(self, run_id, step_id, tool_name, arguments):
+        self.calls.append((tool_name, dict(arguments)))
+        if tool_name == PYTHON_TOOL_NAME:
+            self.python_calls.append((run_id, step_id, tool_name, dict(arguments)))
+            self._ran = True
+            return self._runs.pop(0) if len(self._runs) > 1 else self._runs[0]
+        if tool_name == "ws_list":
+            files = self._files + (self._files_after_run if self._ran else [])
+            return ToolResult(status="succeeded", output={"files": files})
+        if tool_name == "env_probe":
+            return ToolResult(
+                status="succeeded",
+                output={
+                    "runtime": "python",
+                    "version": "3.12.0",
+                    "deps_hash": "sha256:deadbeef",
+                },
+            )
+        if tool_name == "ws_read":
+            path = arguments["path"]
+            if path not in self._texts:
+                return ToolResult(status="failed", error=f"no such file: {path}")
+            return ToolResult(status="succeeded", output={"text": self._texts[path]})
+        if tool_name == "table_profile":
+            profile = self._profiles.get(arguments["path"])
+            if profile is None:
+                return ToolResult(status="failed", error="not scripted in this test")
+            return ToolResult(status="succeeded", output=profile)
+        raise AssertionError(f"unexpected tool call: {tool_name}")
 
 
 def prior_through_planning():
@@ -551,12 +645,213 @@ def test_data_preparation_requires_prior_analysis(registry):
     assert llm.calls == []
 
 
-# -- ExperimentExecutionNode ---------------------------------------------------
+# -- 数据准备：清洗沙盒执行 + G2 数据闸门 ---------------------------------------
 
 
-def test_experiment_generates_code_and_runs_tool(registry):
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
-    tools = FakeToolInvoker([tool_success(artifacts=(artifact(),))])
+CLEANING_CODE = (
+    "print('OMM_METRICS_JSON: "
+    '{"rows_before": 1000, "rows_after": 995, "imputed_columns": ["volume"]}\')'
+)
+
+
+def cleaning_metrics(rows_before=1000, rows_after=995, imputed=("volume",)):
+    return json.dumps(
+        {
+            "rows_before": rows_before,
+            "rows_after": rows_after,
+            "imputed_columns": list(imputed),
+        },
+        ensure_ascii=False,
+    )
+
+
+def cleaning_stdout(**kwargs):
+    return f"OMM_METRICS_JSON: {cleaning_metrics(**kwargs)}\n"
+
+
+def cleaning_llm(plan=None, summary="按方案清洗完成"):
+    """数据阶段的双通道端口：模板调用出方案，会话调用跑清洗。"""
+    return StubLlmPort(
+        {"data_preparation.default": stub_response(plan or PREPARATION_OK)},
+        chat_scripts={
+            CLEANING_PROMPT_ID: sandbox_script({"summary": summary}, code=CLEANING_CODE)
+        },
+    )
+
+
+def cleaning_services(llm, tools):
+    services = make_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+    return services
+
+
+def cleaning_tools(stdout=None, **kwargs):
+    return SandboxToolInvoker(
+        runs=[tool_success(stdout=stdout or cleaning_stdout(**kwargs))],
+        files=["data/orders.csv"],
+        files_after_run=["cleaned/orders.csv"],
+    )
+
+
+def test_data_preparation_dispatches_cleaning_sandbox_and_auto_adopts_small_impact():
+    """删行 0.5%、无目标列插补 → 不惊动用户，自动采用清洗结果。"""
+    registry = load_default_registry()
+    llm = cleaning_llm()
+    tools = cleaning_tools()
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    cleaning = result.outputs["cleaning"]
+    assert cleaning["executed"] is True
+    assert cleaning["status"] == "passed"
+    # 影响面数字来自清洗脚本的标记行，节点只做除法与求交
+    assert cleaning["rows_before"] == 1000
+    assert cleaning["rows_after"] == 995
+    assert cleaning["rows_deleted_ratio"] == 0.005
+    assert cleaning["imputed_columns"] == ["volume"]
+    assert cleaning["imputed_target_columns"] == []
+    assert cleaning["summary"] == "按方案清洗完成"
+    # 清洗脚本本身发布为可复现产物
+    assert [ref.uri.rsplit("/", 1)[-1] for ref in result.artifacts] == ["cleaning.py"]
+    # 方案（而非全对话）进入清洗任务卡
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "线性插值" in card and "3σ 截断" in card
+    assert "- data/orders.csv" in card
+
+
+def test_g2_gate_triggers_on_heavy_row_deletion():
+    registry = load_default_registry()
+    llm = cleaning_llm()
+    tools = cleaning_tools(rows_before=1000, rows_after=900, imputed=())
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert "10.0%" in result.review_reason
+    meta = result.review_meta
+    assert meta["gate"] == "G2"
+    assert [option["id"] for option in meta["options"]] == [
+        "adopt_cleaned",
+        "use_raw",
+        "reject",
+    ]
+    # 单 CTA 的前端要能落到一个确定动作：推荐项必须显式标出
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["adopt_cleaned"]
+    assert meta["impact"]["rows_deleted_ratio"] == 0.1
+    # 闸门未拍板前，清洗结论已随 STEP_SUCCEEDED 的 outputs 落库
+    assert result.outputs["cleaning"]["executed"] is True
+
+
+def test_g2_gate_triggers_on_target_column_imputation():
+    """删行极少但目标列被插补：建模标签被改写，必须请人确认。"""
+    registry = load_default_registry()
+    plan = dict(PREPARATION_OK, target_columns=["Sales"])
+    llm = cleaning_llm(plan=plan)
+    tools = cleaning_tools(rows_before=1000, rows_after=1000, imputed=("sales",))
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert "目标列被插补" in result.review_reason
+    # 列名大小写不该决定是否上闸门
+    assert result.outputs["cleaning"]["imputed_target_columns"] == ["sales"]
+
+
+def test_no_g2_gate_when_imputed_column_is_not_a_target():
+    registry = load_default_registry()
+    plan = dict(PREPARATION_OK, target_columns=["sales"])
+    llm = cleaning_llm(plan=plan)
+    tools = cleaning_tools(rows_before=1000, rows_after=1000, imputed=("temperature",))
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+
+
+@pytest.mark.parametrize(
+    "kwargs, reason_fragment",
+    [
+        ({"supervisor": False}, "子代理监督者"),
+        ({"chat": False}, "会话式调用"),
+        ({"files": False}, "没有已下发的数据文件"),
+        ({"tools": False}, "未配置工具端口"),
+    ],
+)
+def test_cleaning_degrades_honestly_when_a_precondition_is_missing(kwargs, reason_fragment):
+    """清洗是尽力而为的增强：装配缺项如实标注 executed=false，绝不假装跑过。"""
+    registry = load_default_registry()
+    llm = (
+        cleaning_llm()
+        if kwargs.get("chat", True)
+        else CompleteOnlyPort({"data_preparation.default": stub_response(PREPARATION_OK)})
+    )
+    tools = (
+        cleaning_tools() if kwargs.get("files", True) else SandboxToolInvoker(runs=[tool_success()])
+    )
+    services = make_services(llm, tools if kwargs.get("tools", True) else None)
+    if kwargs.get("supervisor", True):
+        services.extras["subagents"] = SubagentSupervisor()
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, services)
+
+    assert result.status == NodeResult.SUCCEEDED, "清洗缺席不阻塞数据阶段"
+    assert result.outputs["profile_summary"]
+    assert result.outputs["cleaning"]["executed"] is False
+    assert reason_fragment in result.outputs["cleaning"]["reason"]
+
+
+def test_cleaning_failure_does_not_block_the_stage_and_skips_g2():
+    """清洗真跑但没跑成：如实记 failed，后续按原始数据继续，不上闸门。"""
+    registry = load_default_registry()
+    llm = cleaning_llm()
+    tools = SandboxToolInvoker(
+        runs=[tool_failure(stderr="ValueError: could not convert string to float")],
+        files=["data/orders.csv"],
+    )
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    cleaning = result.outputs["cleaning"]
+    assert cleaning["executed"] is True
+    assert cleaning["status"] == "failed"
+    assert cleaning["rows_before"] == 0
+
+
+# -- ExperimentExecutionNode（沙盒执行体） ---------------------------------------
+
+
+def experiment_llm(final=None, code=EXPERIMENT_CODE):
+    return StubLlmPort(
+        {},
+        chat_scripts={
+            ExperimentExecutionNode.prompt_id: sandbox_script(
+                final or EXPERIMENT_FINAL, code=code
+            )
+        },
+    )
+
+
+def system_prompt_of(chat_call):
+    """取一次会话调用的 system 段（沙盒模板渲染的角色卡与任务口径）。"""
+    return next(m["content"] for m in chat_call.messages if m["role"] == "system")
+
+
+def user_prompt_of(chat_call):
+    """取一次会话调用的首条 user 段（目标/任务说明/种子/验收/修复反馈）。"""
+    return next(m["content"] for m in chat_call.messages if m["role"] == "user")
+
+
+def test_experiment_runs_code_in_sandbox_and_reports_real_metrics(registry):
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success(artifacts=(artifact(),))])
     node = ExperimentExecutionNode(registry)
     services = make_full_services(llm, tools)
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
@@ -564,58 +859,120 @@ def test_experiment_generates_code_and_runs_tool(registry):
     result = node.run(ctx, services)
 
     assert result.status == NodeResult.SUCCEEDED
-    run_id, step_id, tool_name, arguments = tools.calls[0]
+    run_id, step_id, tool_name, arguments = tools.python_calls[0]
     assert (run_id, step_id, tool_name) == ("run_1", "step_1", PYTHON_TOOL_NAME)
-    assert arguments["code"] == EXPERIMENT_OK["code"]
+    assert arguments["code"] == EXPERIMENT_CODE
+    # 指标来自脚本真实 stdout 的标记行，不是模型自述
     assert result.outputs["metrics"] == {"rmse": 0.12}
+    assert result.outputs["approach_summary"] == EXPERIMENT_FINAL["approach_summary"]
+    assert result.outputs["progress_note"] == EXPERIMENT_FINAL["progress_note"]
     assert "核心指标" in result.outputs["experiment_summary"]
     assert "results.csv" in result.outputs["experiment_summary"]
-    assert result.metrics == {"llm_attempts": 1, "code_rounds": 1}
+    assert result.metrics == {"llm_attempts": 2, "code_rounds": 1, "waves": 1}
     # 工具产物之外，生成的实验脚本本身也发布为 code 产物（可复现）
     assert [ref.kind for ref in result.artifacts] == ["table", "code"]
     code_ref = result.artifacts[-1]
     assert code_ref.uri.endswith("experiment.py")
-    assert services.artifacts.blobs[code_ref.uri].decode("utf-8") == EXPERIMENT_OK["code"]
-    # 首轮提示词的失败反馈为占位「无」，可用库与硬件为保守默认口径
-    assert llm.calls[0].variables["error_feedback"] == "无"
-    assert llm.calls[0].variables["available_packages"] == "无（仅 Python 标准库）"
-    assert llm.calls[0].variables["hardware_note"] == DEFAULT_HARDWARE_NOTE
-    # 选中的方案（recommended A）进入提示词
-    assert "整数规划" in llm.calls[0].variables["chosen_plan"]
+    assert services.artifacts.blobs[code_ref.uri].decode("utf-8") == EXPERIMENT_CODE
 
 
-def test_experiment_passes_detected_packages_to_prompt(registry):
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
-    tools = FakeToolInvoker([tool_success()])
-    node = ExperimentExecutionNode(registry, available_packages="numpy、pandas")
+def test_experiment_output_carries_sandbox_report_for_replay(registry):
+    """新增 sandbox_report：断言逐条结果/种子/环境指纹/预算用量的复现面。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    node = ExperimentExecutionNode(registry)
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
 
-    result = node.run(ctx, make_full_services(llm, tools))
+    report = node.run(ctx, make_full_services(llm, tools)).outputs["sandbox_report"]
 
-    assert result.status == NodeResult.SUCCEEDED
-    assert llm.calls[0].variables["available_packages"] == "numpy、pandas"
+    assert report["status"] == "passed"
+    assert report["seeds"] == {"random_seed": 42}
+    assert report["usage"]["runs"] == 1
+    assert [item["id"] for item in report["assertions"]] == [
+        "run_ok",
+        "metrics_reported",
+    ]
+    assert all(item["passed"] for item in report["assertions"])
+    assert report["env_fingerprint"]["deps_hash"] == "sha256:deadbeef"
 
 
-def test_experiment_passes_gpu_hardware_note_to_prompt(registry):
-    """运行时探测到 GPU 时，硬件口径进入提示词变量（引导实验代码上 GPU）。"""
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
-    tools = FakeToolInvoker([tool_success()])
+def test_experiment_passes_detected_packages_and_gpu_note_to_task_card(registry):
+    """可用库与硬件口径进入沙盒角色卡（system 段），引导实验代码上 GPU。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
     note = gpu_hardware_note("NVIDIA GeForce RTX 4090, 24.0 GB VRAM")
-    node = ExperimentExecutionNode(registry, hardware_note=note)
+    node = ExperimentExecutionNode(
+        registry, available_packages="numpy、pandas", hardware_note=note
+    )
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
 
     result = node.run(ctx, make_full_services(llm, tools))
 
     assert result.status == NodeResult.SUCCEEDED
-    sent = llm.calls[0].variables["hardware_note"]
-    assert "RTX 4090" in sent and "检测到可用 GPU" in sent
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "numpy、pandas" in card
+    assert "RTX 4090" in card and "检测到可用 GPU" in card
     # GPU 口径必须自带回退纪律，别让生成代码在无 GPU 环境硬编码 cuda 崩掉
-    assert "禁止硬编码 cuda" in sent
+    assert "禁止硬编码 cuda" in card
+    # 选中的方案（recommended A）进入任务卡
+    assert "整数规划" in card
 
 
-def test_experiment_feeds_runtime_error_back_and_regenerates_once(registry):
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
-    tools = FakeToolInvoker([tool_failure(), tool_success()])
+def test_experiment_defaults_stay_cpu_conservative(registry):
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, tools))
+
+    card = system_prompt_of(llm.chat_calls[0])
+    assert DEFAULT_HARDWARE_NOTE in card
+    assert "无（仅 Python 标准库）" in card
+
+
+def test_experiment_lists_workspace_data_files_in_task_card(registry):
+    """已下发的数据文件进任务卡：优先读真实数据，而不是一律造合成数据。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(
+        runs=[tool_success()],
+        files=["data/orders.csv", "cleaned/orders.csv", "notes/readme.md"],
+    )
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, tools))
+
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "- data/orders.csv" in card
+    assert "- cleaned/orders.csv" in card
+    assert "notes/readme.md" not in card, "非数据目录的文件不进任务卡"
+
+
+def test_experiment_task_card_carries_g2_user_decision(registry):
+    """用户在 G2 选了原始数据：决策台账原样进任务卡，模型据此选目录。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = NodeContext(
+        run_id="run_1",
+        project_id="proj_1",
+        state=TaskState.EXPERIMENTING,
+        step_id="step_1",
+        attempt=1,
+        inputs={},
+        prior_outputs=prior_through_planning(),
+        review_decisions={TaskState.DATA_PREPARATION.value: "use_raw"},
+    )
+
+    ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, tools))
+
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "use_raw" in card
+    assert "改用原始数据" in card
+
+
+def test_experiment_repairs_across_waves_when_run_fails(registry):
+    """第一波运行失败 → 断言未过 → 带着 stderr 反馈进第二波修复。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_failure(), tool_success()])
     node = ExperimentExecutionNode(registry)
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
 
@@ -623,29 +980,70 @@ def test_experiment_feeds_runtime_error_back_and_regenerates_once(registry):
 
     assert result.status == NodeResult.SUCCEEDED
     assert result.metrics["code_rounds"] == 2
-    assert len(tools.calls) == 2
-    # 第二轮的提示词变量必须携带第一轮的运行时错误与代码
-    retry_vars = llm.calls[1].variables
-    assert "NameError" in retry_vars["error_feedback"]
-    assert retry_vars["previous_code"] == EXPERIMENT_OK["code"]
+    assert result.metrics["waves"] == 2
+    assert len(tools.python_calls) == 2
+    # 第二波任务卡必须带上第一波的真实报错与上一轮代码（结构化反馈，不转录全对话）
+    second_wave = user_prompt_of(llm.chat_calls[2])
+    assert "NameError" in second_wave
+    assert EXPERIMENT_CODE in second_wave
+    assert "问题分析结果" not in second_wave, "反馈是结构化差异，不是把上一波对话搬过来"
 
 
-def test_experiment_fails_after_rounds_exhausted(registry):
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
-    tools = FakeToolInvoker([tool_failure()])
+def test_experiment_fails_when_waves_exhausted_and_names_the_failing_assertion(registry):
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_failure()])
     node = ExperimentExecutionNode(registry)
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
 
     result = node.run(ctx, make_full_services(llm, tools))
 
     assert result.status == NodeResult.FAILED
-    assert "after 2 rounds" in result.error
+    assert "3 wave(s)" in result.error
+    assert "[run_ok]" in result.error
     assert "NameError" in result.error
-    assert len(tools.calls) == 2
+    assert len(tools.python_calls) == 3
+    assert result.metrics["waves"] == 3
+
+
+def test_experiment_rejects_self_reported_success_without_running_code(registry):
+    """§7.1 硬纪律：模型不跑代码直接交终答，断言不认，最终失败。"""
+    llm = StubLlmPort(
+        {},
+        chat_scripts={
+            ExperimentExecutionNode.prompt_id: [stub_response(EXPERIMENT_FINAL)]
+        },
+    )
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    node = ExperimentExecutionNode(registry)
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = node.run(ctx, make_full_services(llm, tools))
+
+    assert result.status == NodeResult.FAILED
+    assert "尚未用 python_run 运行任何代码" in result.error
+    assert tools.python_calls == []
+
+
+def test_experiment_without_chat_capable_port_fails_cleanly(registry):
+    """装配缺陷（端口没有会话能力）必须明说，不能退回旧的单发模板路径。"""
+
+    class CompleteOnlyPort:
+        def complete(self, prompt_id, variables):
+            return "{}"
+
+    node = ExperimentExecutionNode(registry)
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = node.run(
+        ctx, make_full_services(CompleteOnlyPort(), SandboxToolInvoker(runs=[tool_success()]))
+    )
+
+    assert result.status == NodeResult.FAILED
+    assert "chat_text" in result.error
 
 
 def test_experiment_without_tool_invoker_fails_cleanly(registry):
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
+    llm = experiment_llm()
     node = ExperimentExecutionNode(registry)
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
 
@@ -653,12 +1051,12 @@ def test_experiment_without_tool_invoker_fails_cleanly(registry):
 
     assert result.status == NodeResult.FAILED
     assert "no tool invoker" in result.error
-    assert llm.calls == []
+    assert llm.chat_calls == []
 
 
 def test_experiment_requires_prior_planning(registry):
-    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
-    tools = FakeToolInvoker([tool_success()])
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
     node = ExperimentExecutionNode(registry)
     ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_with_analysis())
 
@@ -666,7 +1064,7 @@ def test_experiment_requires_prior_planning(registry):
 
     assert result.status == NodeResult.FAILED
     assert "missing required input" in result.error
-    assert tools.calls == []
+    assert tools.python_calls == []
 
 
 # -- ValidationNode ------------------------------------------------------------

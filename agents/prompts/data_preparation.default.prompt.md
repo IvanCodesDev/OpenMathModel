@@ -2,9 +2,9 @@
 id: data_preparation.default
 stage: DATA_PREPARATION
 variant: default
-version: 4
+version: 5
 input_schema: {"type": "object", "required": ["problem_analysis"], "properties": {"problem_analysis": {"type": "string"}, "attachments_summary": {"type": "string"}}}
-output_schema: {"type": "object", "required": ["profile_summary", "datasets", "preparation_steps"], "properties": {"profile_summary": {"type": "string"}, "datasets": {"type": "array", "items": {"type": "object", "required": ["name", "source", "fields"], "properties": {"name": {"type": "string"}, "source": {"type": "string"}, "fields": {"type": "array", "items": {"type": "string"}}, "quality_risks": {"type": "array", "items": {"type": "string"}}}}}, "preparation_steps": {"type": "array", "items": {"type": "string"}}, "missing_value_strategy": {"type": "string"}, "outlier_strategy": {"type": "string"}, "derived_features": {"type": "array", "items": {"type": "string"}}, "progress_note": {"type": "string"}}}
+output_schema: {"type": "object", "required": ["profile_summary", "datasets", "preparation_steps"], "properties": {"profile_summary": {"type": "string"}, "datasets": {"type": "array", "items": {"type": "object", "required": ["name", "source", "fields"], "properties": {"name": {"type": "string"}, "source": {"type": "string"}, "fields": {"type": "array", "items": {"type": "string"}}, "quality_risks": {"type": "array", "items": {"type": "string"}}}}}, "preparation_steps": {"type": "array", "items": {"type": "string"}}, "missing_value_strategy": {"type": "string"}, "outlier_strategy": {"type": "string"}, "derived_features": {"type": "array", "items": {"type": "string"}}, "target_columns": {"type": "array", "items": {"type": "string"}}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛团队的数据工程师。基于问题分析结果与附件摘要，产出数据准备方案与数据画像。
 
@@ -31,6 +31,7 @@ output_schema: {"type": "object", "required": ["profile_summary", "datasets", "p
 - `missing_value_strategy`：缺失值处理策略与一句话理由，不超过 100 字。
 - `outlier_strategy`：异常值识别与处理策略，不超过 100 字。
 - `derived_features`：建议构造的衍生变量列表，每项「名称：构造式」不超过 24 字，最多 8 项，只列建模真正会用到的。
+- `target_columns`：建模目标变量（因变量/标签）的**真实列名**清单，与附件数据的字段名逐字一致；题目没有附带数据或目标列不存在于数据中时给空数组。清洗阶段判断「目标列是否被插补」依赖它，禁止臆造列名。
 - `progress_note`：两三句面向用户的进度汇报（数据侧的核心结论、最需要注意的质量风险、接下来建模方案阶段会怎么用这些数据），口语化，不要罗列字段清单；它会直接显示在任务页的执行过程里。
 
 这些内容会渲染在版面有限的报告页上：宁可少而精，不要把细节塞进单条文本；超出上限的细节留给后续阶段，不写。

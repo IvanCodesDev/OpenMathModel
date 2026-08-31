@@ -233,9 +233,19 @@ def _approval_projection(row: ApprovalRequestRow | None) -> dict[str, Any] | Non
 
 
 def _preferred_option(approval: ApprovalRequestRow | None) -> str | None:
+    """CTA 按钮的预选项：恰一个正向选项时选它（G1「确认/退回」审批的现状），
+    多正向选项时只认节点声明的推荐项（recommended，如 G2 的「采用清洗结果」）；
+    没有推荐或推荐不唯一则不替用户默选（按钮 no-op，用户须显式选择）。"""
     if approval is None:
         return None
     options = list(approval.options or [])
+    recommended = [
+        option
+        for option in options
+        if option.get("recommended") is True and option.get("id") != "reject"
+    ]
+    if len(recommended) == 1:
+        return str(recommended[0]["id"])
     selectable = [option for option in options if option.get("id") != "reject"]
     return str(selectable[0]["id"]) if len(selectable) == 1 else None
 

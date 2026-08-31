@@ -201,6 +201,10 @@ class ApprovalOption(BaseModel):
     id: constr(min_length=1, max_length=100)
     label: constr(min_length=1, max_length=200)
     description: constr(max_length=1000) | None = None
+    recommended: bool | None = Field(
+        None,
+        description="AI 推荐项标记：多正向选项的闸门（如 G2 数据闸门）用它声明默认选择；至多一个选项为 true。",
+    )
 
 
 class ApprovalProjection(BaseModel):

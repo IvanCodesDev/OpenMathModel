@@ -173,14 +173,19 @@ class TaskRunEngine:
                 events,
             )
             if result.status == NodeResult.NEEDS_REVIEW:
+                review_payload: dict[str, Any] = {
+                    "reason": result.review_reason or "review requested",
+                    "requested_by_step": step_id,
+                    "resume_state": target.value,
+                }
+                if result.review_meta:
+                    # 闸门元数据（闸门号/选项/证据）只在节点声明时携带；
+                    # 缺省时载荷与历史版本逐字节一致（金轨迹稳定）。
+                    review_payload["gate"] = dict(result.review_meta)
                 self._record(
                     snapshot,
                     EventType.REVIEW_REQUESTED,
-                    {
-                        "reason": result.review_reason or "review requested",
-                        "requested_by_step": step_id,
-                        "resume_state": target.value,
-                    },
+                    review_payload,
                     events,
                 )
                 return AdvanceOutcome(AdvanceOutcome.REVIEW_REQUESTED, snapshot, events)
@@ -258,29 +263,83 @@ class TaskRunEngine:
         return events
 
     def resolve_review(
-        self, snapshot: TaskRunSnapshot, approved: bool, reason: str | None = None
+        self,
+        snapshot: TaskRunSnapshot,
+        approved: bool,
+        reason: str | None = None,
+        resume_state: TaskState | None = None,
     ) -> list[AgentEvent]:
         """Resolve a pending human review.
 
-        MVP semantics are forward-only: approval resumes the requesting state
-        (whose step already succeeded), so the next ``advance`` moves on to
-        the following stage; rejection fails the run (retry can re-enter).
-        Sending a run BACKWARDS to redo earlier stages is intentionally out of
-        scope until pass-aware step tracking exists.
+        Default is forward-only, unchanged: approval resumes the requesting
+        state (whose step already succeeded), so the next ``advance`` moves on
+        to the following stage; rejection fails the run (retry can re-enter).
+
+        Sending the run BACKWARDS is now supported in two cases (ADR-0013):
+        resolving a revision review, or passing ``resume_state`` to override
+        the restart point. Both mean the target's previous attempt already
+        SUCCEEDED, which ``_select_target`` would otherwise read as "done,
+        move on" — so the event carries ``rerun`` to force a fresh pass. The
+        key is omitted when it is not needed, keeping forward-only payloads
+        byte-identical to earlier versions (golden traces stay stable).
         """
         if snapshot.state is not TaskState.NEEDS_REVIEW or snapshot.review is None:
             raise ValueError("no pending review to resolve")
+        review = snapshot.review
+        resume = resume_state or review.resume_state
+        if approved and resume not in WORK_STATES:
+            raise ValueError(f"{resume.value} is not a work state")
+        payload: dict[str, Any] = {
+            "approved": approved,
+            "resume_state": resume.value,
+            "reason": reason,
+        }
+        if approved and (review.revision_round > 0 or resume is not review.resume_state):
+            payload["rerun"] = True
+        if review.revision_round > 0:
+            # Which gate this was cannot be recovered from the pair of states
+            # alone, and the projection layer needs to know: declining a
+            # revision restores COMPLETED, declining a node-raised gate fails
+            # the run. Omitted for node-raised gates, so their payloads stay
+            # byte-identical to earlier versions.
+            payload["revision_round"] = review.revision_round
         events: list[AgentEvent] = []
-        self._record(
-            snapshot,
-            EventType.REVIEW_RESOLVED,
-            {
-                "approved": approved,
-                "resume_state": snapshot.review.resume_state.value,
-                "reason": reason,
-            },
-            events,
-        )
+        self._record(snapshot, EventType.REVIEW_RESOLVED, payload, events)
+        return events
+
+    def request_revision(
+        self,
+        snapshot: TaskRunSnapshot,
+        target_state: TaskState,
+        reason: str,
+        note_id: str | None = None,
+    ) -> list[AgentEvent]:
+        """Open a revision round on a finished run (ADR-0013).
+
+        A completed run is not a dead end: the user can ask for changes and
+        have the work actually redone. This suspends the run into the review
+        gate carrying the stage they want to restart from, so the restart
+        point is confirmed by a human before anything is re-run — redoing from
+        problem analysis and redoing from paper writing differ by an order of
+        magnitude in cost. Approving lands the run on ``target_state`` and
+        re-runs it and every stage after it.
+
+        ``note_id`` links the round to the run note holding the user's actual
+        wording, which the projection layer shows as the gate's evidence.
+        """
+        if snapshot.state is not TaskState.COMPLETED:
+            raise ValueError("revision rounds are only valid for a completed run")
+        if target_state not in WORK_STATES:
+            raise ValueError(f"{target_state.value} is not a work state")
+        payload: dict[str, Any] = {
+            "target_state": target_state.value,
+            "reason": reason,
+            "round": snapshot.revision_round + 1,
+        }
+        if note_id is not None:
+            payload["note_id"] = note_id
+        events: list[AgentEvent] = []
+        self._record(snapshot, EventType.REVISION_REQUESTED, payload, events)
         return events
 
     def retry(self, snapshot: TaskRunSnapshot) -> list[AgentEvent]:

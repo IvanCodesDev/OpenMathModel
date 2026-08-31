@@ -42,6 +42,7 @@ from omm_agent_core import (
     ToolResult,
     replay_events,
 )
+from omm_agent_harness import SubagentSupervisor
 from omm_agent_skills import (
     DataPreparationNode,
     ExperimentExecutionNode,
@@ -53,7 +54,7 @@ from omm_agent_skills import (
     load_default_registry,
     stub_response,
 )
-from omm_agent_tools import summarize
+from omm_agent_tools import failure_detail, summarize
 
 from .scenario import CANNED_ANALYSIS, CANNED_PLANNING, PROBLEM_STATEMENT
 
@@ -86,13 +87,19 @@ CANNED_PREPARATION = {
 #: Metrics the scripted sandbox run prints on its OMM_METRICS_JSON line.
 FULL_CHAIN_METRICS = {"rmse": 0.042, "baseline_rmse": 0.31}
 
+#: The script the sandbox agent writes and runs through ``python_run``.
+CANNED_EXPERIMENT_CODE = (
+    "import json\n"
+    "metrics = " + json.dumps(FULL_CHAIN_METRICS) + "\n"
+    "print('OMM_METRICS_JSON: ' + json.dumps(metrics))\n"
+)
+
+#: Final answer of the experiment sandbox agent (summary + the two narrative
+#: keys ``ExperimentExecutionNode`` declares via ``extra_final_keys``).
 CANNED_EXPERIMENT = {
+    "summary": "线性趋势拟合跑通，RMSE 0.042 显著优于均值基线 0.31",
     "approach_summary": "固定种子构造运量序列，最小二乘拟合线性趋势并与均值基线对比 RMSE",
-    "code": (
-        "import json\n"
-        "metrics = " + json.dumps(FULL_CHAIN_METRICS) + "\n"
-        "print('OMM_METRICS_JSON: ' + json.dumps(metrics))\n"
-    ),
+    "progress_note": "实验代码已跑通，RMSE 0.042 对比均值基线 0.31，下一步做稳健性检验。",
 }
 
 CANNED_VALIDATION = {
@@ -171,6 +178,13 @@ def canned_paper_section(variables: dict[str, Any]) -> str:
 
 #: results.csv content the scripted sandbox publishes on success.
 FULL_CHAIN_RESULTS_CSV = b"quarter,volume_pred\n9,108.4\n"
+
+#: Deterministic env_probe answer (sandbox-run-report reproducibility fields).
+FULL_CHAIN_ENV = {
+    "runtime": "python",
+    "version": "3.12.0",
+    "deps_hash": "sha256:evalfixture",
+}
 
 _SUCCESS_STDOUT = "OMM_METRICS_JSON: " + json.dumps(FULL_CHAIN_METRICS) + "\n"
 _FAILURE_STDERR = (
@@ -251,6 +265,12 @@ class FakeToolInvoker:
             result = ToolResult(status="succeeded", output={"files": []})
             self._record(step_id, tool_name, arguments, result)
             return result
+        if tool_name == "env_probe":
+            # 沙盒执行体的环境指纹（进 sandbox-run-report 的复现面）：固定值，
+            # 金轨迹才不会随本机 Python 小版本漂移。
+            result = ToolResult(status="succeeded", output=dict(FULL_CHAIN_ENV))
+            self._record(step_id, tool_name, arguments, result)
+            return result
         run = self._runs.pop(0) if len(self._runs) > 1 else self._runs[0]
         if run.ok:
             refs: tuple[ArtifactRef, ...] = ()
@@ -289,27 +309,53 @@ class FakeToolInvoker:
     ) -> None:
         if self.recorder is None:
             return
-        self.recorder(
-            EventType.TOOL_CALLED,
-            {
-                "step_id": step_id,
-                "tool": tool_name,
-                "status": result.status,
-                "duration_ms": result.duration_ms,
-                "input_summary": summarize(arguments),
-                "output_summary": summarize(
-                    result.output if result.ok else result.error
-                ),
-                "artifact_ids": [ref.artifact_id for ref in result.artifacts],
-            },
-        )
+        payload: dict[str, Any] = {
+            "step_id": step_id,
+            "tool": tool_name,
+            "status": result.status,
+            "duration_ms": result.duration_ms,
+            "input_summary": summarize(arguments),
+            "output_summary": summarize(
+                result.output if result.ok else result.error
+            ),
+            "artifact_ids": [ref.artifact_id for ref in result.artifacts],
+        }
+        if not result.ok:
+            detail = failure_detail(result)
+            if detail:
+                payload["failure_detail"] = detail
+        self.recorder(EventType.TOOL_CALLED, payload)
 
 
 # -- session assembly ----------------------------------------------------------
 
 
+def canned_sandbox_agent(
+    final: dict[str, Any], code: str
+) -> Callable[[list[dict[str, str]]], str]:
+    """Scripted sandbox-agent conversation: tool envelope, then final answer.
+
+    Routing on conversation content (not call index) makes one script serve
+    every repair wave — each wave assembles a fresh inner loop, so "have I
+    already seen a tool observation" is exactly the wave-local question.
+    """
+
+    def reply(messages: list[dict[str, str]]) -> str:
+        if any("[工具执行结果]" in message["content"] for message in messages):
+            return stub_response(final)
+        return json.dumps(
+            {"tool": "python_run", "arguments": {"code": code}}, ensure_ascii=False
+        )
+
+    return reply
+
+
 def build_full_chain_llm() -> StubLlmPort:
     """Stub responses for every prompt id the six real nodes may consult.
+
+    Two channels, mirroring production: template calls (``complete``) for the
+    single-shot stages, and scripted conversations (``chat_text``) for the
+    experiment stage, which is a sandbox agent driving python_run itself.
 
     The paper stage is a multipass pipeline (outline → sections → finalize);
     ``paper_writing.default`` stays stubbed so the single-call fallback path
@@ -320,13 +366,17 @@ def build_full_chain_llm() -> StubLlmPort:
             "problem_analysis.default": stub_response(CANNED_ANALYSIS, fenced=True),
             "data_preparation.default": stub_response(CANNED_PREPARATION),
             "model_planning.default": stub_response(CANNED_PLANNING),
-            "experiment_code.default": stub_response(CANNED_EXPERIMENT),
             "validating.default": stub_response(CANNED_VALIDATION),
             "paper_outline.default": stub_response(CANNED_PAPER_OUTLINE),
             "paper_section.default": canned_paper_section,
             "paper_finalize.default": stub_response(CANNED_PAPER_FINALIZE),
             "paper_writing.default": stub_response(CANNED_PAPER),
-        }
+        },
+        chat_scripts={
+            ExperimentExecutionNode.prompt_id: [
+                canned_sandbox_agent(CANNED_EXPERIMENT, CANNED_EXPERIMENT_CODE)
+            ]
+        },
     )
 
 
@@ -363,7 +413,14 @@ def build_full_chain_session(
     llm = llm or build_full_chain_llm()
     tools = FakeToolInvoker(tool_runs or [sandbox_success()], artifacts=artifacts)
     services = NodeServices(
-        clock=clock, ids=ids, artifacts=artifacts, llm=llm, tools=tools
+        clock=clock,
+        ids=ids,
+        artifacts=artifacts,
+        llm=llm,
+        tools=tools,
+        # 与生产装配同构：数据阶段的清洗执行经监督者派发。本评测不下发附件，
+        # 工作区为空，清洗如实跳过（reason 说的是"没有数据文件"而不是"没接线"）。
+        extras={"subagents": SubagentSupervisor()},
     )
     nodes = {
         TaskState.PROBLEM_ANALYSIS: ProblemAnalysisNode(registry),
@@ -398,19 +455,27 @@ def build_full_chain_session(
     )
 
 
-#: Prompt ids in stage order. The first five stages call once each; the paper
-#: stage is a multipass pipeline: outline → one call per chapter → finalize.
+#: Template (``complete``) prompt ids in stage order. The experiment stage is
+#: absent by design: it is a sandbox agent now, driven through ``chat_text``
+#: conversations (see :data:`FULL_CHAIN_CHAT_SEQUENCE`). The paper stage is a
+#: multipass pipeline: outline → one call per chapter → finalize.
 FULL_CHAIN_PROMPT_SEQUENCE = [
     "problem_analysis.default",
     "data_preparation.default",
     "model_planning.default",
-    "experiment_code.default",
     "validating.default",
     "paper_outline.default",
     "paper_section.default",
     "paper_section.default",
     "paper_section.default",
     "paper_finalize.default",
+]
+
+#: Conversational (``chat_text``) labels in order: one wave of the experiment
+#: sandbox agent = one tool turn + one final answer.
+FULL_CHAIN_CHAT_SEQUENCE = [
+    "experiment_code.sandbox",
+    "experiment_code.sandbox",
 ]
 
 #: Exact event-type trajectory of the full-chain happy path (review gate,
@@ -432,7 +497,12 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.REVIEW_RESOLVED,  # user approves plan A
     EventType.STATE_CHANGED,  # -> EXPERIMENTING
     EventType.STEP_STARTED,
-    EventType.TOOL_CALLED,  # python_run (scripted sandbox)
+    # 实验阶段 = 沙盒 Agent 执行体：先摸清工作区与环境，再由模型自主跑码，
+    # 收束前重列工作区作为断言证据。
+    EventType.TOOL_CALLED,  # ws_list（任务卡里的数据文件清单）
+    EventType.TOOL_CALLED,  # env_probe（报告的环境指纹）
+    EventType.TOOL_CALLED,  # python_run（模型自主调用，scripted sandbox）
+    EventType.TOOL_CALLED,  # ws_list（断言证据：产物清单）
     EventType.ARTIFACT_PRODUCED,  # results.csv
     EventType.ARTIFACT_PRODUCED,  # experiment.py (generated code, reproducible)
     EventType.STEP_SUCCEEDED,

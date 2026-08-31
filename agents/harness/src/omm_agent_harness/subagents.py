@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -234,7 +235,10 @@ class SubagentSupervisor:
 
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
-        thread.join(spec.budgets.max_wall_clock_s)
+        # 墙钟额度未启用（如控制面按审批等待语义禁用 = inf）时按无超时等待：
+        # thread.join(inf) 在 CPython 会 OverflowError，非有限值必须转 None。
+        timeout = spec.budgets.max_wall_clock_s
+        thread.join(timeout if math.isfinite(timeout) else None)
         if thread.is_alive():
             return ResultEnvelope(
                 status="timeout",

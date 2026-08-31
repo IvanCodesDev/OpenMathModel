@@ -6,7 +6,14 @@ Executes model/experiment code inside the run workspace with:
 - a scrubbed environment (small Windows-safe allowlist; no user secrets),
 - a hard wall-clock timeout with process kill,
 - capped stdout/stderr capture,
-- automatic artifact capture of files the code creates in its step directory.
+- automatic artifact capture of files the code creates in the workspace.
+
+The subprocess runs with cwd at the WORKSPACE ROOT, not the per-step script
+directory: every other surface the model sees (ws_list/ws_read/ws_write,
+staged ``data/`` files, ``cleaned/`` outputs, sandbox assertions) speaks
+workspace-relative paths, so relative paths inside generated code must
+resolve against the same root or the model's ``open('data/x.csv')`` would
+dangle while ws_list happily shows the file.
 
 Honest boundary (documented, not hidden): this is process-level isolation
 only. Network access and grandchild processes are NOT blocked here — that
@@ -207,16 +214,19 @@ class PythonSandbox:
 
         step_dir_rel = f"steps/{ctx.step_id}"
         script_path = self._workspace.write_text(f"{step_dir_rel}/main.py", code)
-        step_dir = script_path.parent
 
-        before = {path for path in step_dir.rglob("*") if path.is_file()}
+        # Snapshot AFTER writing main.py so the script itself is never
+        # captured as an artifact; scan the whole workspace because code runs
+        # at the root and may legitimately create files anywhere inside it.
+        scan_root = self._workspace.root
+        before = {path for path in scan_root.rglob("*") if path.is_file()}
 
         env = _sandbox_env()
 
         try:
             proc = subprocess.run(
                 [self._python, "-I", str(script_path)],
-                cwd=str(step_dir),
+                cwd=str(scan_root),
                 env=env,
                 capture_output=True,
                 text=True,
@@ -237,7 +247,7 @@ class PythonSandbox:
                 output={"stdout": _clip(stdout), "stderr": _clip(stderr)},
             )
 
-        artifacts, skipped = self._collect_artifacts(step_dir, before, ctx)
+        artifacts, skipped = self._collect_artifacts(scan_root, before, ctx)
         output = {
             "exit_code": proc.returncode,
             "stdout": _clip(proc.stdout),
@@ -257,13 +267,13 @@ class PythonSandbox:
         return ToolResult(status="succeeded", output=output, artifacts=tuple(artifacts))
 
     def _collect_artifacts(
-        self, step_dir: Path, before: set[Path], ctx: ToolCallContext
+        self, scan_root: Path, before: set[Path], ctx: ToolCallContext
     ) -> tuple[list[ArtifactRef], list[str]]:
         artifacts: list[ArtifactRef] = []
         skipped: list[str] = []
         created = sorted(
             path
-            for path in step_dir.rglob("*")
+            for path in scan_root.rglob("*")
             if path.is_file() and path not in before
         )
         for path in created:

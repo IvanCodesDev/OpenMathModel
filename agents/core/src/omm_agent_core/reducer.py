@@ -20,7 +20,7 @@ from .models import (
     StepStatus,
     TaskRunSnapshot,
 )
-from .states import TaskState, assert_transition
+from .states import WORK_SEQUENCE, WORK_STATES, TaskState, assert_transition
 
 
 class SequenceError(Exception):
@@ -103,6 +103,8 @@ def _on_step_started(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     # 新步骤开始意味着 retry 已被兑现；清掉重跑标志，重放才能收敛（否则每次
     # 重放 RUN_RETRIED 都会重新置位，导致该状态被无限重跑）。
     snapshot.force_rerun = False
+    # 该状态重新执行时，其历史闸门决策随旧产出一并失效（新产出需要新决策）。
+    snapshot.review_decisions.pop(state.value, None)
     snapshot.steps.append(
         StepRun(
             step_id=payload["step_id"],
@@ -149,6 +151,44 @@ def _on_review_requested(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     snapshot.state = TaskState.NEEDS_REVIEW
 
 
+def _on_revision_requested(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
+    """修订回合（ADR-0013）：已完成的运行重新打开，挂进评审门等人确认起点。
+
+    不直接落到目标阶段，是因为重做起点必须经人确认——从问题分析重做和从论文
+    撰写重做，花费与耗时差一个数量级。``target_state`` 只是服务端算出的建议，
+    审批时可以改选，最终以 REVIEW_RESOLVED 的 ``resume_state`` 为准。
+    """
+    payload = event.payload
+    target = TaskState(payload["target_state"])
+    if target not in WORK_STATES:
+        raise ReduceError(f"{target.value} is not a work state")
+    assert_transition(snapshot.state, TaskState.NEEDS_REVIEW)
+    snapshot.revision_round = int(payload["round"])
+    snapshot.review = ReviewRequest(
+        reason=payload["reason"],
+        # 修订由用户发起，没有触发步骤；空串把它与节点自提的闸门评审区分开。
+        requested_by_step="",
+        resume_state=target,
+        revision_round=snapshot.revision_round,
+    )
+    snapshot.state = TaskState.NEEDS_REVIEW
+
+
+def _discard_from(snapshot: TaskRunSnapshot, start: TaskState) -> None:
+    """丢弃 ``start`` 及其下游各阶段的产出与闸门决策。
+
+    这些阶段马上要重做，留着上一轮的产出会串轮：``snapshot.outputs`` 每段是
+    ``bucket.update`` 合并写入的，新一轮少写某个键时旧值会残留；而且回退落地
+    的瞬间下游各段仍挂着上一轮结果，节点读 ``prior_outputs`` 会读到过期数据。
+    上游各段不动——它们本轮不重做，其成果正是这一轮返工的依据。
+
+    历史不会因此丢失：``steps`` 逐趟保留，产出的版本化归档在 stage_outputs。
+    """
+    for state in WORK_SEQUENCE[WORK_SEQUENCE.index(start) :]:
+        snapshot.outputs.pop(state.value, None)
+        snapshot.review_decisions.pop(state.value, None)
+
+
 def _on_review_resolved(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     # Both branches are folded into ONE event so a crash can never leave the
     # run stuck between "review cleared" and "state moved".
@@ -161,6 +201,27 @@ def _on_review_resolved(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
         resume = TaskState(payload["resume_state"])
         assert_transition(TaskState.NEEDS_REVIEW, resume)
         snapshot.state = resume
+        if payload.get("rerun"):
+            # 回退重做（ADR-0013）：目标阶段最近一次步骤已 SUCCEEDED，
+            # _select_target 会把它读成「做完了、往下走」，必须显式要求重跑，
+            # 否则「退回建模方案」的实际效果是直接跳到实验，等于什么都没重做。
+            snapshot.force_rerun = True
+            _discard_from(snapshot, resume)
+        else:
+            # 决策台账的快照面：批准时 reason 携带所选 option_id（控制面
+            # resolve_approval 的约定），按请求确认的状态记账，供下游节点读取
+            # （如 G2 的「采用清洗结果/改用原始数据」）。缺 reason 的旧事件记
+            # 兜底值，重放兼容。重做分支不记：那不是对产出的闸门决策，而是
+            # 重做起点的选择，且该阶段一开步就会被 _on_step_started 清掉。
+            snapshot.review_decisions[resume.value] = str(
+                payload.get("reason") or "approve"
+            )
+    elif review.revision_round > 0:
+        # 撤回修订：这个门是用户在已完成的运行上主动打开的，不批准就把运行
+        # 放回它原本的终态。判成 FAILED 是错的——什么都没跑坏，用户只是
+        # 改了主意。revision_round 不回退，它记的是发起过几轮。
+        assert_transition(TaskState.NEEDS_REVIEW, TaskState.COMPLETED)
+        snapshot.state = TaskState.COMPLETED
     else:
         snapshot.state = TaskState.FAILED
         snapshot.failure = Failure(
@@ -225,6 +286,7 @@ _HANDLERS = {
     EventType.RUN_RESUMED: _on_run_resumed,
     EventType.RUN_CANCELLED: _on_run_cancelled,
     EventType.RUN_RETRIED: _on_run_retried,
+    EventType.REVISION_REQUESTED: _on_revision_requested,
     EventType.RUN_COMPLETED: _on_run_completed,
     EventType.RUN_FAILED: _on_run_failed,
     EventType.TOOL_CALLED: _on_tool_called,

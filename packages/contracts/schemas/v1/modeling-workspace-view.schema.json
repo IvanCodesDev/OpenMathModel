@@ -268,7 +268,11 @@
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 100 },
         "label": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "description": { "type": ["string", "null"], "maxLength": 1000 }
+        "description": { "type": ["string", "null"], "maxLength": 1000 },
+        "recommended": {
+          "type": ["boolean", "null"],
+          "description": "AI 推荐项标记：多正向选项的闸门（如 G2 数据闸门）用它声明默认选择；至多一个选项为 true，null/缺省等价于 false。"
+        }
       },
       "required": ["id", "label"],
       "additionalProperties": false

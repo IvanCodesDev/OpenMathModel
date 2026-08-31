@@ -65,8 +65,10 @@ def test_parse_requires_closing_fence_and_body():
 def test_default_registry_loads_all_stage_prompts():
     registry = load_default_registry()
     assert registry.ids() == [
+        "data_cleaning.sandbox",
         "data_preparation.default",
         "experiment_code.default",
+        "experiment_code.sandbox",
         "model_planning.default",
         "paper_finalize.default",
         "paper_outline.default",
@@ -90,3 +92,26 @@ def test_default_registry_loads_all_stage_prompts():
     experiment = registry.get("experiment_code.default")
     assert experiment.stage == "EXPERIMENTING"
     assert "code" in experiment.output_schema["required"]
+
+
+def test_sandbox_prompts_are_agent_task_cards_not_single_shot_templates():
+    """沙盒执行体的两个模板：终答由内环校验，模板只负责角色与任务口径。
+
+    单发模板（``experiment_code.default``）要求模型一次吐出 ``code``；沙盒
+    模板下代码经 ``python_run`` 工具轮真跑，模板绝不能再要求整段代码，否则
+    模型会把脚本塞进终答而永远不运行。
+    """
+    registry = load_default_registry()
+
+    cleaning = registry.get("data_cleaning.sandbox")
+    assert cleaning.stage == "DATA_PREPARATION"
+    assert cleaning.placeholders() == {"preparation_plan", "data_files"}
+    assert "cleaned/" in cleaning.body
+    assert "OMM_METRICS_JSON" in cleaning.body
+
+    experiment = registry.get("experiment_code.sandbox")
+    assert experiment.stage == "EXPERIMENTING"
+    assert "code" not in experiment.output_schema.get("required", [])
+    assert {"approach_summary", "progress_note"} <= set(
+        experiment.output_schema.get("required", [])
+    )

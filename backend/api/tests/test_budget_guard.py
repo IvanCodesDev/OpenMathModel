@@ -16,7 +16,15 @@ from conftest import (
     wait_until,
 )
 
-from test_task_runs_llm_nodes import _configure_llm, _llm_reply, _stage_router
+from test_task_runs_llm_nodes import (
+    EXPERIMENT_OUTPUT,
+    _configure_llm,
+    _sandbox_reply,
+    _saw_observation,
+    _stage_router,
+    _system_of,
+    _wire_messages,
+)
 
 
 def test_run_level_llm_call_cap_hard_stops_with_e310(client, monkeypatch):
@@ -61,25 +69,24 @@ def test_node_level_token_cap_hard_stops_with_e320(client, monkeypatch):
 
 
 def test_sandbox_run_cap_charges_upfront_with_e310(client, monkeypatch):
-    """沙箱运行按次预付：上限 1 次时，第一轮代码失败后的修复重跑（第 2 次
+    """沙箱运行按次预付：上限 1 次时，第一波代码失败后的修复重跑（第 2 次
     运行）在启动之前就被拦下（started run is spent money，§4.7）。"""
     monkeypatch.setenv("OMM_RUN_MAX_SANDBOX_RUNS", "1")
-    experiment_calls: list[str] = []
+    envelopes_sent: list[str] = []
 
     def router(request):
-        import json as _json
-
-        prompt = _json.loads(request.content)["messages"][-1]["content"]
-        if "实验工程师" in prompt:
-            experiment_calls.append(prompt)
-            if len(experiment_calls) == 1:
-                return _llm_reply(
-                    {"approach_summary": "首版实现", "code": "raise RuntimeError('bad seed')"}
-                )
-            return _llm_reply({
-                "approach_summary": "修复版",
-                "code": "print('OMM_METRICS_JSON: {\"rmse\": 0.5}')",
-            })
+        messages = _wire_messages(request)
+        if "实验工程师" in _system_of(messages):
+            # 第一波交会失败的代码；修复波（终答前无观察的新会话）交修复版，
+            # 但第 2 次 python_run 必须在启动前被预算闸拦下。
+            code = (
+                "raise RuntimeError('bad seed')"
+                if not envelopes_sent
+                else "print('OMM_METRICS_JSON: {\"rmse\": 0.5}')"
+            )
+            if not _saw_observation(messages):
+                envelopes_sent.append(code)
+            return _sandbox_reply(messages, code, EXPERIMENT_OUTPUT)
         return _stage_router(request)
 
     _configure_llm(client, monkeypatch, handler=router)

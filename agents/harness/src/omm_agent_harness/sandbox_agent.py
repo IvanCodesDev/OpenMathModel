@@ -89,6 +89,10 @@ class SandboxTask:
     max_runs: int = 6  # R2 预算（§5.4 单一出处的拍板值）
     max_turns_per_wave: int = 8  # 单波内环轮数（§4.7 沙盒档位）
     max_waves: int = 3  # 断言修复波次上限（每波至少消耗一次运行才有意义）
+    #: 终答除 summary 外要求的叙事键：(键名, 给模型看的一句话说明)。父节点
+    #: 需要沙盒 Agent 的叙事产出（如实验节点的 approach_summary/progress_note）
+    #: 时在此声明；校验与提示词由执行体统一生成，经 on_final_answer 回传。
+    extra_final_keys: tuple[tuple[str, str], ...] = ()
 
 
 def _lenient_parse(raw: str) -> Any:
@@ -109,12 +113,19 @@ def _lenient_parse(raw: str) -> Any:
     raise json.JSONDecodeError("no JSON object found", raw, 0)
 
 
-def _final_answer_validator(value: Any) -> list[str]:
-    if not isinstance(value, dict):
-        return ["终答必须是 JSON 对象"]
-    if not str(value.get("summary") or "").strip():
-        return ["missing required key: summary（一句话说明做了什么与结果）"]
-    return []
+def _final_answer_validator(task: SandboxTask) -> Callable[[Any], list[str]]:
+    def validate(value: Any) -> list[str]:
+        if not isinstance(value, dict):
+            return ["终答必须是 JSON 对象"]
+        problems: list[str] = []
+        if not str(value.get("summary") or "").strip():
+            problems.append("missing required key: summary（一句话说明做了什么与结果）")
+        for key, hint in task.extra_final_keys:
+            if not str(value.get(key) or "").strip():
+                problems.append(f"missing required key: {key}（{hint}）")
+        return problems
+
+    return validate
 
 
 def _extract_metrics(stdout: str) -> dict[str, Any]:
@@ -203,12 +214,18 @@ def _assemble_wave_prompt(
             content=(
                 "用 python_run 工具执行代码（需要留档的辅助文件用 ws_write）；"
                 "运行成功并自查达标后，只输出一个 JSON 对象作为终答："
-                '{"summary": "一句话说明做了什么与关键结果"}。'
-                "终答会触发验收断言评估，未通过会把差异反馈给你继续修复。"
+                + _final_answer_example(task)
+                + "。终答会触发验收断言评估，未通过会把差异反馈给你继续修复。"
             ),
         ),
     ]
     return ContextAssembler.build(sections).messages
+
+
+def _final_answer_example(task: SandboxTask) -> str:
+    pairs = ['"summary": "一句话说明做了什么与关键结果"']
+    pairs += [f'"{key}": "{hint}"' for key, hint in task.extra_final_keys]
+    return "{" + ", ".join(pairs) + "}"
 
 
 def _evaluate(
@@ -249,18 +266,24 @@ def run_sandbox_task(
     env_fingerprint: Mapping[str, Any],
     publish_code: Callable[[str], str] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    on_final_answer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """驱动一张任务卡到 sandbox-run-report.v1 形状的报告 dict。
 
     波次语义：一波 = 一次独立装配的内环（模型写码/跑码/终答）+ 一次断言
     评估；未过则携带断言差异进入下一波。attempts 上报波次数（每波至少一次
     评估）；usage.runs 上报真实沙箱运行次数。
+
+    ``on_final_answer`` 在收束前回传最后一个通过结构校验的终答对象（含
+    extra_final_keys 声明的叙事键）——报告本身保持 sandbox-run-report.v1
+    形状，叙事产出经此旁路交给父节点。
     """
     tracker = _RunTracker(execute_tools, task.max_runs)
     total_usage = {"tokens": 0, "duration_ms": 0}
     assertion_results: list[dict[str, Any]] = []
     feedback: str | None = None
     waves = 0
+    final_answer: dict[str, Any] | None = None
 
     def evidence() -> SandboxEvidence:
         last = tracker.last_result
@@ -280,7 +303,7 @@ def run_sandbox_task(
             LoopTask(
                 task_id=f"{task.task_id}:wave{waves}",
                 messages=_assemble_wave_prompt(task, feedback),
-                validator=_final_answer_validator,
+                validator=_final_answer_validator(task),
                 parser=_lenient_parse,
                 budget=LoopBudget(max_turns=task.max_turns_per_wave),
             ),
@@ -290,6 +313,8 @@ def run_sandbox_task(
         )
         total_usage["tokens"] += outcome.usage.total_tokens
         total_usage["duration_ms"] += outcome.usage.duration_ms
+        if outcome.ok and outcome.value is not None:
+            final_answer = outcome.value
 
         assertion_results, passed = _evaluate(task, evidence())
         if passed and outcome.ok:
@@ -301,6 +326,9 @@ def run_sandbox_task(
         if tracker.exhausted or tracker.runs >= task.max_runs:
             break  # R2 运行预算已尽（§5.4）：收束为 failed 报告
         feedback = _feedback_from(assertion_results, tracker.last_code)
+
+    if on_final_answer is not None and final_answer is not None:
+        on_final_answer(dict(final_answer))
 
     final_code_artifact = ""
     if publish_code is not None and tracker.last_code:

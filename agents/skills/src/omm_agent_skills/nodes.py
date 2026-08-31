@@ -28,15 +28,23 @@ from dataclasses import replace
 from typing import Any
 
 from omm_agent_core import NodeContext, NodeResult, NodeServices, TaskState
+from omm_agent_core.models import ToolResult
 from omm_agent_harness import (
     LoopBudget,
     LoopTask,
     Message,
     Reply,
+    ResultEnvelope,
+    RunBudget,
+    SandboxAssertion,
+    SandboxTask,
+    SpawnSpec,
     Usage,
     run_inner_loop,
+    run_sandbox_task,
 )
 
+from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
 from .prompt_registry import PromptRegistry, PromptTemplate
 from .schema import validate
 
@@ -79,7 +87,6 @@ def gpu_hardware_note(gpu_descriptor: str) -> str:
 _METRICS_LINE = re.compile(r"^OMM_METRICS_JSON:\s*(\{.*\})\s*$", re.MULTILINE)
 
 _STDOUT_TAIL_CHARS = 2000
-_ERROR_FEEDBACK_LIMIT = 3000
 
 
 def extract_json(raw: str) -> Any:
@@ -261,13 +268,18 @@ class ModelPlanningNode(LlmSkillNode):
         analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value)
         if not analysis:
             raise KeyError("'PROBLEM_ANALYSIS outputs'")
+        data_profile = str(
+            ctx.prior_outputs.get(TaskState.DATA_PREPARATION.value, {}).get(
+                "profile_summary", "无数据画像"
+            )
+        )
+        # G2 决策台账透传：用户选了「改用原始数据」时方案阶段必须知情，
+        # 否则方案会默认建立在清洗后数据上。
+        if ctx.review_decisions.get(TaskState.DATA_PREPARATION.value) == "use_raw":
+            data_profile += "（用户已确认改用原始数据，清洗产物不采用）"
         return {
             "problem_analysis": json.dumps(analysis, ensure_ascii=False),
-            "data_profile": str(
-                ctx.prior_outputs.get(TaskState.DATA_PREPARATION.value, {}).get(
-                    "profile_summary", "无数据画像"
-                )
-            ),
+            "data_profile": data_profile,
         }
 
     def to_result(self, parsed: dict[str, Any], attempts: int) -> NodeResult:
@@ -321,7 +333,25 @@ DATA_DIR_PREFIX = "data/"
 _PROFILE_FILE_LIMIT = 5
 
 
-def _profile_data_tables(ctx: NodeContext, services: NodeServices) -> str:
+def _list_data_files(ctx: NodeContext, services: NodeServices) -> list[str]:
+    """工作区 data/ 下的文件清单；无工具或清单失败一律给空表。
+
+    画像与清洗派发问的是同一个问题，共用这一次 ws_list——同一步里列两遍目录
+    会在活动流里留下两条重复的工具事件，而答案必然相同。
+    """
+    if services.tools is None:
+        return []
+    listing = services.tools.invoke(
+        ctx.run_id, ctx.step_id, WS_LIST_TOOL, {"prefix": DATA_DIR_PREFIX}
+    )
+    if not listing.ok:
+        return []
+    return [str(path) for path in listing.output.get("files") or []]
+
+
+def _profile_data_tables(
+    ctx: NodeContext, services: NodeServices, data_files: Sequence[str]
+) -> str:
     """工作区 data/ 下 CSV 的确定性画像 → 提示词附注段；无工具/无文件给空串。
 
     画像数字由 table_profile 代码统计产出（§1.3 原则 5），LLM 只判读质量与
@@ -329,15 +359,8 @@ def _profile_data_tables(ctx: NodeContext, services: NodeServices) -> str:
     """
     if services.tools is None:
         return ""
-    listing = services.tools.invoke(
-        ctx.run_id, ctx.step_id, WS_LIST_TOOL, {"prefix": DATA_DIR_PREFIX}
-    )
-    if not listing.ok:
-        return ""
     tables = [
-        path
-        for path in listing.output.get("files") or []
-        if str(path).lower().endswith(".csv")
+        path for path in data_files if str(path).lower().endswith(".csv")
     ][:_PROFILE_FILE_LIMIT]
     notes: list[str] = []
     for path in tables:
@@ -356,7 +379,216 @@ def _profile_data_tables(ctx: NodeContext, services: NodeServices) -> str:
     )
 
 
+# ── 沙盒执行体的节点侧桥（H3 前置刀）────────────────────────────────────────
+#
+# run_sandbox_task 的全部依赖（chat/工具执行器/工作区访问器/环境指纹）从
+# NodeServices 就地装配：工具走 services.tools（RecordingInvoker 统一审计
+# 与档位），会话走 LlmPort 的 chat_text 扩展（文本协议，见 chat_adapter）。
+
+#: 沙盒任务允许的工具面（§7.1 五件套；env_probe 由节点侧预先探测，不给模型）。
+SANDBOX_TOOL_NAMES = ("python_run", "ws_write", "ws_read", "ws_list")
+
+#: 显式种子（§7.1 任务卡字段）：合成数据/抽样必须使用的固定种子。
+SANDBOX_SEEDS = {"random_seed": 42}
+
+
+class _SandboxCapture:
+    """节点侧执行证据：最后一次 python_run 的 stdout/指标 + 全部产物。
+
+    sandbox-run-report.v1 不含 stdout 与指标本体（那是产物与断言的事），但
+    节点输出（stage_outputs 正文）需要它们——在工具执行器上就地截获，不改
+    执行体的报告形状。
+    """
+
+    def __init__(self) -> None:
+        self.stdout = ""
+        self.metrics: dict[str, Any] = {}
+        self.artifacts: list[Any] = []
+        self._seen: set[str] = set()
+
+    def observe(self, result: ToolResult) -> None:
+        output = result.output or {}
+        self.stdout = str(output.get("stdout") or "")
+        parsed: dict[str, Any] = {}
+        for match in _METRICS_LINE.finditer(self.stdout):
+            try:
+                candidate = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                parsed = candidate
+        self.metrics = parsed
+        for ref in result.artifacts:
+            if ref.artifact_id not in self._seen:
+                self._seen.add(ref.artifact_id)
+                self.artifacts.append(ref)
+
+
+def _sandbox_tool_executor(
+    ctx: NodeContext,
+    services: NodeServices,
+    capture: _SandboxCapture,
+    allowed: Sequence[str] = SANDBOX_TOOL_NAMES,
+):
+    """ToolExecutor：合成 ToolCall → services.tools.invoke（审计/计费在途中）。"""
+    allowed_set = set(allowed)
+
+    def execute(calls):
+        results: list[ToolResult] = []
+        for call in calls:
+            if call.name not in allowed_set:
+                results.append(
+                    ToolResult(
+                        status="failed",
+                        error=(
+                            f"工具 {call.name} 不在本任务允许清单"
+                            f"（可用：{', '.join(sorted(allowed_set))}）"
+                        ),
+                    )
+                )
+                continue
+            result = services.tools.invoke(
+                ctx.run_id, ctx.step_id, call.name, dict(call.arguments)
+            )
+            if call.name == PYTHON_TOOL_NAME:
+                capture.observe(result)
+            results.append(result)
+        return results
+
+    return execute
+
+
+def _workspace_files(ctx: NodeContext, services: NodeServices) -> list[str]:
+    listing = services.tools.invoke(ctx.run_id, ctx.step_id, WS_LIST_TOOL, {})
+    if not listing.ok:
+        return []
+    return [str(path) for path in listing.output.get("files") or []]
+
+
+def _workspace_reader(ctx: NodeContext, services: NodeServices):
+    def read_text(path: str) -> str:
+        result = services.tools.invoke(
+            ctx.run_id, ctx.step_id, "ws_read", {"path": path}
+        )
+        if not result.ok:
+            raise FileNotFoundError(result.error or f"无法读取 {path}")
+        return str(result.output.get("text") or "")
+
+    return read_text
+
+
+def _env_fingerprint(ctx: NodeContext, services: NodeServices) -> dict[str, Any]:
+    result = services.tools.invoke(ctx.run_id, ctx.step_id, "env_probe", {})
+    return dict(result.output) if result.ok else {}
+
+
+def _publish_code_callback(
+    ctx: NodeContext,
+    services: NodeServices,
+    capture: _SandboxCapture,
+    filename: str,
+):
+    """publish_code 回调：脚本进内容寻址存储，产物引用并入节点产出。"""
+
+    def publish(code: str) -> str:
+        if services.artifacts is None or not code:
+            return ""
+        ref = services.artifacts.put(
+            ctx.run_id,
+            "code",
+            filename,
+            code.encode("utf-8"),
+            "text/x-python",
+            ctx.step_id,
+        )
+        capture.artifacts.append(ref)
+        return ref.artifact_id
+
+    return publish
+
+
+def _report_shape_problems(report: dict[str, Any]) -> list[str]:
+    """sandbox-run-report.v1 的形状点检（E520 校验器；契约包不在依赖边内）。"""
+    if not isinstance(report, dict):
+        return ["报告必须是 JSON 对象"]
+    required = (
+        "status", "attempts", "assertions", "produced_artifacts",
+        "seeds", "env_fingerprint", "usage",
+    )
+    return [f"missing required key: {key}" for key in required if key not in report]
+
+
+# ── 数据准备：LLM 方案 → 清洗沙盒执行 → G2 影响面闸门 ─────────────────────────
+
+#: G2 触发阈值（§9.1/§11.1 拍板值）：删行比例超过 5% 即请人确认。
+G2_ROW_DELETION_THRESHOLD = 0.05
+
+#: G2 审批选项（控制面投影按此渲染决策卡；id 进 review_decisions 供下游读取）。
+G2_OPTIONS = (
+    {
+        "id": "adopt_cleaned",
+        "label": "采用清洗结果",
+        "description": "以 cleaned/ 目录的清洗后数据继续建模（推荐）",
+        "recommended": True,
+    },
+    {
+        "id": "use_raw",
+        "label": "改用原始数据",
+        "description": "忽略清洗产物，后续阶段直接使用 data/ 原始文件",
+    },
+    {
+        "id": "reject",
+        "label": "退回调整",
+        "description": "重新执行数据准备阶段（重做画像、方案与清洗）",
+    },
+)
+
+CLEANING_PROMPT_ID = "data_cleaning.sandbox"
+
+
+def _normalize_column(name: Any) -> str:
+    return str(name).strip().lower()
+
+
+def _cleaning_impact(
+    metrics: Mapping[str, Any], target_columns: Sequence[str]
+) -> dict[str, Any]:
+    """影响面统计（数字来自清洗脚本的标记行，节点只做除法与求交）。"""
+    try:
+        rows_before = int(metrics.get("rows_before") or 0)
+        rows_after = int(metrics.get("rows_after") or 0)
+    except (TypeError, ValueError):
+        rows_before, rows_after = 0, 0
+    imputed = [
+        str(column).strip()
+        for column in (metrics.get("imputed_columns") or [])
+        if str(column).strip()
+    ]
+    ratio = 0.0
+    if rows_before > 0:
+        ratio = max(0.0, 1.0 - rows_after / rows_before)
+    normalized_targets = {_normalize_column(col) for col in target_columns}
+    imputed_targets = sorted(
+        {col for col in imputed if _normalize_column(col) in normalized_targets}
+    )
+    return {
+        "rows_before": rows_before,
+        "rows_after": rows_after,
+        "rows_deleted_ratio": round(ratio, 4),
+        "imputed_columns": imputed,
+        "imputed_target_columns": imputed_targets,
+    }
+
+
 class DataPreparationNode(LlmSkillNode):
+    """数据画像判读 + 准备方案（LLM）→ 清洗沙盒执行（子代理）→ G2 条件闸门。
+
+    清洗执行是尽力而为的增强：监督者/会话端口/数据文件任一缺席都**如实降级**
+    为「仅方案」（cleaning.executed=false + 原因），不阻塞数据阶段——但绝不
+    假装执行过。G2 只在清洗真实执行且影响面超阈值（删行 >5% 或目标列被插补）
+    时触发（§9.1），选项与决策台账见 G2_OPTIONS。
+    """
+
     prompt_id = "data_preparation.default"
     state = TaskState.DATA_PREPARATION
 
@@ -372,28 +604,253 @@ class DataPreparationNode(LlmSkillNode):
         }
 
     def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
-        note = _profile_data_tables(ctx, services)
+        data_files = _list_data_files(ctx, services)
+        note = _profile_data_tables(ctx, services, data_files)
         if note:
             ctx = replace(ctx, inputs={**dict(ctx.inputs), "table_profile_note": note})
-        return super().run(ctx, services)
+        base = super().run(ctx, services)
+        if base.status != NodeResult.SUCCEEDED:
+            return base
+
+        capture = _SandboxCapture()
+        cleaning = self._execute_cleaning(
+            ctx, services, base.outputs, capture, data_files
+        )
+        outputs = {**base.outputs, "cleaning": cleaning}
+        artifacts = base.artifacts + tuple(capture.artifacts)
+
+        gate = self._g2_review(cleaning)
+        if gate is not None:
+            reason, meta = gate
+            return NodeResult.needs_review(
+                reason=reason,
+                outputs=outputs,
+                review_meta=meta,
+                metrics=base.metrics,
+                artifacts=artifacts,
+            )
+        return NodeResult.succeeded(
+            outputs=outputs, metrics=base.metrics, artifacts=artifacts
+        )
+
+    # -- cleaning execution ---------------------------------------------------
+
+    def _execute_cleaning(
+        self,
+        ctx: NodeContext,
+        services: NodeServices,
+        parsed: Mapping[str, Any],
+        capture: _SandboxCapture,
+        data_files: Sequence[str],
+    ) -> dict[str, Any]:
+        def skipped(reason: str) -> dict[str, Any]:
+            return {"executed": False, "reason": reason}
+
+        if services.tools is None:
+            return skipped("未配置工具端口，跳过清洗执行")
+        supervisor = (services.extras or {}).get("subagents")
+        if supervisor is None:
+            return skipped("未配置子代理监督者，跳过清洗执行")
+        if not supports_chat(services.llm):
+            return skipped("模型端口不支持会话式调用，跳过清洗执行")
+        data_files = list(data_files)
+        if not data_files:
+            return skipped("工作区没有已下发的数据文件，无需清洗")
+
+        governor = (services.extras or {}).get("budget_governor")
+        budgets: RunBudget = (
+            governor.subagent_slice() if governor is not None else RunBudget()
+        )
+        if budgets.max_sandbox_runs < 1 or budgets.max_llm_calls < 2:
+            return skipped("剩余预算不足以派发清洗子代理")
+
+        template = self._registry.get(CLEANING_PROMPT_ID)
+        plan_slice = {
+            key: parsed.get(key)
+            for key in (
+                "profile_summary",
+                "preparation_steps",
+                "missing_value_strategy",
+                "outlier_strategy",
+                "target_columns",
+            )
+            if parsed.get(key) is not None
+        }
+        system_prompt = template.render({
+            "preparation_plan": json.dumps(plan_slice, ensure_ascii=False),
+            "data_files": "\n".join(f"- {path}" for path in data_files),
+        })
+
+        final_answer: dict[str, Any] = {}
+        task = SandboxTask(
+            task_id=f"{ctx.step_id}:cleaning",
+            goal="按数据准备方案清洗 data/ 数据文件，产出 cleaned/ 数据与影响面统计",
+            system_prompt=system_prompt,
+            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
+            assertions=(
+                SandboxAssertion(
+                    id="cleaned_files_exist",
+                    description="cleaned/ 目录产出至少一个清洗后数据文件",
+                    check=lambda evidence: (
+                        any(name.startswith("cleaned/") for name in evidence.files),
+                        "；".join(
+                            name for name in evidence.files if name.startswith("cleaned/")
+                        ) or "工作区没有 cleaned/ 下的文件",
+                    ),
+                ),
+                SandboxAssertion(
+                    id="impact_stats_reported",
+                    description=(
+                        "打印影响面统计标记行 OMM_METRICS_JSON"
+                        "（rows_before/rows_after/imputed_columns）"
+                    ),
+                    check=_impact_stats_check,
+                ),
+            ),
+            seeds=dict(SANDBOX_SEEDS),
+            max_runs=max(1, min(SandboxTask.max_runs, budgets.max_sandbox_runs)),
+            extra_final_keys=(),
+        )
+
+        llm_calls = {"count": 0}
+        chat = text_protocol_chat(
+            services.llm,
+            label=CLEANING_PROMPT_ID,
+            on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
+        )
+        executor = _sandbox_tool_executor(ctx, services, capture)
+        fingerprint = _env_fingerprint(ctx, services)
+
+        def runner(_spec: SpawnSpec) -> ResultEnvelope:
+            report = run_sandbox_task(
+                task,
+                chat=chat,
+                execute_tools=executor,
+                workspace_files=lambda: _workspace_files(ctx, services),
+                read_text=_workspace_reader(ctx, services),
+                env_fingerprint=fingerprint,
+                publish_code=_publish_code_callback(
+                    ctx, services, capture, "cleaning.py"
+                ),
+                on_final_answer=final_answer.update,
+            )
+            return ResultEnvelope(
+                status="done",
+                output=report,
+                usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+            )
+
+        envelope = supervisor.spawn(
+            SpawnSpec(
+                kind="sandbox",
+                goal=task.goal,
+                context_slice={
+                    "preparation_plan": plan_slice,
+                    "data_files": data_files,
+                },
+                toolset=tuple(SANDBOX_TOOL_NAMES),
+                tool_tier="execute",
+                budgets=budgets,
+                output_schema_id="sandbox-run-report.v1",
+            ),
+            runner,
+            parent_tier="execute",
+            output_validator=_report_shape_problems,
+        )
+
+        if not envelope.ok or envelope.output is None:
+            return {
+                "executed": False,
+                "reason": f"清洗子代理未完成（{envelope.status}"
+                + (f"，{envelope.error_code}" if envelope.error_code else "")
+                + "）；后续阶段按原始数据继续",
+            }
+
+        report = envelope.output
+        target_columns = [
+            str(col).strip()
+            for col in (parsed.get("target_columns") or [])
+            if str(col).strip()
+        ]
+        impact = _cleaning_impact(capture.metrics, target_columns)
+        return {
+            "executed": True,
+            "status": str(report.get("status") or "failed"),
+            "attempts": int(report.get("attempts") or 0),
+            "llm_calls": llm_calls["count"],
+            "summary": str(final_answer.get("summary") or ""),
+            "target_columns": target_columns,
+            "final_code_artifact": str(report.get("final_code_artifact") or ""),
+            "produced_artifacts": list(report.get("produced_artifacts") or []),
+            **impact,
+        }
+
+    # -- G2 gate ----------------------------------------------------------------
+
+    @staticmethod
+    def _g2_review(
+        cleaning: Mapping[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        if not cleaning.get("executed") or cleaning.get("status") != "passed":
+            return None
+        triggers: list[str] = []
+        ratio = float(cleaning.get("rows_deleted_ratio") or 0.0)
+        if ratio > G2_ROW_DELETION_THRESHOLD:
+            triggers.append(f"删除了 {ratio:.1%} 的数据行（阈值 5%）")
+        imputed_targets = list(cleaning.get("imputed_target_columns") or [])
+        if imputed_targets:
+            triggers.append(f"目标列被插补（{'、'.join(imputed_targets)}）")
+        if not triggers:
+            return None
+        reason = "数据清洗影响面较大：" + "；".join(triggers) + "。请确认数据处理方式"
+        meta = {
+            "gate": "G2",
+            "decision_type": "generic",
+            "title": reason,
+            "options": [dict(option) for option in G2_OPTIONS],
+            "impact": {
+                "rows_before": cleaning.get("rows_before"),
+                "rows_after": cleaning.get("rows_after"),
+                "rows_deleted_ratio": cleaning.get("rows_deleted_ratio"),
+                "imputed_columns": cleaning.get("imputed_columns"),
+                "imputed_target_columns": imputed_targets,
+            },
+        }
+        return reason, meta
+
+
+def _impact_stats_check(evidence) -> tuple[bool, str]:
+    metrics = evidence.metrics
+    problems: list[str] = []
+    for key in ("rows_before", "rows_after"):
+        value = metrics.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            problems.append(f"{key} 缺失或不是非负整数")
+    if not isinstance(metrics.get("imputed_columns"), list):
+        problems.append("imputed_columns 缺失或不是数组")
+    if problems:
+        return False, "影响面统计不合格：" + "；".join(problems)
+    return True, (
+        f"rows_before={metrics['rows_before']}，rows_after={metrics['rows_after']}，"
+        f"imputed_columns={metrics['imputed_columns']}"
+    )
 
 
 class ExperimentExecutionNode(LlmSkillNode):
-    """Generate experiment code with the LLM, run it in the python sandbox.
+    """实验阶段 = 沙盒 Agent 执行体（H3 前置刀：迁移自单发生成+私有重试环）。
 
-    Two loops with distinct purposes:
-    - the inherited ``_complete_validated`` repairs STRUCTURALLY invalid model
-      output (bad JSON / schema violations), one repair try;
-    - this node's round loop repairs code that failed AT RUNTIME: the sandbox
-      error is fed back and the code is regenerated once. Rounds are bounded —
-      an endlessly self-repairing experiment burns budget without evidence.
+    模型在多轮会话里写码/跑码/读反馈直到验收断言通过或 R2 预算（6 次运行，
+    §5.4）耗尽；验收以确定性断言为准（最后一次运行成功 + 指标标记行在场），
+    模型自述完成无效。输出形状与迁移前一致（approach_summary/metrics/
+    stdout_tail/experiment_summary/progress_note），下游（验证/论文）零改动；
+    新增 sandbox_report（sandbox-run-report.v1 形状）供复现与评测。
     """
 
-    prompt_id = "experiment_code.default"
+    prompt_id = "experiment_code.sandbox"
     state = TaskState.EXPERIMENTING
 
-    #: First attempt + one regeneration with runtime error feedback.
-    max_code_rounds = 2
+    #: R2 运行预算（§4.7/§5.4 拍板值）：整个实验步骤最多 6 次沙箱运行。
+    max_sandbox_runs = 6
 
     def __init__(
         self,
@@ -414,17 +871,28 @@ class ExperimentExecutionNode(LlmSkillNode):
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
         planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
-        preparation = ctx.prior_outputs.get(TaskState.DATA_PREPARATION.value) or {}
+        preparation = dict(
+            ctx.prior_outputs.get(TaskState.DATA_PREPARATION.value) or {}
+        )
+        decision = ctx.review_decisions.get(TaskState.DATA_PREPARATION.value)
+        if decision:
+            # G2 决策台账进任务卡：模型据此选 cleaned/ 或 data/（用户理由
+            # AI 不得改写，这里只透传选项 id 与含义）。
+            preparation["user_decision"] = {
+                "option_id": decision,
+                "meaning": {
+                    "adopt_cleaned": "用户已确认采用清洗后的数据（cleaned/）",
+                    "use_raw": "用户已选择改用原始数据（data/），忽略清洗产物",
+                }.get(decision, decision),
+            }
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
             "chosen_plan": json.dumps(chosen_plan(planning), ensure_ascii=False),
             "data_preparation": (
-                json.dumps(dict(preparation), ensure_ascii=False) if preparation else "无"
+                json.dumps(preparation, ensure_ascii=False) if preparation else "无"
             ),
             "available_packages": self._available_packages,
             "hardware_note": self._hardware_note,
-            "error_feedback": "无",
-            "previous_code": "无",
         }
 
     def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
@@ -432,119 +900,154 @@ class ExperimentExecutionNode(LlmSkillNode):
             return NodeResult.failed("no LLM port configured for this run")
         if services.tools is None:
             return NodeResult.failed("no tool invoker configured for this run")
+        if not supports_chat(services.llm):
+            return NodeResult.failed(
+                "LLM 端口不支持会话式调用（缺 chat_text）：实验执行体需要多轮"
+                "写码/跑码会话，装配缺陷请检查运行时接线"
+            )
         template = self._registry.get(self.prompt_id)
 
         try:
             variables = self.build_variables(ctx)
         except KeyError as exc:
             return NodeResult.failed(f"missing required input: {exc}")
+        data_files = [
+            path
+            for path in _workspace_files(ctx, services)
+            if path.startswith(DATA_DIR_PREFIX) or path.startswith("cleaned/")
+        ]
+        variables["data_files"] = (
+            "\n".join(f"- {path}" for path in data_files)
+            if data_files
+            else "无（按数据准备方案构造合成数据）"
+        )
         input_problems = validate(variables, template.input_schema)
         if input_problems:
             return NodeResult.failed(
                 "prompt input invalid: " + "; ".join(input_problems)
             )
 
-        llm_attempts = 0
-        last_error = "experiment did not run"
-        for round_no in range(1, self.max_code_rounds + 1):
-            parsed, attempts, error = self._complete_validated(template, variables, services)
-            llm_attempts += attempts
-            if parsed is None:
-                return NodeResult.failed(
-                    f"model output failed validation after {attempts} attempts: {error}"
-                )
-            code = str(parsed.get("code") or "")
-            result = services.tools.invoke(
-                ctx.run_id, ctx.step_id, PYTHON_TOOL_NAME, {"code": code}
-            )
-            if result.ok:
-                return self._to_success(
-                    parsed, result, llm_attempts, round_no, ctx, services
-                )
-            last_error = self._failure_feedback(result)
-            variables = dict(variables)
-            variables["error_feedback"] = last_error[:_ERROR_FEEDBACK_LIMIT]
-            variables["previous_code"] = code
-        return NodeResult.failed(
-            f"experiment code failed after {self.max_code_rounds} rounds: {last_error}",
-            metrics={"llm_attempts": llm_attempts, "code_rounds": self.max_code_rounds},
+        plan = chosen_plan(_require_outputs(ctx, TaskState.MODEL_PLANNING))
+        capture = _SandboxCapture()
+        final_answer: dict[str, Any] = {}
+        llm_calls = {"count": 0}
+        task = SandboxTask(
+            task_id=f"{ctx.step_id}:experiment",
+            goal=(
+                f"实现并运行方案「{plan.get('name') or plan.get('id') or '选定方案'}」"
+                "的实验代码，产出真实指标与结果表"
+            ),
+            system_prompt=template.render(variables),
+            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
+            assertions=(
+                SandboxAssertion(
+                    id="run_ok",
+                    description="实验脚本经 python_run 成功运行（退出码 0）",
+                    check=_experiment_run_ok_check,
+                ),
+                SandboxAssertion(
+                    id="metrics_reported",
+                    description="打印核心指标标记行 OMM_METRICS_JSON（含基线对比）",
+                    check=_experiment_metrics_check,
+                ),
+            ),
+            seeds=dict(SANDBOX_SEEDS),
+            max_runs=self.max_sandbox_runs,
+            extra_final_keys=(
+                (
+                    "approach_summary",
+                    "实现思路摘要：算法、数据来源/构造方式、评估口径与基线设置，不超过 200 字",
+                ),
+                (
+                    "progress_note",
+                    "两三句面向用户的进度汇报（实现了什么、对比基线看什么指标、下一步验证什么），口语化",
+                ),
+            ),
+        )
+        chat = text_protocol_chat(
+            services.llm,
+            label=self.prompt_id,
+            on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
+        )
+        report = run_sandbox_task(
+            task,
+            chat=chat,
+            execute_tools=_sandbox_tool_executor(ctx, services, capture),
+            workspace_files=lambda: _workspace_files(ctx, services),
+            read_text=_workspace_reader(ctx, services),
+            env_fingerprint=_env_fingerprint(ctx, services),
+            publish_code=_publish_code_callback(ctx, services, capture, "experiment.py"),
+            on_final_answer=final_answer.update,
         )
 
-    @staticmethod
-    def _failure_feedback(result: Any) -> str:
-        output = result.output or {}
-        parts = [str(result.error or result.status)]
-        stderr = str(output.get("stderr") or "").strip()
-        stdout = str(output.get("stdout") or "").strip()
-        if stderr:
-            parts.append("stderr:\n" + stderr[-1500:])
-        elif stdout:
-            parts.append("stdout（尾部）:\n" + stdout[-800:])
-        return "\n".join(parts)
+        node_metrics = {
+            "llm_attempts": llm_calls["count"],
+            "code_rounds": int(report["usage"]["runs"]),
+            "waves": int(report["attempts"]),
+        }
+        if report["status"] != "passed":
+            failed_assertions = [
+                f"[{item['id']}] {item['detail']}"
+                for item in report["assertions"]
+                if not item["passed"]
+            ]
+            detail = "；".join(failed_assertions) or "沙盒执行未通过验收"
+            return NodeResult.failed(
+                f"experiment sandbox failed after {report['attempts']} wave(s), "
+                f"{report['usage']['runs']} run(s): {detail}",
+                metrics=node_metrics,
+            )
 
-    @staticmethod
-    def _extract_metrics(stdout: str) -> dict[str, Any]:
-        metrics: dict[str, Any] = {}
-        for match in _METRICS_LINE.finditer(stdout):
-            try:
-                candidate = json.loads(match.group(1))
-            except json.JSONDecodeError:
-                continue
-            if isinstance(candidate, dict):
-                metrics = candidate  # keep the LAST marker line the script printed
-        return metrics
-
-    def _to_success(
-        self,
-        parsed: dict[str, Any],
-        result: Any,
-        llm_attempts: int,
-        code_rounds: int,
-        ctx: NodeContext,
-        services: NodeServices,
-    ) -> NodeResult:
-        output = result.output or {}
-        stdout = str(output.get("stdout") or "")
-        metrics = self._extract_metrics(stdout)
-        approach = str(parsed.get("approach_summary") or "")
-
+        approach = str(final_answer.get("approach_summary") or "")
+        metrics = dict(capture.metrics)
         summary_bits = [approach]
         if metrics:
             summary_bits.append("核心指标：" + json.dumps(metrics, ensure_ascii=False))
-        if result.artifacts:
-            names = [ref.uri.rstrip("/").rsplit("/", 1)[-1] for ref in result.artifacts]
+        if capture.artifacts:
+            names = [
+                ref.uri.rstrip("/").rsplit("/", 1)[-1] for ref in capture.artifacts
+            ]
             summary_bits.append("产物文件：" + "、".join(names))
-
-        artifacts = list(result.artifacts)
-        code = str(parsed.get("code") or "")
-        if services.artifacts is not None and code:
-            # The sandbox only captures files CREATED by the run; the script
-            # itself is written before its snapshot and would otherwise be
-            # lost. Publishing it makes the experiment reproducible from the
-            # artifact list alone.
-            artifacts.append(
-                services.artifacts.put(
-                    ctx.run_id,
-                    "code",
-                    "experiment.py",
-                    code.encode("utf-8"),
-                    "text/x-python",
-                    ctx.step_id,
-                )
-            )
 
         return NodeResult.succeeded(
             outputs={
                 "approach_summary": approach,
                 "metrics": metrics,
-                "stdout_tail": stdout[-_STDOUT_TAIL_CHARS:],
+                "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:],
                 "experiment_summary": "\n".join(bit for bit in summary_bits if bit),
-                # 面向用户的进度叙述（提示词 v3 的 progress_note）：执行轨迹的正文段
-                "progress_note": str(parsed.get("progress_note") or ""),
+                # 面向用户的进度叙述：执行轨迹的正文段
+                "progress_note": str(final_answer.get("progress_note") or ""),
+                # 复现与评测面：断言逐条结果/种子/环境指纹/预算用量
+                "sandbox_report": report,
             },
-            metrics={"llm_attempts": llm_attempts, "code_rounds": code_rounds},
-            artifacts=tuple(artifacts),
+            metrics=node_metrics,
+            artifacts=tuple(capture.artifacts),
         )
+
+
+def _experiment_run_ok_check(evidence) -> tuple[bool, str]:
+    last = evidence.last_run
+    if last is None:
+        return False, "尚未用 python_run 运行任何代码"
+    if not last.ok:
+        output = last.output or {}
+        stderr = str(output.get("stderr") or "").strip()
+        detail = str(last.error or last.status)
+        if stderr:
+            detail += "\nstderr（尾部）：" + stderr[-1500:]
+        return False, detail
+    return True, "最后一次运行成功"
+
+
+def _experiment_metrics_check(evidence) -> tuple[bool, str]:
+    if not evidence.metrics:
+        return False, (
+            "未捕获核心指标：脚本必须原样打印一行 "
+            'OMM_METRICS_JSON: {"指标名": 数值, ...}（独占一行）'
+        )
+    return True, "指标标记行已捕获：" + json.dumps(
+        dict(evidence.metrics), ensure_ascii=False
+    )
 
 
 class ValidationNode(LlmSkillNode):

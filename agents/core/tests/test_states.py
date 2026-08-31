@@ -44,8 +44,12 @@ def test_work_states_can_fail_and_request_review():
         assert can_transition(state, TaskState.NEEDS_REVIEW)
 
 
-def test_completed_is_fully_terminal():
+def test_completed_only_reopens_through_the_review_gate():
+    """跑完之后唯一的出边是评审门（ADR-0013 修订回合），别的一律封死。"""
+    assert can_transition(TaskState.COMPLETED, TaskState.NEEDS_REVIEW)
     for target in TaskState:
+        if target is TaskState.NEEDS_REVIEW:
+            continue
         assert not can_transition(TaskState.COMPLETED, target)
 
 
@@ -61,7 +65,10 @@ def test_review_resolution_targets():
     for target in WORK_STATES:
         assert can_transition(TaskState.NEEDS_REVIEW, target)
     assert can_transition(TaskState.NEEDS_REVIEW, TaskState.FAILED)
-    assert not can_transition(TaskState.NEEDS_REVIEW, TaskState.COMPLETED)
+    # 回到 COMPLETED 只为「撤回修订请求」而存在（ADR-0013）；矩阵放行，
+    # 由归约器保证节点自提的闸门永远走不到这条边（见 test_engine.py）。
+    assert can_transition(TaskState.NEEDS_REVIEW, TaskState.COMPLETED)
+    assert not can_transition(TaskState.NEEDS_REVIEW, TaskState.CREATED)
 
 
 def test_self_transition_is_illegal():

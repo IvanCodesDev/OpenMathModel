@@ -149,6 +149,54 @@ def test_single_wave_pass_produces_contract_shaped_report() -> None:
     }
 
 
+# -- 终答叙事扩展键 ---------------------------------------------------------------
+
+
+def test_extra_final_keys_are_required_and_returned_via_callback() -> None:
+    """extra_final_keys：缺键触发 R1 修复；补齐后经 on_final_answer 回传。"""
+    incomplete = json.dumps({"summary": "做完了"})  # 缺 approach_summary
+    complete = json.dumps(
+        {"summary": "做完了", "approach_summary": "线性回归基线，MSE 0.5"}
+    )
+    chat = ScriptedChat([
+        tool_reply(run_call("print(1)")),
+        text_reply(incomplete),
+        text_reply(complete),  # R1 修复轮
+    ])
+    sandbox = FakeSandbox([ok_run('OMM_METRICS_JSON: {"rmse": 0.5}')])
+    captured: list[dict] = []
+    task = make_task(
+        metrics_has_rmse(),
+        extra_final_keys=(("approach_summary", "两三句技术路线"),),
+    )
+    report = run_sandbox_task(
+        task,
+        chat=chat,
+        execute_tools=sandbox,
+        workspace_files=lambda: [],
+        read_text=lambda p: "",
+        env_fingerprint=ENV,
+        on_final_answer=captured.append,
+    )
+
+    assert report["status"] == "passed"
+    assert captured == [
+        {"summary": "做完了", "approach_summary": "线性回归基线，MSE 0.5"}
+    ]
+    # 波次提示词把扩展键写进终答样例
+    assert chat.calls == 3
+
+
+def test_wave_prompt_lists_extra_final_keys() -> None:
+    from omm_agent_harness.sandbox_agent import _assemble_wave_prompt
+
+    task = make_task(extra_final_keys=(("progress_note", "面向用户的进度叙述"),))
+    messages = _assemble_wave_prompt(task, None)
+    joined = "\n".join(m.content for m in messages)
+    assert '"progress_note"' in joined
+    assert "面向用户的进度叙述" in joined
+
+
 # -- 模型自述成功不算数 -----------------------------------------------------------
 
 

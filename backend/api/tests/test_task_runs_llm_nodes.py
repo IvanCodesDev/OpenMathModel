@@ -79,8 +79,9 @@ PLANNING_OUTPUT = {
     "rationale": "数据规模中等，精确解可行",
 }
 
-#: 实验阶段 stub 模型给出的脚本——由 python 沙箱真实执行：写产物文件并打印指标行。
-#: newline='' 禁止平台换行转换，产物字节在 Windows 与 POSIX 上一致。
+#: 实验沙盒会话（H3）里 stub 模型发出的脚本——由 python 沙箱真实执行：
+#: 写产物文件并打印指标行。newline='' 禁止平台换行转换，产物字节在
+#: Windows 与 POSIX 上一致。
 EXPERIMENT_CODE = (
     "import json\n"
     "with open('results.csv', 'w', encoding='utf-8', newline='') as fh:\n"
@@ -88,10 +89,29 @@ EXPERIMENT_CODE = (
     "print('OMM_METRICS_JSON: ' + json.dumps({'rmse': 0.5}))\n"
 )
 
+#: 实验沙盒会话的终答（summary + 节点声明的两个叙事键）。approach_summary
+#: 沿老字段名进入 stage-outputs 投影，下游断言不漂移。
 EXPERIMENT_OUTPUT = {
+    "summary": "贪心近似跑通，rmse 0.5 达标并写出结果表",
     "approach_summary": "构造合成需求数据，贪心近似求解并与随机基线对比",
-    "code": EXPERIMENT_CODE,
+    "progress_note": "实验代码已跑通，核心指标 rmse=0.5，下一步进入结果检验。",
 }
+
+#: 清洗沙盒会话（仅有数据文件下发的用例走到）：读 data/ 原文件、写 cleaned/
+#: 同名文件、打印影响面统计标记行（数字为脚本真实统计）。
+CLEANING_CODE = (
+    "import csv, json, os\n"
+    "os.makedirs('cleaned', exist_ok=True)\n"
+    "with open('data/orders.csv', encoding='utf-8', newline='') as fh:\n"
+    "    rows = list(csv.reader(fh))\n"
+    "with open('cleaned/orders.csv', 'w', encoding='utf-8', newline='') as fh:\n"
+    "    csv.writer(fh).writerows(rows)\n"
+    "print('OMM_METRICS_JSON: ' + json.dumps("
+    "{'rows_before': len(rows) - 1, 'rows_after': len(rows) - 1, "
+    "'imputed_columns': []}))\n"
+)
+
+CLEANING_OUTPUT = {"summary": "按准备方案完成清洗：未删行、未插补，产物在 cleaned/"}
 
 VALIDATION_OUTPUT = {
     "verdict": "concerns",
@@ -181,9 +201,53 @@ def _llm_reply(payload: dict) -> httpx.Response:
     )
 
 
+# ── 沙盒会话（H3）的路由助手：清洗/实验是多轮写码/跑码会话，不再是单发模板 ──
+
+
+def _wire_messages(request: httpx.Request) -> list[dict]:
+    return json.loads(request.content)["messages"]
+
+
+def _system_of(messages: list[dict]) -> str:
+    """会话的 system 角色卡（沙盒阶段的锚点在这里，而不是最后一条消息）。"""
+    return messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+
+
+def _saw_observation(messages: list[dict]) -> bool:
+    return any("[工具执行结果]" in str(m.get("content") or "") for m in messages)
+
+
+def _python_envelope(code: str) -> httpx.Response:
+    """模型侧的工具信封：chat_adapter 据此合成 python_run 调用。"""
+    return _llm_reply({"tool": "python_run", "arguments": {"code": code}})
+
+
+def _sandbox_reply(messages: list[dict], code: str, final: dict) -> httpx.Response:
+    """沙盒会话的脚本应答：没跑过码先发信封，看到工具观察后交终答。
+
+    按会话内容而非调用序号判断（与 agents/skills 测试的 sandbox_script 同
+    纪律）：同一份脚本能原样服务修复波——每波都是全新装配的内环。
+    """
+    if _saw_observation(messages):
+        return _llm_reply(final)
+    return _python_envelope(code)
+
+
 def _stage_router(request: httpx.Request) -> httpx.Response:
-    """按各阶段提示词的角色锚点路由 stub 输出（锚点来自 agents/prompts 模板正文）。"""
-    prompt = json.loads(request.content)["messages"][-1]["content"]
+    """按各阶段提示词的角色锚点路由 stub 输出（锚点来自 agents/prompts 模板正文）。
+
+    单发模板阶段的锚点在最后一条消息（complete 的整段渲染文本）；沙盒会话
+    阶段（清洗/实验）的锚点在 system 角色卡，按会话脚本应答。
+    """
+    messages = _wire_messages(request)
+    system = _system_of(messages)
+    if "数据清洗执行工程师" in system:
+        assert "- data/orders.csv" in system, "清洗任务卡应携带待清洗数据文件清单"
+        return _sandbox_reply(messages, CLEANING_CODE, CLEANING_OUTPUT)
+    if "实验工程师" in system:
+        assert '"id": "A"' in system, "实验任务卡应携带选中的方案 A"
+        return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
+    prompt = messages[-1]["content"]
     if "赛题原文" in prompt:
         return _llm_reply(ANALYSIS_OUTPUT)
     if "数据工程师" in prompt:
@@ -193,9 +257,6 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "规划节点应携带分析产出"
         assert PREPARATION_OUTPUT["profile_summary"] in prompt, "规划节点应携带数据画像摘要"
         return _llm_reply(PLANNING_OUTPUT)
-    if "实验工程师" in prompt:
-        assert '"id": "A"' in prompt, "实验节点应携带选中的方案 A"
-        return _llm_reply(EXPERIMENT_OUTPUT)
     if "评审专家" in prompt:
         assert '"rmse": 0.5' in prompt, "检验节点应携带实验指标"
         return _llm_reply(VALIDATION_OUTPUT)
@@ -235,30 +296,24 @@ def _configure_llm(client, monkeypatch, handler=_stage_router) -> None:
     assert saved.status_code == 200, saved.text
 
 
-def test_attachment_csv_is_profiled_into_data_stage_prompt(client, monkeypatch):
-    """附件 CSV → 工作区下发 → table_profile 确定性画像 → 数据准备提示词。
-
-    原则 5 的数据阶段落点：画像统计数字（行数/均值）由代码产出并原样进
-    prompt，LLM 只判读；附件经 artifact_id 归属校验后按 basename 落入 data/。
-    """
+def _stage_csv_attachment(client, project_id: str, name: str, csv_bytes: bytes) -> str:
+    """把一份 CSV 写进内容寻址存储并登记为项目附件产物，返回 artifact_id。"""
     from omm_api.engine_glue import get_blobstore
     from omm_api.ids import new_id
     from omm_api.orm import ArtifactRow
     from omm_api.serialize import utcnow
 
-    project = create_project(client)
-    csv_bytes = "quarter,volume\n1,120.5\n2,130.0\n".encode("utf-8")
     sha256, size = get_blobstore().put(csv_bytes)
     artifact_id = new_id("art")
     with client.app.state.db.session_factory() as session:
         session.add(
             ArtifactRow(
                 id=artifact_id,
-                project_id=project["id"],
+                project_id=project_id,
                 run_id=None,
                 kind="dataset",
-                name="orders.csv",
-                uri=f"local://{sha256}/orders.csv",
+                name=name,
+                uri=f"local://{sha256}/{name}",
                 sha256=sha256,
                 size_bytes=size,
                 media_type="text/csv",
@@ -267,6 +322,20 @@ def test_attachment_csv_is_profiled_into_data_stage_prompt(client, monkeypatch):
             )
         )
         session.commit()
+    return artifact_id
+
+
+def test_attachment_csv_is_profiled_into_data_stage_prompt(client, monkeypatch):
+    """附件 CSV → 工作区下发 → table_profile 确定性画像 → 数据准备提示词。
+
+    原则 5 的数据阶段落点：画像统计数字（行数/均值）由代码产出并原样进
+    prompt，LLM 只判读；附件经 artifact_id 归属校验后按 basename 落入 data/。
+    有数据文件在场时，清洗沙盒会话（H3）随数据阶段真实执行。
+    """
+    project = create_project(client)
+    artifact_id = _stage_csv_attachment(
+        client, project["id"], "orders.csv", "quarter,volume\n1,120.5\n2,130.0\n".encode("utf-8")
+    )
 
     seen: dict[str, str] = {}
 
@@ -290,6 +359,19 @@ def test_attachment_csv_is_profiled_into_data_stage_prompt(client, monkeypatch):
     assert '"rows": 2' in prompt, "行数由 table_profile 统计"
     assert "120.5" in prompt and "130.0" in prompt, "数值统计原样进入提示词"
     assert "data/orders.csv" in prompt
+
+    # 有数据文件在场：清洗沙盒会话随数据阶段真实执行（python_run 留痕成功），
+    # 影响面极小（未删行、未插补）→ 不触发 G2，第一道审批仍是方案确认。
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    cleaning_runs = [entry for entry in logs if entry.get("tool") == "python_run"]
+    assert cleaning_runs and cleaning_runs[0]["status"] == "succeeded"
+    cleaning_calls = [
+        entry
+        for entry in logs
+        if entry.get("kind") == "llm_call" and entry.get("prompt_id") == "data_cleaning.sandbox"
+    ]
+    assert len(cleaning_calls) == 2, "清洗会话恰两次模型调用（发码 + 终答）"
 
 
 def test_provider_billing_error_fails_cleanly_without_traceback(client, monkeypatch):
@@ -481,7 +563,8 @@ def test_llm_failure_fails_step_and_run_is_retryable(client, monkeypatch):
     run = create_run(client, create_project(client)["id"])
 
     failed = wait_until(client, run["id"], run_status_is(client, run["id"], "FAILED"))
-    assert failed["failure"]["failure_class"] == "CODE_DEFECT"
+    # 模型接口失败按真实类别归为 TRANSIENT（重试可恢复），不再无脑 CODE_DEFECT
+    assert failed["failure"]["failure_class"] == "TRANSIENT"
 
     steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
     assert steps and steps[0]["node"] == "PROBLEM_ANALYSIS"
@@ -776,21 +859,26 @@ def test_paper_stage_retry_resumes_from_completed_chapters(client, monkeypatch):
 
 
 def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatch):
-    """实验代码在沙箱里报错时，第二轮生成必须携带运行时错误反馈并成功收尾。"""
-    experiment_calls: list[str] = []
+    """实验代码在沙箱里报错时，修复波必须携带运行时错误反馈并成功收尾。
+
+    沙盒执行体按「波」修复（§5.4 R2）：第一波运行失败 → 验收断言未过 →
+    第二波任务卡带 stderr 反馈与上一版代码重新装配（结构化反馈，不转录全
+    对话）。"""
+    experiment_cards: list[str] = []
 
     def router(request: httpx.Request) -> httpx.Response:
-        prompt = json.loads(request.content)["messages"][-1]["content"]
-        if "实验工程师" in prompt:
-            experiment_calls.append(prompt)
-            if len(experiment_calls) == 1:
-                return _llm_reply(
-                    {"approach_summary": "首版实现", "code": "raise RuntimeError('bad seed')"}
-                )
-            assert "bad seed" in prompt, "第二轮生成必须携带第一轮的运行时错误"
-            assert "raise RuntimeError" in prompt, "第二轮生成必须携带上一轮代码"
+        messages = _wire_messages(request)
+        if "实验工程师" not in _system_of(messages):
+            return _stage_router(request)
+        if _saw_observation(messages):
             return _llm_reply(EXPERIMENT_OUTPUT)
-        return _stage_router(request)
+        card = messages[-1]["content"]
+        experiment_cards.append(card)
+        if "上一轮未通过验收" not in card:
+            return _python_envelope("raise RuntimeError('bad seed')")
+        assert "bad seed" in card, "修复波必须携带第一波的运行时错误"
+        assert "raise RuntimeError" in card, "修复波必须携带上一轮代码"
+        return _python_envelope(EXPERIMENT_CODE)
 
     _configure_llm(client, monkeypatch, handler=router)
     run = create_run(client, create_project(client)["id"])
@@ -798,5 +886,95 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
     approve_when_asked(client, run["id"], option_id="approve")
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
 
-    assert final["status"] == "COMPLETED", "一轮代码修复后任务应完整走完"
-    assert len(experiment_calls) == 2
+    assert final["status"] == "COMPLETED", "一波代码修复后任务应完整走完"
+    assert len(experiment_cards) == 2, "两波各装配一次任务卡"
+
+    # 两次沙箱运行都留 TOOL_CALLED 痕：先失败后成功
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    runs = [entry for entry in logs if entry.get("tool") == "python_run"]
+    assert [entry["status"] for entry in runs] == ["failed", "succeeded"]
+
+
+def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
+    client, monkeypatch, validate_contract
+):
+    """G2 数据闸门端到端（§9.1）：清洗删行超阈值 → 运行停在 generic 决策卡
+    （三选项 + 推荐项，CTA 预选推荐）→ 用户拍板「采用清洗结果」→ 决策进
+    review_decisions 台账并进实验任务卡 → 后续方案确认（G1）照常 → 完成。"""
+    project = create_project(client)
+    csv_lines = ["quarter,volume"] + [f"{i},{100 + i}" for i in range(1, 41)]
+    artifact_id = _stage_csv_attachment(
+        client, project["id"], "orders.csv", ("\n".join(csv_lines) + "\n").encode("utf-8")
+    )
+
+    # 删 40 行中的 10 行（25% > 阈值 5%）：触发 G2 的清洗脚本
+    heavy_cleaning_code = (
+        "import csv, json, os\n"
+        "os.makedirs('cleaned', exist_ok=True)\n"
+        "with open('data/orders.csv', encoding='utf-8', newline='') as fh:\n"
+        "    rows = list(csv.reader(fh))\n"
+        "kept = rows[:31]\n"
+        "with open('cleaned/orders.csv', 'w', encoding='utf-8', newline='') as fh:\n"
+        "    csv.writer(fh).writerows(kept)\n"
+        "print('OMM_METRICS_JSON: ' + json.dumps("
+        "{'rows_before': len(rows) - 1, 'rows_after': len(kept) - 1, "
+        "'imputed_columns': []}))\n"
+    )
+
+    experiment_cards: list[str] = []
+
+    def router(request: httpx.Request) -> httpx.Response:
+        messages = _wire_messages(request)
+        system = _system_of(messages)
+        if "数据清洗执行工程师" in system:
+            return _sandbox_reply(
+                messages, heavy_cleaning_code, {"summary": "剔除异常行 25% 后落 cleaned/"}
+            )
+        if "实验工程师" in system:
+            experiment_cards.append(system)
+        return _stage_router(request)
+
+    _configure_llm(client, monkeypatch, handler=router)
+    run = create_run(
+        client,
+        project["id"],
+        goal="优化共享单车调度",
+        params={"attachment_metadata": [{"name": "orders.csv", "artifact_id": artifact_id}]},
+    )
+
+    # 第一道闸是 G2（数据阶段先于方案确认）：generic 决策卡，选项来自节点声明
+    gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    validate_contract("approval-request.schema.json", gate)
+    assert gate["decision_type"] == "generic"
+    assert "25.0%" in gate["title"] and "数据清洗影响面较大" in gate["title"]
+    options = {option["id"]: option for option in gate["options"]}
+    assert list(options) == ["adopt_cleaned", "use_raw", "reject"]
+    assert options["adopt_cleaned"].get("recommended") is True, "推荐项必须显式标出"
+    assert not options["use_raw"].get("recommended")
+
+    # 工作台 CTA 落到推荐项：多正向选项时预选 recommended（而非不敢默选）
+    workspace = client.get(f"/api/v1/task-runs/{run['id']}/workspace").json()
+    validate_contract("modeling-workspace-view.schema.json", workspace)
+    action = workspace["agent"]["action"]
+    assert action["kind"] == "approve"
+    assert action["approval_id"] == gate["id"]
+    assert action["option_id"] == "adopt_cleaned"
+
+    # 拍板「采用清洗结果」：决策台账 → 实验任务卡（模型据此选 cleaned/ 目录）
+    resolved = client.post(
+        f"/api/v1/task-runs/{run['id']}/actions",
+        json={"action": "approve", "approval_id": gate["id"], "option_id": "adopt_cleaned"},
+    )
+    assert resolved.status_code == 200, resolved.text
+
+    # G2 之后照常走到 G1 方案确认，批准后全链完成
+    approve_when_asked(client, run["id"], option_id="approve")
+    final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
+    assert final["status"] == "COMPLETED"
+
+    assert experiment_cards, "实验阶段应已执行"
+    card = experiment_cards[0]
+    assert "adopt_cleaned" in card, "G2 决策的选项 id 应进实验任务卡"
+    assert "用户已确认采用清洗后的数据" in card
+    assert "- cleaned/orders.csv" in card, "清洗产物目录应进入工作区数据文件清单"
