@@ -14,6 +14,7 @@ from omm_agent_core import (
     ToolResult,
 )
 from omm_agent_skills import (
+    DEFAULT_HARDWARE_NOTE,
     PYTHON_TOOL_NAME,
     DataPreparationNode,
     ExperimentExecutionNode,
@@ -25,6 +26,7 @@ from omm_agent_skills import (
     ValidationNode,
     chosen_plan,
     extract_json,
+    gpu_hardware_note,
     load_default_registry,
     render_paper_markdown,
     stub_response,
@@ -574,9 +576,10 @@ def test_experiment_generates_code_and_runs_tool(registry):
     code_ref = result.artifacts[-1]
     assert code_ref.uri.endswith("experiment.py")
     assert services.artifacts.blobs[code_ref.uri].decode("utf-8") == EXPERIMENT_OK["code"]
-    # 首轮提示词的失败反馈为占位「无」，可用库为默认口径
+    # 首轮提示词的失败反馈为占位「无」，可用库与硬件为保守默认口径
     assert llm.calls[0].variables["error_feedback"] == "无"
     assert llm.calls[0].variables["available_packages"] == "无（仅 Python 标准库）"
+    assert llm.calls[0].variables["hardware_note"] == DEFAULT_HARDWARE_NOTE
     # 选中的方案（recommended A）进入提示词
     assert "整数规划" in llm.calls[0].variables["chosen_plan"]
 
@@ -591,6 +594,23 @@ def test_experiment_passes_detected_packages_to_prompt(registry):
 
     assert result.status == NodeResult.SUCCEEDED
     assert llm.calls[0].variables["available_packages"] == "numpy、pandas"
+
+
+def test_experiment_passes_gpu_hardware_note_to_prompt(registry):
+    """运行时探测到 GPU 时，硬件口径进入提示词变量（引导实验代码上 GPU）。"""
+    llm = StubLlmPort({"experiment_code.default": stub_response(EXPERIMENT_OK)})
+    tools = FakeToolInvoker([tool_success()])
+    note = gpu_hardware_note("NVIDIA GeForce RTX 4090, 24.0 GB VRAM")
+    node = ExperimentExecutionNode(registry, hardware_note=note)
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = node.run(ctx, make_full_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    sent = llm.calls[0].variables["hardware_note"]
+    assert "RTX 4090" in sent and "检测到可用 GPU" in sent
+    # GPU 口径必须自带回退纪律，别让生成代码在无 GPU 环境硬编码 cuda 崩掉
+    assert "禁止硬编码 cuda" in sent
 
 
 def test_experiment_feeds_runtime_error_back_and_regenerates_once(registry):

@@ -1,9 +1,12 @@
 import os
+import subprocess
 
 import pytest
 
 from omm_agent_core import InMemoryArtifactStore
-from omm_agent_tools import PythonSandbox, TaskWorkspace
+from omm_agent_tools import PythonSandbox, TaskWorkspace, probe_sandbox_gpu
+from omm_agent_tools import python_runner
+from omm_agent_tools.python_runner import _GPU_PROBE_SCRIPT, parse_gpu_probe_output
 from omm_agent_tools.registry import ToolCallContext
 
 
@@ -139,3 +142,69 @@ def test_injected_store_captures_created_files(tmp_path):
     assert ref.uri.startswith("memory://run_s/")
     assert ref.producer_step == "step_store"
     assert store.blobs[ref.uri] == b"a,b\n1,2\n"
+
+
+# -- GPU probe -----------------------------------------------------------------
+
+
+def test_gpu_probe_script_is_valid_python():
+    """探针脚本以字符串常量存放，语法坏了只有运行才暴露——这里先编译兜底。"""
+    compile(_GPU_PROBE_SCRIPT, "<gpu-probe>", "exec")
+
+
+def test_gpu_probe_output_parses_cuda_device():
+    stdout = (
+        "UserWarning: some noisy package banner\n"
+        '{"cuda": true, "name": "NVIDIA GeForce RTX 4090", "vram_gb": 24.0}\n'
+    )
+    assert parse_gpu_probe_output(stdout) == "NVIDIA GeForce RTX 4090, 24.0 GB VRAM"
+
+
+def test_gpu_probe_output_without_vram_falls_back_to_name_only():
+    assert parse_gpu_probe_output('{"cuda": true, "name": "Tesla T4"}') == "Tesla T4"
+
+
+def test_gpu_probe_output_cpu_only_or_garbage_is_none():
+    assert parse_gpu_probe_output('{"cuda": false}\n') is None
+    assert parse_gpu_probe_output("") is None
+    assert parse_gpu_probe_output("ModuleNotFoundError: torch") is None
+    assert parse_gpu_probe_output("[1, 2, 3]") is None
+
+
+def test_probe_sandbox_gpu_degrades_to_none_on_subprocess_failure(monkeypatch):
+    def broken_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(python_runner.subprocess, "run", broken_run)
+    assert probe_sandbox_gpu() is None
+
+
+def test_probe_sandbox_gpu_degrades_to_none_on_timeout(monkeypatch):
+    def hanging_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="python", timeout=0.1)
+
+    monkeypatch.setattr(python_runner.subprocess, "run", hanging_run)
+    assert probe_sandbox_gpu(timeout_s=0.1) is None
+
+
+def test_probe_sandbox_gpu_returns_descriptor_from_probe_stdout(monkeypatch):
+    def cuda_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"cuda": true, "name": "NVIDIA RTX A6000", "vram_gb": 48.0}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(python_runner.subprocess, "run", cuda_run)
+    assert probe_sandbox_gpu() == "NVIDIA RTX A6000, 48.0 GB VRAM"
+
+
+def test_probe_sandbox_gpu_end_to_end_never_crashes():
+    """真跑一次探针子进程：无论本机有无 torch/GPU，都必须安静给出结论。
+
+    环境无关断言（None 或描述串），价值在于走通「-I + 环境清洗 + 脚本执行 +
+    stdout 解析」全链路——脚本被改坏时这里第一时间红。
+    """
+    result = probe_sandbox_gpu(timeout_s=120.0)
+    assert result is None or (isinstance(result, str) and result)

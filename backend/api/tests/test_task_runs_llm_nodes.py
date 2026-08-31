@@ -351,6 +351,30 @@ def test_network_error_guidance_never_mentions_recharge():
     assert "充值" in result.error, "只有余额类失败才指向充值"
 
 
+def test_sandbox_hardware_note_follows_gpu_probe(monkeypatch):
+    """实验提示词的硬件口径跟随 GPU 探测：有 GPU 引导上 GPU，无 GPU 保守用 CPU。"""
+    from omm_agent_skills import DEFAULT_HARDWARE_NOTE
+    from omm_api import engine_glue
+
+    engine_glue._sandbox_hardware.cache_clear()
+    try:
+        monkeypatch.setattr(
+            engine_glue,
+            "probe_sandbox_gpu",
+            lambda: "NVIDIA GeForce RTX 4090, 24.0 GB VRAM",
+        )
+        note = engine_glue._sandbox_hardware()
+        assert "检测到可用 GPU" in note and "RTX 4090" in note
+        assert "禁止硬编码 cuda" in note, "GPU 口径必须要求自适应设备选择"
+
+        engine_glue._sandbox_hardware.cache_clear()
+        monkeypatch.setattr(engine_glue, "probe_sandbox_gpu", lambda: None)
+        assert engine_glue._sandbox_hardware() == DEFAULT_HARDWARE_NOTE
+    finally:
+        # lru_cache 是进程级状态，脏了会污染同进程后续用例的真实探测
+        engine_glue._sandbox_hardware.cache_clear()
+
+
 def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch):
     """全链真实节点：审批前三个阶段 + 审批后实验（沙箱真跑代码）/检验/论文。"""
     project = create_project(client)

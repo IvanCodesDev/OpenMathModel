@@ -47,6 +47,7 @@ ENV_PROBE_PACKAGE_CANDIDATES: tuple[str, ...] = (
     "matplotlib",
     "networkx",
     "sympy",
+    "torch",
 )
 
 

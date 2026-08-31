@@ -52,6 +52,27 @@ PYTHON_TOOL_NAME = "python_run"
 #: interpreter with the sandbox should pass their real detection result.
 DEFAULT_AVAILABLE_PACKAGES = "无（仅 Python 标准库）"
 
+#: What the experiment prompt says about local hardware when the runtime does
+#: not report a probe result. Conservative default: CPU-only wording keeps
+#: generated code runnable anywhere; runtimes that probed a real GPU (see
+#: engine_glue._sandbox_hardware) pass the GPU-first wording instead.
+DEFAULT_HARDWARE_NOTE = "未检测到可用 GPU：请用 CPU 实现并控制计算规模。"
+
+
+def gpu_hardware_note(gpu_descriptor: str) -> str:
+    """Prompt wording once the runtime probed a CUDA GPU the sandbox can use.
+
+    Counterpart of :data:`DEFAULT_HARDWARE_NOTE`; both phrasings live here so
+    the prompt's hardware vocabulary has a single owner. ``gpu_descriptor``
+    is the probe's factual device string (e.g. "NVIDIA GeForce RTX 4090,
+    24.0 GB VRAM").
+    """
+    return (
+        f"检测到可用 GPU：{gpu_descriptor}，PyTorch CUDA 可用。"
+        "计算密集的核心计算（大规模矩阵运算、迭代求解、模型训练）应优先放到 GPU 上执行；"
+        "设备选择必须自适应并保留 CPU 回退，禁止硬编码 cuda。"
+    )
+
 #: Marker line experiment scripts must print for structured metrics capture.
 #: Anchored to a full line so prose that merely mentions the marker (or a
 #: brace later on the same line) cannot produce a bogus capture.
@@ -378,12 +399,17 @@ class ExperimentExecutionNode(LlmSkillNode):
         self,
         registry: PromptRegistry,
         available_packages: str = DEFAULT_AVAILABLE_PACKAGES,
+        hardware_note: str = DEFAULT_HARDWARE_NOTE,
     ) -> None:
         super().__init__(registry)
         # Which third-party packages the sandbox interpreter really offers:
         # the prompt whitelists imports against this, so code quality scales
         # with the environment instead of being pinned to stdlib-only.
         self._available_packages = available_packages
+        # Sandbox hardware facts (GPU availability): the prompt steers heavy
+        # computation onto the local GPU when the runtime probed one, and
+        # stays CPU-conservative otherwise.
+        self._hardware_note = hardware_note
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
@@ -396,6 +422,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 json.dumps(dict(preparation), ensure_ascii=False) if preparation else "无"
             ),
             "available_packages": self._available_packages,
+            "hardware_note": self._hardware_note,
             "error_feedback": "无",
             "previous_code": "无",
         }

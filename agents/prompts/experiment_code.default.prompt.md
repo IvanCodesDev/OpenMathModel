@@ -2,8 +2,8 @@
 id: experiment_code.default
 stage: EXPERIMENTING
 variant: default
-version: 3
-input_schema: {"type": "object", "required": ["problem_analysis", "chosen_plan", "data_preparation"], "properties": {"problem_analysis": {"type": "string"}, "chosen_plan": {"type": "string"}, "data_preparation": {"type": "string"}, "available_packages": {"type": "string"}, "error_feedback": {"type": "string"}, "previous_code": {"type": "string"}}}
+version: 4
+input_schema: {"type": "object", "required": ["problem_analysis", "chosen_plan", "data_preparation"], "properties": {"problem_analysis": {"type": "string"}, "chosen_plan": {"type": "string"}, "data_preparation": {"type": "string"}, "available_packages": {"type": "string"}, "hardware_note": {"type": "string"}, "error_feedback": {"type": "string"}, "previous_code": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["approach_summary", "code"], "properties": {"approach_summary": {"type": "string"}, "code": {"type": "string"}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛团队的实验工程师。按已确认的建模方案编写一个完整的 Python 实验脚本并总结实现思路。
@@ -24,6 +24,10 @@ output_schema: {"type": "object", "required": ["approach_summary", "code"], "pro
 
 {{available_packages}}
 
+## 硬件环境
+
+{{hardware_note}}
+
 ## 上次尝试的失败反馈
 
 {{error_feedback}}
@@ -41,6 +45,7 @@ output_schema: {"type": "object", "required": ["approach_summary", "code"], "pro
 5. 脚本最后必须原样打印一行核心指标（独占一行、不要拆行，数值为实际计算结果，须包含基线对比项）：
    `OMM_METRICS_JSON: {"指标名": 数值, ...}`
 6. 不要交互输入、不要联网、不要读取脚本目录以外的路径、不要使用多进程。
+7. 「硬件环境」标明 GPU 可用且「可用第三方库」列出了 torch 时，计算密集的核心计算（大规模矩阵运算、迭代求解、模型训练）优先放到 GPU 上执行；设备选择必须自适应：`device = "cuda" if torch.cuda.is_available() else "cpu"`，禁止硬编码 cuda——同一份代码在无 GPU 环境必须原样可跑。GPU 不可用时用 CPU 实现并控制计算规模。
 
 上次尝试的失败反馈不为「无」时，必须先修复反馈中指出的错误再完善其余部分。
 

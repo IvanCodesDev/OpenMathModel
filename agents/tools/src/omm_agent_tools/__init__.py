@@ -13,7 +13,7 @@ from .invoker import (
     execute_parallel,
     summarize,
 )
-from .python_runner import PythonSandbox
+from .python_runner import PythonSandbox, probe_sandbox_gpu
 from .registry import (
     TIERS,
     ToolCallContext,
@@ -53,6 +53,7 @@ __all__ = [
     "args_fingerprint",
     "env_fingerprint",
     "execute_parallel",
+    "probe_sandbox_gpu",
     "profile_csv_text",
     "sandbox_workspace_specs",
     "summarize",

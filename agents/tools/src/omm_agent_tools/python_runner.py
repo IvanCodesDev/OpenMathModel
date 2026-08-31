@@ -16,6 +16,7 @@ must not be silently assumed by callers.
 
 from __future__ import annotations
 
+import json
 import mimetypes
 import os
 import subprocess
@@ -46,6 +47,96 @@ _ENV_ALLOWLIST = (
 _OUTPUT_LIMIT = 32 * 1024
 _MAX_ARTIFACTS = 16
 _MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+#: GPU probe budget. Generous because a cold torch import plus CUDA driver
+#: init can take tens of seconds on Windows; callers cache the result so the
+#: cost is paid once per process.
+_GPU_PROBE_TIMEOUT_S = 60.0
+
+#: Executed via ``python -I -c`` under the exact sandbox conditions. Prints a
+#: single JSON line; ``{"cuda": false}`` covers torch missing, a CPU-only
+#: torch build, and no usable device alike — callers need no distinction.
+_GPU_PROBE_SCRIPT = """\
+import json
+info = {"cuda": False}
+try:
+    import torch
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        props = torch.cuda.get_device_properties(0)
+        info = {
+            "cuda": True,
+            "name": torch.cuda.get_device_name(0),
+            "vram_gb": round(props.total_memory / 1024 ** 3, 1),
+        }
+except Exception:
+    pass
+print(json.dumps(info, ensure_ascii=False))
+"""
+
+
+def _sandbox_env() -> dict[str, str]:
+    """The scrubbed environment every sandbox subprocess (and probe) gets."""
+    env = {key: os.environ[key] for key in _ENV_ALLOWLIST if key in os.environ}
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
+def parse_gpu_probe_output(stdout: str) -> str | None:
+    """Extract a GPU descriptor from probe stdout, or None for CPU-only.
+
+    Scans from the last line backwards because stray package warnings may
+    precede the probe's own JSON line.
+    """
+    for line in reversed(stdout.strip().splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            info = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(info, dict):
+            continue
+        if info.get("cuda") is not True:
+            return None
+        name = str(info.get("name") or "").strip() or "CUDA GPU"
+        vram_gb = info.get("vram_gb")
+        if isinstance(vram_gb, (int, float)) and vram_gb > 0:
+            return f"{name}, {vram_gb} GB VRAM"
+        return name
+    return None
+
+
+def probe_sandbox_gpu(
+    python_executable: str | None = None,
+    timeout_s: float = _GPU_PROBE_TIMEOUT_S,
+) -> str | None:
+    """Report the CUDA GPU usable from sandbox code, or None for CPU-only.
+
+    Probes with the exact conditions ``python_run`` uses — same interpreter,
+    ``-I`` isolation, scrubbed environment — because that is the only honest
+    answer to "will generated GPU code actually run here?" (e.g. torch
+    installed only in user site-packages imports fine in the parent process
+    but not under ``-I``). Every failure mode — no torch, CPU-only build,
+    driver trouble, timeout — degrades to None so callers fall back to CPU
+    wording instead of steering code onto hardware that is not there.
+    """
+    try:
+        proc = subprocess.run(
+            [python_executable or sys.executable, "-I", "-c", _GPU_PROBE_SCRIPT],
+            env=_sandbox_env(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_s,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return parse_gpu_probe_output(proc.stdout)
 
 #: Artifact kind by file suffix, using the packages/contracts vocabulary
 #: (artifact.schema.json kind enum) so captured files project onto the v1
@@ -120,9 +211,7 @@ class PythonSandbox:
 
         before = {path for path in step_dir.rglob("*") if path.is_file()}
 
-        env = {key: os.environ[key] for key in _ENV_ALLOWLIST if key in os.environ}
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
+        env = _sandbox_env()
 
         try:
             proc = subprocess.run(

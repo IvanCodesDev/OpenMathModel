@@ -7,6 +7,7 @@
 from .llm import LlmCall, ScriptedLlmPort, StubLlmPort, stub_response
 from .nodes import (
     DEFAULT_AVAILABLE_PACKAGES,
+    DEFAULT_HARDWARE_NOTE,
     PYTHON_TOOL_NAME,
     DataPreparationNode,
     ExperimentExecutionNode,
@@ -17,6 +18,7 @@ from .nodes import (
     ValidationNode,
     chosen_plan,
     extract_json,
+    gpu_hardware_note,
     render_paper_markdown,
 )
 from .prompt_registry import (
@@ -32,6 +34,7 @@ from .schema import validate
 
 __all__ = [
     "DEFAULT_AVAILABLE_PACKAGES",
+    "DEFAULT_HARDWARE_NOTE",
     "DEFAULT_PROMPTS_DIR",
     "PYTHON_TOOL_NAME",
     "DataPreparationNode",
@@ -50,6 +53,7 @@ __all__ = [
     "ValidationNode",
     "chosen_plan",
     "extract_json",
+    "gpu_hardware_note",
     "load_default_registry",
     "parse_prompt_text",
     "render_paper_markdown",

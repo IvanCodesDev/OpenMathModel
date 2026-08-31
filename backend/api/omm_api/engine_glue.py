@@ -46,6 +46,7 @@ from omm_agent_core import (
 from omm_agent_core.errors import AgentError
 from omm_agent_harness import BudgetGovernor, NodeBudget, RunBudget
 from omm_agent_skills import (
+    DEFAULT_HARDWARE_NOTE,
     DataPreparationNode,
     ExperimentExecutionNode,
     ModelPlanningNode,
@@ -53,6 +54,7 @@ from omm_agent_skills import (
     ProblemAnalysisNode,
     PromptRegistry,
     ValidationNode,
+    gpu_hardware_note,
     load_default_registry,
 )
 from omm_agent_tools import (
@@ -60,6 +62,7 @@ from omm_agent_tools import (
     RecordingInvoker,
     TaskWorkspace,
     ToolRegistry,
+    probe_sandbox_gpu,
     sandbox_workspace_specs,
     table_profile_spec,
 )
@@ -356,6 +359,8 @@ _SANDBOX_PACKAGE_CANDIDATES = (
     "matplotlib",
     "networkx",
     "sympy",
+    # torch 上榜才允许实验代码 import 它——GPU 加速（_sandbox_hardware）依赖此项。
+    "torch",
 )
 
 
@@ -367,6 +372,19 @@ def _sandbox_packages() -> str:
         if importlib.util.find_spec(name) is not None
     ]
     return "、".join(available) if available else "无（仅 Python 标准库）"
+
+
+@lru_cache(maxsize=1)
+def _sandbox_hardware() -> str:
+    """沙箱硬件口径：探测到沙箱可用的 CUDA GPU 就引导实验代码优先上 GPU。
+
+    探测走 probe_sandbox_gpu（与沙箱同解释器、同 ``-I`` 隔离、同环境清洗——
+    答案对沙箱子进程才算数），每进程一次；冷启动 torch import 的秒级开销由
+    lru_cache 吞掉。探测不到（无 torch / CPU 版 torch / 无设备 / 探测失败）
+    一律回落 CPU 保守措辞，绝不把代码引向不存在的硬件。
+    """
+    descriptor = probe_sandbox_gpu()
+    return gpu_hardware_note(descriptor) if descriptor else DEFAULT_HARDWARE_NOTE
 
 
 #: 六个阶段的模板齐套才启用真实链路：缺一个就整链回落模拟，
@@ -735,7 +753,9 @@ def _llm_wiring_impl(
             TaskState.DATA_PREPARATION: _ParamsDataPreparationNode(registry),
             TaskState.MODEL_PLANNING: ModelPlanningNode(registry),
             TaskState.EXPERIMENTING: ExperimentExecutionNode(
-                registry, available_packages=_sandbox_packages()
+                registry,
+                available_packages=_sandbox_packages(),
+                hardware_note=_sandbox_hardware(),
             ),
             TaskState.VALIDATING: ValidationNode(registry),
             TaskState.PAPER_WRITING: PaperWritingNode(registry),
