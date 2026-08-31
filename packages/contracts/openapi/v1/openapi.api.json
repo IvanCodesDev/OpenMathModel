@@ -182,6 +182,18 @@
             "minLength": 1,
             "title": "Label",
             "type": "string"
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "AI 推荐项标记：多正向选项的闸门（如 G2 数据闸门）用它声明默认选择；至多一个选项为 true，null/缺省等价于 false。",
+            "title": "Recommended"
           }
         },
         "required": [
@@ -2042,6 +2054,18 @@
             "minLength": 1,
             "title": "Label",
             "type": "string"
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "AI 推荐项标记：多正向选项的闸门（如 G2 数据闸门）用它声明默认选择；至多一个选项为 true，null/缺省等价于 false。",
+            "title": "Recommended"
           }
         },
         "required": [
@@ -2971,6 +2995,56 @@
           "text"
         ],
         "title": "RunNoteInput",
+        "type": "object"
+      },
+      "RunRevision": {
+        "description": "修订受理回执：这一轮的轮次、待确认的审批、服务端建议的重做起点。",
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "note_id": {
+            "title": "Note Id",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "suggested_stage": {
+            "title": "Suggested Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "round",
+          "approval_id",
+          "suggested_stage",
+          "note_id"
+        ],
+        "title": "RunRevision",
+        "type": "object"
+      },
+      "RunRevisionInput": {
+        "description": "已完成运行的修改要求（ADR-0013）：POST /v1/task-runs/{run_id}/revisions。\n\n只收要求正文，不收重做起点：起点由服务端按正文给出建议、再经审批门由用户\n拍板（同一句「结论不够有力」既可能只重写论文、也可能要重做实验，差一个\n数量级的花费，不能替用户默选）。",
+        "properties": {
+          "text": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "RunRevisionInput",
         "type": "object"
       },
       "RunStatus": {
@@ -5118,7 +5192,7 @@
     },
     "/api/v1/artifacts/parse": {
       "post": {
-        "description": "对话附件的即席解析（ADR-0010 批次三）：不落库、不建产物。\n\n对话历史保存在页面内存、服务端无状态；随消息提供的附件也保持同样姿态——\n解析一次、返回文本、什么都不留。抽取链路与产物正文完全相同（含可选 VL），\n图片和扫描件因此也能转成模型可读的 Markdown。",
+        "description": "对话附件的即席解析（ADR-0010 批次三）：不落库、不建产物。\n\n对话历史保存在页面内存、服务端无状态；随消息提供的附件也保持同样姿态——\n解析一次、返回文本、什么都不留。抽取链路与产物正文完全相同（含可选的\n远程 OCR），图片和扫描件因此也能转成模型可读的 Markdown。",
         "operationId": "parse_attachment_adhoc_api_v1_artifacts_parse_post",
         "requestBody": {
           "content": {
@@ -6219,6 +6293,59 @@
           }
         },
         "summary": "Post Run Note",
+        "tags": [
+          "task-runs"
+        ]
+      }
+    },
+    "/api/v1/task-runs/{run_id}/revisions": {
+      "post": {
+        "description": "对已完成的运行提出修改要求（ADR-0013）：重开运行并挂审批门等确认起点。\n\n要求正文同时落成一条 global 备注——重做阶段的节点靠它读到「要改什么」，\n不落的话重跑一遍只会原样再产出一次。真正的重做要等用户在审批门里选定起点\n（本接口只受理，不推进）。",
+        "operationId": "post_run_revision_api_v1_task_runs__run_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRevisionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRevision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Run Revision",
         "tags": [
           "task-runs"
         ]
