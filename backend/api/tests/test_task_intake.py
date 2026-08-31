@@ -2,11 +2,13 @@
 
 不变量：
 - 未配置自定义 API 的用户永远放行（演示/模拟链的「发送即建任务」不变）；
-- 启发式短路（无摘录附件 / 长题面 / 极短输入）不出网；
+- 启发式短路（无摘录附件 / 长题面 / 赛题标识 / 极短输入）不出网；
 - 带正文摘录的附件必须进模型判定，不再「带附件即放行」——判定提示词
   含文件名与摘录，意图与回应透传；
 - 模型判定的意图与回应透传；判定失败/输出无法解析一律放行——门控挂了
   绝不能挡住真实用户；
+- 本地信号层否决弱模型的 needs_info 误判（有对象有目标时「信息不足」
+  不是合法拦人理由），但不否决 chat——垃圾项目的防线要留着；
 - 端点要求登录。
 """
 
@@ -80,9 +82,19 @@ def test_heuristics_skip_the_judge_call(client, monkeypatch):
     long_goal = _intake(client, "某物流公司需要根据历史运量预测下季度运量并优化车辆配置。" * 10)
     assert (long_goal["intent"], long_goal["source"]) == ("modeling_task", "heuristic")
 
-    trivial = _intake(client, "你好")
-    assert (trivial["intent"], trivial["source"]) == ("needs_info", "heuristic")
-    assert "赛题正文" in trivial["reply"]
+    # 寒暄不是「想建模但没说清」：按 chat 友好回应，别对着一句「你好」索要赛题正文
+    greeting = _intake(client, "你好")
+    assert (greeting["intent"], greeting["source"]) == ("chat", "heuristic")
+    assert "完整赛题" in greeting["reply"]
+
+    # 极短但带赛题标识：确实想做题却没给题面，引导补题
+    bare_marker = _intake(client, "A题")
+    assert (bare_marker["intent"], bare_marker["source"]) == ("needs_info", "heuristic")
+    assert "赛题正文" in bare_marker["reply"]
+
+    # 带赛题标识 = 带着题面来的，不必再问判定模型
+    contest = _intake(client, "2024 高教社杯 A 题，生产线排产优化")
+    assert (contest["intent"], contest["source"]) == ("modeling_task", "heuristic")
 
 
 def test_attachment_excerpts_are_judged_not_blindly_passed(client, monkeypatch):
@@ -161,6 +173,91 @@ def test_judge_intent_and_reply_pass_through(client, monkeypatch):
     assert result["intent"] == "chat"
     assert result["source"] == "judge"
     assert "完整赛题" in result["reply"]
+
+
+def test_local_signal_vetoes_needs_info_misjudgement(client, monkeypatch):
+    """有对象有目标却被判「信息不足」= 弱模型误判，本地信号否决它放行。
+
+    17:38 复现出的真实误判样本：判定模型（池中最弱者）看到简短一句话就索要
+    「完整题目正文」，把真实用户挡在建模流程外。
+    """
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: _judge_reply(
+            {"intent": "needs_info", "reply": "请提供共享单车调度问题的完整题目正文。"}
+        ),
+    )
+    result = _intake(client, "帮我做一个共享单车调度优化模型")
+
+    assert result["intent"] == "modeling_task", "有对象（共享单车调度）有目标（优化）不该被拦"
+    assert result["source"] == "heuristic", "结论由本地信号做出，不是判定模型"
+    assert result["reply"] == ""
+
+
+def test_local_signal_does_not_veto_chat(client, monkeypatch):
+    """否决只针对 needs_info：模型说「与建模无关」时仍听它的，否则垃圾项目防线就没了。"""
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: _judge_reply(
+            {"intent": "chat", "reply": "这是在聊调度软件选型，不是建模需求。"}
+        ),
+    )
+    result = _intake(client, "你们公司排产调度用的什么优化软件呀")
+
+    assert (result["intent"], result["source"]) == ("chat", "judge")
+
+
+def test_inquiry_phrasing_keeps_the_judge_verdict(client, monkeypatch):
+    """咨询式问句不触发本地信号：「怎么做选址优化」是在问建模，不是派建模任务。"""
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: _judge_reply({"intent": "needs_info", "reply": "请给出具体题目。"}),
+    )
+    result = _intake(client, "怎么给共享单车调度做优化")
+
+    assert (result["intent"], result["source"]) == ("needs_info", "judge")
+
+
+def test_intent_alias_is_normalized(client, monkeypatch):
+    """弱模型省掉后缀写成 "modeling" 时按 modeling_task 采纳，不白烧这次调用。"""
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: _judge_reply({"intent": "modeling", "reply": ""}),
+    )
+    result = _intake(client, "帮我做个建模")
+
+    assert (result["intent"], result["source"]) == ("modeling_task", "judge")
+
+
+def test_judge_output_wrapped_in_prose_is_parsed(client, monkeypatch):
+    """模型在 JSON 前后写解释、套 Markdown 围栏时照样解析出意图。
+
+    解释文字里的花括号会让「取最外层 { … } 跨度」失效，逐个候选片段兜住它。
+    """
+    content = (
+        "用户只说了要建模 {没有具体对象}，因此判为信息不足：\n"
+        '```json\n{"intent": "needs_info", "reply": "请提供题目正文与数据附件。"}\n```'
+    )
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: httpx.Response(
+            200,
+            json={
+                "model": "gpt-test",
+                "choices": [{"message": {"content": content}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 10},
+            },
+        ),
+    )
+    result = _intake(client, "帮我做个建模")
+
+    assert (result["intent"], result["source"]) == ("needs_info", "judge")
+    assert result["reply"] == "请提供题目正文与数据附件。"
 
 
 def test_needs_info_without_reply_gets_default_guidance(client, monkeypatch):
