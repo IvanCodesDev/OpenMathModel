@@ -250,6 +250,37 @@ def _preferred_option(approval: ApprovalRequestRow | None) -> str | None:
     return str(selectable[0]["id"]) if len(selectable) == 1 else None
 
 
+def _revision_round(approval: ApprovalRequestRow | None) -> int:
+    """修订门的轮次（ADR-0013）；节点自提的闸门恒为 0。
+
+    判据取 evidence 里的 revision_round——那是投影修订门时写下的显式标记。
+    改用选项 id 的 ``redo:`` 前缀会把日后任何沿用该命名的选项误判成修订门。
+    """
+    if approval is None:
+        return 0
+    try:
+        return int((approval.evidence or {}).get("revision_round") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _revision_gate_summary(approval: ApprovalRequestRow, preselected: str | None) -> str:
+    """修订门 CTA 的说明：点下去是「从某阶段整段重做」，不是「继续往下走」。
+
+    起点与代价都得写明：从问题分析重做与从论文撰写重做差一个数量级的花费，
+    且每批准一轮就按 ADR-0013 §3.1 追加一整份运行配额。推荐不唯一时预选项
+    缺席、按钮本就是 no-op，此时如实请用户自己选，不假装点一下就能走。
+    """
+    if preselected is None:
+        return f"{approval.title}。请先选定重做起点：所选阶段及其之后的阶段会整段重做。"
+    stage = STAGE_LABELS.get(str((approval.evidence or {}).get("suggested_stage") or ""), "")
+    scope = f"从「{stage}」" if stage else "从建议的阶段"
+    return (
+        f"{approval.title}。确认后，Agent 将{scope}起重做该阶段及其之后的全部阶段，"
+        "原有成果由本轮新结果替换；本轮修改另计一份运行配额。"
+    )
+
+
 def _agent_projection(
     run: TaskRunRow,
     active_page: dict[str, Any],
@@ -270,13 +301,19 @@ def _agent_projection(
     if run.status == "WAITING_APPROVAL" and approval is not None:
         state = "WAITING_APPROVAL"
         label = approval.title
-        summary = f"{approval.title}。确认后，Agent 将从当前检查点继续执行。"
+        preselected = _preferred_option(approval)
+        if _revision_round(approval):
+            summary = _revision_gate_summary(approval, preselected)
+            approve_label = "确认重做起点"
+        else:
+            summary = f"{approval.title}。确认后，Agent 将从当前检查点继续执行。"
+            approve_label = "确认并继续"
         action = {
             "kind": "approve",
-            "label": "确认并继续",
+            "label": approve_label,
             "target_route": active_page["route"],
             "approval_id": approval.id,
-            "option_id": _preferred_option(approval),
+            "option_id": preselected,
         }
     elif run.status == "PAUSED":
         state = "PAUSED"

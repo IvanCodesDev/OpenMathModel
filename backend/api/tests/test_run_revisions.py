@@ -199,6 +199,38 @@ def test_revision_approval_matches_contract(client, validate_contract) -> None:
         validate_contract("approval-request.schema.json", approval)
 
 
+def test_revision_gate_cta_says_redo_not_continue(client) -> None:
+    """工作台 CTA 必须说清这一下是「整段重做」而不是「从检查点继续」（ADR-0013 §4 第 15 项）。
+
+    两类审批门以前共用一句写死的文案。修订门沿用它就是骗人：按钮点下去会从选定
+    阶段起重跑整条下游链路并追加一整份配额，说成「继续执行」等于让用户闭眼付费。
+    """
+    run_id = _completed_run(client)
+    _post_revision(client, run_id)
+
+    agent = client.get(f"{API}/task-runs/{run_id}/workspace").json()["agent"]
+    assert agent["state"] == "WAITING_APPROVAL"
+    assert agent["action"]["label"] == "确认重做起点"
+    assert agent["action"]["option_id"] == "redo:PAPER_WRITING"
+    summary = agent["summary"]
+    assert "从当前检查点继续执行" not in summary
+    # 起点、影响面、代价三样都要在文案里，缺一样用户就得点开别处才知道会发生什么
+    assert "论文撰写" in summary
+    assert "重做" in summary
+    assert "配额" in summary
+
+
+def test_node_gate_cta_copy_is_unchanged(client) -> None:
+    """节点自提的闸门（G1 方案确认）不受修订门改文案影响，仍是「从检查点继续」。"""
+    project = create_project(client)
+    run = create_run(client, project["id"])
+    wait_until(client, run["id"], pending_approval(client, run["id"]))
+
+    agent = client.get(f"{API}/task-runs/{run['id']}/workspace").json()["agent"]
+    assert agent["action"]["label"] == "确认并继续"
+    assert "从当前检查点继续执行" in agent["summary"]
+
+
 # -- 起点建议（纯函数层） --------------------------------------------------------
 
 

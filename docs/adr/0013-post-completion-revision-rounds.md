@@ -1,6 +1,6 @@
 # ADR-0013：跑完之后还能接着改——修订回合复用评审门，不派生新运行
 
-- 状态：Accepted（切片 1、2 已落地并通过全量回归；切片 3 前端待做）
+- 状态：Accepted（切片 1、2 已落地并通过全量回归；切片 3 的第 15 项已落地，第 12/13/14/16/17 项前端待做）
 - 日期：2026-08-31
 - 关联：ADR-0011（编排状态机与有界循环）、ADR-0007、[系统架构](../architecture/system-overview.md)、设计 §11.3（运行备注）
 
@@ -159,9 +159,9 @@ ADR-0011 约束新增领域阶段要走全链路，因此**不为分诊增设节
 | 12 | `openmathmodel-ui.ts` | 409 `RUN_FINISHED` 从「死路」改成 CTA：「按这条要求继续修改」，点击调 `/revisions` |
 | 13 | `modeling-workspace-api.ts` | 新增 `postRunRevision(runId, text)` |
 | 14 | 审批卡 | 渲染六阶段选项（`_preferred_option` 已优先 recommended，可直接用） |
-| 15 | `workspace_view.py` | WAITING_APPROVAL 的 CTA 文案对修订门要改口径：现固定为「确认后，Agent 将从当前检查点继续执行」，而修订门要表达的是「从所选阶段重做」。切片 2 未动该文件（避开与并行会话的写冲突），标题本身已自述，先记在此 |
-| 16 | 时间线 | 同一阶段出现多趟，按轮分组并标「第 2 轮」，避免看起来是重复卡片 |
-| 17 | 状态接管 | 运行状态由 COMPLETED 变回 RUNNING，列表筛选、通知、`restore-last-task` 需能接住 |
+| 15 | `workspace_view.py` | **已落地**：修订门不再沿用「确认后，Agent 将从当前检查点继续执行」。`_revision_round` 以 `evidence["revision_round"]` 为判据（不是选项 id 的 `redo:` 前缀——那只是命名约定，日后同名选项会被误判），`_revision_gate_summary` 写明起点、影响面与「另计一份运行配额」，按钮改称「确认重做起点」；推荐不唯一致预选缺席时如实请用户自选。节点自提闸门逐字不变，`backend/api` 全量 287 passed |
+| 16 | 时间线 | 同一阶段出现多趟，按轮分组并标「第 2 轮」，避免看起来是重复卡片。**开工前先看**：`modeling-workspace-controller.ts` 第 785~791 行对同一 `llm:<prompt_id>` 复用行并改写标题为「（第 N 次尝试）」，第 2 轮重跑必然命中同一 prompt_id，会把用户主动要求的修订轮显示成系统失败重试——得先按 `revision_round` 拆 key 或标题，否则加了分组标题仍是错的 |
+| 17 | 状态接管 | 运行状态由 COMPLETED 变回 RUNNING，列表筛选、通知需能接住。**已核实**：`recent-tasks.ts` 的 `TERMINAL_STATUSES` 归桶跟着 status 走，无需改；`restore-last-task.ts` 全文无状态判断，本项不涉及该文件。**新发现必须改的一处**：`notifications/desktop-notifications.ts` 的 `tag: omm-run-{runId}-{current}` 在第二轮完成时逐字节相同，浏览器按 tag 去重会静默吞掉第 2 轮的「任务已完成」通知，tag 需带轮次 |
 
 ### 5. 明确不做
 
