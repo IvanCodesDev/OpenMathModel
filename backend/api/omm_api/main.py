@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import platform
-import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,7 +13,6 @@ from . import engine_glue
 from .blobstore import LocalContentStore
 from .config import Settings, get_settings
 from .db import Database
-from .doc_text import warmup_vl
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
 from .paper_export import PaperExportProcessor, PaperExportThread
@@ -62,10 +60,6 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             exporter = PaperExportThread(app.state.paper_exports, resolved)
             exporter.start()
         app.state.paper_export_thread = exporter
-        # PaddleOCR-VL 预热：守护线程后台加载，不阻塞启动；停机时无需等待
-        # （只写模块级单例，进程退出即弃）。--reload 重启后自动重新预热。
-        if resolved.vl_warmup_enabled:
-            threading.Thread(target=warmup_vl, name="omm-vl-warmup", daemon=True).start()
         try:
             yield
         finally:

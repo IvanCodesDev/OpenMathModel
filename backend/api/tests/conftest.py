@@ -42,8 +42,8 @@ def app(tmp_path: Path):
         database_url=override or f"sqlite:///{(tmp_path / 'test.db').as_posix()}",
         runner_enabled=False,
         retention_sweep_enabled=False,
-        # 预热线程会真实导入 paddle 栈（开发机可能装了），测试必须关闭保证确定性
-        vl_warmup_enabled=False,
+        # 与本地 backend/api/.env 隔离：key 清空即关闭远程 OCR，测试绝不外呼
+        ocr_api_key="",
         # 编译线程同理关闭，改由用例手动 process 驱动
         paper_export_worker_enabled=False,
         sse_poll_seconds=0.01,

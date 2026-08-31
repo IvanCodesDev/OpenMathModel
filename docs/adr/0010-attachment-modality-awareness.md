@@ -2,6 +2,13 @@
 
 日期：2026-08-16 · 状态：已接受（批次一、二、三均已落地）
 
+> **修订（2026-08-30）**：批次二的视觉解析后端由**本地 PaddleOCR-VL 替换为远程 OCR API**
+> （讯飞星辰 MaaS 上的 PaddleOCR，OpenAI 兼容协议，`OMM_OCR_API_KEY` 启用）。本地
+> paddle 栈（1.8GB 权重、约 90 秒冷加载、线程局部动态图状态）与 `vl` 附加项、启动
+> 预热线程一并移除；扫描件 PDF 改为 pypdfium2 逐页渲染后上送（新 `pdf-ocr` 附加项），
+> `engine` 由 `paddleocr-vl` 变为 `paddleocr-api`。摄入阶梯、诚实降级与触发面不变。
+> 下文批次二一节保留为决策历史，进程模型等描述以本注记为准。
+
 ## 背景
 
 题面附件（PDF/Word/PPT）中的图表、公式截图和示意图经常承载关键约束——本仓库题库样本里就有大量「见图 1 / 见图 2」的题面。当前附件解析管线（[对接规范 §2.3](../development/frontend-backend-agent-integration.md)）只抽取文字层：

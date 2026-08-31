@@ -66,7 +66,11 @@ cd backend/api
 | `OMM_AVATARS_DIR` | `backend/api/data/avatars` | 用户头像内容存储根，与运行产物目录分开 |
 | `OMM_AVATAR_MAX_BYTES` | `2097152` | 单个头像上限；前端会先压到 256×256，这是服务端兜底 |
 | `OMM_ATTACHMENT_TEXT_MAX_BYTES` | `33554432` | 正文抽取上限，比上传上限更严；超过的附件只留原文件不抽正文 |
-| `OMM_OCR_LANGUAGES` | `chi_sim+eng` | 图片 OCR 语言包；未安装 Tesseract 时不生效 |
+| `OMM_OCR_LANGUAGES` | `chi_sim+eng` | 图片 OCR 语言包（Tesseract 回落路径）；未安装 Tesseract 时不生效 |
+| `OMM_OCR_API_KEY` | 空 | 远程 OCR（讯飞星辰 MaaS · PaddleOCR，OpenAI 兼容协议）的 API key；留空 = 功能关闭。敏感项，放 `backend/api/.env` 或环境变量 |
+| `OMM_OCR_API_BASE_URL` | `https://maas-api.cn-huabei-1.xf-yun.com/v2` | 远程 OCR 的 OpenAI 兼容 Base URL |
+| `OMM_OCR_API_MODEL` | `xoppaddleocrv16` | 远程 OCR 的 Model ID |
+| `OMM_OCR_API_TIMEOUT_SECONDS` | `60` | 单次识别调用（每页一次）的超时 |
 
 ## 测试
 
@@ -95,7 +99,7 @@ $env:OMM_TEST_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel@127
 - 动作 `approve/pause/resume/cancel/retry` 按状态机校验；approve 的 `reject` 选项退回重做 MODEL_PLANNING 并再次请求确认。
 - 失败注入：`params.fail_at` / `params.fail_attempts`（兼容 goal 含 `[fail:experiment]`），用于验证 FAILED → retry 链路。
 - **Artifact 存储闭环（B4）**：二进制内容按 sha256 内容寻址存放在 `data/artifacts/`（协议可替换，MinIO/S3 待底座就绪）；上传 `POST /api/v1/projects/{id}/artifacts`（multipart，服务端重算哈希），下载 `GET /api/v1/artifacts/{id}/download`（下载即核验，哈希不一致返回 `ARTIFACT_CORRUPTED`）；模拟工作流产物经同一存储端口真实落盘、可下载。
-- **附件正文抽取**：`GET /api/v1/artifacts/{id}/text` 返回 Agent 可读的纯文本。抽取放在读取时而不是上传时——上传要对用户即时响应，而几十兆的 PDF 抽一遍要好几秒；产物内容寻址、字节不可变，因此结果缓存在 `artifact_texts` 表里长期复用，服务端补装依赖后用 `?refresh=true` 重跑。`status` 五档：`ready`/`partial`/`empty`/`unsupported`/`failed`，后三档也是 200，调用方要的是原因而不是错误码。docx/pptx/xlsx/ODF/压缩包/纯文本全部用标准库 `zipfile` + `ElementTree` 解（零额外依赖），PDF 用 `pypdf`；旧版 `.doc`（按 FIB 分片表抽正文）、`.xls`、RTF 需要 `pip install -e "backend/api[legacy-docs]"`，图片 OCR 需要 `[ocr]` 附加项**外加**系统里装有 Tesseract 与语言包。缺依赖时返回 `unsupported` 并说明原因，不抛 500。
+- **附件正文抽取**：`GET /api/v1/artifacts/{id}/text` 返回 Agent 可读的纯文本。抽取放在读取时而不是上传时——上传要对用户即时响应，而几十兆的 PDF 抽一遍要好几秒；产物内容寻址、字节不可变，因此结果缓存在 `artifact_texts` 表里长期复用，服务端补装依赖后用 `?refresh=true` 重跑。`status` 五档：`ready`/`partial`/`empty`/`unsupported`/`failed`，后三档也是 200，调用方要的是原因而不是错误码。docx/pptx/xlsx/ODF/压缩包/纯文本全部用标准库 `zipfile` + `ElementTree` 解（零额外依赖），PDF 用 `pypdf`；旧版 `.doc`（按 FIB 分片表抽正文）、`.xls`、RTF 需要 `pip install -e "backend/api[legacy-docs]"`。图片与扫描件 PDF 的识别走**远程 OCR**（讯飞星辰 MaaS 上的 PaddleOCR，OpenAI 兼容协议，配置 `OMM_OCR_API_KEY` 启用；输出 Markdown、公式为 LaTeX、`engine="paddleocr-api"`），其中扫描件 PDF 还需 `[pdf-ocr]` 附加项（pypdfium2 逐页渲染成图片再上送）；未配置 key 时图片回落本地 Tesseract（`[ocr]` 附加项 + 系统 Tesseract 与语言包）。缺依赖/未配置时返回 `unsupported`/`empty` 并说明原因，不抛 500。
 - **用户头像**：`POST /api/account/avatar`（multipart）、`DELETE /api/account/avatar`、`GET /api/account/avatar`。内容走与 Artifact 相同的内容寻址实现但独立目录 `data/avatars/`（归属与回收边界不同），`users` 表只存 `avatar_sha256` 与服务端识别的 `avatar_media_type`。格式按**文件魔数**判定（PNG/JPEG/WebP/GIF），声明的 Content-Type 不作数——头像以同源 URL 回给浏览器，放行 SVG 等同于同源脚本注入；响应固定带 `X-Content-Type-Options: nosniff`。读取只按当前会话返回本人头像，不提供按 user_id 的公开地址。`user_payload.avatar_url` 带内容摘要查询串，换图后 URL 自动变化。
 - **SQLite 补列机制（仅显式 SQLite 路径生效）**：`create_all` 只建新表、不改已存在的表，因此对 SQLite 库启动时额外补齐模型新增的**可空**列（`omm_api/db.py`）。数据库已限定 PostgreSQL（以 Alembic 为准）后，该机制只服务测试夹具与应急排查场景；两种方言的 schema 一致性由 `tests/test_migrations.py` 守住。
 

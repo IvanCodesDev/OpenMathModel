@@ -49,10 +49,17 @@ class Settings(BaseSettings):
     attachment_text_max_bytes: int = 32 * 1024 * 1024
     # 图片 OCR 的识别语言（Tesseract 语言包名）；未安装 Tesseract 时该项不生效。
     ocr_languages: str = "chi_sim+eng"
-    # PaddleOCR-VL 启动预热：模型冷加载实测约 90 秒，若留给首个发图请求，会叠上
-    # CPU 推理耗时一起超过前端 180 秒解析预算。开启后启动时用守护线程后台加载；
-    # 未安装 vl 附加项时预热立即结束，不影响启动。测试环境显式关闭。
-    vl_warmup_enabled: bool = True
+    # ── 远程 OCR（讯飞星辰 MaaS 上的 PaddleOCR，OpenAI 兼容协议）────────
+    # 本地 paddle 栈已移除（2026-08-30）：扫描件 PDF 与图片的文档解析改走远程
+    # chat/completions（图片以 base64 data URL 传入，输出 Markdown，公式为
+    # LaTeX）。key 是敏感项，放 backend/api/.env（OMM_OCR_API_KEY=...）或环境
+    # 变量，绝不写进任何入库文件；留空 = 功能关闭，图片回落 Tesseract、扫描件
+    # 如实 empty。base_url 与 model 非敏感，默认即当前使用的服务。
+    ocr_api_base_url: str = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
+    ocr_api_model: str = "xoppaddleocrv16"
+    ocr_api_key: str = ""
+    # 单次远程识别（每页一次调用）的超时；扫描件逐页串行，总时长 ≈ 页数 × 单次。
+    ocr_api_timeout_seconds: float = 60.0
 
     # 高级设置「最大并发任务」的默认值与可调上限；用户改动存 users 表，按用户生效。
     default_max_concurrent_runs: int = 3

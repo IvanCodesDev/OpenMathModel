@@ -47,11 +47,12 @@ ocr = [
   "pytesseract>=0.3.13",
   "pillow>=10",
 ]
-# 视觉文档解析（ADR-0010 批次二）：PaddleOCR-VL 把扫描件/图片解析成 Markdown
-# （公式→LaTeX、表格→表格标记）。依赖较重且首次运行会下载模型权重；缺依赖时
-# 扫描件与图片回落到 Tesseract 或如实 unsupported，不会报错。
-vl = [
-  "paddleocr[doc-parser]>=3.3",
+# 扫描件 PDF 的远程 OCR 前置：远程 API（OpenAI 兼容协议）只收图片，PDF 需先
+# 逐页渲染成图片再上送。图片附件本身零新增依赖（httpx 走核心依赖）；缺这两个
+# 包时扫描件如实 empty 并说明启用途径，不会报错。
+pdf-ocr = [
+  "pypdfium2>=4",
+  "pillow>=10",
 ]
 
 [tool.setuptools.packages.find]

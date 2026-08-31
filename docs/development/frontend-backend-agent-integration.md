@@ -82,7 +82,7 @@ project_id? / run_request_token?
 - `empty` 文件正常但没有文字（扫描版 PDF 落在这里）；
 - `unsupported` 缺少可选依赖或格式不支持；`failed` 文件损坏或抽取出错。
 
-浏览器解不动的（旧版 `.doc`/`.xls`/`.ppt`、RTF、图片 OCR、超限文件）在卡片上显示为“等待服务端解析”而不是失败。服务端的可选依赖：`legacy-docs` 附加项提供 `.doc`/`.xls`/RTF，`ocr` 附加项加上系统 Tesseract 才能识别图片，`vl` 附加项（`paddleocr[doc-parser]`）启用 PaddleOCR-VL 视觉文档解析——扫描件 PDF 与图片优先走它，输出逐页 Markdown（公式→LaTeX、表格→表格标记，`engine="paddleocr-vl"`）；缺失时接口如实返回 `unsupported`/`empty` 并说明原因。
+浏览器解不动的（旧版 `.doc`/`.xls`/`.ppt`、RTF、图片 OCR、超限文件）在卡片上显示为“等待服务端解析”而不是失败。服务端的可选依赖与配置：`legacy-docs` 附加项提供 `.doc`/`.xls`/RTF；图片与扫描件 PDF 的识别走远程 OCR（讯飞星辰 MaaS 上的 PaddleOCR，OpenAI 兼容协议，配置 `OMM_OCR_API_KEY` 启用；本地 paddle 栈已于 2026-08-30 移除），输出逐页 Markdown（公式→LaTeX、表格→表格标记，`engine="paddleocr-api"`），扫描件 PDF 另需 `pdf-ocr` 附加项（pypdfium2 逐页渲染）；未配置 key 时图片回落 `ocr` 附加项 + 系统 Tesseract。缺失时接口如实返回 `unsupported`/`empty` 并说明原因。
 
 ### 2.4 图片计数与单模态提醒（ADR-0010 批次一）
 

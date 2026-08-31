@@ -6,29 +6,25 @@
 
 依赖策略：OOXML、OpenDocument、压缩包与纯文本全部用标准库的 ``zipfile`` +
 ``ElementTree`` 完成，只有 PDF 依赖 ``pypdf``。旧版 ``.doc``/``.xls``、RTF 与
-OCR 走可选依赖，缺库时如实返回 ``unsupported`` 并说明原因——控制面不该因为少装
-一个包就抛 500，用户需要的是"换个格式重传"这样的可执行提示。
+OCR 走可选依赖或远程 API，缺库/未配置时如实返回 ``unsupported`` 并说明原因——
+控制面不该因为少装一个包就抛 500，用户需要的是"换个格式重传"这样的可执行提示。
 """
 
 from __future__ import annotations
 
+import base64
 import codecs
 import io
 import logging
-import os
-import queue
 import re
 import shutil
 import struct
-import tempfile
-import threading
-import time
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import partial
 from typing import Callable, Iterable, Optional
+
+import httpx
 
 logger = logging.getLogger("omm.doc_text")
 
@@ -393,7 +389,7 @@ def _pdf_image_count(reader: object, page_limit: int) -> Optional[int]:
         return None
 
 
-def _extract_pdf(data: bytes) -> Extraction:
+def _extract_pdf(data: bytes, ocr_api: OcrApi | None = None) -> Extraction:
     try:
         from pypdf import PdfReader
     except ModuleNotFoundError:  # pragma: no cover - 部署缺依赖时的兜底
@@ -412,22 +408,24 @@ def _extract_pdf(data: bytes) -> Extraction:
     text = _tidy("\n\n".join(pages))
     images = _pdf_image_count(reader, read)
     if not text:
-        # 扫描件：文字层为空时优先走 PaddleOCR-VL（公式→LaTeX、表格→表格标记）。
-        parsed = _vl_parse(data, ".pdf")
+        # 扫描件：文字层为空时交给远程 OCR（公式→LaTeX、表格→表格标记）。
+        parsed, note = _ocr_pdf_markdown(data, ocr_api)
         if parsed:
+            detail = "扫描件经远程 OCR 解析为 Markdown（公式为 LaTeX）"
             return Extraction(
                 "ready",
-                "paddleocr-vl",
+                "paddleocr-api",
                 parsed,
                 segments=total,
-                detail="扫描件经 PaddleOCR-VL 解析为 Markdown（公式为 LaTeX）",
+                detail=f"{detail}；{note}" if note else detail,
                 images=images,
             )
-        detail = (
-            "PaddleOCR-VL 没有从扫描件中识别出内容"
-            if parsed == ""
-            else "PDF 没有文字层（多半是扫描件），需要在服务端启用 OCR（Tesseract 或 vl 附加项）后重试"
-        )
+        if parsed == "":
+            detail = "远程 OCR 没有从扫描件中识别出内容"
+        elif ocr_api is not None and ocr_api.configured:
+            detail = note or "远程 OCR 本次识别失败，可稍后带 refresh=true 重试"
+        else:
+            detail = "PDF 没有文字层（多半是扫描件），需要配置远程 OCR（OMM_OCR_API_KEY）后重试"
         return Extraction("empty", "pdf", segments=total, detail=detail, images=images)
     if read < total:
         return Extraction("partial", "pdf", text, segments=total, detail=f"仅抽取了前 {read} 页", images=images)
@@ -441,150 +439,146 @@ def _extract_plain(data: bytes) -> Extraction:
     return Extraction("ready", "text", text, segments=text.count("\n") + 1)
 
 
-# ── PaddleOCR-VL 可选视觉解析后端（ADR-0010 批次二）─────────────────
+# ── 远程 OCR 后端（讯飞星辰 MaaS 上的 PaddleOCR，OpenAI 兼容协议）────────
 #
-# 0.9B 文档解析 VLM：扫描件与图片解析成 Markdown（公式→LaTeX、表格→表格标记），
-# 对纯文本模型几乎无损。惰性单例：首次调用加载模型（可能下载权重），之后复用；
-# 开发链在 API 进程内直跑，生产隔离随独立 Worker 接线迁移到执行面。
+# 本地 paddle 栈已移除（2026-08-30）：1.8GB 权重、约 90 秒冷加载、线程局部的
+# 动态图状态，换来的还是 CPU 上排队的推理，多数部署根本没装过 vl 附加项。
+# 扫描件与图片的文档解析改走远程 API：图片以 base64 data URL 进
+# ``POST {base_url}/chat/completions``，识别结果按 Markdown 返回（公式→LaTeX、
+# 表格→表格标记），对纯文本模型几乎无损。key 未配置时功能整体关闭：图片回落
+# Tesseract、扫描件如实 empty——与其他可选依赖同一套诚实降级姿态。
 
-_VL_PIPELINE: Optional[object] = None
-_VL_UNAVAILABLE: Optional[str] = None
-#: paddle 动态图模式是线程局部状态：模型在哪个线程创建就只能在哪个线程推理，
-#: 跨线程 predict 会以「int(Tensor) is not supported in static graph mode」的
-#: RuntimeError 失败（2026-08-20 实测）。因此初始化与全部推理都固定在同一条
-#: 专用工作线程上；单工作线程同时天然串行化了并发解析（旧 _VL_LOCK 的职责）。
-#:
-#: 刻意不用 concurrent.futures.ThreadPoolExecutor：它的工作线程非守护且注册了
-#: atexit join——若线程恰好阻塞（如向已死的 stderr 管道写日志），整个进程退出
-#: 会被永久挂住，uvicorn --reload 的重启因此堵死（2026-08-20 py-spy 实证）。
-_VL_QUEUE: "queue.SimpleQueue[tuple[Callable[[], object], dict, threading.Event]]" = (
-    queue.SimpleQueue()
+OCR_API_PROMPT = (
+    "请完整识别图中的全部内容，按原版面顺序输出 Markdown："
+    "数学公式用 LaTeX（行内 $...$、独立公式 $$...$$），表格用 Markdown 表格；"
+    "只输出识别结果，不要任何解释或前后缀。"
 )
-_VL_WORKER: Optional[threading.Thread] = None
-_VL_WORKER_LOCK = threading.Lock()
+
+#: 扫描件 PDF 单次最多识别的页数：每页是一次远程调用，赛题扫描件极少超过
+#: 这个数；超出部分如实标注截断，而不是无上限地烧时间与配额。
+MAX_OCR_PDF_PAGES = 20
+
+#: PDF 光栅化倍率：PDFium 基准 72dpi，2.0 ≈ 144dpi，印刷体与公式足够清晰，
+#: 同时控制 base64 体积（服务端对单图有编码后约 4MB 的上限）。
+PDF_RENDER_SCALE = 2.0
 
 
-def _vl_worker_loop() -> None:
-    while True:
-        func, box, done = _VL_QUEUE.get()
-        try:
-            box["value"] = func()
-        except BaseException as error:  # noqa: BLE001 异常原样带回调用线程
-            box["error"] = error
-        finally:
-            done.set()
+@dataclass(frozen=True)
+class OcrApi:
+    """远程 OCR 的连接配置；由路由层从 Settings 组装注入，本模块不读配置。"""
+
+    base_url: str
+    model: str
+    api_key: str
+    timeout_seconds: float = 60.0
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url and self.model and self.api_key)
 
 
-def _vl_call(func: Callable[[], object]) -> object:
-    """把调用投递到 VL 专用守护线程执行并等待结果；工作线程按需惰性拉起。"""
-
-    global _VL_WORKER
-    with _VL_WORKER_LOCK:
-        if _VL_WORKER is None or not _VL_WORKER.is_alive():
-            _VL_WORKER = threading.Thread(target=_vl_worker_loop, name="omm-vl", daemon=True)
-            _VL_WORKER.start()
-    box: dict = {}
-    done = threading.Event()
-    _VL_QUEUE.put((func, box, done))
-    done.wait()
-    if "error" in box:
-        raise box["error"]  # type: ignore[misc]
-    return box.get("value")
+_IMAGE_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"BM", "image/bmp"),
+    (b"GIF8", "image/gif"),
+    (b"II*\x00", "image/tiff"),
+    (b"MM\x00*", "image/tiff"),
+)
 
 
-def _vl_pipeline() -> Optional[object]:
-    """构建/返回惰性单例。只允许在 VL 专用工作线程内调用。"""
+def _image_mime(data: bytes) -> str:
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    for magic, mime in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime
+    return "image/png"
 
-    global _VL_PIPELINE, _VL_UNAVAILABLE
-    if _VL_PIPELINE is not None or _VL_UNAVAILABLE is not None:
-        return _VL_PIPELINE
+
+def _ocr_api_chat(api: OcrApi, data_url: str) -> str:
+    """单张图的一次远程识别；网络/协议错误原样抛出，由调用方决定降级。"""
+
+    response = httpx.post(
+        api.base_url.rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {api.api_key}"},
+        json={
+            "model": api.model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {"type": "text", "text": OCR_API_PROMPT},
+                ],
+            }],
+            "stream": False,
+            # 服务端默认 2048 tokens，密排页会被拦腰截断；顶到协议上限。
+            "max_tokens": 8192,
+        },
+        timeout=api.timeout_seconds,
+    )
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"].get("content")
+    return content if isinstance(content, str) else ""
+
+
+def _ocr_image_markdown(data: bytes, api: OcrApi | None) -> str | None:
+    """把一张图交给远程 OCR，返回 Markdown 文本。
+
+    返回 None = 未配置或本次调用失败（调用方走既有降级路径）；
+    返回 ""   = 服务正常但没有识别出内容。
+    """
+
+    if api is None or not api.configured:
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
     try:
-        from paddleocr import PaddleOCRVL
+        return _tidy(_ocr_api_chat(api, f"data:{_image_mime(data)};base64,{encoded}"))
+    except Exception:
+        # 静默降级曾让后端故障隐身数日（本地 VL 时期实证）；失败必须落日志。
+        logger.warning("远程 OCR 识别失败", exc_info=True)
+        return None
+
+
+def _ocr_pdf_markdown(data: bytes, api: OcrApi | None) -> tuple[str | None, str | None]:
+    """扫描件 PDF：pypdfium2 逐页渲染成 JPEG，再逐页远程识别并合并。
+
+    返回 ``(text, note)``：text 语义同 :func:`_ocr_image_markdown`；note 是要
+    透传给用户的补充说明（页数截断、缺光栅化依赖等），没有则为 None。
+    """
+
+    if api is None or not api.configured:
+        return None, None
+    try:
+        import pypdfium2 as pdfium
     except ModuleNotFoundError:
-        _VL_UNAVAILABLE = "未安装 paddleocr[doc-parser]"
-        return None
-    except Exception as error:  # paddle 栈在个别环境上导入即崩，如实降级
-        _VL_UNAVAILABLE = f"paddleocr 导入失败：{type(error).__name__}"
-        logger.warning("%s", _VL_UNAVAILABLE, exc_info=True)
-        return None
-    try:
-        _VL_PIPELINE = PaddleOCRVL()
-    except Exception as error:
-        _VL_UNAVAILABLE = f"PaddleOCR-VL 初始化失败：{type(error).__name__}"
-        logger.warning("%s", _VL_UNAVAILABLE, exc_info=True)
-        return None
-    return _VL_PIPELINE
-
-
-def _vl_markdown(results: Iterable[object]) -> str:
-    """把 predict 返回的逐页结果收敛成 Markdown 文本（在 VL 工作线程内取尽）。"""
+        return None, "识别扫描件还需安装 pdf-ocr 附加项（pypdfium2，负责把 PDF 页渲染成图片）"
+    except Exception as error:  # 二进制轮子在个别环境上加载即崩，如实降级
+        logger.warning("pypdfium2 导入失败", exc_info=True)
+        return None, f"PDF 光栅化组件不可用：{type(error).__name__}"
 
     pages: list[str] = []
-    for result in results:
-        markdown = getattr(result, "markdown", None)
-        text = markdown.get("markdown_texts", "") if isinstance(markdown, Mapping) else ""
-        if isinstance(text, str) and text.strip():
-            pages.append(text)
-    return _tidy("\n\n".join(pages))
-
-
-def _vl_text(path: str) -> Optional[str]:
-    """专用工作线程内的完整解析：建管线 → predict → 抽取逐页 Markdown。
-
-    推理结果也在本线程内取尽（paddleocr 的 predict 返回已物化的列表），
-    绝不把惰性对象带出线程。
-    """
-
-    pipeline = _vl_pipeline()
-    if pipeline is None:
-        return None
-    text = _vl_markdown(pipeline.predict(path))  # type: ignore[attr-defined]
-    if text:
-        return text
-    # 版面检测（PP-DocLayoutV3）面向整页文档训练，对稀疏截图——大片留白里
-    # 两行公式的小图——常检出 0 个区域，放大也无济于事（2026-08-21 实测），
-    # 正文因此恒为空。版面一无所获时把整图直接交给识别端重试一次；
-    # 真实文档页首轮已有结果，不会走到这里。
-    return _vl_markdown(pipeline.predict(path, use_layout_detection=False))  # type: ignore[attr-defined]
-
-
-def warmup_vl() -> None:
-    """预热 VL 惰性单例：把约 90 秒的模型冷加载从首个用户请求挪到进程启动。
-
-    设计给启动期的守护线程调用；加载发生在 VL 专用工作线程上（与后续推理
-    同一线程），请求撞上预热未完成时在队列里排队等待而不是重复加载。
-    未安装 vl 附加项时等同一次空操作。
-    """
-
-    started = time.monotonic()
-    if _vl_call(_vl_pipeline) is None:
-        logger.info("PaddleOCR-VL 预热跳过：%s", _VL_UNAVAILABLE)
-    else:
-        logger.info("PaddleOCR-VL 预热完成，耗时 %.1f 秒", time.monotonic() - started)
-
-
-def _vl_parse(data: bytes, suffix: str) -> Optional[str]:
-    """把图片/PDF 字节交给 PaddleOCR-VL，返回逐页 Markdown 合并文本。
-
-    返回 None = 后端不可用或本次解析失败（调用方走既有降级路径）；
-    返回 ""   = 后端跑了但没有识别出内容。predict 只收路径，先落临时文件。
-    """
-
-    handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
-        handle.write(data)
-        handle.close()
-        result = _vl_call(partial(_vl_text, handle.name))
-        return result if result is None else str(result)
-    except Exception:
-        # 静默降级曾让「跨线程推理失败」隐身数日；失败原因必须落日志。
-        logger.warning("PaddleOCR-VL 解析失败", exc_info=True)
-        return None
-    finally:
+        document = pdfium.PdfDocument(data)
         try:
-            os.unlink(handle.name)
-        except OSError:
-            pass
+            total = len(document)
+            read = min(total, MAX_OCR_PDF_PAGES)
+            for index in range(read):
+                image = document[index].render(scale=PDF_RENDER_SCALE).to_pil()
+                buffer = io.BytesIO()
+                image.convert("RGB").save(buffer, format="JPEG", quality=85)
+                text = _ocr_image_markdown(buffer.getvalue(), api)
+                if text is None:
+                    return None, None  # 远程调用失败，原因已落日志
+                if text:
+                    pages.append(text)
+            note = f"扫描件共 {total} 页，仅识别前 {read} 页" if read < total else None
+        finally:
+            document.close()
+    except Exception:
+        logger.warning("扫描件光栅化失败", exc_info=True)
+        return None, None
+    return _tidy("\n\n".join(pages)), note
 
 
 def _extract_rtf(data: bytes) -> Extraction:
@@ -720,19 +714,19 @@ def _extract_xls(data: bytes) -> Extraction:
     return Extraction("ready", "xls", _tidy("\n\n".join(blocks) + suffix), segments=len(blocks))
 
 
-def _extract_image(data: bytes, languages: str) -> Extraction:
-    # 优先 PaddleOCR-VL：对公式、表格、图表远强于逐字 OCR；不可用再回落 Tesseract。
-    parsed = _vl_parse(data, ".png")
+def _extract_image(data: bytes, languages: str, ocr_api: OcrApi | None = None) -> Extraction:
+    # 优先远程 OCR：对公式、表格、图表远强于逐字 OCR；未配置或失败再回落 Tesseract。
+    parsed = _ocr_image_markdown(data, ocr_api)
     if parsed:
-        return Extraction("ready", "paddleocr-vl", parsed, segments=parsed.count("\n") + 1, images=1)
+        return Extraction("ready", "paddleocr-api", parsed, segments=parsed.count("\n") + 1, images=1)
     if parsed == "":
-        return Extraction("empty", "paddleocr-vl", detail="PaddleOCR-VL 没有识别出内容", images=1)
+        return Extraction("empty", "paddleocr-api", detail="远程 OCR 没有识别出内容", images=1)
 
     if shutil.which("tesseract") is None:
         return Extraction(
             "unsupported",
             "ocr",
-            detail="服务端未安装 Tesseract OCR，图片附件暂时只登记不转文字（可安装 ocr 或 vl 附加项启用识别）",
+            detail="服务端未配置远程 OCR（OMM_OCR_API_KEY）也未安装 Tesseract，图片附件暂时只登记不转文字",
             images=1,
         )
     try:
@@ -753,7 +747,7 @@ def _extract_image(data: bytes, languages: str) -> Extraction:
     return Extraction("ready", "ocr", text, segments=text.count("\n") + 1, images=1)
 
 
-def _extract_archive(data: bytes, languages: str) -> Extraction:
+def _extract_archive(data: bytes, languages: str, ocr_api: OcrApi | None = None) -> Extraction:
     with _zip_of(data) as archive:
         entries = [item for item in archive.infolist() if not item.is_dir()][:MAX_ARCHIVE_ENTRIES]
         manifest = [f"# 压缩包内容（{len(entries)} 个文件）"]
@@ -768,7 +762,7 @@ def _extract_archive(data: bytes, languages: str) -> Extraction:
             # 压缩包里再套压缩包不展开：一层就够用，再深下去容易被构造成解压炸弹。
             if extractor is None or extractor is _extract_archive:
                 continue
-            nested = _run(extractor, archive.read(item), languages)
+            nested = _run(extractor, archive.read(item), languages, ocr_api)
             if nested.status in ("ready", "partial") and nested.text:
                 bodies.append(f"# {item.filename}\n{nested.text}")
                 expanded += 1
@@ -848,20 +842,29 @@ def _extractor_for(name: str, media_type: str) -> Optional[Extractor]:
     return None
 
 
-def _run(extractor: Extractor, data: bytes, languages: str) -> Extraction:
+def _run(extractor: Extractor, data: bytes, languages: str, ocr_api: OcrApi | None) -> Extraction:
+    if extractor is _extract_pdf:
+        return extractor(data, ocr_api)
     if extractor in (_extract_image, _extract_archive):
-        return extractor(data, languages)
+        return extractor(data, languages, ocr_api)
     return extractor(data)
 
 
-def extract_text(data: bytes, name: str, media_type: str, *, ocr_languages: str = "chi_sim+eng") -> Extraction:
+def extract_text(
+    data: bytes,
+    name: str,
+    media_type: str,
+    *,
+    ocr_languages: str = "chi_sim+eng",
+    ocr_api: OcrApi | None = None,
+) -> Extraction:
     """按文件名与媒体类型选择抽取器；任何抽取失败都收敛成 failed 而不是异常。"""
 
     extractor = _extractor_for(name, media_type)
     if extractor is None:
         return Extraction("unsupported", "none", detail=f"暂不支持解析该格式：{name}")
     try:
-        return _run(extractor, data, ocr_languages).truncated()
+        return _run(extractor, data, ocr_languages, ocr_api).truncated()
     except zipfile.BadZipFile:
         return Extraction("failed", "zip", detail="文件不是合法的压缩包，可能在传输中损坏")
     except ET.ParseError as error:

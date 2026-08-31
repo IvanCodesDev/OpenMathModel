@@ -7,29 +7,19 @@
 from __future__ import annotations
 
 import io
-import threading
 import zipfile
 
 import pytest
 
-from omm_api.doc_text import extract_text
+from omm_api.doc_text import OcrApi, extract_text
 
 from conftest import API, create_project
 
 pytest.importorskip("pypdf")
 
-
-@pytest.fixture(autouse=True)
-def _vl_disabled_by_default(monkeypatch):
-    """开发机可能真装了 paddle 栈；测试默认强制 VL 不可用保证确定性。
-
-    需要 VL 路径的用例经 _install_fake_paddleocr 显式复位并注入假模块。
-    """
-
-    import omm_api.doc_text as doc_text
-
-    monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
-    monkeypatch.setattr(doc_text, "_VL_UNAVAILABLE", "测试默认禁用")
+# 单元用例不传 ocr_api 即远程 OCR 关闭；应用级用例经 conftest 的 ocr_api_key=""
+# 关闭。需要远程路径的用例显式传本配置并 monkeypatch _ocr_api_chat，绝不外呼。
+OCR_API = OcrApi(base_url="https://ocr.test/v2", model="xoppaddleocrv16", api_key="test-key")
 
 
 def _zip(parts: dict[str, str]) -> bytes:
@@ -223,140 +213,135 @@ def test_unknown_and_corrupted_inputs_degrade_without_raising():
     assert "压缩包" in (broken.detail or "")
 
 
-# ── PaddleOCR-VL 可选后端（假模块注入，不依赖真实 paddle 栈）──────────
+# ── 远程 OCR 后端（monkeypatch HTTP 调用与光栅化模块，CI 绝不外呼）─────
 
 
-def _install_fake_paddleocr(
-    monkeypatch,
-    pages: list[str],
-    nolayout_pages: list[str] | None = None,
-    calls: list[bool] | None = None,
-) -> None:
-    import sys
-    import types
+def _fake_ocr_chat(monkeypatch, replies: list[str], calls: list[str] | None = None) -> None:
+    """按调用顺序弹出 replies 作为识别结果；calls 记录每次上送的 data URL 头。"""
 
     import omm_api.doc_text as doc_text
 
-    def _result(text: str):
-        return types.SimpleNamespace(markdown={"markdown_texts": text})
+    pending = list(replies)
 
-    def _predict(_path: str, use_layout_detection: bool = True):
+    def _chat(_api, data_url: str) -> str:
         if calls is not None:
-            calls.append(use_layout_detection)
-        chosen = pages if use_layout_detection else (nolayout_pages or [])
-        return [_result(text) for text in chosen]
+            calls.append(data_url.split(";", 1)[0])
+        assert pending, "远程 OCR 被调用的次数超过预期"
+        return pending.pop(0)
 
-    module = types.ModuleType("paddleocr")
-    module.PaddleOCRVL = lambda: types.SimpleNamespace(predict=_predict)
-    monkeypatch.setitem(sys.modules, "paddleocr", module)
-    # 惰性单例复位，避免其他用例触发的可用性判定串场；teardown 时自动还原。
-    monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
-    monkeypatch.setattr(doc_text, "_VL_UNAVAILABLE", None)
+    monkeypatch.setattr(doc_text, "_ocr_api_chat", _chat)
 
 
-def test_scanned_pdf_upgrades_to_paddleocr_vl_markdown(monkeypatch):
+def _install_fake_pdfium(monkeypatch, page_count: int) -> None:
+    """假 pypdfium2：render→to_pil→save 产出带 JPEG 魔数的假页图字节。"""
+
+    import sys
+    import types
+
+    class _Image:
+        def convert(self, _mode: str) -> _Image:
+            return self
+
+        def save(self, buffer: io.BytesIO, **_kw) -> None:
+            buffer.write(b"\xff\xd8\xff fake-jpeg")
+
+    class _Page:
+        def render(self, scale: float):
+            return types.SimpleNamespace(to_pil=lambda: _Image())
+
+    class _Document:
+        def __init__(self, _data: bytes) -> None:
+            self._pages = [_Page() for _ in range(page_count)]
+
+        def __len__(self) -> int:
+            return len(self._pages)
+
+        def __getitem__(self, index: int) -> _Page:
+            return self._pages[index]
+
+        def close(self) -> None:
+            pass
+
+    module = types.ModuleType("pypdfium2")
+    module.PdfDocument = _Document
+    monkeypatch.setitem(sys.modules, "pypdfium2", module)
+
+
+def _blank_pdf() -> bytes:
     from pypdf import PdfWriter
 
-    _install_fake_paddleocr(monkeypatch, ["# 题目\n$E=mc^2$", "|站点|需求|\n|---|---|"])
     writer = PdfWriter()
     writer.add_blank_page(width=200, height=200)
     buffer = io.BytesIO()
     writer.write(buffer)
+    return buffer.getvalue()
 
-    result = extract_text(buffer.getvalue(), "扫描件.pdf", "application/pdf")
+
+def test_scanned_pdf_upgrades_to_remote_ocr_markdown(monkeypatch):
+    _install_fake_pdfium(monkeypatch, page_count=2)
+    calls: list[str] = []
+    _fake_ocr_chat(monkeypatch, ["# 题目\n$E=mc^2$", "|站点|需求|\n|---|---|"], calls)
+
+    result = extract_text(_blank_pdf(), "扫描件.pdf", "application/pdf", ocr_api=OCR_API)
     assert result.status == "ready"
-    assert result.engine == "paddleocr-vl"
+    assert result.engine == "paddleocr-api"
     assert "$E=mc^2$" in result.text
+    assert "站点" in result.text
     assert result.images == 0
+    # 每页渲染成 JPEG 后各上送一次。
+    assert calls == ["data:image/jpeg", "data:image/jpeg"]
 
 
-def test_image_prefers_paddleocr_vl_over_tesseract(monkeypatch):
-    _install_fake_paddleocr(monkeypatch, ["流程图：输入 → 模型 → 输出"])
-    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
+def test_image_prefers_remote_ocr_over_tesseract(monkeypatch):
+    calls: list[str] = []
+    _fake_ocr_chat(monkeypatch, ["流程图：输入 → 模型 → 输出"], calls)
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png", ocr_api=OCR_API)
     assert result.status == "ready"
-    assert result.engine == "paddleocr-vl"
+    assert result.engine == "paddleocr-api"
+    assert result.images == 1
+    assert calls == ["data:image/png"]
+
+
+def test_image_reports_empty_when_remote_ocr_finds_nothing(monkeypatch):
+    _fake_ocr_chat(monkeypatch, [""])
+    result = extract_text(b"\x89PNG fake", "白图.png", "image/png", ocr_api=OCR_API)
+    assert result.status == "empty"
+    assert result.engine == "paddleocr-api"
     assert result.images == 1
 
 
-def test_sparse_screenshot_retries_without_layout_detection(monkeypatch):
-    """版面检测对稀疏截图（大片留白里两行公式）检出 0 区域是常态而非异常：
-    首轮为空时必须把整图直接交给识别端重试，否则正文恒为空（2026-08-21 实测）。"""
-
-    calls: list[bool] = []
-    _install_fake_paddleocr(
-        monkeypatch, pages=[], nolayout_pages=["$S=a+b$\n\n$\\max Z=3x+5y$"], calls=calls
-    )
-    result = extract_text(b"\x89PNG fake", "目标函数截图.png", "image/png")
-    assert result.status == "ready"
-    assert result.engine == "paddleocr-vl"
-    assert "max Z" in result.text
-    # 先带版面检测跑一轮，空了再整图重试一轮。
-    assert calls == [True, False]
-
-
-def test_image_reports_empty_when_both_vl_passes_find_nothing(monkeypatch):
-    calls: list[bool] = []
-    _install_fake_paddleocr(monkeypatch, pages=[], nolayout_pages=[], calls=calls)
-    result = extract_text(b"\x89PNG fake", "白图.png", "image/png")
-    assert result.status == "empty"
-    assert result.engine == "paddleocr-vl"
-    assert calls == [True, False]
-
-
-def test_warmup_vl_preloads_the_lazy_singleton(monkeypatch):
+def test_image_falls_back_honestly_when_remote_ocr_fails(monkeypatch):
     import omm_api.doc_text as doc_text
 
-    _install_fake_paddleocr(monkeypatch, ["预热"])
-    doc_text.warmup_vl()
-    # 预热即加载：随后的图片解析直接复用单例，不再付冷启动成本。
-    assert doc_text._VL_PIPELINE is not None
-    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
-    assert result.engine == "paddleocr-vl"
+    def _boom(_api, _data_url: str) -> str:
+        raise RuntimeError("上游 502")
+
+    monkeypatch.setattr(doc_text, "_ocr_api_chat", _boom)
+    monkeypatch.setattr(doc_text.shutil, "which", lambda _name: None)
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png", ocr_api=OCR_API)
+    # 远程失败不抛错：回落 Tesseract 路径，缺 Tesseract 时如实 unsupported。
+    assert result.status == "unsupported"
+    assert result.images == 1
 
 
-def test_warmup_vl_is_a_noop_when_the_backend_is_unavailable():
+def test_image_without_api_key_keeps_local_degradation(monkeypatch):
     import omm_api.doc_text as doc_text
 
-    # autouse fixture 已把 VL 置为不可用；预热不得抛异常、不得改变不可用状态。
-    doc_text.warmup_vl()
-    assert doc_text._VL_PIPELINE is None
+    monkeypatch.setattr(doc_text.shutil, "which", lambda _name: None)
+    unconfigured = OcrApi(base_url="https://ocr.test/v2", model="m", api_key="")
+    result = extract_text(b"\x89PNG fake", "figure.png", "image/png", ocr_api=unconfigured)
+    assert result.status == "unsupported"
+    assert "OMM_OCR_API_KEY" in (result.detail or "")
 
 
-def test_vl_init_and_predict_run_on_the_same_dedicated_thread(monkeypatch):
-    """paddle 动态图模式是线程局部状态：模型在哪个线程创建就只能在哪个线程推理，
-    跨线程 predict 以「static graph mode」RuntimeError 失败（2026-08-20 实测）。
-    契约：预热初始化与请求推理必须发生在同一条专用线程上，且不在调用方线程。"""
-
+def test_scanned_pdf_reports_missing_rasterizer(monkeypatch):
     import sys
-    import types
 
-    import omm_api.doc_text as doc_text
-
-    seen: dict[str, int] = {}
-
-    def _result(text: str):
-        return types.SimpleNamespace(markdown={"markdown_texts": text})
-
-    class _Pipeline:
-        def __init__(self) -> None:
-            seen["init"] = threading.get_ident()
-
-        def predict(self, _path: str):
-            seen["predict"] = threading.get_ident()
-            return [_result("同线程推理")]
-
-    module = types.ModuleType("paddleocr")
-    module.PaddleOCRVL = _Pipeline
-    monkeypatch.setitem(sys.modules, "paddleocr", module)
-    monkeypatch.setattr(doc_text, "_VL_PIPELINE", None)
-    monkeypatch.setattr(doc_text, "_VL_UNAVAILABLE", None)
-
-    doc_text.warmup_vl()
-    result = extract_text(b"\x89PNG fake", "figure.png", "image/png")
-    assert result.engine == "paddleocr-vl"
-    assert result.text == "同线程推理"
-    assert seen["init"] == seen["predict"]
-    assert seen["init"] != threading.get_ident()
+    # sys.modules 置 None：import pypdfium2 即刻 ModuleNotFoundError，模拟未安装。
+    monkeypatch.setitem(sys.modules, "pypdfium2", None)
+    result = extract_text(_blank_pdf(), "扫描件.pdf", "application/pdf", ocr_api=OCR_API)
+    assert result.status == "empty"
+    assert "pdf-ocr" in (result.detail or "")
 
 
 def test_legacy_binary_formats_report_a_reason_rather_than_crashing():
@@ -429,7 +414,7 @@ def test_text_endpoint_retries_stale_negative_cache_without_refresh(client, app)
             cached.status = "empty"
             cached.text = ""
             cached.characters = 0
-            cached.detail = "PaddleOCR-VL 没有识别出内容"
+            cached.detail = "远程 OCR 没有识别出内容"
             cached.created_at = created_at
             session.commit()
 

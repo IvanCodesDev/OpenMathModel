@@ -13,9 +13,10 @@ from omm_contracts import ArtifactStatus
 
 from ..api_models import ArtifactText, AttachmentParseResult
 from ..blobstore import local_content_digest
+from ..config import Settings
 from ..db import get_session
 from ..deps import AuthContext, get_auth_context
-from ..doc_text import extract_text
+from ..doc_text import OcrApi, extract_text
 from ..errors import ApiError, NotFoundError
 from ..orm import ArtifactRow, ArtifactTextRow, ProjectRow
 from ..serialize import as_utc, utcnow
@@ -35,6 +36,17 @@ def _text_cache_reusable(cached: ArtifactTextRow) -> bool:
     return created_at is not None and utcnow() - created_at < NEGATIVE_TEXT_CACHE_TTL
 
 
+def _ocr_api(settings: Settings) -> OcrApi:
+    """远程 OCR 连接配置；key 未配置时 doc_text 侧按功能关闭处理。"""
+
+    return OcrApi(
+        base_url=settings.ocr_api_base_url,
+        model=settings.ocr_api_model,
+        api_key=settings.ocr_api_key,
+        timeout_seconds=settings.ocr_api_timeout_seconds,
+    )
+
+
 @router.post("/parse", response_model=AttachmentParseResult)
 async def parse_attachment_adhoc(
     request: Request,
@@ -44,8 +56,8 @@ async def parse_attachment_adhoc(
     """对话附件的即席解析（ADR-0010 批次三）：不落库、不建产物。
 
     对话历史保存在页面内存、服务端无状态；随消息提供的附件也保持同样姿态——
-    解析一次、返回文本、什么都不留。抽取链路与产物正文完全相同（含可选 VL），
-    图片和扫描件因此也能转成模型可读的 Markdown。
+    解析一次、返回文本、什么都不留。抽取链路与产物正文完全相同（含可选的
+    远程 OCR），图片和扫描件因此也能转成模型可读的 Markdown。
     """
 
     content = await file.read()
@@ -62,10 +74,15 @@ async def parse_attachment_adhoc(
             text="",
             detail=f"文件超过正文抽取上限 {settings.attachment_text_max_bytes} 字节",
         )
-    # 抽取必须离开事件循环：VL/OCR 是同步重活（首载可达数十秒），在 async 端点里
-    # 直跑会冻结整个 API（健康检查、对话、SSE 全部停摆）。
+    # 抽取必须离开事件循环：远程 OCR/大 PDF 是同步慢活（可达数十秒），在 async
+    # 端点里直跑会冻结整个 API（健康检查、对话、SSE 全部停摆）。
     extraction = await run_in_threadpool(
-        extract_text, content, name, media_type, ocr_languages=settings.ocr_languages
+        extract_text,
+        content,
+        name,
+        media_type,
+        ocr_languages=settings.ocr_languages,
+        ocr_api=_ocr_api(settings),
     )
     return AttachmentParseResult(
         name=name,
@@ -179,6 +196,7 @@ def read_artifact_text(
             row.name,
             row.media_type or "",
             ocr_languages=settings.ocr_languages,
+            ocr_api=_ocr_api(settings),
         )
         extraction_status, engine, text = extraction.status, extraction.engine, extraction.text
         detail, segments, images = extraction.detail, extraction.segments, extraction.images
