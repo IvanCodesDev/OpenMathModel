@@ -2195,10 +2195,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
               <div class="settings-section">
                 ${settingsToggle("allowProxyApi", "允许使用第三方中转站", "发送请求前显示实际域名，并记录接口用量", true)}
                 ${settingsToggle("streamResponse", "流式输出", "支持时逐步显示模型回复，降低首字等待时间", true)}
-                ${settingsToggle("fallbackApi", "失败时自动切换备用接口", "仅在主接口超时或达到限流后触发", true)}
+                ${settingsToggle("fallbackApi", "失败时自动切换备用接口", "主接口超时、限流或余额不足时触发", true)}
               </div>
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>已保存接口</h3><p>主接口负责默认调用；Auto 模式按能力权重在这些接口间路由，其余接口在超时或限流时作为备用。</p></div></div>
+                <div class="settings-section-heading"><div><h3>已保存接口</h3><p>主接口负责默认调用；Auto 模式按能力权重在这些接口间路由，其余接口在超时、限流或余额不足时作为备用。</p></div></div>
                 <div class="endpoint-list" data-endpoint-list>
                   <div class="endpoint-item"><span class="endpoint-dot"></span><div><strong>正在读取已保存接口…</strong><span>接口配置保存在本机后端，随账户生效</span></div></div>
                 </div>

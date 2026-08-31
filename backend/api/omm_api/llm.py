@@ -10,8 +10,10 @@
 - anthropic → Messages API（x-api-key + anthropic-version，SSE 事件流）；
 - gemini → generateContent / streamGenerateContent?alt=sse（key 走查询串）。
 
-回退语义与设置面板文案一致：仅在超时、网络层失败或 HTTP 429 时切到下一个
-已保存接口；模型侧 4xx/5xx 属于配置或内容问题，换接口大概率同样失败，直接报错。
+回退语义与设置面板文案一致：超时、网络层失败、HTTP 429 限流或 HTTP 402
+余额不足时切到下一个已保存接口——余额是接口各自独立的资产，主接口欠费不代表
+备用接口不可用；其余模型侧 4xx/5xx 属于配置或内容问题，换接口大概率同样失败，
+直接报错。
 """
 
 from __future__ import annotations
@@ -789,6 +791,15 @@ def _upstream_error(endpoint: LlmEndpoint, response: httpx.Response) -> ApiError
             snippet = payload["message"][:300]
     except Exception:  # noqa: BLE001 - 上游错误体可以是任何东西
         pass
+    if response.status_code == 402:
+        # 余额不足单独归码：换一个有余额的接口就能继续（进 _FALLBACK_CODES），
+        # 失败指引也按「充值」方向给（engine_glue 按 code 分型），不与其它
+        # 上游错误混在 LLM_UPSTREAM_ERROR 里。
+        return ApiError(
+            402,
+            "LLM_NO_BALANCE",
+            f"接口「{endpoint.name}」余额不足（HTTP 402）：{snippet}",
+        )
     return ApiError(
         502,
         "LLM_UPSTREAM_ERROR",
@@ -796,14 +807,31 @@ def _upstream_error(endpoint: LlmEndpoint, response: httpx.Response) -> ApiError
     )
 
 
-_FALLBACK_CODES = frozenset({"LLM_RATE_LIMITED", "LLM_TIMEOUT", "LLM_UNREACHABLE"})
+#: 换一个接口就可能成功的错误：限流 / 超时 / 网络层失败，以及 402 余额不足——
+#: 余额是接口各自独立的资产（真实事故：DeepSeek 402 时链里的 GLM 余额充足，
+#: 却因 402 不回退导致整个任务失败）。
+_FALLBACK_CODES = frozenset(
+    {"LLM_RATE_LIMITED", "LLM_TIMEOUT", "LLM_UNREACHABLE", "LLM_NO_BALANCE"}
+)
+
+#: 同一条调用链稍后重来就可能自愈的瞬态类（EngineLlmPort 整次调用重试用）。
+#: 402 不在其中：余额不足是确定性失败，链内回退已试过备用接口，原样重试
+#: 只会再撞一次。
+_TRANSIENT_CODES = frozenset({"LLM_RATE_LIMITED", "LLM_TIMEOUT", "LLM_UNREACHABLE"})
 
 
 def _should_fall_back(error: Exception) -> bool:
-    """与面板文案对齐：仅超时、网络层失败与限流触发备用切换。"""
+    """与面板文案对齐：超时、网络层失败、限流与余额不足触发备用切换。"""
     if isinstance(error, httpx.TimeoutException | httpx.TransportError):
         return True
     return isinstance(error, ApiError) and error.code in _FALLBACK_CODES
+
+
+def _is_transient(error: Exception) -> bool:
+    """整次调用重试的判定：只认换个时间重来可能自愈的瞬态类。"""
+    if isinstance(error, httpx.TimeoutException | httpx.TransportError):
+        return True
+    return isinstance(error, ApiError) and error.code in _TRANSIENT_CODES
 
 
 def _post(endpoint: LlmEndpoint, url: str, headers: dict[str, str], body: dict[str, Any], read_timeout: float) -> httpx.Response:

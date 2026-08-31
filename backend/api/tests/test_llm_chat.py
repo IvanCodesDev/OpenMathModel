@@ -434,6 +434,51 @@ def test_chat_falls_back_on_429_and_reports_it(client, monkeypatch):
     assert payload["fallback_used"] is True
 
 
+def test_chat_402_falls_back_to_backup_endpoint(client, monkeypatch):
+    """主接口余额不足（HTTP 402）→ 自动切到还有余额的备用接口。
+
+    余额是接口各自独立的资产：主接口欠费不代表备用接口不可用。真实事故：
+    DeepSeek 402 时链里的 GLM 余额充足，旧版却不回退、任务整个失败。
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "gateway.test":
+            return httpx.Response(402, json={"error": {"message": "Insufficient Balance"}})
+        return _openai_reply("备用接口的回答")
+
+    _install_transport(monkeypatch, handler)
+    _save_config(
+        client,
+        [
+            _openai_endpoint_body(),
+            _openai_endpoint_body(name="备用接口", base_url="https://backup.test/v1", api_key="sk-b"),
+        ],
+        fallback=True,
+    )
+
+    response = client.post("/api/chat", json={"messages": MESSAGES, "stream": False})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"] == "备用接口的回答"
+    assert payload["endpoint"] == "备用接口"
+    assert payload["fallback_used"] is True
+
+
+def test_chat_402_without_backup_surfaces_no_balance(client, monkeypatch):
+    """只有一个接口时 402 如实上抛：独立错误码 + 余额不足人话文案。"""
+    _install_transport(
+        monkeypatch,
+        lambda request: httpx.Response(402, json={"error": {"message": "Insufficient Balance"}}),
+    )
+    _save_config(client, [_openai_endpoint_body()])
+
+    response = client.post("/api/chat", json={"messages": MESSAGES, "stream": False})
+    assert response.status_code == 402
+    payload = response.json()
+    assert payload["code"] == "LLM_NO_BALANCE"
+    assert "余额不足" in payload["message"] and "402" in payload["message"]
+
+
 def test_chat_fallback_disabled_surfaces_rate_limit(client, monkeypatch):
     _install_transport(monkeypatch, lambda request: httpx.Response(429, json={}))
     _save_config(

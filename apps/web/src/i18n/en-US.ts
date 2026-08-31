@@ -1357,7 +1357,8 @@ const SETTINGS: Record<string, string> = {
   "支持时逐步显示模型回复，降低首字等待时间":
     "Stream replies where supported to cut time to first token",
   "失败时自动切换备用接口": "Fail over to a backup endpoint",
-  "仅在主接口超时或达到限流后触发": "Only after the primary times out or hits a rate limit",
+  "主接口超时、限流或余额不足时触发":
+    "After the primary times out, hits a rate limit or runs out of balance",
   "请求发送至": "Request sent to",
   "自动路由选择接口中…": "Auto-routing across saved endpoints…",
   "已切换备用接口": "Switched to a backup endpoint",

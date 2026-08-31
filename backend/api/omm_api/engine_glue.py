@@ -498,14 +498,38 @@ def _budget_stop_message(error: AgentError) -> str:
     )
 
 
+#: ApiError → 按错误码分型的可行动指引（D2.1：指引必须对症）。此前所有接口
+#: 错误统一追加「检查余额…充值」，网络断流也被引导去查余额——真实误导案例：
+#: GLM 中转站流式断连，用户余额充足却按指引反复检查充值页。
+_API_ERROR_GUIDANCE: dict[str, str] = {
+    "LLM_UNREACHABLE": (
+        "这是网络或接口服务不稳定（与余额无关）：请直接重试；"
+        "反复出现时在设置中心更换更稳定的接口或追加备用接口。"
+    ),
+    "LLM_TIMEOUT": (
+        "这是接口响应超时（与余额无关）：请直接重试，"
+        "或在设置中心换用响应更快的模型或接口。"
+    ),
+    "LLM_RATE_LIMITED": (
+        "这是接口限流（与余额无关）：请稍等片刻重试，"
+        "或在设置中心追加备用接口分担调用。"
+    ),
+    "LLM_NO_BALANCE": "请在设置中心为该接口充值，或更换/追加有余额的备用接口后重试。",
+}
+_API_ERROR_GUIDANCE_DEFAULT = (
+    "请在设置中心检查该接口的配置与可用性，必要时更换或追加备用接口后重试。"
+)
+
+
 class _BudgetGuardedNode:
     """把节点内抛出的已知基础设施错误转成干净的步骤失败信息（D2.1：UI 只显示
     人话文案），避免引擎兜底把整段 traceback 当失败原因展示给用户。
 
     - AgentError（预算硬停 E31x/E32x）：带用量快照与追加通道指引；
     - ApiError（模型接口错误：余额不足/配额/网络/网关异常，E140 家族）：
-      接口侧的原因本身已是人话（如「接口 X 返回 HTTP 402: Insufficient
-      Balance」），附上可行动指引后作为步骤失败上报，走标准 retry 路径。
+      接口侧的原因本身已是人话（如「接口 X 余额不足（HTTP 402）」），按错误码
+      附上对症指引后作为步骤失败上报，走标准 retry 路径——网络断流/超时/限流
+      绝不把用户往「查余额充值」上引。
     """
 
     def __init__(self, inner: Any) -> None:
@@ -517,10 +541,8 @@ class _BudgetGuardedNode:
         except AgentError as error:
             return NodeResult.failed(_budget_stop_message(error))
         except ApiError as error:
-            return NodeResult.failed(
-                f"模型接口调用失败：{error.message}。"
-                "请在设置中心检查该接口的余额与可用性，充值或更换/追加备用接口后重试。"
-            )
+            guidance = _API_ERROR_GUIDANCE.get(error.code, _API_ERROR_GUIDANCE_DEFAULT)
+            return NodeResult.failed(f"模型接口调用失败：{error.message}。{guidance}")
 
 
 class _BudgetedInvoker:

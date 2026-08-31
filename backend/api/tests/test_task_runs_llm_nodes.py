@@ -296,7 +296,7 @@ def test_provider_billing_error_fails_cleanly_without_traceback(client, monkeypa
     """供应商侧计费错误（HTTP 402 余额不足）→ 人话步骤失败并走标准 retry 路径。
 
     D2.1 纪律：UI 只显示人话文案——接口侧异常绝不允许以裸 traceback 上屏
-    （曾在真实运行中把整段调用栈打给用户看）。
+    （曾在真实运行中把整段调用栈打给用户看）。指引必须对症：402 才提充值。
     """
 
     def broke(_request: httpx.Request) -> httpx.Response:
@@ -309,11 +309,46 @@ def test_provider_billing_error_fails_cleanly_without_traceback(client, monkeypa
     failed = wait_until(client, run["id"], run_status_is(client, run["id"], "FAILED"))
     message = failed["failure"]["message"]
     assert "Traceback" not in message and "node raised" not in message
-    assert "402" in message
-    assert "设置中心" in message, "失败信息必须给出可行动指引"
+    assert "402" in message and "余额不足" in message
+    assert "设置中心" in message and "充值" in message, "402 的指引必须指向充值/换接口"
 
     steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
     assert steps and steps[0]["status"] == "FAILED"
+
+
+def test_network_error_guidance_never_mentions_recharge():
+    """网络断流/超时/限流的失败指引绝不提余额充值（对症指引，D2.1）。
+
+    真实误导案例：GLM 中转站流式断连（peer closed connection），旧版统一
+    指引让用户去「检查余额与可用性，充值…」，用户余额明明充足。
+    """
+    from omm_api.engine_glue import _BudgetGuardedNode
+    from omm_api.errors import ApiError
+
+    class _Boom:
+        def __init__(self, error: ApiError) -> None:
+            self._error = error
+
+        def run(self, ctx, services):
+            raise self._error
+
+    network_errors = [
+        ApiError(502, "LLM_UNREACHABLE", "无法连接接口「GLM」（api.b.ai）：peer closed connection"),
+        ApiError(504, "LLM_TIMEOUT", "接口「GLM」流式响应中断超过 300 秒（api.b.ai）"),
+        ApiError(429, "LLM_RATE_LIMITED", "接口「GLM」触发限流（HTTP 429）"),
+    ]
+    for error in network_errors:
+        result = _BudgetGuardedNode(_Boom(error)).run(None, None)
+        assert result.status == "failed"
+        assert error.message in result.error
+        assert "充值" not in result.error and "余额" not in result.error.replace("与余额无关", "")
+        assert "与余额无关" in result.error, "网络类失败要明说与余额无关"
+        assert "重试" in result.error
+
+    no_balance = ApiError(402, "LLM_NO_BALANCE", "接口「DeepSeek」余额不足（HTTP 402）：Insufficient Balance")
+    result = _BudgetGuardedNode(_Boom(no_balance)).run(None, None)
+    assert result.status == "failed"
+    assert "充值" in result.error, "只有余额类失败才指向充值"
 
 
 def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch):
