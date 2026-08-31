@@ -69,7 +69,7 @@ import {
   syncPrivacyGatesOnce,
 } from "../preferences/privacy-preferences";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
-import { WorkspaceApiError, modelingWorkspaceApi } from "../integration/modeling-workspace-api";
+import { RUN_REVISION_TEXT_LIMIT, WorkspaceApiError, modelingWorkspaceApi } from "../integration/modeling-workspace-api";
 import { mountSidebarSearch } from "../integration/sidebar-search";
 import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { hydrateProjectsPage } from "../integration/projects-page";
@@ -3447,6 +3447,58 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     };
   }
 
+  /** 已完成的运行撞上 409 时挂一个「按这条要求继续修改」的按钮（ADR-0013 第 12 项）。
+   *
+   *  点它只是**受理**：服务端重开运行、落一条 global 备注、挂起审批门等用户选定重做
+   *  起点——真正的重跑与花费要等审批门里那一下，所以这个按钮本身不会偷偷扣钱。
+   *  三种 409 分别给话：非正常完成的运行（失败/取消）没有修订入口，三轮用尽要另起新任务。
+   */
+  function offerRevisionCta(handle, runId, text) {
+    if (!handle?.element) return;
+    const host = document.createElement("div");
+    host.className = "stream-detail stream-cta";
+    handle.element.append(host);
+
+    const settleAs = message => {
+      host.replaceChildren(Object.assign(document.createElement("span"), { textContent: message }));
+    };
+
+    // 服务端 RunRevisionInput.text 卡 2000 字。超长就不给按钮：与其让用户点一下
+    // 换回一个 422，不如当场说清为什么点不了、要怎么办。
+    if (text.length > RUN_REVISION_TEXT_LIMIT) {
+      settleAs(`这条消息有 ${text.length} 字，超过修改要求的 ${RUN_REVISION_TEXT_LIMIT} 字上限；请精简成一条明确的修改要求后重新发送。`);
+      return;
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "按这条要求继续修改";
+    host.append(button);
+
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = "正在受理…";
+      try {
+        const receipt = await modelingWorkspaceApi.postRunRevision(runId, text);
+        // 重做起点由审批门里的选项说了算，这里不重复报建议值（免得两处措辞打架）；
+        // 审批门本身会经 SSE 的 approval.requested 自己出现，无需前端手动刷新。
+        settleAs(`已受理第 ${receipt.round} 轮修改：请在待确认事项中选定重做起点后生效。`);
+      } catch (error) {
+        const code = error instanceof WorkspaceApiError ? error.code : "";
+        if (code === "RUN_NOT_COMPLETED") {
+          settleAs("这次运行不是正常完成的（失败或已取消），没有修改入口；请基于当前结果新建任务。");
+        } else if (code === "REVISION_LIMIT_REACHED") {
+          settleAs("本次运行的修改轮数已用完（上限 3 轮）；如仍需调整，请基于当前结果新建任务。");
+        } else {
+          button.disabled = false;
+          button.textContent = "按这条要求继续修改";
+          toast(t("发起修改失败，请稍后重试"));
+        }
+      }
+    });
+  }
+
   /** 回复右下角操作区：复制原始回复文本（Markdown 源码，便于粘贴到论文与笔记）。 */
   function appendReplyActions(replyBlock, replyText) {
     const actions = document.createElement("div");
@@ -3624,13 +3676,17 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           await modelingWorkspaceApi.postRunNote(noteScope.runId, text);
         } catch (error) {
           if (error instanceof WorkspaceApiError && error.code === "RUN_FINISHED") {
+            // 终态不再是死路（ADR-0013）：已完成的运行可以按这条要求真正返工。
+            // 落盘的这行只写「本轮发生了什么」——按钮是活的 DOM，重开页面点不了，
+            // 所以历史里不留会骗人的按钮，只留一句仍然成立的说明。
             const row = {
               icon: "info",
               title: "任务已结束，本条按问答处理",
-              detail: "运行已到终态，消息不再影响执行与成果；如需按新要求修改，请基于此任务再发起一次新任务。",
+              detail: "运行已到终态，这条消息不再影响执行与成果；若这次运行是正常完成的，可以按这条要求发起一轮修改——重开运行后需要你选定从哪个阶段重做。",
             };
-            appendReplyTraceRow(replyBlock, row);
+            const handle = appendReplyTraceRow(replyBlock, row);
             traceLog.push(row);
+            offerRevisionCta(handle, noteScope.runId, text);
           }
           // 网络抖动等其它失败不打断对话本身，也不渲染误导性的成功行
         }

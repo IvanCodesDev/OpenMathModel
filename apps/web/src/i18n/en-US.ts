@@ -384,6 +384,7 @@ const TASK_RUNNING: Record<string, string> = {
   "回复生成中断": "Reply interrupted",
   "回复仍在生成中…": "Reply still generating…",
   "回复生成中断，请重新发送。": "Reply generation was interrupted; please send it again.",
+  "发起修改失败，请稍后重试": "Could not start the revision; please try again",
   "暂停生成": "Stop generating",
   "已暂停生成": "Generation stopped",
   "已暂停生成。": "Generation stopped.",

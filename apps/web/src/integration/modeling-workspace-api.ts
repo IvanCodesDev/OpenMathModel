@@ -89,6 +89,21 @@ export interface TaskIntakeResult {
   source: "heuristic" | "judge" | "fallback";
 }
 
+/** POST /task-runs/{id}/revisions 的受理回执（ADR-0013）。
+ *  `suggested_stage` 是服务端建议的重做起点，已作为审批门里唯一的 recommended 项；
+ *  最终起点由用户在审批门拍板，本回执只负责把人带到那道门前。 */
+export interface RunRevisionReceipt {
+  run_id: string;
+  round: number;
+  approval_id: string;
+  suggested_stage: string;
+  note_id: string;
+}
+
+/** 修改要求正文上限，与服务端 RunRevisionInput.text 的 max_length 对齐；
+ *  超长在前端就拦下来，别等服务端回 422 才告诉用户白写了。 */
+export const RUN_REVISION_TEXT_LIMIT = 2000;
+
 /** GET /task-runs/{id}/stage-outputs：五类页面正文（未产出的阶段为 null）。 */
 export interface StageOutputsPayload {
   run_id: string;
@@ -251,6 +266,26 @@ export const modelingWorkspaceApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, scope }),
     });
+  },
+
+  /** 对已完成的运行提出修改要求（ADR-0013）：重开运行并挂审批门等用户确认重做起点。
+   *  本接口只受理不推进——真正重跑要等用户在审批门里选定起点。
+   *  409 分三种：RUN_NOT_COMPLETED（运行还没跑完）、REVISION_LIMIT_REACHED（三轮已满）、
+   *  以及 /notes 那边的 RUN_FINISHED（终态但不是 COMPLETED，如失败/取消），调用方分别给话。 */
+  postRunRevision(
+    runId: string,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<RunRevisionReceipt> {
+    return request<RunRevisionReceipt>(
+      `/api/v1/task-runs/${encodeURIComponent(runId)}/revisions`,
+      {
+        method: "POST",
+        signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      },
+    );
   },
 
   act(runId: string, input: TaskRunActionInput, signal?: AbortSignal): Promise<unknown> {

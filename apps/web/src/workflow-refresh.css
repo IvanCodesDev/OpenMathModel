@@ -3757,8 +3757,35 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
 }
 html[data-theme="dark"] .stream-narration { color: #d0d0ca; }
 html[data-theme="dark"] .stream-row { color: #b9b9b2; }
+/* 终态运行的「按这条要求继续修改」入口（ADR-0013 第 12 项）：过程行下挂一个真按钮。
+   点它只是受理修订、真正重跑与花费仍要在审批门里再确认一次，所以用低调的次级按钮，
+   不给主行动色——避免看起来像「点了就开跑」。 */
+.stream-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #6d6d67;
+  font-size: 13px;
+  line-height: 1.75;
+}
+.stream-cta button {
+  height: 30px;
+  padding: 0 14px;
+  flex: 0 0 auto;
+  border: 1px solid #dcdcd8;
+  border-radius: 8px;
+  color: #22221f;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+.stream-cta button:hover:not(:disabled) { border-color: #bcbcb6; background: #f4f4f1; }
+.stream-cta button:disabled { color: #9a9a95; cursor: default; }
 html[data-theme="dark"] .stream-detail { border-color: #3a3a37; background: #262624; }
 html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; }
+html[data-theme="dark"] .stream-cta { color: #a8a8a1; }
+html[data-theme="dark"] .stream-cta button { border-color: #45453f; color: #d8d8d2; background: #2e2e2c; }
+html[data-theme="dark"] .stream-cta button:hover:not(:disabled) { border-color: #56564f; background: #383835; }
 html[data-reduce-motion="on"] .stream-in,
 html[data-reduce-motion="on"] .stream-item.is-waiting .stream-row > i { animation: none; }
 html[data-reduce-motion="on"] .stream-title.title-shine-once {
