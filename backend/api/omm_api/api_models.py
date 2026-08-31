@@ -84,6 +84,27 @@ class RunNote(BaseModel):
     created_at: str
 
 
+class RunRevisionInput(BaseModel):
+    """已完成运行的修改要求（ADR-0013）：POST /v1/task-runs/{run_id}/revisions。
+
+    只收要求正文，不收重做起点：起点由服务端按正文给出建议、再经审批门由用户
+    拍板（同一句「结论不够有力」既可能只重写论文、也可能要重做实验，差一个
+    数量级的花费，不能替用户默选）。
+    """
+
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class RunRevision(BaseModel):
+    """修订受理回执：这一轮的轮次、待确认的审批、服务端建议的重做起点。"""
+
+    run_id: str
+    round: int
+    approval_id: str
+    suggested_stage: str
+    note_id: str
+
+
 class StageOutputs(BaseModel):
     """六类页面正文投影的聚合响应：GET /v1/task-runs/{run_id}/stage-outputs。
 

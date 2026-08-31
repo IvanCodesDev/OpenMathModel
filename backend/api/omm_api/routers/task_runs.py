@@ -18,13 +18,27 @@ from omm_contracts import (
 )
 
 from ..actions import execute_action
-from ..api_models import ApprovalList, RunNote, RunNoteInput, StepRunList, TaskRunList
+from ..api_models import (
+    ApprovalList,
+    RunNote,
+    RunNoteInput,
+    RunRevision,
+    RunRevisionInput,
+    StepRunList,
+    TaskRunList,
+)
 from ..config import DEFAULT_MAX_CONCURRENT_RUNS
 from ..db import get_session
 from ..deps import AuthContext, get_auth_context
-from ..engine_glue import create_run_events
+from ..engine_glue import (
+    MAX_REVISION_ROUNDS,
+    create_run_events,
+    request_revision,
+    revision_rounds,
+    suggest_revision_stage,
+)
 from ..errors import ApiError, NotFoundError
-from ..events import append_event
+from ..events import append_event, lock_run
 from ..idempotency import with_idempotency
 from ..ids import new_id
 from ..orm import ApprovalRequestRow, ProjectRow, RunNoteRow, StepRunRow, TaskRunRow
@@ -269,6 +283,78 @@ def post_run_note(
         text=text,
         scope=payload.scope,
         created_at=iso_z(note.created_at),
+    )
+
+
+@router.post("/{run_id}/revisions", response_model=RunRevision, status_code=201)
+def post_run_revision(
+    run_id: str,
+    payload: RunRevisionInput,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> RunRevision:
+    """对已完成的运行提出修改要求（ADR-0013）：重开运行并挂审批门等确认起点。
+
+    要求正文同时落成一条 global 备注——重做阶段的节点靠它读到「要改什么」，
+    不落的话重跑一遍只会原样再产出一次。真正的重做要等用户在审批门里选定起点
+    （本接口只受理，不推进）。
+    """
+    run = get_owned_run(session, ctx, run_id)
+    locked = lock_run(session, run.id)
+    run = locked if locked is not None else run
+    if run.status != TaskRunStatus.COMPLETED.value:
+        raise ApiError(
+            409,
+            "RUN_NOT_COMPLETED",
+            f"状态 {run.status} 不支持提出修改要求；仅已完成的运行可以发起修订",
+        )
+    rounds = revision_rounds(session, run.id)
+    if rounds >= MAX_REVISION_ROUNDS:
+        raise ApiError(
+            409,
+            "REVISION_LIMIT_REACHED",
+            f"本次运行的修改轮数已达上限（{MAX_REVISION_ROUNDS} 轮）；"
+            "如仍需调整，请基于当前结果新建任务",
+        )
+    text = payload.text.strip()
+    if not text:
+        raise ApiError(422, "EMPTY_TEXT", "修改要求不能为空")
+
+    note = RunNoteRow(
+        id=new_id("note"),
+        run_id=run.id,
+        text=text,
+        scope="global",
+        created_at=utcnow(),
+    )
+    session.add(note)
+    session.flush()  # 备注行先于领域事件落库：重做的节点按 run_id 读它
+
+    round_no, approval_id = request_revision(session, run, text, note.id)
+    suggested = suggest_revision_stage(text)
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_log.value,
+        {
+            "kind": "revision_requested",
+            "note_id": note.id,
+            "round": round_no,
+            "suggested_stage": suggested,
+            "text": text[:500],
+            "message": (
+                f"已受理第 {round_no} 轮修改要求，建议从「"
+                f"{STAGE_LABELS.get(suggested, suggested)}」重做；"
+                "请在待确认事项中选定重做起点后生效"
+            ),
+        },
+    )
+    return RunRevision(
+        run_id=run.id,
+        round=round_no,
+        approval_id=approval_id,
+        suggested_stage=suggested,
+        note_id=note.id,
     )
 
 
