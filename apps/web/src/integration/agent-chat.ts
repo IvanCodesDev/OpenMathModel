@@ -85,6 +85,26 @@ let scopeRunId: string | null = null;
 let scopeGoal = "";
 
 /**
+ * 对话纪元：每次换绑/解绑归属自增。在途的对话轮记下发起时的纪元，完成时
+ * 若纪元已变（用户中途退出页面、切了任务），就不再碰当前 history——那已经
+ * 是别人的上下文；但落盘仍按**发起时**的归属进行，绝不丢记录。
+ */
+let conversationEpoch = 0;
+
+/**
+ * 在途对话轮登记（按归属 id）：用户离开页面后生成仍在后台继续，重进页面时
+ * 据此挂「回复仍在生成中」的占位；完成/失败时广播事件，由页面层补录或落定。
+ */
+const pendingTurns = new Map<string, { token: number; text: string; opening: boolean }>();
+let turnCounter = 0;
+
+/** 某归属是否有仍在后台生成的对话轮（重进页面时页面层查询用）。 */
+export function pendingTurnFor(scopeId: string): { text: string; opening: boolean } | null {
+  const entry = pendingTurns.get(scopeId);
+  return entry ? { text: entry.text, opening: entry.opening } : null;
+}
+
+/**
  * Auto 路由的会话内状态：上一轮判定结果随下一条消息回传（服务端无状态）。
  * 服务端据此实现「短追问继承难度」与「接口粘性」，省掉重复判定调用并保住
  * 供应商侧 prompt cache。turns = 距上次真实判定的轮数（judged 时清零）。
@@ -105,6 +125,7 @@ export function configureConversation(runId: string | null, goal = ""): void {
     scopeGoal = goal || scopeGoal;
     return;
   }
+  conversationEpoch += 1;
   scopeRunId = runId;
   scopeGoal = goal;
   history.length = 0;
@@ -238,11 +259,48 @@ export interface ChatTurnOptions {
 /**
  * 发送一轮对话并返回完整回复。首轮把任务目标并入用户消息作为背景，
  * 保持 user/assistant 交替（Anthropic 协议要求严格交替）。
+ *
+ * 用户中途退出页面时生成不中断：本轮按**发起时**的归属登记在途、继续流式，
+ * 完成后照常落盘（修复「思考中退出到首页，整轮记录全丢」），并广播
+ * omm:chat-turn-committed / omm:chat-turn-failed，重进页面的一侧据此补录。
  */
 export async function sendConversationTurn(
   text: string,
   handlers: ChatHandlers = {},
   options: ChatTurnOptions = {},
+): Promise<{ text: string; reasoning: string; meta: ChatMeta }> {
+  const turnScope = scopeRunId;
+  const epoch = conversationEpoch;
+  const token = ++turnCounter;
+  if (turnScope) {
+    pendingTurns.set(turnScope, { token, text, opening: options.openingAnalysis === true });
+  }
+  try {
+    return await performConversationTurn(text, handlers, options, turnScope, epoch);
+  } catch (error) {
+    // 页面已离开（纪元变了）：发起侧的错误渲染落在废弃 DOM 上，用户看不见。
+    // 广播失败事件，重进页面挂的「生成中」占位据此落定为中断态。
+    if (turnScope && conversationEpoch !== epoch) {
+      document.dispatchEvent(new CustomEvent("omm:chat-turn-failed", {
+        detail: {
+          scopeId: turnScope,
+          opening: options.openingAnalysis === true,
+          message: error instanceof Error ? error.message : "对话请求失败",
+        },
+      }));
+    }
+    throw error;
+  } finally {
+    if (turnScope && pendingTurns.get(turnScope)?.token === token) pendingTurns.delete(turnScope);
+  }
+}
+
+async function performConversationTurn(
+  text: string,
+  handlers: ChatHandlers,
+  options: ChatTurnOptions,
+  turnScope: string | null,
+  epoch: number,
 ): Promise<{ text: string; reasoning: string; meta: ChatMeta }> {
   const goal = history.length === 0 ? taskGoal() : "";
   // 任务附件（首页上传的项目产物）与随消息附件（对话框托盘）是互补的两条来源：
@@ -260,6 +318,11 @@ export async function sendConversationTurn(
   const content = parts.join("\n\n");
   history.push({ role: "user", content });
   trimHistory();
+  // 纪元一变（退出/切任务），history 已被清空或按落盘记录重建，本轮的用户
+  // 消息早已不在其中：失败回滚只在纪元未变时进行，否则会误删别人的上下文。
+  const rollbackUserTurn = (): void => {
+    if (conversationEpoch === epoch) history.pop();
+  };
 
   // 携图直通时钉住视觉接口：Auto 难度路由看不见图片，可能把消息发给纯文本模型。
   const images = options.images?.length ? options.images : undefined;
@@ -281,14 +344,14 @@ export async function sendConversationTurn(
       }),
     });
   } catch (error) {
-    history.pop();
+    rollbackUserTurn();
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new ChatError("GENERATION_STOPPED", "已暂停生成");
     }
     throw new ChatError("NETWORK_ERROR", "无法连接服务，请确认后端已启动");
   }
   if (!response.ok) {
-    history.pop();
+    rollbackUserTurn();
     throw await errorFromResponse(response);
   }
 
@@ -340,12 +403,12 @@ export async function sendConversationTurn(
       if (done) break;
     }
     if (stopped && !full) {
-      history.pop();
+      rollbackUserTurn();
       throw new ChatError("GENERATION_STOPPED", "已暂停生成");
     }
     if (stopped) meta.stopped = true;
     if (failure && !full) {
-      history.pop();
+      rollbackUserTurn();
       throw failure;
     }
   } else {
@@ -353,7 +416,7 @@ export async function sendConversationTurn(
     try {
       payload = (await response.json()) as ChatMeta & { reply?: string; reasoning?: string };
     } catch (error) {
-      history.pop();
+      rollbackUserTurn();
       if (error instanceof DOMException && error.name === "AbortError") {
         throw new ChatError("GENERATION_STOPPED", "已暂停生成");
       }
@@ -370,16 +433,29 @@ export async function sendConversationTurn(
   }
 
   if (!full) {
-    history.pop();
+    rollbackUserTurn();
     throw new ChatError("EMPTY_REPLY", "模型没有返回内容，请重试或检查接口配置");
   }
-  // 思考过程只用于展示，不进对话历史（回传会浪费上下文且各家协议不认）
-  history.push({ role: "assistant", content: full });
-  trimHistory();
+  // 思考过程只用于展示，不进对话历史（回传会浪费上下文且各家协议不认）。
+  // 纪元未变：正常接在本轮用户消息后。纪元变了但用户已回到同一归属（退出又
+  // 重进同一任务）：history 按落盘记录重建、缺这轮在途往返，把整轮补回去；
+  // 归属已是别人（切了任务/新对话）：不碰现 history。
+  if (conversationEpoch === epoch) {
+    history.push({ role: "assistant", content: full });
+    trimHistory();
+  } else if (turnScope && scopeRunId === turnScope && history[history.length - 1]?.role !== "user") {
+    // 退出又重进同一任务：history 已按落盘记录重建、缺这轮往返，补回去。
+    // 末尾是 user 说明用户已另发一轮在途消息——此时不插，保住 user/assistant
+    // 严格交替（Anthropic 协议要求）；上下文里少这一轮，记录不受影响。
+    history.push({ role: "user", content });
+    history.push({ role: "assistant", content: full });
+    trimHistory();
+  }
   // Auto 路由状态推进：judged=true 表示服务端真的花了一次判定（计数清零），
-  // 否则累加继承轮数，攒够后服务端会强制重判一次。
+  // 否则累加继承轮数，攒够后服务端会强制重判一次。纪元变了不推进——
+  // routeState 已随换绑重置，别把上一段对话的难度状态污染进新对话。
   const route = meta.route;
-  if (route?.mode === "auto" && typeof route.difficulty === "number") {
+  if (conversationEpoch === epoch && route?.mode === "auto" && typeof route.difficulty === "number") {
     routeState = {
       difficulty: route.difficulty,
       endpointId: route.endpoint_id ?? routeState?.endpointId,
@@ -388,26 +464,43 @@ export async function sendConversationTurn(
   }
   // 发送成功才把任务附件标记为已注入；失败路径保留，下一轮重新并入。
   taskAttachments?.commit();
-  // 本机对话记录（按 run 隔离）：重新进入任务时恢复气泡与上下文。
+  // 本机对话记录：按**发起时**的归属落盘，用户中途退出页面也不丢记录。
   // 「保存任务历史」（数据与隐私）关闭时不落盘。
-  if (scopeRunId && saveHistoryEnabled()) {
+  // 思考过程随回复一起落盘（只为恢复「已思考」回看盒，见上：不进请求历史）。
+  if (turnScope && saveHistoryEnabled()) {
+    const reply: ConversationLogEntry = { role: "assistant", text: full, ...(reasoning ? { reasoning } : {}) };
     const entries: ConversationLogEntry[] = options.openingAnalysis
-      ? [{ role: "assistant", text: full, opening: true }]
+      ? [{ ...reply, opening: true }]
       : [
         {
           role: "user",
           text,
           ...(options.attachmentNames?.length ? { attachments: options.attachmentNames } : {}),
         },
-        { role: "assistant", text: full },
+        reply,
       ];
-    appendConversationEntries(scopeRunId, entries);
+    appendConversationEntries(turnScope, entries);
+  }
+  // 后台完成的轮次（发起页面已离开）：广播补录事件。重进同一任务的页面把
+  // 「生成中」占位替换成真实回复；不在该页面则只靠上面的落盘，下次进入可见。
+  if (turnScope && conversationEpoch !== epoch) {
+    document.dispatchEvent(new CustomEvent("omm:chat-turn-committed", {
+      detail: {
+        scopeId: turnScope,
+        opening: options.openingAnalysis === true,
+        text,
+        reply: full,
+        reasoning,
+        attachments: options.attachmentNames ?? [],
+      },
+    }));
   }
   return { text: full, reasoning, meta };
 }
 
 /** 切换任务/页面时清空上下文与运行绑定（预留给控制器调用）。 */
 export function resetConversation(): void {
+  conversationEpoch += 1;
   history.length = 0;
   scopeRunId = null;
   scopeGoal = "";

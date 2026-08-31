@@ -8,6 +8,7 @@
  */
 
 import { ApiError, authApi, type PrivacySettings } from "../auth/api";
+import { clearAllChatSessions } from "../tasks/chat-sessions";
 import { clearAllConversationLogs } from "../tasks/conversation-log";
 import { forgetLastTask } from "../tasks/last-task-record";
 
@@ -169,9 +170,11 @@ export async function hydratePrivacyPane(root: ParentNode): Promise<void> {
 /** 「保存更改」时调用：九项落服务端。返回要提示用户的文案，null = 成功。 */
 export async function persistPrivacySettings(values: Record<string, unknown>): Promise<string | null> {
   const settings = privacySettingsFromForm(values);
-  // 关闭「保存任务历史」立即清掉本机的最近任务记录与全部对话记录，不等下一次写入。
+  // 关闭「保存任务历史」立即清掉本机的最近任务记录、首页对话目录与全部对话
+  // 正文，不等下一次写入。
   if (!settings.save_history) {
     forgetLastTask();
+    clearAllChatSessions();
     clearAllConversationLogs();
   }
   try {

@@ -62,7 +62,8 @@ function renderInline(stash: Stash, text: string): string {
   return result;
 }
 
-const TABLE_DIVIDER = /^\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/;
+// GFM 分隔行允许每格单条横线（| - | - |），部分模型确实这么输出，故用 -+ 而非 -{2,}
+const TABLE_DIVIDER = /^\|?(?:\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/;
 
 function tableCells(line: string): string[] {
   return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(cell => cell.trim());

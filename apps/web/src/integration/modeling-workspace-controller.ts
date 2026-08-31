@@ -236,8 +236,11 @@ function isPlanningPhase(view: ModelingWorkspaceView): boolean {
 const STAGE_BY_PROMPT: Record<string, string> = {
   "problem_analysis.default": "题意解析",
   "data_preparation.default": "数据准备",
+  // 沙盒会话（H3）：清洗/实验的多轮写码跑码会话，prompt_id 即会话标签
+  "data_cleaning.sandbox": "数据清洗",
   "model_planning.default": "建模方案",
   "experiment_code.default": "实验代码",
+  "experiment_code.sandbox": "实验执行",
   "validating.default": "结果验证",
   // 整篇回退路径（总编规划失败时的单次生成）
   "paper_writing.default": "论文撰写",
@@ -305,8 +308,10 @@ function formatStageOutputs(node: string, outputs: Record<string, unknown>): str
       ? Object.entries(outputs.metrics as Record<string, unknown>).map(([key, value]) => `${key} = ${String(value)}`)
       : [];
     parts.push(section("核心指标", metrics));
+    // stdout_tail 已由节点侧截到 2000 字（nodes._STDOUT_TAIL_CHARS），
+    // 这里不再二次裁剪：展开详情就是给用户看完整尾部的地方
     const stdout = str(outputs.stdout_tail);
-    if (stdout) parts.push(`运行输出（尾部）：\n${stdout.slice(-600)}`);
+    if (stdout) parts.push(`运行输出（尾部）：\n${stdout}`);
   } else if (node === "VALIDATING") {
     if (str(outputs.verdict)) parts.push(`总体结论：${str(outputs.verdict)}`);
     const checks = Array.isArray(outputs.checks)
@@ -428,13 +433,16 @@ function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElem
 }
 
 function streamAppend(root: HTMLElement, node: HTMLElement): void {
-  const host = resolveStreamHost(root, streamState(root));
+  const state = streamState(root);
+  const host = resolveStreamHost(root, state);
   if (!host) return;
   const scroll = root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
   const stick = scroll
     ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120
     : false;
-  node.classList.add("stream-in");
+  // 首连回放的历史行不重播入场动画：重进任务时执行轨迹应当「本来就在」，
+  // 而不是一条条动画重演；只有实时新事件才浮现入场。
+  if (!state.replaying) node.classList.add("stream-in");
   host.append(node);
   if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
 }
@@ -455,6 +463,70 @@ interface StreamRowOptions {
   waitingSinceMs?: number | null;
   detail?: string;
   mono?: boolean;
+  /** 同类行归组（用户要求：大批同类行平铺难看）：连续同组行折进一个
+   *  可展开的组行，组标题计数递增；被其他行隔断则另起新组，时序不乱。 */
+  group?: StreamRowGroup;
+}
+
+interface StreamRowGroup {
+  key: string;
+  title: string;
+  icon: string;
+}
+
+/** 归组落行：尾部已是同组容器则续写；尾部是同组散行则升格成组容器
+ *  （首条同类行保持散行——只有一条时套组反而多一层）；否则按散行落下。 */
+function appendGrouped(root: HTMLElement, item: HTMLElement, group: StreamRowGroup): void {
+  const state = streamState(root);
+  const host = resolveStreamHost(root, state);
+  if (!host) return;
+  const tail = host.lastElementChild instanceof HTMLElement ? host.lastElementChild : null;
+  let body = tail?.classList.contains("stream-group") && tail.dataset.groupKey === group.key
+    ? tail.querySelector<HTMLElement>(".stream-group-body")
+    : null;
+  if (!body && tail?.classList.contains("stream-item") && tail.dataset.groupKey === group.key) {
+    const container = document.createElement("div");
+    container.className = "stream-item stream-group";
+    container.dataset.groupKey = group.key;
+    container.innerHTML = `
+      <div class="stream-row is-expandable" role="button" tabindex="0" aria-expanded="false">
+        <i class="ph ph-${group.icon}" aria-hidden="true"></i>
+        <span class="stream-title"><span></span><span class="stream-group-count"></span></span>
+        <i class="ph ph-caret-down stream-chevron" aria-hidden="true"></i>
+      </div>
+      <div class="stream-group-body" hidden></div>`;
+    container.querySelector<HTMLElement>(".stream-title > span")!.textContent = group.title;
+    const row = container.querySelector<HTMLElement>(".stream-row")!;
+    const groupBody = container.querySelector<HTMLElement>(".stream-group-body")!;
+    const toggle = (): void => {
+      groupBody.hidden = !groupBody.hidden;
+      row.setAttribute("aria-expanded", String(!groupBody.hidden));
+    };
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggle();
+      }
+    });
+    if (!state.replaying) container.classList.add("stream-in");
+    host.append(container);
+    groupBody.append(tail); // 把先落下的散行收编进组，保持发生顺序
+    body = groupBody;
+  }
+  if (!body) {
+    item.dataset.groupKey = group.key;
+    streamAppend(root, item);
+    return;
+  }
+  const scroll = root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
+  const stick = scroll
+    ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120
+    : false;
+  body.append(item);
+  const badge = body.parentElement?.querySelector<HTMLElement>(".stream-group-count");
+  if (badge) badge.textContent = `×${body.children.length}`;
+  if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
 }
 
 /** 给已有过程行补挂可展开详情区（创建时或实时增量首次到达时调用）。 */
@@ -567,9 +639,11 @@ function streamRow(root: HTMLElement, options: StreamRowOptions): void {
   if (options.waitingSinceMs !== undefined) {
     // 进行中的行：标题持续扫光（与「思考中…」同一动效语言），落定时移除
     title.classList.add("thinking-shimmer");
-    const localSince = Date.now();
-    timeCell.dataset.elapsedSince = String(localSince);
-    timeCell.textContent = formatElapsed(0);
+    // 走秒锚定事件的服务端时间：刷新重进时在途调用接着真实起点累计，
+    // 不再每次进页从 0 重走（钟差导致事件时间超前本地时取本地，保证非负）
+    const since = Math.min(options.waitingSinceMs ?? Date.now(), Date.now());
+    timeCell.dataset.elapsedSince = String(since);
+    timeCell.textContent = formatElapsed(Date.now() - since);
     if (options.key) {
       state.pending.set(options.key, {
         element: item,
@@ -588,7 +662,11 @@ function streamRow(root: HTMLElement, options: StreamRowOptions): void {
     const pre = attachRowDetail(item, { mono: options.mono });
     pre.textContent = options.detail;
   }
-  streamAppend(root, item);
+  if (options.group) {
+    appendGrouped(root, item, options.group);
+  } else {
+    streamAppend(root, item);
+  }
 }
 
 /** 移除等待中的行：被信息更完整的行整体替换时用（与「落定」不同，不保留元素）。 */
@@ -713,8 +791,10 @@ function ingestStreamEvent(
           if (titleNode) titleNode.textContent = `${title}（第 ${existing.attempts} 次尝试）`;
           const timeCell = existing.element.querySelector<HTMLElement>(".stream-elapsed");
           if (timeCell) {
-            timeCell.dataset.elapsedSince = String(Date.now());
-            timeCell.textContent = formatElapsed(0);
+            // 与新行同规则：锚定事件时间，重放的重试行也从真实起点累计
+            const since = Math.min(eventMs ?? Date.now(), Date.now());
+            timeCell.dataset.elapsedSince = String(since);
+            timeCell.textContent = formatElapsed(Date.now() - since);
           }
           // 新一次尝试是全新生成：上次失败尝试的半截增量不再保留
           stopLiveTyping(existing);
@@ -732,9 +812,9 @@ function ingestStreamEvent(
         return;
       }
       if (kind === "llm_delta") {
-        // 模型生成的实时增量：流入走秒行的可展开详情（默认折叠），逐字打上屏。
-        // 历史回放不重放增量——完整内容已在 thinking 行与阶段产出里。
-        if (replay) return;
+        // 模型生成的实时增量：流入走秒行的可展开详情（默认折叠）。实时逐字
+        // 打上屏；历史回放直接批量归位——已落定调用的增量随 thinking 行整体
+        // 替换不重复，在途调用刷新前已生成的内容则原样找回（不再整段丢失）。
         const entry = state.pending.get(`llm:${String(payload.prompt_id)}`);
         if (!entry) return;
         const channel = String(payload.channel ?? "");
@@ -744,6 +824,7 @@ function ingestStreamEvent(
           : "";
         entry.element.dataset.lastChannel = channel;
         enqueueLiveDelta(entry, glue + String(payload.text ?? ""));
+        if (replay) flushLiveTyping(entry);
         return;
       }
       if (kind === "llm_call_failed") {
@@ -802,6 +883,8 @@ function ingestStreamEvent(
       }
       if (payload.tool === "python_run") {
         // 实验沙箱执行：标题说人话，输入/输出摘要进可展开详情。
+        // 失败时 failure_detail 携带 stderr 尾部（含 traceback）——没有它用户只能看到
+        // 「python exited with code 1」一行，无从判断崩在哪。
         const failed = payload.status !== "succeeded";
         streamRow(root, {
           icon: failed ? "warning-circle" : "terminal-window",
@@ -811,6 +894,7 @@ function ingestStreamEvent(
             `状态：${String(payload.status ?? "")}`,
             payload.input_summary ? `输入：${String(payload.input_summary)}` : "",
             payload.output_summary ? `输出：${String(payload.output_summary)}` : "",
+            payload.failure_detail ? `报错详情：\n${String(payload.failure_detail)}` : "",
           ].filter(Boolean).join("\n"),
           mono: true,
         });
@@ -900,12 +984,15 @@ function ingestStreamEvent(
       return;
     }
     case "artifact.published": {
+      // 一个阶段常一口气写十几个文件：连续的「写入」行归进一个可展开的
+      // 组行（写入产物文件 ×N），活动流不再被同类小标题刷屏。
       const name = String(payload.name ?? payload.kind ?? "文件");
       streamRow(root, {
         icon: "file-arrow-down",
         title: `写入 ${name}`,
         detail: [`名称：${name}`, payload.kind ? `类型：${String(payload.kind)}` : "", payload.uri ? `位置：${String(payload.uri)}` : ""].filter(Boolean).join("\n"),
         mono: true,
+        group: { key: "artifacts", title: "写入产物文件", icon: "files" },
       });
       return;
     }
@@ -1313,11 +1400,36 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     refreshTimer = window.setTimeout(() => void refresh(false), 80);
   };
 
+  /**
+   * 首屏一次性水合历史事件：REST 分页拉全量，同步喂给活动流（单个任务内上屏、
+   * 不重演入场动画），SSE 随后只接实时增量。此前历史靠 SSE 从头逐帧重放，
+   * 重进任务时整段轨迹一条条动画加载（2026-08-31 用户报障）。
+   * 拉取失败时 lastSequence 维持原样，SSE 按旧路径从头回放兜底，功能不减。
+   */
+  const hydrateHistory = async (): Promise<void> => {
+    try {
+      let after = 0;
+      for (;;) {
+        const { items } = await modelingWorkspaceApi.listRunEvents(runId, after, abortController.signal);
+        if (disposed || items.length === 0) return;
+        for (const item of items) ingestStreamEvent(root, item, true);
+        const tail = items[items.length - 1]?.sequence ?? 0;
+        if (tail <= after) return;
+        after = tail;
+        lastSequence = Math.max(lastSequence ?? 0, tail);
+        if (items.length < 1000) return;
+      }
+    } catch {
+      // 历史拉取失败（网络/权限）：退回 SSE 全量回放，只是入场略慢
+    }
+  };
+
   const connectEvents = (): void => {
     if (disposed || streamEnded) return;
-    // 活动流完全由事件重建，因此首连必须让服务端从头回放：只有断线重连才带
-    // after（= 已经收到的最后一条）。快照的 latest_event_sequence 不能拿来当
-    // 首连的起点——那等于宣称「历史我都有了」，结果是重进任务后执行轨迹一片空白。
+    // 活动流完全由事件重建：正常路径 hydrateHistory 已拉完历史（lastSequence
+    // 就位），这里只接增量；水合失败时 lastSequence 为空，让服务端从头回放兜底。
+    // 快照的 latest_event_sequence 不能拿来当首连起点——那等于宣称「历史我都
+    // 有了」，结果是重进任务后执行轨迹一片空白。
     replayThrough ??= currentView?.latest_event_sequence ?? 0;
     const url = new URL(`/api/v1/task-runs/${encodeURIComponent(runId)}/events`, window.location.origin);
     if (lastSequence) url.searchParams.set("after", String(lastSequence));
@@ -1526,7 +1638,12 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     element.dataset.workspaceLoading = "true";
     if (element instanceof HTMLButtonElement) element.disabled = true;
   });
-  void refresh().then(() => {
-    if (!disposed && currentView) connectEvents();
+  void refresh().then(async () => {
+    if (disposed || !currentView) return;
+    // 先把 replayThrough 冻结在快照序号上（水合本身会推高 lastSequence，
+    // 不能反过来把水合期间产生的新事件也算成历史）。
+    replayThrough ??= currentView.latest_event_sequence ?? 0;
+    await hydrateHistory();
+    if (!disposed) connectEvents();
   });
 }

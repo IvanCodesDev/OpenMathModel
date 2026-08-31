@@ -3700,10 +3700,11 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
   border-radius: 16px;
   background: #fafaf8;
 }
+/* 展开详情是用户主动要读全文：内容多长就多高，不压进小视口里内部滚动。
+   限高只保留给「生成中的实时区」（见下），落定后的内容一律完整铺开。 */
 .stream-detail pre {
   margin: 0;
-  max-height: 260px;
-  overflow: auto;
+  overflow: visible;
   color: #6d6d67;
   font-family: inherit;
   font-size: 13px;
@@ -3716,10 +3717,27 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
   font-size: 12px;
   line-height: 1.65;
 }
-/* 实时生成区（llm_delta 增量流入）：更矮的视口，边生成边吸底 */
-.stream-detail.is-live pre {
+/* 同类过程行的二级归组（写入产物文件 ×N 等）：组行复用可展开行的交互
+   语言，成员行缩进一层与展开详情对齐，计数徽标低权重灰 */
+.stream-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 2px 23px;
+}
+.stream-group-count {
+  margin-left: 6px;
+  color: #b0b0aa;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+/* 实时生成区（llm_delta 增量流入） */
+.stream-detail.is-live pre { font-size: 12.5px; }
+/* 生成进行中才限高：内容每秒都在长，不封住的话页面其余部分会被持续推走，
+   这里保持矮视口 + 吸底跟随；行落定（.is-waiting 摘除）后解除，展开即读全。 */
+.stream-item.is-waiting .stream-detail.is-live pre {
   max-height: 220px;
-  font-size: 12.5px;
+  overflow: auto;
 }
 .stream-in { animation: step-reveal-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 /* 过程行标题的入场扫光：与「思考中…」同款渐变，扫两遍后由 JS 摘除类恢复常规配色 */
@@ -5761,11 +5779,42 @@ html[data-theme="dark"] .todo-label::before { background: linear-gradient(90deg,
    气泡、Agent 头（水母 Logo）、思考块、Markdown 正文全部复用执行页的
    全局类（user-bubble / assistant-block / reply-thinking / analysis-copy），
    这里只负责容器布局与对话态下的 hero 收纳，不重造任何气泡样式。 */
+/* hero 收纳：首轮消息落地（home-chat.ts 给 .new-screen 打 data-home-chat="on"）
+   即隐藏 Logo、标题与引导语，首屏让位给消息流；刷新后对话不持久，欢迎态自然回归。
+   直接子选择器：回复 Markdown 渲染出的 h1 在线程内层，不受波及。 */
+.new-screen[data-home-chat="on"] > .hero-logo,
+.new-screen[data-home-chat="on"] > h1,
+.new-screen[data-home-chat="on"] > .lead { display: none; }
+/* 任务类型快捷 chip（竞赛建模/数据分析/论文优化/模型比较）只属于欢迎态：
+   首条消息发出后一并收起（2026-08-31 用户要求），对话态输入区保持干净。 */
+.new-screen[data-home-chat="on"] .composer-shortcuts { display: none; }
+/* 对话态整屏锁高：页面不再随消息增长（此前 composer 会被长回复推出首屏，
+   用户得自己往下滑才找得到输入框）。滚动收进消息线程内部，输入框常驻视口底部
+   ——与执行页 chat-scroll + composer 的布局语义一致。模型菜单等浮层是
+   position:fixed，不受这里 overflow 裁剪。
+   横向内边距同时清零：线程要全宽铺开让滚动条贴住主区右缘（挂在 865px
+   版心右侧会浮在页面中间）；只动左右，顶/底内边距原样保留（手机档
+   56px 顶距是给抽屉按钮让位的）。 */
+.new-screen[data-home-chat="on"] {
+  height: 100%;
+  padding-left: 0;
+  padding-right: 0;
+  overflow: hidden;
+}
+/* 线程只存在于对话态（home-chat.ts 动态插入），无需属性门控：作为唯一
+   滚动容器全宽铺开，消息版心改由左右内边距撑出——与执行页 .chat-scroll
+   同一手法。视觉列宽不变（min(865px, 90%) 居中），滚动条贴最右；padding
+   百分比相对父级定宽解析，竖向滚动条出没不会让版心抖动。 */
 .home-chat-thread {
-  width: min(865px, 90%);
-  margin: 26px auto 6px;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  margin: 0 0 6px;
+  padding: 26px calc((100% - min(865px, 90%)) / 2) 0;
+  align-self: stretch;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   text-align: left;
-  align-self: center;
 }
 .home-chat-thread .user-message { justify-content: flex-end; display: flex; }
 .home-chat-thread .assistant-block { margin: 0 0 30px; }

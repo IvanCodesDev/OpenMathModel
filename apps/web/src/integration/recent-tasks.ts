@@ -1,25 +1,41 @@
 /**
- * 侧栏「最近任务」：真实任务记录 + 重命名 / 归档 / 删除。
+ * 侧栏「最近任务」：建模任务 + 首页普通对话，各自可重命名 / 归档 / 删除。
  *
- * 数据来自控制面两张列表（运行按创建时间倒序 + 未归档项目），客户端联结出
- * 「项目 → 最新一次运行」的最近条目；未登录或请求失败时保留页面模板的演示
- * 条目，不打扰当前页面。操作全部走真实接口：重命名 PATCH 项目名（与工作台
- * 顶栏同源），归档从默认列表隐藏（可经 archived=true 找回），删除为服务端
- * 级联清除且不可恢复。视觉复用现有 .recent-link 行与模态对话框样式。
+ * 两个数据源合并后按最近有动静排序：
+ * - **建模任务**来自控制面两张列表（运行按创建时间倒序 + 项目清单），客户端
+ *   联结出「项目 → 最新一次运行」；操作全部走真实接口：重命名 PATCH 项目名
+ *   （与工作台顶栏同源），归档从默认列表隐藏（可经 archived=true 找回），
+ *   删除为服务端级联清除且不可恢复。
+ * - **普通对话**（接待判定分流到首页对话的那条链）不建项目、不起运行，服务端
+ *   没有可列的记录，改由 tasks/chat-sessions 的本机目录提供；重命名 / 归档 /
+ *   删除都落在本机，删除连带清掉对话正文。
+ *
+ * 未登录或任务请求失败时保留页面模板的演示条目，不打扰当前页面。
+ * 视觉复用现有 .recent-link 行与模态对话框样式。
  */
 
-import type { TaskRun } from "@openmathmodel/contracts";
+import { fetchMe } from "../auth/api";
 import { t } from "../i18n/locale";
+import {
+  deleteChatSession,
+  listChatSessions,
+  renameChatSession,
+  setChatSessionArchived,
+} from "../tasks/chat-sessions";
 import { clearConversationLog } from "../tasks/conversation-log";
 import { forgetLastTask } from "../tasks/last-task-record";
 import { modelingWorkspaceApi } from "./modeling-workspace-api";
-import { buildRunningUrl } from "./task-start-state";
+import { buildChatUrl, buildRunningUrl } from "./task-start-state";
 
-interface RecentTaskItem {
-  projectId: string;
+/** 侧栏一行；chat 条目没有项目与运行，id 是本机会话 id、runId 恒为空。 */
+interface RecentItem {
+  kind: "task" | "chat";
+  id: string;
   runId: string;
   name: string;
-  status: TaskRun["status"];
+  status: string;
+  /** 合并排序用的时间戳（毫秒）。 */
+  time: number;
 }
 
 /** 展示条数上限：列表区在侧栏内自行滚动，不再受模板三条的限制。 */
@@ -41,11 +57,12 @@ function showToast(message: string, duration = 2200): void {
   window.setTimeout(() => node.remove(), duration);
 }
 
-/** 运行状态 → 行首图标；进行中的状态额外亮红点（沿用模板的 unread-dot）。 */
-function statusIcon(status: string): string {
-  if (status === "COMPLETED") return "check";
-  if (status === "FAILED") return "warning";
-  if (status === "CANCELLED") return "x";
+/** 行首图标：对话固定气泡，任务按运行状态区分（进行中额外亮 unread-dot）。 */
+function itemIcon(item: RecentItem): string {
+  if (item.kind === "chat") return "chat-circle";
+  if (item.status === "COMPLETED") return "check";
+  if (item.status === "FAILED") return "warning";
+  if (item.status === "CANCELLED") return "x";
   return "circle-half";
 }
 
@@ -76,14 +93,14 @@ function matchesFilter(status: string): boolean {
 // ── 数据 ─────────────────────────────────────────────────────────
 
 /** null = 未登录或网络失败（保留模板演示条目）；[] = 已登录但还没有任务。 */
-async function fetchRecentItems(): Promise<RecentTaskItem[] | null> {
+async function fetchTaskItems(): Promise<RecentItem[] | null> {
   try {
     const [runs, projects] = await Promise.all([
       modelingWorkspaceApi.listTaskRuns(100),
       modelingWorkspaceApi.listProjects({ archived: currentFilter === "archived", limit: 100 }),
     ]);
     const names = new Map(projects.items.map(project => [project.id, project.name]));
-    const items: RecentTaskItem[] = [];
+    const items: RecentItem[] = [];
     const seen = new Set<string>();
     for (const run of runs.items) {
       const name = names.get(run.project_id);
@@ -91,7 +108,15 @@ async function fetchRecentItems(): Promise<RecentTaskItem[] | null> {
       if (name === undefined || seen.has(run.project_id)) continue;
       seen.add(run.project_id);
       if (!matchesFilter(run.status)) continue;
-      items.push({ projectId: run.project_id, runId: run.id, name, status: run.status });
+      items.push({
+        kind: "task",
+        id: run.project_id,
+        runId: run.id,
+        name,
+        status: run.status,
+        // 与对话条目同口径按「最近有动静」排序：执行中的任务因此留在最前
+        time: Date.parse(run.updated_at || run.created_at) || 0,
+      });
       if (items.length >= MAX_ITEMS) break;
     }
     return items;
@@ -100,15 +125,38 @@ async function fetchRecentItems(): Promise<RecentTaskItem[] | null> {
   }
 }
 
+/**
+ * 本机的首页对话条目。「进行中 / 已完成」两个桶按运行状态归类，对话没有
+ * 运行也就没有状态，只在「全部」与「已归档」里出现。
+ */
+async function fetchChatItems(): Promise<RecentItem[]> {
+  if (currentFilter === "active" || currentFilter === "done") return [];
+  const me = await fetchMe().catch(() => null);
+  if (!me) return [];
+  return listChatSessions(me.user.id, { archived: currentFilter === "archived" }).map(session => ({
+    kind: "chat" as const,
+    id: session.id,
+    runId: "",
+    name: session.title,
+    status: "CHAT",
+    time: session.updated_at,
+  }));
+}
+
 // ── 渲染 ─────────────────────────────────────────────────────────
 
-function renderItems(host: HTMLElement, items: RecentTaskItem[]): void {
+function itemUrl(item: RecentItem): string {
+  return item.kind === "chat" ? buildChatUrl(item.id) : buildRunningUrl(item.runId, item.id);
+}
+
+function renderItems(host: HTMLElement, items: RecentItem[]): void {
   const rows = items.map(item => {
-    const dot = ACTIVE_STATUSES.has(item.status) ? '<b class="unread-dot"></b>' : "";
-    return `<a class="recent-link has-action" href="${escapeHtml(buildRunningUrl(item.runId, item.projectId))}"
-      data-recent-item data-project-id="${escapeHtml(item.projectId)}" data-run-id="${escapeHtml(item.runId)}" data-name="${escapeHtml(item.name)}">
-      ${icon(statusIcon(item.status))}<span>${escapeHtml(item.name)}</span>${dot}
-      <button type="button" class="recent-action" data-recent-action aria-label="任务选项" title="任务选项">${icon("dots-three")}</button>
+    const dot = item.kind === "task" && ACTIVE_STATUSES.has(item.status) ? '<b class="unread-dot"></b>' : "";
+    const options = t(item.kind === "chat" ? "对话选项" : "任务选项");
+    return `<a class="recent-link has-action" href="${escapeHtml(itemUrl(item))}"
+      data-recent-item data-kind="${item.kind}" data-item-id="${escapeHtml(item.id)}" data-run-id="${escapeHtml(item.runId)}" data-name="${escapeHtml(item.name)}">
+      ${icon(itemIcon(item))}<span>${escapeHtml(item.name)}</span>${dot}
+      <button type="button" class="recent-action" data-recent-action aria-label="${escapeHtml(options)}" title="${escapeHtml(options)}">${icon("dots-three")}</button>
     </a>`;
   });
   const filterLabel = FILTER_OPTIONS.find(option => option.id === currentFilter)?.label ?? "";
@@ -159,7 +207,7 @@ function presentMenu(anchor: HTMLElement, menu: HTMLElement): () => void {
   return dispose;
 }
 
-function openMenu(anchor: HTMLElement, item: RecentTaskItem): void {
+function openMenu(anchor: HTMLElement, item: RecentItem): void {
   closeMenu();
   const menu = document.createElement("div");
   menu.className = "recent-menu";
@@ -227,11 +275,12 @@ async function runDialogAction(
   }
 }
 
-function openRenameDialog(item: RecentTaskItem): void {
+function openRenameDialog(item: RecentItem): void {
+  const chat = item.kind === "chat";
   const backdrop = openDialog(
-    t("重命名任务"),
+    t(chat ? "重命名对话" : "重命名任务"),
     `
-    <label>${t("任务名称")}</label><input name="name" maxlength="200" value="${escapeHtml(item.name)}">
+    <label>${t(chat ? "对话名称" : "任务名称")}</label><input name="name" maxlength="200" value="${escapeHtml(item.name)}">
     <div class="dialog-error" data-dialog-error></div>
     <div class="modal-actions"><button type="button" data-dialog-cancel>${t("取消")}</button><button type="button" class="primary" data-dialog-submit>${t("保存")}</button></div>`,
   );
@@ -240,9 +289,12 @@ function openRenameDialog(item: RecentTaskItem): void {
     if (!submit) return;
     void runDialogAction(backdrop, submit, async () => {
       const name = backdrop.querySelector<HTMLInputElement>("[name=name]")?.value.trim() ?? "";
-      if (!name) throw new Error(t("任务名称不能为空"));
-      if (name !== item.name) await modelingWorkspaceApi.updateProject(item.projectId, { name });
-      showToast(t("任务已重命名"));
+      if (!name) throw new Error(t(chat ? "对话名称不能为空" : "任务名称不能为空"));
+      if (name !== item.name) {
+        if (chat) renameChatSession(item.id, name);
+        else await modelingWorkspaceApi.updateProject(item.id, { name });
+      }
+      showToast(t(chat ? "对话已重命名" : "任务已重命名"));
       void hydrateRecentTasks();
     });
   };
@@ -252,20 +304,24 @@ function openRenameDialog(item: RecentTaskItem): void {
   });
 }
 
-async function archiveItem(item: RecentTaskItem): Promise<void> {
+async function archiveItem(item: RecentItem): Promise<void> {
   try {
-    await modelingWorkspaceApi.updateProject(item.projectId, { archived: true });
-    showToast(t("任务已归档，不再出现在最近任务中"));
+    if (item.kind === "chat") setChatSessionArchived(item.id, true);
+    else await modelingWorkspaceApi.updateProject(item.id, { archived: true });
+    showToast(t(item.kind === "chat"
+      ? "对话已归档，不再出现在最近任务中"
+      : "任务已归档，不再出现在最近任务中"));
     void hydrateRecentTasks();
   } catch (error) {
     showToast(error instanceof Error ? error.message : t("操作失败，请稍后再试"));
   }
 }
 
-async function unarchiveItem(item: RecentTaskItem): Promise<void> {
+async function unarchiveItem(item: RecentItem): Promise<void> {
   try {
-    await modelingWorkspaceApi.updateProject(item.projectId, { archived: false });
-    showToast(t("已取消归档，任务回到最近任务"));
+    if (item.kind === "chat") setChatSessionArchived(item.id, false);
+    else await modelingWorkspaceApi.updateProject(item.id, { archived: false });
+    showToast(t(item.kind === "chat" ? "已取消归档，对话回到最近任务" : "已取消归档，任务回到最近任务"));
     void hydrateRecentTasks();
   } catch (error) {
     showToast(error instanceof Error ? error.message : t("操作失败，请稍后再试"));
@@ -275,11 +331,12 @@ async function unarchiveItem(item: RecentTaskItem): Promise<void> {
 const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
 const ACTIVE_PROJECT_KEY = "openmathmodel.activeProjectId";
 
-/** 用户当前停留的页面是否正属于该任务：URL 身份命中，或工作台页面经
+/** 用户当前停留的页面是否正是这一条：URL 身份命中，或工作台页面经
  *  sessionStorage 恢复的身份命中（§5.1 允许 URL 不带参数）。 */
-function viewingTask(item: RecentTaskItem): boolean {
+function viewingItem(item: RecentItem): boolean {
   const params = new URL(window.location.href).searchParams;
-  if (params.get("run_id") === item.runId || params.get("project_id") === item.projectId) return true;
+  if (item.kind === "chat") return params.get("chat") === item.id;
+  if (params.get("run_id") === item.runId || params.get("project_id") === item.id) return true;
   if (params.get("demo") === "1" || params.has("run_id")) return false;
   if (!document.querySelector("[data-modeling-shell]")) return false;
   try {
@@ -289,38 +346,46 @@ function viewingTask(item: RecentTaskItem): boolean {
   }
 }
 
-function openDeleteDialog(item: RecentTaskItem): void {
+function openDeleteDialog(item: RecentItem): void {
+  const chat = item.kind === "chat";
   const backdrop = openDialog(
-    t("删除任务"),
+    t(chat ? "删除对话" : "删除任务"),
     `
-    <p class="dialog-note">${t("删除后，该任务的对话、执行步骤、审批记录和生成文件将全部清除，且无法恢复。仅想隐藏可改用「归档」。")}</p>
+    <p class="dialog-note">${t(chat
+      ? "删除后，这段对话的全部消息将从本机清除，且无法恢复。仅想隐藏可改用「归档」。"
+      : "删除后，该任务的对话、执行步骤、审批记录和生成文件将全部清除，且无法恢复。仅想隐藏可改用「归档」。")}</p>
     <div class="dialog-error" data-dialog-error></div>
     <div class="modal-actions"><button type="button" data-dialog-cancel>${t("取消")}</button><button type="button" class="primary" data-dialog-submit>${t("永久删除")}</button></div>`,
   );
   backdrop.querySelector<HTMLButtonElement>("[data-dialog-submit]")?.addEventListener("click", function () {
     void runDialogAction(backdrop, this, async () => {
-      // 是否正在浏览被删任务要在清身份之前判定（判定会读 sessionStorage）。
-      const viewing = viewingTask(item);
-      await modelingWorkspaceApi.deleteProject(item.projectId);
-      forgetLastTask(item.runId);
-      // 服务端已级联删除，本机对话记录一并清掉，不留孤儿数据。
-      clearConversationLog(item.runId);
-      // 活动身份指向被删任务时一并清除：其余流程页不再带着死链身份自动恢复。
-      try {
-        if (sessionStorage.getItem(ACTIVE_RUN_KEY) === item.runId) {
-          sessionStorage.removeItem(ACTIVE_RUN_KEY);
-          sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
+      // 是否正在浏览被删条目要在清身份之前判定（判定会读 sessionStorage）。
+      const viewing = viewingItem(item);
+      if (chat) {
+        // 对话只存在于本机：目录条目与正文记录一起清。
+        deleteChatSession(item.id);
+      } else {
+        await modelingWorkspaceApi.deleteProject(item.id);
+        forgetLastTask(item.runId);
+        // 服务端已级联删除，本机对话记录一并清掉，不留孤儿数据。
+        clearConversationLog(item.runId);
+        // 活动身份指向被删任务时一并清除：其余流程页不再带着死链身份自动恢复。
+        try {
+          if (sessionStorage.getItem(ACTIVE_RUN_KEY) === item.runId) {
+            sessionStorage.removeItem(ACTIVE_RUN_KEY);
+            sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
+          }
+        } catch {
+          // 会话存储不可用时也没有身份可清
         }
-      } catch {
-        // 会话存储不可用时也没有身份可清
       }
       if (viewing) {
-        // 正在看的就是被删任务：原地停留只会继续展示已不存在的内容，直接回
-        // 初始问答页。用 replace 不留历史死链，回退不会又跳回已删除的任务页。
+        // 正在看的就是被删条目：原地停留只会继续展示已不存在的内容，直接回
+        // 初始问答页。用 replace 不留历史死链，回退不会又跳回已删除的页面。
         window.location.replace("/");
         return;
       }
-      showToast(t("任务已删除"));
+      showToast(t(chat ? "对话已删除" : "任务已删除"));
       void hydrateRecentTasks();
     });
   });
@@ -390,10 +455,12 @@ function bindHost(host: HTMLElement): void {
     const row = trigger.closest<HTMLElement>("[data-recent-item]");
     if (!row) return;
     openMenu(trigger, {
-      projectId: row.dataset.projectId ?? "",
+      kind: row.dataset.kind === "chat" ? "chat" : "task",
+      id: row.dataset.itemId ?? "",
       runId: row.dataset.runId ?? "",
       name: row.dataset.name ?? "",
       status: "QUEUED",
+      time: 0,
     });
   });
 }
@@ -408,9 +475,14 @@ export async function hydrateRecentTasks(): Promise<void> {
   bindFilterButton();
   syncFilterButtons();
   const seq = ++hydrateSeq;
-  const items = await fetchRecentItems();
+  const [tasks, chats] = await Promise.all([fetchTaskItems(), fetchChatItems()]);
   // 快速切换筛选时旧请求可能后到：只认最新一次
-  if (seq !== hydrateSeq || items === null) return;
+  if (seq !== hydrateSeq) return;
+  // 任务清单拿不到（未登录/后端不可用）且本机也没有对话：保留模板演示条目
+  if (tasks === null && chats.length === 0) return;
   closeMenu();
+  const items = [...(tasks ?? []), ...chats]
+    .sort((a, b) => b.time - a.time)
+    .slice(0, MAX_ITEMS);
   renderItems(host, items);
 }

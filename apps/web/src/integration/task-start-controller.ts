@@ -15,7 +15,7 @@ import {
   listComposerReferences,
   persistPendingTaskReferences,
 } from "./composer-references";
-import { runHomeChatTurn, stopHomeChatGeneration } from "./home-chat";
+import { resetHomeChat, restoreHomeChat, runHomeChatTurn, stopHomeChatGeneration } from "./home-chat";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
   showTaskLaunchOverlay,
@@ -382,6 +382,10 @@ function sameSubmission(persisted: TaskDraft | null, next: TaskDraft): persisted
 function mountNewTask(root: HTMLElement): () => void {
   root.dataset.taskStartState = "draft";
   root.dataset.taskStartSource = "local";
+  // 侧栏「最近任务」点开的历史对话在这里重建现场；地址栏没带 ?chat= 就是
+  // 新的一段对话，把上一段的归属与上下文解绑，别把两段聊到一起去。
+  const requestedChat = new URL(window.location.href).searchParams.get("chat");
+  if (!requestedChat || !restoreHomeChat(root, requestedChat)) resetHomeChat();
   const textarea = root.querySelector<HTMLTextAreaElement>('[data-task-description], textarea[aria-label="任务描述"]');
   const attachments = attachmentsWithin(root);
   const sendButton = root.querySelector<HTMLButtonElement>('[data-action="send"]');
@@ -426,6 +430,13 @@ function mountNewTask(root: HTMLElement): () => void {
       if (textarea) {
         textarea.value = "";
         persistCurrent();
+      }
+      // 这句已经变成对话消息，不再是待办的任务题面：连提交时写下的旧
+      // openmathmodelPrompt 一起清掉，否则下次回首页输入框里又躺着它。
+      try {
+        sessionStorage.removeItem(LEGACY_PROMPT_KEY);
+      } catch {
+        // 会话存储不可用时也没有残留可清
       }
       const references = listComposerReferences();
       void runHomeChatTurn(root, sentText, {

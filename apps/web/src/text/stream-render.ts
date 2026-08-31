@@ -14,6 +14,7 @@
  * 每次真实渲染后只会排版新替换的尾部块。
  */
 
+import { t } from "../i18n/locale";
 import { renderMarkdown } from "./markdown";
 import { typesetMath } from "./math-typeset";
 
@@ -106,6 +107,45 @@ export function createStreamingMarkdownRenderer(
       }
     },
   };
+}
+
+/**
+ * 恢复态「已思考」回看盒：重进对话时按落盘的思考全文重建，与活体思考块
+ * （首页/执行页的 createThinkingBlock）同类名、同折叠交互，直接以完成态
+ * 出场（折叠、可点开、限高内滚）。没记录思考时长，标签只写「已思考」。
+ * 调用方自行插到回复块的 .analysis-copy 之前。
+ */
+export function createRestoredThinkingBlock(reasoningText: string): HTMLElement {
+  const host = document.createElement("div");
+  host.className = "reply-thinking is-done";
+  // 恢复的历史不重演入场动画（.reply-thinking 基类自带 320ms 浮现）
+  host.style.animation = "none";
+  host.innerHTML = `
+    <button type="button" class="thinking-header is-clickable" aria-expanded="false" aria-label="${t("展开或收起思考过程")}">
+      <span class="thinking-label"><span class="thinking-verb">${t("已思考")}</span></span>
+      <i class="ph ph-caret-up thinking-chevron" aria-hidden="true"></i>
+    </button>
+    <div class="thinking-collapsible is-collapsed">
+      <div class="thinking-inner">
+        <div class="thinking-viewport"><div class="thinking-stream"></div></div>
+      </div>
+    </div>`;
+  host.querySelector<HTMLElement>(".thinking-stream")!.textContent = reasoningText;
+  const header = host.querySelector<HTMLElement>(".thinking-header")!;
+  const collapsible = host.querySelector<HTMLElement>(".thinking-collapsible")!;
+  const viewport = host.querySelector<HTMLElement>(".thinking-viewport")!;
+  let open = false;
+  header.addEventListener("click", () => {
+    open = !open;
+    header.setAttribute("aria-expanded", String(open));
+    collapsible.classList.toggle("is-collapsed", !open);
+    if (open) {
+      viewport.scrollTop = 0;
+      // 与活体块回看态同规则：按当前盒高重算是否可滚，渐隐遮罩才如实
+      viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
+    }
+  });
+  return host;
 }
 
 /**

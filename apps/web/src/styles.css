@@ -1584,8 +1584,22 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
   line-height: 1.8;
 }
 
-.analysis-copy p { margin: 0 0 8px; }
+/* 段距必须明显大于行内间距（line-height 1.8 下约 12.8px），否则分了段看上去仍是一堵墙 */
+.analysis-copy p { margin: 0 0 16px; }
 .analysis-copy ol { margin: 0; padding-left: 22px; }
+/* 首尾元素不撑出多余留白：容器与气泡已各自给了外边距 */
+.analysis-copy > :first-child { margin-top: 0; }
+.analysis-copy > :last-child { margin-bottom: 0; }
+/* 行宽上限：任务页 .chat-scroll 没有版心，宽屏上一行能排到 90 多个汉字，回行容易串行。
+   只约束文字流，表格 / 代码块 / 公式块仍按容器宽度铺开 */
+.analysis-copy > p,
+.analysis-copy > ul,
+.analysis-copy > ol,
+.analysis-copy > blockquote,
+.analysis-copy > h1,
+.analysis-copy > h2,
+.analysis-copy > h3,
+.analysis-copy > h4 { max-width: 46em; }
 .assistant-block h4 { margin: 0 0 10px; font-size: 14px; }
 
 /* 思考过程块：流式展开自动跟随，回答开始后折叠为「已思考 N 秒」 */
@@ -1644,6 +1658,7 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
   pointer-events: none;
 }
 .thinking-inner { min-height: 0; overflow: hidden; }
+/* 思考进行中：矮视口 + 吸底跟随，只露最新几行，不让持续增长的思考挤走正文 */
 .thinking-viewport {
   margin-top: 6px;
   max-height: 180px;
@@ -1654,6 +1669,13 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
 .thinking-viewport.is-capped {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+}
+/* 思考结束后点开回看：仍是限高盒子 + 内部滚动（2026-08-31 用户明确要求：
+   不要整段铺开把对话挤走，要像流式时一样有个盒子限定范围）。
+   盒高比流式矮窗略高、读起来不憋屈；渐隐遮罩保留作「还有内容可滚」的暗示，
+   is-capped 由 JS 在展开时按本盒高重算，装得下就不遮。 */
+.reply-thinking.is-done .thinking-viewport {
+  max-height: min(380px, 50vh);
 }
 .thinking-stream {
   white-space: pre-wrap;
@@ -1738,11 +1760,12 @@ html[data-theme="dark"] .reply-action-button { color: #8a8a85; }
 html[data-theme="dark"] .reply-action-button:hover { background: #2e2e2c; color: #c9c9c4; }
 
 /* 对话回复的 Markdown 子集（text/markdown.ts 输出） */
-.analysis-copy h1, .analysis-copy h2, .analysis-copy h3 { margin: 14px 0 6px; font-size: 15px; }
-.analysis-copy h4 { margin: 12px 0 6px; font-size: 14px; }
-.analysis-copy ul { margin: 0 0 8px; padding-left: 22px; }
-.analysis-copy ol { margin: 0 0 8px; padding-left: 22px; }
-.analysis-copy li { margin: 2px 0; }
+/* 标题不得小于正文 16px，否则模型分了节也压不住层级 */
+.analysis-copy h1, .analysis-copy h2, .analysis-copy h3 { margin: 22px 0 8px; font-size: 17px; font-weight: 600; }
+.analysis-copy h4 { margin: 18px 0 8px; font-size: 16px; font-weight: 600; }
+.analysis-copy ul { margin: 0 0 16px; padding-left: 22px; }
+.analysis-copy ol { margin: 0 0 16px; padding-left: 22px; }
+.analysis-copy li { margin: 6px 0; }
 .analysis-copy blockquote {
   margin: 0 0 8px;
   padding: 2px 12px;

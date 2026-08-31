@@ -123,3 +123,8 @@ export function buildRunningUrl(runId: string, projectId: string): string {
   const params = new URLSearchParams({ run_id: runId, project_id: projectId });
   return `/task/running?${params.toString()}`;
 }
+
+/** 首页普通对话的回看地址：首页挂载时据此重建对话现场。 */
+export function buildChatUrl(chatId: string): string {
+  return `/?${new URLSearchParams({ chat: chatId }).toString()}`;
+}

@@ -135,6 +135,19 @@ export const modelingWorkspaceApi = {
     );
   },
 
+  /** 历史事件一页（首屏一次性水合活动流用；after 为游标，最大页长 1000）。 */
+  listRunEvents(
+    runId: string,
+    after: number,
+    signal?: AbortSignal,
+  ): Promise<{ items: import("@openmathmodel/contracts").AgentEvent[] }> {
+    const params = new URLSearchParams({ after: String(after), limit: "1000" });
+    return request<{ items: import("@openmathmodel/contracts").AgentEvent[] }>(
+      `/api/v1/task-runs/${encodeURIComponent(runId)}/events/history?${params}`,
+      { signal },
+    );
+  },
+
   /** 项目列表；默认只含未归档，archived=true 时只看已归档。 */
   listProjects(
     options: {
@@ -222,6 +235,22 @@ export const modelingWorkspaceApi = {
       `/api/v1/task-runs/${encodeURIComponent(runId)}/steps`,
       { signal },
     );
+  },
+
+  /** 运行中追加补充要求（§11.3 方案 A）：落库后在后续每次节点执行时注入提示词。
+   *  运行已到终态时服务端返回 409 RUN_FINISHED，由调用方如实向用户说明。 */
+  postRunNote(
+    runId: string,
+    text: string,
+    scope = "global",
+    signal?: AbortSignal,
+  ): Promise<{ id: string }> {
+    return request<{ id: string }>(`/api/v1/task-runs/${encodeURIComponent(runId)}/notes`, {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, scope }),
+    });
   },
 
   act(runId: string, input: TaskRunActionInput, signal?: AbortSignal): Promise<unknown> {

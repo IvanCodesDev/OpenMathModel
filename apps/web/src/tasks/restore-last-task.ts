@@ -26,6 +26,10 @@ export function restoreLastTaskOnStartup(): boolean {
     return false;
   }
 
+  // 带着 ?chat= 进来是要回看某段对话（侧栏「最近任务」的对话条目），这是用户
+  // 此刻明确的去向，不能被恢复跳转劫持；本会话的一次尝试机会照常记为已用掉。
+  if (new URL(window.location.href).searchParams.has("chat")) return false;
+
   if (!restoreLastTaskEnabled()) return false;
   const record = savedLastTask();
   if (!record) return false;

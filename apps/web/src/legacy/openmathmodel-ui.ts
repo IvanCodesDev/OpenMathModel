@@ -17,7 +17,7 @@ import { attachmentsOf } from "../attachments/composer-attachments";
 import { collectConversationAttachments } from "../attachments/conversation-context";
 import { encodePassthroughImages, planImagePassthrough } from "../attachments/image-passthrough";
 import { resolveSelectedModality } from "../integration/model-modality";
-import { OPENING_ANALYSIS_PROMPT, conversationSnapshot, sendConversationTurn } from "../integration/agent-chat";
+import { OPENING_ANALYSIS_PROMPT, conversationSnapshot, pendingTurnFor, sendConversationTurn } from "../integration/agent-chat";
 import { CHAT_MODES, currentChatMode, saveChatMode } from "../integration/chat-mode";
 import {
   addComposerReference,
@@ -69,12 +69,17 @@ import {
   syncPrivacyGatesOnce,
 } from "../preferences/privacy-preferences";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
+import { WorkspaceApiError, modelingWorkspaceApi } from "../integration/modeling-workspace-api";
 import { mountSidebarSearch } from "../integration/sidebar-search";
 import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { hydrateProjectsPage } from "../integration/projects-page";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
-import { createStreamingMarkdownRenderer, createThrottledTextSink } from "../text/stream-render";
+import {
+  createRestoredThinkingBlock,
+  createStreamingMarkdownRenderer,
+  createThrottledTextSink,
+} from "../text/stream-render";
 import {
   notificationsSupported,
   requestNotificationPermission,
@@ -500,12 +505,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     // 统一导航模型：顶部返回箭头一律回“任务执行”总览页（hub）；
     // 阶段之间的横向跳转由左栏六阶段时间线承担，不再用返回键模拟线性浏览历史。
     // 例外：任务已交付的“最终成果”页，返回键即一键回首页。
+    // 任务名只作标识、不做导航（返回动作统一收敛到左箭头，2026-08-31 用户拍板）；
+    // 原先它是指向 hub 的 <a>，还带着未实现下拉菜单的 caret 占位，误导点击后跳页丢现场。
     const backRoute = active === "complete" ? routes.new : routes.running;
     const backLabel = active === "complete" ? "返回首页" : "返回任务执行";
     return `<header class="focused-modeling-topbar">
       <div class="focused-topbar-context">
         <a class="focused-back" href="${backRoute}" data-back-from="${active}" aria-label="${backLabel}" title="${backLabel}">${icon("arrow-left")}</a>
-        <a class="focused-task-name" href="${routes.running}"><span data-bind="project-name">城市共享单车调度优化</span>${icon("caret-down")}</a>
+        <span class="focused-task-name"><span data-bind="project-name">城市共享单车调度优化</span></span>
       </div>
     </header>`;
   }
@@ -3052,6 +3059,21 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     } catch {
       return;
     }
+    // 上一次进入本页发起的开场分析还在后台生成（用户中途退出过）：不再重复
+    // 发起（防双份调用扣费），挂「思考中」占位，完成事件到达时原地补录正文。
+    if (pendingTurnFor(runId)?.opening) {
+      const stepsBlock = $(".chat-scroll .assistant-block:not(.follow-up-reply)");
+      const host = document.createElement("div");
+      host.className = "opening-analysis opening-reply";
+      host.dataset.pendingOpening = runId;
+      host.innerHTML = `<div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>`;
+      const anchor = stepsBlock?.querySelector(".assistant-id");
+      if (anchor) anchor.insertAdjacentElement("afterend", host);
+      else if (stepsBlock) stepsBlock.prepend(host);
+      else scroll.append(host);
+      if (stepsBlock) stepsBlock.dataset.openingState = "pending";
+      return;
+    }
     const replyId = `reply-opening-${Date.now()}`;
     // 开场分析与执行步骤同属一条 Agent 消息：注入步骤块头部之后，
     // 思考完成 → 分析正文 → 计划在同一气泡内接续展开，不拆成两条对话。
@@ -3092,9 +3114,73 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    * 2. 按本机对话记录（「保存任务历史」管辖，按 run_id 隔离）重建开场分析与
    *    此前的对话气泡，恢复离开前的对话现场。
    */
+  /** 重建一条用户气泡（历史记录恢复 / 后台在途轮占位共用）。 */
+  function appendRestoredUserBubble(scroll, text, attachments = []) {
+    const chips = attachments.length
+      ? `<div class="user-attachment-chips">${attachments.map(name =>
+        `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
+      : "";
+    scroll.insertAdjacentHTML("beforeend", `<div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>`);
+  }
+
+  /**
+   * 重建一条追问回复块（历史记录恢复 / 后台完成补录共用）。
+   * 有轨迹的历史回复重建过程区（旧记录没有轨迹字段则保持纯文本形态）；
+   * 行内耗时用落盘的最终值，不再走秒。已撤下的样板行（RETIRED_TRACE_TITLES）
+   * 与折叠头（用户要求）不再重建。
+   */
+  function appendRestoredReply(scroll, entry) {
+    const replyBlock = document.createElement("div");
+    replyBlock.className = "assistant-block follow-up-reply";
+    const traceRows = (entry.trace ?? []).filter(row => !RETIRED_TRACE_TITLES.has(row.title));
+    const traceMarkup = traceRows.length ? `<div class="agent-stream reply-trace"></div>` : "";
+    replyBlock.innerHTML = `
+      <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+      ${traceMarkup}
+      <div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
+    // 思考过程随记录回来：与活体同位（轨迹之后、正文之前）重建回看盒
+    if (entry.reasoning) {
+      replyBlock.insertBefore(createRestoredThinkingBlock(entry.reasoning), $(".analysis-copy", replyBlock));
+    }
+    traceRows.forEach(row => appendReplyTraceRow(replyBlock, {
+      icon: row.icon,
+      title: row.title,
+      suffix: row.suffix ?? "",
+      detail: row.detail ?? "",
+      elapsed: row.elapsed ?? "",
+      animate: false,
+    }));
+    scroll.append(replyBlock);
+    renderFormulas($(".analysis-copy", replyBlock));
+    appendReplyActions(replyBlock, entry.text);
+    return replyBlock;
+  }
+
+  /** 重建开场分析（历史记录恢复 / 后台完成补录共用）：挂进步骤块头部。 */
+  function restoreOpeningReply(scroll, entry, runId) {
+    const stepsBlock = $(".assistant-block:not(.follow-up-reply)", scroll);
+    if (!stepsBlock || stepsBlock.querySelector(".opening-reply")) return false;
+    const host = document.createElement("div");
+    host.className = "opening-analysis opening-reply";
+    host.innerHTML = `<div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
+    // 落盘过思考的开场分析：正文上方重建折叠的「已思考」回看盒（与活体同位）
+    if (entry.reasoning) host.insertBefore(createRestoredThinkingBlock(entry.reasoning), host.firstElementChild);
+    const anchor = stepsBlock.querySelector(".assistant-id");
+    if (anchor) anchor.insertAdjacentElement("afterend", host);
+    else stepsBlock.prepend(host);
+    renderFormulas(host);
+    appendReplyActions(host, entry.text);
+    stepsBlock.dataset.openingState = "done";
+    // 已恢复的开场分析不再自动重发（规划阶段重进页面时防重复扣费）。
+    try { sessionStorage.setItem(`openmathmodelOpeningReply.${runId}`, "1"); } catch {}
+    return true;
+  }
+
   document.addEventListener("omm:conversation-restore", event => {
     const { runId, goal } = event.detail ?? {};
-    const scroll = $(".chat-scroll");
+    // 聚焦阶段页的对话区是 .focused-agent-scroll：那里发出的消息同属本运行的
+    // 对话记录，重进/刷新时也要在原地重建，不能只在总览页恢复。
+    const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
     if (!runId || !scroll) return;
     const firstBubble = $(".user-message .user-bubble", scroll);
     if (firstBubble && goal) firstBubble.textContent = goal;
@@ -3103,61 +3189,80 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     // 首页随任务创建交接过来的引用：挂回输入框上方的 chips，随首条消息进入上下文。
     const composerHost = $(".chat-pane .composer");
     if (composerHost) restorePendingTaskReferences(runId, composerHost);
-    const entries = loadConversationLog(runId);
-    if (entries.length === 0) return;
-    const stepsBlock = $(".assistant-block:not(.follow-up-reply)", scroll);
-    for (const entry of entries) {
+    for (const entry of loadConversationLog(runId)) {
       if (entry.role === "assistant" && entry.opening) {
-        if (!stepsBlock || stepsBlock.querySelector(".opening-reply")) continue;
-        const host = document.createElement("div");
-        host.className = "opening-analysis opening-reply";
-        host.innerHTML = `<div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
-        const anchor = stepsBlock.querySelector(".assistant-id");
-        if (anchor) anchor.insertAdjacentElement("afterend", host);
-        else stepsBlock.prepend(host);
-        renderFormulas(host);
-        appendReplyActions(host, entry.text);
-        stepsBlock.dataset.openingState = "done";
-        // 已恢复的开场分析不再自动重发（规划阶段重进页面时防重复扣费）。
-        try { sessionStorage.setItem(`openmathmodelOpeningReply.${runId}`, "1"); } catch {}
+        restoreOpeningReply(scroll, entry, runId);
         continue;
       }
       if (entry.role === "user") {
-        const chips = entry.attachments?.length
-          ? `<div class="user-attachment-chips">${entry.attachments.map(name =>
-            `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
-          : "";
-        scroll.insertAdjacentHTML("beforeend", `<div class="user-message"><div class="user-bubble">${escapeHtml(entry.text)}${chips}</div></div>`);
+        appendRestoredUserBubble(scroll, entry.text, entry.attachments ?? []);
         continue;
       }
-      const replyBlock = document.createElement("div");
-      replyBlock.className = "assistant-block follow-up-reply";
-      // 有轨迹的历史回复按原样重建折叠头与过程区（本次改造前的旧记录没有
-      // 轨迹字段，保持纯文本形态）；行内耗时用落盘的最终值，不再走秒。
-      const traceMarkup = entry.trace?.length
-        ? `<button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
-        <div class="agent-stream reply-trace"></div>`
-        : "";
-      replyBlock.innerHTML = `
-        <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-        ${traceMarkup}
-        <div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
-      entry.trace?.forEach(row => appendReplyTraceRow(replyBlock, {
-        icon: row.icon,
-        title: row.title,
-        suffix: row.suffix ?? "",
-        detail: row.detail ?? "",
-        elapsed: row.elapsed ?? "",
-      }));
-      scroll.append(replyBlock);
-      renderFormulas($(".analysis-copy", replyBlock));
-      appendReplyActions(replyBlock, entry.text);
+      appendRestoredReply(scroll, entry);
+    }
+    // 离开页面时仍在后台生成的追问轮（生成中退出不再中断，见 agent-chat）：
+    // 先补出用户气泡 + 「生成中」占位，完成/失败事件到达时替换或落定。
+    // 在途的开场分析没有用户气泡，由 omm:run-planning 一侧挂占位。
+    const pending = pendingTurnFor(runId);
+    if (pending && !pending.opening) {
+      appendRestoredUserBubble(scroll, pending.text);
+      scroll.insertAdjacentHTML("beforeend", `
+        <div class="assistant-block follow-up-reply" data-pending-turn="${runId}">
+          <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+          <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("回复仍在生成中…")}</span></p></div>
+        </div>`);
     }
     scroll.scrollTop = scroll.scrollHeight;
   });
 
+  /**
+   * 后台完成的对话轮补录：用户在生成中途退出了页面，该轮已按发起时的归属
+   * 落盘（agent-chat）。此刻若正看着该任务的对话区，把「生成中」占位替换成
+   * 真实回复；不在页面则忽略——记录已在，下次进入自然恢复。
+   */
+  document.addEventListener("omm:chat-turn-committed", event => {
+    const { scopeId, opening, text, reply, reasoning, attachments } = event.detail ?? {};
+    if (!scopeId || conversationSnapshot().runId !== scopeId) return;
+    const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
+    if (!scroll) return;
+    if (opening) {
+      $(`[data-pending-opening="${scopeId}"]`)?.remove();
+      restoreOpeningReply(scroll, { text: reply, reasoning }, scopeId);
+      document.dispatchEvent(new CustomEvent("omm:opening-analysis-done"));
+    } else {
+      // 等待期间用户可能又发了新消息：补录的回复要落回占位原位，不是队尾
+      const placeholder = $(`[data-pending-turn="${scopeId}"]`, scroll);
+      if (!placeholder) appendRestoredUserBubble(scroll, text, attachments ?? []);
+      const block = appendRestoredReply(scroll, { text: reply, reasoning });
+      if (placeholder) placeholder.replaceWith(block);
+    }
+    scroll.scrollTop = scroll.scrollHeight;
+  });
+
+  /** 后台对话轮失败：占位落定为中断态（这轮没有落盘，如实告知，不装成功）。 */
+  document.addEventListener("omm:chat-turn-failed", event => {
+    const { scopeId, opening, message } = event.detail ?? {};
+    if (!scopeId || conversationSnapshot().runId !== scopeId) return;
+    const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
+    if (!scroll) return;
+    if (opening) {
+      $(`[data-pending-opening="${scopeId}"]`)?.remove();
+      const stepsBlock = $(".assistant-block:not(.follow-up-reply)", scroll);
+      if (stepsBlock) stepsBlock.dataset.openingState = "done";
+      document.dispatchEvent(new CustomEvent("omm:opening-analysis-done"));
+      return;
+    }
+    const placeholder = $(`[data-pending-turn="${scopeId}"]`, scroll);
+    if (!placeholder) return;
+    const copy = $(".analysis-copy", placeholder);
+    if (copy) copy.innerHTML = `<p class="muted">${escapeHtml(message || t("回复生成中断，请重新发送。"))}</p>`;
+    placeholder.removeAttribute("data-pending-turn");
+  });
+
   function appendConversationTurn(text, composer) {
-    const scroll = $(".chat-scroll");
+    // 任务执行总览页是 .chat-scroll；数据/建模/实验/论文/交付五个聚焦页的对话区
+    // 是 .focused-agent-scroll。此前只认前者，聚焦页点发送静默无效（消息发不出去）。
+    const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
     if (!scroll) return;
     // 随消息发送的附件（ADR-0010 批次三）与「添加上下文」引用：
     // 气泡下方以纸夹/@ 徽标如实展示。
@@ -3170,14 +3275,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
       : "";
     const replyId = `reply-${Date.now()}`;
-    // 每条回复与首条 Agent 消息同构：「收起/查看执行步骤」折叠头 + 执行过程区
-    // （.reply-trace，本轮真实发生的上下文读取/附件解析/难度路由/生成计时）
-    // → 思考块 → 正文。过程行由 streamAssistantReply 按实际发生顺序写入。
+    // 每条回复的结构：执行过程区（.reply-trace，本轮真实发生的附件解析/
+    // 难度路由/生成计时）→ 思考块 → 正文。过程行由 streamAssistantReply
+    // 按实际发生顺序写入。「收起执行步骤」折叠头已按用户要求撤下——修剪后
+    // 过程行只剩少数几条，直接显示比多一层折叠更干净（首条 Agent 消息的
+    // 六阶段长时间线仍保留折叠头，那里有真实收纳需求）。
     scroll.insertAdjacentHTML("beforeend", `
       <div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>
       <div class="assistant-block follow-up-reply" id="${replyId}">
         <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-        <button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
         <div class="agent-stream reply-trace"></div>
         <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>
       </div>`);
@@ -3219,7 +3325,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (!done) return;
       open = !open;
       applyOpen();
-      if (open) viewport.scrollTop = 0;
+      if (open) {
+        viewport.scrollTop = 0;
+        // 回看盒高与流式矮窗不同：按当前盒高重算是否可滚，渐隐遮罩才如实
+        viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
+      }
     });
     // 文本赋值与布局读写按节流节奏合并：高频 reasoning 增量不再逐条触发重排
     const sink = createThrottledTextSink(fullText => {
@@ -3235,6 +3345,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         if (done) return;
         done = true;
         sink.flush();
+        // 思考已完整落地：切换回看态——盒子放宽但仍限高内滚（styles.css 的 is-done 规则），
+        // 不整段铺开（2026-08-31 用户要求）
+        host.classList.add("is-done");
         const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
         label.classList.remove("thinking-shimmer");
         label.innerHTML = `<span class="thinking-verb">${t("已思考")}</span> ${seconds} ${t("秒")}`;
@@ -3244,6 +3357,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       },
     };
   }
+
+  /**
+   * 已撤下的轨迹样板行（用户要求）：每轮内容雷同、无增量信息的固定标题。
+   * 新回复不再生成；旧对话记录里已落盘的同名行在恢复重建时一并过滤。
+   */
+  const RETIRED_TRACE_TITLES = new Set(["已读取任务与对话上下文", "已同步给执行中的智能体"]);
 
   /** 回复轨迹的耗时文本：与工作台时间线同一节奏（<10s 一位小数，<60s 整秒，更长分+秒）。 */
   function formatTraceElapsed(ms) {
@@ -3261,12 +3380,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    * 出现在思考块与正文之前。标签与后缀分节点写入，便于语言切换逐段翻译。
    * waiting=true 时本地走秒，settle() 落定图标与最终耗时；before 指定插入
    * 位置以保持与服务端实际发生顺序一致。返回 {element, settle}。
+   * animate=false 用于恢复历史（重进对话时轨迹应当「本来就在」，不重演入场）。
    */
-  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", waiting = false, before = null }) {
+  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", waiting = false, before = null, animate = true }) {
     const trace = $(".reply-trace", replyBlock);
     if (!trace) return null;
     const item = document.createElement("div");
-    item.className = `stream-item stream-in${waiting ? " is-waiting" : ""}`;
+    item.className = `stream-item${animate ? " stream-in" : ""}${waiting ? " is-waiting" : ""}`;
     item.innerHTML = `
       <div class="stream-row">
         ${icon(iconName)}
@@ -3396,6 +3516,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const replyBlock = document.getElementById(replyId);
     const copy = replyBlock?.querySelector(".analysis-copy");
     if (!replyBlock || !copy) return false;
+    // 本轮归属在发起时定格：用户生成中途退出页面会解绑/换绑对话归属，
+    // 完成后的轨迹落盘必须跟着发起时的运行走（正文落盘同理，见 agent-chat）。
+    const boundRunId = conversationSnapshot().runId;
     const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
     // 流式正文渲染：节流 + 块级增量上屏（stream-render），公式排版随之削峰。
     // 旧写法逐增量整段重建 innerHTML + 全量排版，长回复（尤其多公式）明显卡顿。
@@ -3465,24 +3588,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       const contextBlocks = [referenceBlock, attachmentContext].filter(Boolean).join("\n\n");
       // ── 执行轨迹：每条回复都由真实过程行组成（与首条 Agent 消息同构）。
       //    traceLog 收集落定后的行，回复完成后随对话记录落盘，恢复时原样重建。
+      //    「已读取任务与对话上下文」「已同步给执行中的智能体」两条样板行已按
+      //    用户要求撤下（每轮内容雷同、无增量信息）；动作本身照常发生。
       const traceLog = [];
-      // 行①：读取任务与对话上下文（题面、对话模式、历史轮数都是本轮真实输入）
-      if (!options.opening) {
-        const snapshot = conversationSnapshot();
-        const mode = currentChatMode();
-        const contextDetail = [
-          snapshot.goal ? `任务：${snapshot.goal.slice(0, 160)}` : "任务：未绑定运行",
-          `模式：${mode.label}`,
-          `历史：${Math.floor(snapshot.turns / 2)} 轮对话`,
-        ].join("\n");
-        appendReplyTraceRow(replyBlock, {
-          icon: "book-open-text",
-          title: "已读取任务与对话上下文",
-          detail: contextDetail,
-        });
-        traceLog.push({ icon: "book-open-text", title: "已读取任务与对话上下文", detail: contextDetail });
-      }
-      // 行②：附件/引用解析完成并注入上下文（真实动作，解析在上面刚发生）
+      // 行①：附件/引用解析完成并注入上下文（真实动作，解析在上面刚发生）
       if (attachmentNames.length || references.length) {
         const contextNames = [...attachmentNames, ...references.map(reference => `@${reference.title}`)];
         const row = {
@@ -3494,7 +3603,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         appendReplyTraceRow(replyBlock, row);
         traceLog.push(row);
       }
-      // 行②'：图片原图直通视觉模型（真实动作：这些图跳过 OCR 随消息直发）
+      // 行①'：图片原图直通视觉模型（真实动作：这些图跳过 OCR 随消息直发）
       if (passthroughNames.length) {
         const row = {
           icon: "image",
@@ -3505,6 +3614,27 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         appendReplyTraceRow(replyBlock, row);
         traceLog.push(row);
       }
+      // 行①''：绑定真实运行的追问先同步给执行中的智能体（§11.3 运行备注）：
+      // 落库后后续每次节点执行的提示词都会带上这条要求——对话不再只是旁观问答。
+      // 成功路径不再渲染样板行（用户要求）；运行已结束时服务端 409，仍如实
+      // 告知本条按问答处理（这条有真实信息量）；其余失败静默（对话照常）。
+      const noteScope = conversationSnapshot();
+      if (!options.opening && /^run_[0-9a-f]{32}$/.test(noteScope.runId ?? "")) {
+        try {
+          await modelingWorkspaceApi.postRunNote(noteScope.runId, text);
+        } catch (error) {
+          if (error instanceof WorkspaceApiError && error.code === "RUN_FINISHED") {
+            const row = {
+              icon: "info",
+              title: "任务已结束，本条按问答处理",
+              detail: "运行已到终态，消息不再影响执行与成果；如需按新要求修改，请基于此任务再发起一次新任务。",
+            };
+            appendReplyTraceRow(replyBlock, row);
+            traceLog.push(row);
+          }
+          // 网络抖动等其它失败不打断对话本身，也不渲染误导性的成功行
+        }
+      }
       // 生成回复行实时走秒；难度判定行到达时插到它前面（服务端先判定后生成）
       generatingRow = options.opening
         ? null
@@ -3512,7 +3642,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       startedGeneratingAt = Date.now();
       const { text: reply, meta } = await sendConversationTurn(text, {
         onMeta: current => {
-          // 行③：Auto 路由真实发生的难度判定（详情 = 判定理由；继承/短路轮
+          // 行②：Auto 路由真实发生的难度判定（详情 = 判定理由；继承/短路轮
           // judged=false 不出现，不制造噪音）。服务端先判定后生成，插在生成行之前。
           if (current.route?.judged && typeof current.route.difficulty === "number") {
             const row = {
@@ -3586,10 +3716,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         });
       }
       appendReplyActions(replyBlock, reply);
-      // 轨迹随本机对话记录落盘（「保存任务历史」开启且绑定真实运行）：恢复对话时原样重建
-      const traceScope = conversationSnapshot();
-      if (!options.opening && traceScope.runId && saveHistoryEnabled() && traceLog.length) {
-        attachTraceToLastReply(traceScope.runId, reply, traceLog);
+      // 轨迹随本机对话记录落盘（「保存任务历史」开启且绑定真实运行）：恢复对话时
+      // 原样重建。归属用发起时定格的 boundRunId——用户中途退出页面后这里才完成时，
+      // 当前绑定可能已是首页或别的任务。
+      if (!options.opening && boundRunId && saveHistoryEnabled() && traceLog.length) {
+        attachTraceToLastReply(boundRunId, reply, traceLog);
       }
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
       return true;

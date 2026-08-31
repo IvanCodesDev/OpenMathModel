@@ -79,6 +79,21 @@ test("renders github-style tables", () => {
   assert.ok(html.includes("<td>A</td><td>低</td>"));
 });
 
+test("accepts single-dash divider rows (GFM allows | - | - |)", () => {
+  const html = renderMarkdown("| 方案 | 成本 |\n| - | - |\n| A | 低 |");
+  assert.ok(html.includes('<table class="md-table">'), "单横线分隔行也应识别为表格");
+  assert.ok(html.includes("<th>方案</th><th>成本</th>"));
+  assert.ok(html.includes("<td>A</td><td>低</td>"));
+  const aligned = renderMarkdown("| 方案 | 成本 |\n|:-|-:|\n| A | 低 |");
+  assert.ok(aligned.includes('<table class="md-table">'), "带对齐冒号的单横线分隔行同样识别");
+});
+
+test("pipe-separated prose without a divider row stays plain text", () => {
+  const html = renderMarkdown("Summary 1 页 | TOC 1 | 正文 ~20 | Memo 1 | 参考 1。");
+  assert.ok(!html.includes("<table"), "没有分隔行的竖线句子不是表格");
+  assert.ok(html.includes("Summary 1 页 | TOC 1"));
+});
+
 test("single newlines become line breaks inside a paragraph", () => {
   const html = renderMarkdown("第一行\n第二行\n\n新段落");
   assert.ok(html.includes("<p>第一行<br>第二行</p>"));

@@ -59,3 +59,20 @@ test("rejects missing or unparsable storage values", () => {
   assert.deepEqual(parseConversationLog("{"), []);
   assert.deepEqual(parseConversationLog(JSON.stringify({ entries: "oops" })), []);
 });
+
+test("keeps reply reasoning for the thought-review box and drops junk values", () => {
+  assert.deepEqual(
+    parseConversationLog(wrap([
+      { role: "assistant", text: "结论", reasoning: "先设变量再消元……" },
+      { role: "assistant", text: "开场分析", opening: true, reasoning: "题面拆解……" },
+      { role: "assistant", text: "无思考的普通回复", reasoning: "" },
+      { role: "assistant", text: "思考字段是杂质", reasoning: 42 },
+    ])),
+    [
+      { role: "assistant", text: "结论", reasoning: "先设变量再消元……" },
+      { role: "assistant", text: "开场分析", opening: true, reasoning: "题面拆解……" },
+      { role: "assistant", text: "无思考的普通回复" },
+      { role: "assistant", text: "思考字段是杂质" },
+    ],
+  );
+});

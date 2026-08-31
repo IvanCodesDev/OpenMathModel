@@ -5,16 +5,43 @@
  * 闲聊或缺题面的输入进入本模块。视觉与执行页对话严格同构——复用全局的
  * user-bubble / assistant-block / assistant-id（水母 Logo）/ reply-thinking
  * （思考过程折叠块）/ analysis-copy（Markdown 正文）类与交互，不另造样式。
- * 对话历史由 agent-chat 维护（内存态、走用户配置的模型与 Auto 路由）。
+ * 对话历史由 agent-chat 维护（走用户配置的模型与 Auto 路由）。
  * 对话中一旦出现完整题面（接待判定升级），交回任务创建链路跳转执行页。
+ *
+ * 这条链不建项目、不起运行，服务端因此没有可列的记录。首轮发送时向
+ * tasks/chat-sessions 领一个 `chat_…` 身份并绑定给 agent-chat，正文就随
+ * 任务对话同一套 localStorage 记录落盘，侧栏「最近任务」据此列出对话、
+ * 点回来由 restoreHomeChat 重建现场（同受「保存任务历史」开关管辖）。
  *
  * DOM 由本模块动态插入（与执行计划面板同模式），不改动页面模板与路由。
  */
 
+import { fetchMe } from "../auth/api";
 import { openAuthDialog } from "../auth/auth-dialog";
 import { t } from "../i18n/locale";
-import { createStreamingMarkdownRenderer, createThrottledTextSink } from "../text/stream-render";
-import { ChatError, sendConversationTurn } from "./agent-chat";
+import { saveHistoryEnabled } from "../preferences/privacy-preferences";
+import {
+  createChatSession,
+  findChatSession,
+  newChatSessionId,
+  touchChatSession,
+} from "../tasks/chat-sessions";
+import { loadConversationLog } from "../tasks/conversation-log";
+import { renderMarkdown } from "../text/markdown";
+import { typesetMath } from "../text/math-typeset";
+import {
+  createRestoredThinkingBlock,
+  createStreamingMarkdownRenderer,
+  createThrottledTextSink,
+} from "../text/stream-render";
+import {
+  ChatError,
+  configureConversation,
+  conversationSnapshot,
+  resetConversation,
+  sendConversationTurn,
+} from "./agent-chat";
+import { hydrateRecentTasks } from "./recent-tasks";
 
 const AGENT_ID_HTML =
   '<img class="project-logo assistant-logo" src="/assets/OpenMathModel_IP_Crop.png" alt="" aria-hidden="true"><span>Agent</span>';
@@ -102,7 +129,11 @@ function createThinkingBlock(replyBlock: HTMLElement): {
     if (!done) return;
     open = !open;
     applyOpen();
-    if (open) viewport.scrollTop = 0;
+    if (open) {
+      viewport.scrollTop = 0;
+      // 回看盒高与流式矮窗不同：按当前盒高重算是否可滚，渐隐遮罩才如实
+      viewport.classList.toggle("is-capped", viewport.scrollHeight > viewport.clientHeight + 1);
+    }
   });
   // 文本赋值与布局读写按节流节奏合并：高频 reasoning 增量不再逐条触发重排
   const sink = createThrottledTextSink(fullText => {
@@ -118,6 +149,9 @@ function createThinkingBlock(replyBlock: HTMLElement): {
       if (done) return;
       done = true;
       sink.flush();
+      // 思考已完整落地：切换回看态——盒子放宽但仍限高内滚（styles.css 的 is-done 规则），
+      // 不整段铺开（2026-08-31 用户要求）
+      host.classList.add("is-done");
       const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
       label.classList.remove("thinking-shimmer");
       label.innerHTML = `<span class="thinking-verb">${t("已思考")}</span> ${seconds} ${t("秒")}`;
@@ -134,6 +168,66 @@ function scrollIntoView(element: HTMLElement): void {
 
 export function isHomeChatActive(root: HTMLElement): boolean {
   return root.dataset.homeChat === "on";
+}
+
+// ── 对话归属：不建项目，用本机会话 id 承载记录 ──────────────────────────────
+
+let activeChatId: string | null = null;
+
+/**
+ * 绑定本轮对话的归属：首轮领一个 `chat_…` 身份并登记标题（取首条消息），
+ * 之后沿用同一个。未登录或「保存任务历史」关闭时不登记——不落盘的对话
+ * 列进「最近任务」只会点开一片空白，页面内存里照常聊完这一程。
+ * 返回本轮是否新建了会话（新条目要立刻出现在侧栏）。
+ */
+async function ensureChatSession(firstText: string): Promise<boolean> {
+  if (activeChatId || !saveHistoryEnabled()) return false;
+  // 只认领还没往返过的对话：聊到一半才开启「保存任务历史」时再绑定，会触发
+  // agent-chat 的换归属清空，把已聊的上下文抹掉，这一程就保持不落盘。
+  if (conversationSnapshot().turns > 0) return false;
+  const me = await fetchMe().catch(() => null);
+  if (!me) return false;
+  const id = newChatSessionId();
+  if (!createChatSession(id, me.user.id, firstText)) return false;
+  activeChatId = id;
+  configureConversation(id);
+  return true;
+}
+
+/** 首页回到欢迎态（地址栏没带 ?chat=）：下一条消息另开一段对话。 */
+export function resetHomeChat(): void {
+  activeChatId = null;
+  resetConversation();
+}
+
+/**
+ * 从本机记录重建一段对话现场：侧栏「最近任务」点开对话条目时调用。
+ * 记录已被清空（关过「保存任务历史」）时返回 false，页面留在欢迎态。
+ */
+export function restoreHomeChat(root: HTMLElement, chatId: string): boolean {
+  if (!findChatSession(chatId)) return false;
+  const entries = loadConversationLog(chatId);
+  if (entries.length === 0) return false;
+  const thread = ensureThread(root);
+  if (!thread) return false;
+  thread.replaceChildren();
+  root.dataset.homeChat = "on";
+  for (const entry of entries) {
+    if (entry.role === "user") {
+      appendUserBubble(thread, entry.text, entry.attachments ?? []);
+      continue;
+    }
+    const block = appendAssistantBlock(thread);
+    const copy = block.querySelector<HTMLElement>(".analysis-copy")!;
+    // 思考过程随记录一起回来：正文上方重建折叠的「已思考」回看盒
+    if (entry.reasoning) block.insertBefore(createRestoredThinkingBlock(entry.reasoning), copy);
+    copy.innerHTML = renderMarkdown(entry.text);
+    typesetMath(copy);
+  }
+  activeChatId = chatId;
+  configureConversation(chatId);
+  thread.scrollTop = thread.scrollHeight;
+  return true;
 }
 
 // ── 暂停生成：回复流式期间发送键变为暂停键（与执行页同语义） ────────────────
@@ -193,18 +287,31 @@ export async function runHomeChatTurn(
     thinking: ReturnType<typeof createThinkingBlock> | null;
     sawDelta: boolean;
   } = { thinking: null, sawDelta: false };
-  // 渲染节流 + 块级增量上屏（长回复不再逐增量整段重建），公式排版随之削峰
-  const renderer = createStreamingMarkdownRenderer(copy);
+  // 渲染节流 + 块级增量上屏（长回复不再逐增量整段重建），公式排版随之削峰。
+  // stickTo=thread：对话态滚动在线程内部（composer 常驻视口底部），
+  // 流式期间近底自动跟随，与执行页 chat-scroll 同语义。
+  const renderer = createStreamingMarkdownRenderer(copy, { stickTo: thread });
   const abort = new AbortController();
   activeAbort = abort;
   setSendButtonGenerating(root, true);
+  // 归属要在发送前定下：agent-chat 按它把这一轮往返写进本机对话记录。
+  const startedNewSession = await ensureChatSession(text);
   try {
     const { text: reply } = await sendConversationTurn(
       text,
       {
         onReasoning: (_delta, full) => {
-          state.thinking ??= createThinkingBlock(block);
+          // 思考流入场也跟随滚动（与执行页同节奏）：用户已在底部才吸底，翻上去回看不打扰
+          const stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 140;
+          if (!state.thinking) {
+            state.thinking = createThinkingBlock(block);
+            // 思考块自带「思考中…」标签，回答区占位不必重复（与执行页同语义）：
+            // 不清会出现上下两个「思考中…」同屏。渲染器首次上屏自会接管容器，
+            // 这里提前清空不影响其增量状态。
+            if (!state.sawDelta) copy.innerHTML = "";
+          }
           state.thinking.append(full);
+          if (stick) thread.scrollTop = thread.scrollHeight;
         },
         onDelta: (_delta, full) => {
           if (!state.sawDelta) {
@@ -221,8 +328,14 @@ export async function runHomeChatTurn(
       },
     );
     state.thinking?.finish();
+    // 收尾不再强制滚到底：跟随交给 stickTo 的近底吸附——用户翻上去回看时，
+    // 回复完成不该把视口拽走（执行页同语义）。
     renderer.finish(reply);
-    scrollIntoView(block);
+    if (activeChatId) {
+      touchChatSession(activeChatId);
+      // 新对话要立刻出现在侧栏；后续轮次只更新本机时间戳，不为每条消息重拉清单
+      if (startedNewSession) void hydrateRecentTasks();
+    }
     return true;
   } catch (error) {
     state.thinking?.finish();

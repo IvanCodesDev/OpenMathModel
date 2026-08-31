@@ -1,14 +1,17 @@
 /**
- * 按运行（run_id）隔离的本机对话记录。
+ * 按对话归属隔离的本机对话记录。
  *
- * 服务端对话保持无状态（/api/chat 不落库），任务页对话历史只存浏览器
- * localStorage：键按 run_id 隔离，跨任务互不可见；是否写入由调用方按
+ * 服务端对话保持无状态（/api/chat 不落库），对话历史只存浏览器
+ * localStorage：键按归属 id 隔离，互不可见；是否写入由调用方按
  * 「数据与隐私 → 保存任务历史」开关决定（本模块不做闸门，保持零依赖，
  * 与 last-task-record 一样可直接在 Node 测试里加载）。
+ *
+ * 归属 id 有两种，键空间不重叠：任务页对话用运行 `run_…`；首页普通对话
+ * 不建项目、没有运行，用 tasks/chat-sessions 发的 `chat_…`。
  */
 
 const LOG_KEY_PREFIX = "openmathmodel.chatLog.v1.";
-const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/;
+const SCOPE_ID_PATTERN = /^(?:run|chat)_[0-9a-f]{32}$/;
 /** 单条文本与总条数上限：控制 localStorage 占用；超长回复截断保留开头。 */
 const MAX_ENTRY_CHARS = 20_000;
 const MAX_ENTRIES = 80;
@@ -32,6 +35,11 @@ export interface ConversationLogEntry {
   attachments?: string[];
   /** 回复的执行轨迹（读取上下文/附件解析/难度路由/生成计时等真实过程）。 */
   trace?: ConversationTraceRow[];
+  /**
+   * 回复的思考过程（推理型模型）：只用于恢复「已思考」回看盒，不回传模型
+   * （agent-chat 的请求历史仍然只有正文）。刷新前生成的思考内容因此不再丢失。
+   */
+  reasoning?: string;
 }
 
 /** 轨迹落盘上限：行数与字段长度都收口，控制 localStorage 占用。 */
@@ -55,8 +63,8 @@ function sanitizeTrace(value: unknown): ConversationTraceRow[] {
   return rows;
 }
 
-function keyFor(runId: string): string {
-  return LOG_KEY_PREFIX + runId;
+function keyFor(scopeId: string): string {
+  return LOG_KEY_PREFIX + scopeId;
 }
 
 export function parseConversationLog(raw: string | null): ConversationLogEntry[] {
@@ -71,7 +79,9 @@ export function parseConversationLog(raw: string | null): ConversationLogEntry[]
   if (!Array.isArray(entries)) return [];
   const result: ConversationLogEntry[] = [];
   for (const item of entries) {
-    const entry = item as { role?: unknown; text?: unknown; opening?: unknown; attachments?: unknown; trace?: unknown };
+    const entry = item as {
+      role?: unknown; text?: unknown; opening?: unknown; attachments?: unknown; trace?: unknown; reasoning?: unknown;
+    };
     if (entry?.role !== "user" && entry?.role !== "assistant") continue;
     if (typeof entry.text !== "string" || !entry.text) continue;
     const attachments = Array.isArray(entry.attachments)
@@ -84,29 +94,34 @@ export function parseConversationLog(raw: string | null): ConversationLogEntry[]
       ...(entry.opening === true ? { opening: true } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(trace.length > 0 ? { trace } : {}),
+      ...(typeof entry.reasoning === "string" && entry.reasoning ? { reasoning: entry.reasoning } : {}),
     });
   }
   return result;
 }
 
-export function loadConversationLog(runId: string): ConversationLogEntry[] {
-  if (!RUN_ID_PATTERN.test(runId)) return [];
+export function loadConversationLog(scopeId: string): ConversationLogEntry[] {
+  if (!SCOPE_ID_PATTERN.test(scopeId)) return [];
   try {
-    return parseConversationLog(localStorage.getItem(keyFor(runId)));
+    return parseConversationLog(localStorage.getItem(keyFor(scopeId)));
   } catch {
     return [];
   }
 }
 
 /** 追加一轮对话（用户消息与回复成对写入；开场分析只有回复一条）。 */
-export function appendConversationEntries(runId: string, entries: ConversationLogEntry[]): void {
-  if (!RUN_ID_PATTERN.test(runId) || entries.length === 0) return;
-  const trimmed = entries.map(entry => (
-    entry.text.length > MAX_ENTRY_CHARS ? { ...entry, text: entry.text.slice(0, MAX_ENTRY_CHARS) } : entry
-  ));
-  const merged = [...loadConversationLog(runId), ...trimmed].slice(-MAX_ENTRIES);
+export function appendConversationEntries(scopeId: string, entries: ConversationLogEntry[]): void {
+  if (!SCOPE_ID_PATTERN.test(scopeId) || entries.length === 0) return;
+  const trimmed = entries.map(entry => ({
+    ...entry,
+    ...(entry.text.length > MAX_ENTRY_CHARS ? { text: entry.text.slice(0, MAX_ENTRY_CHARS) } : {}),
+    ...(entry.reasoning && entry.reasoning.length > MAX_ENTRY_CHARS
+      ? { reasoning: entry.reasoning.slice(0, MAX_ENTRY_CHARS) }
+      : {}),
+  }));
+  const merged = [...loadConversationLog(scopeId), ...trimmed].slice(-MAX_ENTRIES);
   try {
-    localStorage.setItem(keyFor(runId), JSON.stringify({ entries: merged, saved_at: Date.now() }));
+    localStorage.setItem(keyFor(scopeId), JSON.stringify({ entries: merged, saved_at: Date.now() }));
   } catch {
     // 存储满或被禁用：本轮不落盘，对话仍在页面内存里继续。
   }
@@ -117,23 +132,23 @@ export function appendConversationEntries(runId: string, entries: ConversationLo
  * （生成耗时等），晚于回复本身的落盘。用回复文本校验目标条目，
  * 防止「保存任务历史」中途开关造成的错位。
  */
-export function attachTraceToLastReply(runId: string, replyText: string, trace: ConversationTraceRow[]): void {
-  if (!RUN_ID_PATTERN.test(runId) || trace.length === 0) return;
-  const entries = loadConversationLog(runId);
+export function attachTraceToLastReply(scopeId: string, replyText: string, trace: ConversationTraceRow[]): void {
+  if (!SCOPE_ID_PATTERN.test(scopeId) || trace.length === 0) return;
+  const entries = loadConversationLog(scopeId);
   const last = [...entries].reverse().find(entry => entry.role === "assistant" && !entry.opening);
   if (!last || last.text !== replyText.slice(0, MAX_ENTRY_CHARS)) return;
   last.trace = sanitizeTrace(trace);
   try {
-    localStorage.setItem(keyFor(runId), JSON.stringify({ entries, saved_at: Date.now() }));
+    localStorage.setItem(keyFor(scopeId), JSON.stringify({ entries, saved_at: Date.now() }));
   } catch {
     // 存储满或被禁用：轨迹不落盘，页面内展示不受影响。
   }
 }
 
-/** 删除任务时调用：清掉该运行的本机对话记录。 */
-export function clearConversationLog(runId: string): void {
+/** 删除任务或对话时调用：清掉该归属的本机对话记录。 */
+export function clearConversationLog(scopeId: string): void {
   try {
-    localStorage.removeItem(keyFor(runId));
+    localStorage.removeItem(keyFor(scopeId));
   } catch {
     // 没有存储就没有记录可清。
   }
