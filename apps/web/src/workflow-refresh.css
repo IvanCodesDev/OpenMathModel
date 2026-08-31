@@ -3783,6 +3783,54 @@ html[data-theme="dark"] .stream-row { color: #b9b9b2; }
 .stream-cta button:disabled { color: #9a9a95; cursor: default; }
 html[data-theme="dark"] .stream-detail { border-color: #3a3a37; background: #262624; }
 html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; }
+/* 审批门的多选项列表（ADR-0013 第 14 项）：修订门六个「从 X 重做」+ 一个撤回。
+   做成一组可点卡片而不是原生 radio——每项都要摆得下标题、建议徽标和一句影响面
+   说明（「重跑 X 及其之后的全部阶段」），原生控件既塞不下也压不住行高。 */
+.approval-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.approval-options-legend { margin: 0; color: #6d6d67; font-size: 13px; }
+.approval-options button {
+  width: 100%;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  align-items: center;
+  border: 1px solid #e4e4e1;
+  border-radius: 10px;
+  color: #3a3a36;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+.approval-options button strong { min-width: 0; font-size: 14px; font-weight: 600; }
+.approval-options button small {
+  grid-column: 1 / -1;
+  color: #79796f;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.approval-options button:hover { border-color: #c9c9c3; background: #fafaf8; }
+.approval-options button.is-selected { border-color: #151515; box-shadow: inset 0 0 0 1px #151515; }
+/* 撤回不是一个「阶段」，用虚线边框把它从六个重做起点里区分出来 */
+.approval-options button.is-withdraw { border-style: dashed; }
+.approval-option-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #4a4a45;
+  background: #efefec;
+  font-size: 12px;
+}
+html[data-theme="dark"] .approval-options-legend { color: #a8a8a1; }
+html[data-theme="dark"] .approval-options button { border-color: #3a3a37; color: #d8d8d2; background: #232321; }
+html[data-theme="dark"] .approval-options button small { color: #98988f; }
+html[data-theme="dark"] .approval-options button:hover { border-color: #4d4d46; background: #2b2b28; }
+html[data-theme="dark"] .approval-options button.is-selected { border-color: #e6e6e0; box-shadow: inset 0 0 0 1px #e6e6e0; }
+html[data-theme="dark"] .approval-option-badge { color: #d3d3cc; background: #3a3a37; }
 html[data-theme="dark"] .stream-cta { color: #a8a8a1; }
 html[data-theme="dark"] .stream-cta button { border-color: #45453f; color: #d8d8d2; background: #2e2e2c; }
 html[data-theme="dark"] .stream-cta button:hover:not(:disabled) { border-color: #56564f; background: #383835; }

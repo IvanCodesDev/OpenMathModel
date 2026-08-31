@@ -738,6 +738,8 @@ const MODEL_STAGE: Record<string, string> = {
     "Plan v2 compares accuracy, efficiency, interpretability and risk.",
   "已确认": "Confirmed",
   "已应用": "Applied",
+  // 审批门选项卡上的推荐标（ADR-0013 第 14 项）
+  "建议": "Suggested",
   // 真实阶段正文（stage-content：PlanProposal → 建模方案页）
   "建议采用方案": "Recommended plan",
   "方案": "Plan",

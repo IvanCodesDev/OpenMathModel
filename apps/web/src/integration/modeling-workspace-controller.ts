@@ -2,6 +2,12 @@ import type { ModelingWorkspaceView } from "@openmathmodel/contracts";
 import { mountComposerAttachments } from "../attachments/composer-attachments";
 import { currentLocale, t } from "../i18n/locale";
 import { configureConversation } from "./agent-chat";
+import {
+  applyChosenOption,
+  REJECT_OPTION_ID,
+  shouldOfferOptions,
+  type ChosenApprovalOption,
+} from "./approval-options";
 import { notifyRunStatusChange } from "../notifications/desktop-notifications";
 import { saveHistoryEnabled } from "../preferences/privacy-preferences";
 import { forgetLastTask, rememberLastTask } from "../tasks/last-task-record";
@@ -175,6 +181,16 @@ function renderStatus(root: HTMLElement, screen: ScreenId, view: ModelingWorkspa
   });
 }
 
+/** 用户在审批门里手选的那一项（ADR-0013 第 14 项）；null 表示沿用服务端预选。 */
+let chosenApprovalOption: ChosenApprovalOption | null = null;
+
+function withChosenOption(
+  view: ModelingWorkspaceView,
+  action: ModelingWorkspaceView["agent"]["action"],
+): ModelingWorkspaceView["agent"]["action"] {
+  return applyChosenOption(view.pending_approval, action, chosenApprovalOption);
+}
+
 function actionForScreen(
   screen: ScreenId,
   view: ModelingWorkspaceView,
@@ -200,12 +216,12 @@ function actionForScreen(
     };
   }
   if (screen === "model" && view.agent.action.kind === "approve") {
-    return {
+    return withChosenOption(view, {
       ...view.agent.action,
       label: "确认 Agent 当前方案并继续",
-    };
+    });
   }
-  return view.agent.action;
+  return withChosenOption(view, view.agent.action);
 }
 
 function agentSummaryForScreen(screen: ScreenId, view: ModelingWorkspaceView): string {
@@ -1001,6 +1017,83 @@ function ingestStreamEvent(
   }
 }
 
+/**
+ * 审批门的选项列表（ADR-0013 第 14 项）：把选项摆在 CTA 上方让用户挑重做起点。
+ *
+ * 摆不摆由 `shouldOfferOptions` 定；这里只负责渲染。修订门必须摆出来的理由见
+ * ADR §3：从问题分析重做和从论文撰写重做差一个数量级的花费，服务端只把建议项标成
+ * recommended、绝不替用户默选，不给改选入口的话「知情同意」就是一句空话。
+ */
+function renderApprovalOptions(
+  root: HTMLElement,
+  view: ModelingWorkspaceView,
+  action: ModelingWorkspaceView["agent"]["action"],
+  hidden: boolean,
+): void {
+  const approval = view.pending_approval;
+  const show = shouldOfferOptions(approval, action);
+  const selectedId = action.kind === "approve" ? action.option_id : null;
+
+  root.querySelectorAll<HTMLButtonElement>("[data-agent-cta]").forEach(cta => {
+    const previous = cta.previousElementSibling;
+    const existing = previous instanceof HTMLElement && previous.dataset.approvalOptions !== undefined
+      ? previous
+      : null;
+    if (!show || approval === null) {
+      existing?.remove();
+      return;
+    }
+    const host = existing ?? document.createElement("div");
+    host.className = "approval-options";
+    host.dataset.approvalOptions = approval.id;
+    host.hidden = hidden;
+    // 同一道门重复渲染（SSE 每来一帧都会走到这里）时只更新选中态，不重建 DOM——
+    // 重建会打断用户正在用键盘走的焦点。
+    if (existing && existing.dataset.approvalOptions === approval.id
+      && existing.childElementCount === approval.options.length + 1) {
+      existing.querySelectorAll<HTMLButtonElement>("[data-approval-option]").forEach(button => {
+        const active = button.dataset.approvalOption === selectedId;
+        button.classList.toggle("is-selected", active);
+        button.setAttribute("aria-checked", String(active));
+      });
+      return;
+    }
+    const legend = document.createElement("p");
+    legend.className = "approval-options-legend";
+    legend.textContent = approval.title;
+    const children: HTMLElement[] = [legend];
+    approval.options.forEach(option => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.approvalOption = option.id;
+      button.setAttribute("role", "radio");
+      const active = option.id === selectedId;
+      button.setAttribute("aria-checked", String(active));
+      button.classList.toggle("is-selected", active);
+      button.classList.toggle("is-withdraw", option.id === REJECT_OPTION_ID);
+      const label = document.createElement("strong");
+      label.textContent = option.label;
+      button.append(label);
+      if (option.recommended) {
+        const badge = document.createElement("span");
+        badge.className = "approval-option-badge";
+        badge.textContent = t("建议");
+        button.append(badge);
+      }
+      if (option.description) {
+        const description = document.createElement("small");
+        description.textContent = option.description;
+        button.append(description);
+      }
+      children.push(button);
+    });
+    host.replaceChildren(...children);
+    host.setAttribute("role", "radiogroup");
+    host.setAttribute("aria-label", approval.title);
+    if (!existing) cta.insertAdjacentElement("beforebegin", host);
+  });
+}
+
 function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspaceView): void {
   const planning = isPlanningPhase(view);
 
@@ -1083,11 +1176,15 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
   // 统一写入同一后端动作，点击处理按就近的 [data-agent-cta] 生效。
   // 规划阶段整体隐藏：此时没有可执行动作，「等待任务开始」占位不再显示。
   const action = actionForScreen(screen, view);
+  renderApprovalOptions(root, view, action, planning || Boolean(openingPending));
   root.querySelectorAll<HTMLButtonElement>("[data-agent-cta]").forEach(cta => {
     cta.removeAttribute("data-go");
     cta.dataset.agentAction = action.kind;
     cta.textContent = action.label;
-    cta.disabled = action.kind === "none";
+    // 多选项审批门没选中任何一项时按钮点了也是 no-op（服务端要求显式 option_id），
+    // 与其让用户点空，不如禁用它、由上方选项列表引导先选一项。
+    cta.disabled = action.kind === "none"
+      || (action.kind === "approve" && action.option_id === null);
     cta.hidden = planning || Boolean(openingPending);
   });
 }
@@ -1513,6 +1610,20 @@ export function mountModelingWorkspace(screen: ScreenId): void {
       if (currentView.run_status === "COMPLETED") {
         navigateTo(ROUTE_BY_GO.complete);
       }
+      return;
+    }
+
+    const approvalOption = target?.closest<HTMLButtonElement>("[data-approval-option]");
+    if (approvalOption?.dataset.approvalOption && currentView?.pending_approval) {
+      event.preventDefault();
+      event.stopPropagation();
+      // 只记选择、不提交：真正生效仍要点下面那个确认按钮。修订门这一下可能触发
+      // 整条下游链路重跑并追加一份配额，不能让「点了个单选」等于「已经开跑」。
+      chosenApprovalOption = {
+        approvalId: currentView.pending_approval.id,
+        optionId: approvalOption.dataset.approvalOption,
+      };
+      renderAgent(root, currentScreen, currentView);
       return;
     }
 
