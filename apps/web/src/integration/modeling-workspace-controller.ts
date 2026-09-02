@@ -1040,16 +1040,46 @@ function ingestStreamEvent(
 /** 新的多选项门刚出现时把决策块滚进视野（2026-09-02 走查观感）：修订门的选项列表
  *  往往超出一屏，CTA 又被输入框上方浮动的「执行计划」面板压在折叠线以下，用户看不出
  *  下面还有选项和确认键。每道门只滚一次（以审批 id 记账），之后的快照刷新与用户改选
- *  不再抢滚动条。 */
-function revealApprovalOptions(host: HTMLElement, approvalId: string, hidden: boolean): void {
+ *  不再抢滚动条。
+ *
+ *  必须等首屏历史水合完成（`root.dataset.streamHydrated`）再滚：首个快照渲染出选项时
+ *  活动流还是空的，紧接着 hydrateHistory 会在选项上方插入整段执行轨迹，此刻滚到的位置
+ *  马上被顶走（2026-09-02 实机复验：从运行页点 CTA 进成果页，只滚了 31px、选项仍在
+ *  视口下方 700px，而记账已写、不会再滚）。水合完成后控制器会再渲染一次，那一次才记账。
+ *
+ *  滚完还要核对一拍：首屏之后布局仍会变（摘要段落的打字机最长约 1.7s 才打完、页面层
+ *  恢复本机对话气泡、阶段正文拉取回来再渲染），而任何一次同步的 `scrollTop =` 赋值都会
+ *  打断进行中的平滑滚动——一次 fire-and-forget 的 scrollTo 本质上保证不了落点（2026-09-02
+ *  第三遍复验：记账已写、scrollTop 却停在 0 两秒多，之后才滚到一个按旧布局算出的位置）。
+ *  所以 REVEAL_SETTLE_MS 后再量一次：决策块顶部不在视口上半区就按此刻的布局直接落位；
+ *  这期间用户已经自己碰过滚动条则不再干预。 */
+const REVEAL_SETTLE_MS = 900;
+const REVEAL_USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown"] as const;
+
+function revealApprovalOptions(root: HTMLElement, host: HTMLElement, approvalId: string, hidden: boolean): void {
   if (hidden || host.dataset.revealedFor === approvalId) return;
+  if (root.dataset.streamHydrated !== "true") return;
   host.dataset.revealedFor = approvalId;
   const scroll = host.closest<HTMLElement>(".focused-agent-scroll, .chat-scroll");
   if (!scroll) return;
-  const top = host.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop - 8;
+  const hostTopInScroll = () => host.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+  const scrollHostToTop = (behavior: ScrollBehavior) => {
+    scroll.scrollTo({ top: Math.max(0, hostTopInScroll() + scroll.scrollTop - 8), behavior });
+  };
   const reduce = document.documentElement.dataset.reduceMotion === "on"
     || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  scroll.scrollTo({ top: Math.max(0, top), behavior: reduce ? "auto" : "smooth" });
+  scrollHostToTop(reduce ? "auto" : "smooth");
+
+  let userScrolled = false;
+  const markUserScroll = () => { userScrolled = true; };
+  REVEAL_USER_SCROLL_EVENTS.forEach(type => scroll.addEventListener(type, markUserScroll, { passive: true }));
+  window.setTimeout(() => {
+    REVEAL_USER_SCROLL_EVENTS.forEach(type => scroll.removeEventListener(type, markUserScroll));
+    if (userScrolled || !host.isConnected || !scroll.isConnected || !host.offsetParent) return;
+    const top = hostTopInScroll();
+    if (top >= -1 && top <= scroll.clientHeight / 2) return;
+    scrollHostToTop("auto");
+  }, REVEAL_SETTLE_MS);
 }
 
 /**
@@ -1091,8 +1121,9 @@ function renderApprovalOptions(
         button.classList.toggle("is-selected", active);
         button.setAttribute("aria-checked", String(active));
       });
-      // 覆盖「渲染时还被开场分析压着、随后放行」的时序：放行后仍要滚一次
-      revealApprovalOptions(existing, approval.id, hidden);
+      // 覆盖「渲染时还被开场分析压着、随后放行」与「首屏历史尚未水合」的时序：
+      // 放行 / 水合完成后的那次渲染仍要滚一次
+      revealApprovalOptions(root, existing, approval.id, hidden);
       return;
     }
     const legend = document.createElement("p");
@@ -1128,7 +1159,7 @@ function renderApprovalOptions(
     host.setAttribute("role", "radiogroup");
     host.setAttribute("aria-label", approval.title);
     if (!existing) cta.insertAdjacentElement("beforebegin", host);
-    revealApprovalOptions(host, approval.id, hidden);
+    revealApprovalOptions(root, host, approval.id, hidden);
   });
 }
 
@@ -1815,6 +1846,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   window.addEventListener("pagehide", cleanup, { once: true });
 
   root.dataset.integrationState = "loading";
+  // 同一壳层可能被复用给另一个运行：历史水合标记按本次挂载重新计
+  delete root.dataset.streamHydrated;
   root.querySelectorAll<HTMLElement>(
     '[data-go], [data-agent-cta], [data-action="continue-paper"], [data-action="download-all"], '
     + '[data-action="files"], [data-action="more"]',
@@ -1828,6 +1861,11 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     // 不能反过来把水合期间产生的新事件也算成历史）。
     replayThrough ??= currentView.latest_event_sequence ?? 0;
     await hydrateHistory();
-    if (!disposed) connectEvents();
+    if (disposed) return;
+    // 历史就位、布局不再被整段轨迹顶动：此刻再渲染一次，让审批门的选项列表
+    // 按最终位置滚进视野（revealApprovalOptions 在此之前一律不滚也不记账）。
+    root.dataset.streamHydrated = "true";
+    renderWorkspace(root, currentScreen, currentView);
+    connectEvents();
   });
 }
