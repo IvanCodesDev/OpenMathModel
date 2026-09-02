@@ -1037,6 +1037,21 @@ function ingestStreamEvent(
   }
 }
 
+/** 新的多选项门刚出现时把决策块滚进视野（2026-09-02 走查观感）：修订门的选项列表
+ *  往往超出一屏，CTA 又被输入框上方浮动的「执行计划」面板压在折叠线以下，用户看不出
+ *  下面还有选项和确认键。每道门只滚一次（以审批 id 记账），之后的快照刷新与用户改选
+ *  不再抢滚动条。 */
+function revealApprovalOptions(host: HTMLElement, approvalId: string, hidden: boolean): void {
+  if (hidden || host.dataset.revealedFor === approvalId) return;
+  host.dataset.revealedFor = approvalId;
+  const scroll = host.closest<HTMLElement>(".focused-agent-scroll, .chat-scroll");
+  if (!scroll) return;
+  const top = host.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop - 8;
+  const reduce = document.documentElement.dataset.reduceMotion === "on"
+    || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+  scroll.scrollTo({ top: Math.max(0, top), behavior: reduce ? "auto" : "smooth" });
+}
+
 /**
  * 审批门的选项列表（ADR-0013 第 14 项）：把选项摆在 CTA 上方让用户挑重做起点。
  *
@@ -1076,6 +1091,8 @@ function renderApprovalOptions(
         button.classList.toggle("is-selected", active);
         button.setAttribute("aria-checked", String(active));
       });
+      // 覆盖「渲染时还被开场分析压着、随后放行」的时序：放行后仍要滚一次
+      revealApprovalOptions(existing, approval.id, hidden);
       return;
     }
     const legend = document.createElement("p");
@@ -1111,6 +1128,7 @@ function renderApprovalOptions(
     host.setAttribute("role", "radiogroup");
     host.setAttribute("aria-label", approval.title);
     if (!existing) cta.insertAdjacentElement("beforebegin", host);
+    revealApprovalOptions(host, approval.id, hidden);
   });
 }
 
@@ -1419,6 +1437,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   let actionToken: string | undefined;
   let actionFingerprint: string | undefined;
   let conversationConfigured = false;
+  // 本页刚提交过修订撤回：随后的 WAITING_APPROVAL → COMPLETED 是回落不是新完成，
+  // 桌面通知按此静默（走查观感：撤回后再弹一次「任务已完成」）。观察到状态真正
+  // 变化后即清除，不影响之后任何一次真实完成的提醒。
+  let revisionWithdrawn = false;
 
   // ── 合并工作台（B 方案）：五个阶段面板同存于一个页面，阶段间跳转是软切换 ──
   const WORKSPACE_STAGE_SET = new Set<ScreenId>(["data", "model", "experiments", "editor", "complete"]);
@@ -1469,16 +1491,20 @@ export function mountModelingWorkspace(screen: ScreenId): void {
       const view = await modelingWorkspaceApi.get(runId, abortController.signal);
       if (disposed) return;
       // 首屏快照没有“上一个状态”，此时不提醒：用户刚打开页面，不该被历史状态打扰。
+      const previousStatus = currentView?.run_status;
       notifyRunStatusChange({
         runId: view.run_id,
         projectId: view.project_id,
         projectName: view.project_name,
-        previous: currentView?.run_status,
+        previous: previousStatus,
         current: view.run_status,
         // 同一运行第二次进入同一状态（G2→G1 两道门、修订第 2 轮完成）要各自提醒
         approvalId: view.pending_approval?.id ?? null,
         eventSequence: view.latest_event_sequence,
+        revisionWithdrawn,
       });
+      // 撤回标记只管到下一次真实状态变化为止（撤回的回落本身就是那次变化）
+      if (previousStatus && previousStatus !== view.run_status) revisionWithdrawn = false;
       // 问题分析产出实际题目后服务端会自动重命名项目：侧栏「最近任务」跟着换名
       if (currentView && currentView.project_name !== view.project_name) {
         void hydrateRecentTasks();
@@ -1708,6 +1734,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         async () => {
           actionToken = undefined;
           actionFingerprint = undefined;
+          // 撤回已被服务端受理：紧随其后回落到 COMPLETED 的快照不再当作新完成提醒
+          revisionWithdrawn = action.kind === "approve" && action.option_id === REJECT_OPTION_ID;
           await refresh();
           // 阶段推进体验：方案确认（非退回重做）后直接进入“实验与验证”页跟随执行。
           // 这是用户显式确认动作的延续；ADR-0007 禁止的是“加载时自动跳页”，不适用于此。

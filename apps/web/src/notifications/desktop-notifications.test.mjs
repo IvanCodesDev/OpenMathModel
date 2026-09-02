@@ -19,7 +19,7 @@ const privacyStub = stub(
 const moduleCode = outputText
   .replace('"../i18n/locale"', JSON.stringify(localeStub))
   .replace('"../preferences/privacy-preferences"', JSON.stringify(privacyStub));
-const { runStatusNotificationTag } = await import(
+const { runStatusNotificationTag, shouldAnnounceRunStatus } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(moduleCode)}`
 );
 
@@ -74,4 +74,32 @@ test("非等待确认状态不拿审批 id 当标识（审批 id 属于门，不
     runStatusNotificationTag(RUN, "COMPLETED", { approvalId: "appr_stale", eventSequence: 9 }),
     `omm-run-${RUN}-COMPLETED-9`,
   );
+});
+
+test("撤回修订后的回落（等待确认 → 已完成）不再当作新完成提醒", () => {
+  assert.equal(
+    shouldAnnounceRunStatus({ previous: "WAITING_APPROVAL", current: "COMPLETED", revisionWithdrawn: true }),
+    false,
+  );
+  // 没有撤回标记的同一转换仍提醒：跨标签页等场景宁可多提醒也不吞
+  assert.equal(
+    shouldAnnounceRunStatus({ previous: "WAITING_APPROVAL", current: "COMPLETED" }),
+    true,
+  );
+});
+
+test("撤回标记不误伤其它转换：真实第 2 轮完成与再次进门照常提醒", () => {
+  assert.equal(
+    shouldAnnounceRunStatus({ previous: "RUNNING", current: "COMPLETED", revisionWithdrawn: true }),
+    true,
+  );
+  assert.equal(
+    shouldAnnounceRunStatus({ previous: "COMPLETED", current: "WAITING_APPROVAL", revisionWithdrawn: true }),
+    true,
+  );
+});
+
+test("首屏快照与状态未变的重复快照一律不提醒", () => {
+  assert.equal(shouldAnnounceRunStatus({ previous: undefined, current: "COMPLETED" }), false);
+  assert.equal(shouldAnnounceRunStatus({ previous: "RUNNING", current: "RUNNING" }), false);
 });

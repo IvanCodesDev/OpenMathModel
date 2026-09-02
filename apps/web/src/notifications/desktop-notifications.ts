@@ -92,7 +92,25 @@ export function sendNotificationPreview(): void {
   });
 }
 
-/** 运行状态变化提醒；`previous` 为空表示首次加载，不打扰用户。
+/** 运行状态提醒的放行规则；单独导出便于 node --test 直接覆盖（web 包没有 DOM 测试栈）。
+ *
+ *  - `previous` 为空表示首次加载快照，不打扰用户；状态没变的重复快照同理。
+ *  - `revisionWithdrawn`：本页刚提交过修订撤回（ADR-0013），随后的
+ *    WAITING_APPROVAL → COMPLETED 只是把运行放回它本来的完成态——上一轮完成时
+ *    已经提醒过，这里再弹「任务已完成」等于把撤回说成了新成果（2026-09-02 走查观感）。
+ *    真正的第 2 轮完成走 WAITING_APPROVAL → RUNNING → … → COMPLETED，不受影响。 */
+export function shouldAnnounceRunStatus(input: {
+  previous: string | undefined;
+  current: string;
+  revisionWithdrawn?: boolean;
+}): boolean {
+  const { previous, current, revisionWithdrawn } = input;
+  if (!previous || previous === current) return false;
+  if (revisionWithdrawn && previous === "WAITING_APPROVAL" && current === "COMPLETED") return false;
+  return true;
+}
+
+/** 运行状态变化提醒；放行规则见 `shouldAnnounceRunStatus`。
  *
  *  同一运行会多次进入同一状态：G2 数据闸门与 G1 方案门先后 WAITING_APPROVAL、
  *  失败→重试→再失败、修订回合（ADR-0013）第 2 轮再次 COMPLETED。tag 只由
@@ -110,9 +128,11 @@ export function notifyRunStatusChange(input: {
   approvalId?: string | null;
   /** 快照里最新事件的序号；没有事件时为 null。 */
   eventSequence?: number | null;
+  /** 本页刚提交过修订撤回：撤回回落到 COMPLETED 不再当作新完成提醒。 */
+  revisionWithdrawn?: boolean;
 }): void {
-  const { runId, projectId, projectName, previous, current, approvalId, eventSequence } = input;
-  if (!previous || previous === current) return;
+  const { runId, projectId, projectName, current, approvalId, eventSequence } = input;
+  if (!shouldAnnounceRunStatus(input)) return;
 
   const url = `/task/running?run_id=${encodeURIComponent(runId)}&project_id=${encodeURIComponent(projectId)}`;
   const notices: Record<string, { title: string; body: string }> = {
