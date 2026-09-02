@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -31,8 +32,36 @@ from omm_contracts import (
 
 from .api_models import StageOutputs
 from .blobstore import ArtifactBlobStore, has_readable_local_content
-from .orm import ArtifactRow, DomainEventRow, StageOutputRow, TaskRunRow
+from .orm import ArtifactRow, DomainEventRow, StageOutputRow, StepRunRow, TaskRunRow
 from .serialize import as_utc, iso_z
+
+
+def superseded_step_ids(steps: Iterable[StepRunRow]) -> set[str]:
+    """同一节点多趟 step 里，除最近一趟（attempt 最大）之外的 step id。
+
+    修订回合重做（ADR-0013）与失败重试都会让同一节点出现多趟；成果页与交付
+    清单只列最近一趟产出的文件——审批门承诺的正是「原有成果由本轮新结果替换」，
+    两轮产物并列（重名两两、数量翻倍）会让用户分不清哪份是现行的。旧趟的产物
+    行与内容对象都还在库里（可审计、可经 /artifacts/{id}/download 直接取），
+    只是不再列出。上传附件没有 producer_step，不受影响。
+    """
+    latest: dict[str, tuple[tuple[int, Any, str], str]] = {}
+    seen: set[str] = set()
+    for step in steps:
+        seen.add(step.id)
+        rank = (int(step.attempt or 0), step.created_at, step.id)
+        current = latest.get(step.node)
+        if current is None or rank > current[0]:
+            latest[step.node] = (rank, step.id)
+    return seen - {step_id for _, step_id in latest.values()}
+
+
+def current_pass_artifacts(
+    artifact_rows: Iterable[ArtifactRow], steps: Iterable[StepRunRow]
+) -> list[ArtifactRow]:
+    """过滤掉被后一趟替换的产物（见 :func:`superseded_step_ids`）。"""
+    superseded = superseded_step_ids(steps)
+    return [row for row in artifact_rows if (row.producer_step or "") not in superseded]
 
 _PROBLEM_ANALYSIS = "PROBLEM_ANALYSIS"
 _DATA_PREPARATION = "DATA_PREPARATION"
@@ -408,12 +437,17 @@ def build_stage_outputs(
 ) -> StageOutputs:
     stages, step_nodes = replay_stage_outputs(session, run.id)
     overlay_stage_output_rows(session, run.id, stages)
-    artifact_rows = list(
+    steps = list(
+        session.execute(select(StepRunRow).where(StepRunRow.run_id == run.id)).scalars()
+    )
+    # 交付清单只列每个节点最近一趟的产物：修订重做后旧趟成果不再并列
+    artifact_rows = current_pass_artifacts(
         session.execute(
             select(ArtifactRow)
             .where(ArtifactRow.run_id == run.id)
             .order_by(ArtifactRow.created_at.asc(), ArtifactRow.id.asc())
-        ).scalars()
+        ).scalars(),
+        steps,
     )
 
     return StageOutputs(

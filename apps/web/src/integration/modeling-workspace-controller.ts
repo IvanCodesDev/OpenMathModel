@@ -374,6 +374,8 @@ interface AgentStreamState {
   pending: Map<string, PendingStreamRow>;
   /** 当前处理的是首连回放的历史事件（决定落点，见 resolveStreamHost）。 */
   replaying: boolean;
+  /** 已受理的修订轮次（ADR-0013）：0 = 首轮；之后进入的阶段都属于第 N 轮修改的重做。 */
+  revisionRound: number;
 }
 
 const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
@@ -381,10 +383,16 @@ const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
 function streamState(root: HTMLElement): AgentStreamState {
   let state = streamByRoot.get(root);
   if (!state) {
-    state = { host: null, seen: new Set(), pending: new Map(), replaying: false };
+    state = { host: null, seen: new Set(), pending: new Map(), replaying: false, revisionRound: 0 };
     streamByRoot.set(root, state);
   }
   return state;
+}
+
+/** 阶段行的轮次后缀：同一阶段在修订重做后会再出现一遍，不标轮次看起来像重复卡片
+ *  （ADR-0013 第 16 项）。首轮不加后缀，既有文案逐字不变。 */
+function revisionSuffix(state: AgentStreamState): string {
+  return state.revisionRound > 0 ? `（第 ${state.revisionRound} 轮修改）` : "";
 }
 
 /** 首条 Agent 消息是否已「封口」：开场分析结束且计划相位到达 revealed
@@ -778,7 +786,7 @@ function ingestStreamEvent(
       // 且紧随的 run.status_changed 已经叙述「全部阶段完成」，这里不再重复。
       if (String(payload.to ?? "") === "COMPLETED") return;
       const label = String(payload.label ?? payload.to ?? "");
-      if (label) streamNarration(root, `进入「${label}」阶段。`);
+      if (label) streamNarration(root, `进入「${label}」阶段${revisionSuffix(state)}。`);
       return;
     }
     case "run.status_changed": {
@@ -894,6 +902,15 @@ function ingestStreamEvent(
         });
         return;
       }
+      if (kind === "revision_requested") {
+        // 修订回合受理（ADR-0013）：之后进入的阶段都属于这一轮修改的重做，
+        // 阶段行据此标轮次；回执本身有现成人话 message，不落原始 JSON 兜底。
+        const round = Number(payload.round);
+        state.revisionRound = Number.isFinite(round) && round > 0 ? round : state.revisionRound + 1;
+        const message = String(payload.message ?? "").trim();
+        if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
+        return;
+      }
       if (kind === "task_renamed" || kind === "budget_limit") {
         // 有现成人话 message 的运营事件：以叙述行呈现，不落进原始 JSON 兜底
         const message = String(payload.message ?? "").trim();
@@ -977,7 +994,7 @@ function ingestStreamEvent(
       if (detail) {
         streamRow(root, {
           icon: "clipboard-text",
-          title: `阶段产出 · ${label}`,
+          title: `阶段产出 · ${label}${revisionSuffix(state)}`,
           detail,
         });
       }

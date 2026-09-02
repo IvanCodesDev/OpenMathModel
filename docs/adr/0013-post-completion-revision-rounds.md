@@ -1,6 +1,6 @@
 # ADR-0013：跑完之后还能接着改——修订回合复用评审门，不派生新运行
 
-- 状态：Accepted（切片 1、2 已落地并通过全量回归；切片 3 的第 12/13/14/15 项已落地，第 16/17 项前端待做）
+- 状态：Accepted（切片 1、2 已落地并通过全量回归；切片 3 第 12~17 项全部落地，第 12/14 项经 2026-09-02 无头浏览器实机走查）
 - 日期：2026-08-31
 - 关联：ADR-0011（编排状态机与有界循环）、ADR-0007、[系统架构](../architecture/system-overview.md)、设计 §11.3（运行备注）
 
@@ -164,7 +164,7 @@ ADR-0011 约束新增领域阶段要走全链路，因此**不为分诊增设节
 | 13 | `modeling-workspace-api.ts` | **已落地**（`f87bbf4`）：新增 `postRunRevision(runId, text)` 与回执类型 `RunRevisionReceipt`，导出 `RUN_REVISION_TEXT_LIMIT=2000` 与服务端对齐 |
 | 14 | 审批卡 | **已落地**（`15817bf`）：修订门（正向选项 >1）在 CTA 上方摆出全部选项供改选，点选只记选择不提交；策略拆到 `approval-options.ts` 以便单测（8 例）。**2026-09-02 实机走查通过**：七个选项渲染、建议项带「建议」标（「目标函数」→ 建模方案、「灵敏度」→ 结果验证均如预期）、改选实验运行后确认 → `step_runs` 仅 EXPERIMENTING/VALIDATING/PAPER_WRITING 出现 attempt 2、上游三段不动；选「撤回」按钮文案换成「撤回本次修改要求」，点击后运行回到 COMPLETED 且 `ended_at` 回填。已知观感：成果页左栏的选项列表下半段与 CTA 被浮动的「执行计划」面板遮住，需在面板内滚动才能看到 |
 | 15 | `workspace_view.py` | **已落地**：修订门不再沿用「确认后，Agent 将从当前检查点继续执行」。`_revision_round` 以 `evidence["revision_round"]` 为判据（不是选项 id 的 `redo:` 前缀——那只是命名约定，日后同名选项会被误判），`_revision_gate_summary` 写明起点、影响面与「另计一份运行配额」，按钮改称「确认重做起点」；推荐不唯一致预选缺席时如实请用户自选。节点自提闸门逐字不变，`backend/api` 全量 287 passed |
-| 16 | 时间线 | 同一阶段出现多趟，按轮分组并标「第 2 轮」，避免看起来是重复卡片。**2026-09-02 读码修正**：`modeling-workspace-controller.ts` 对同一 `llm:<prompt_id>` 的行复用只在上一行仍未落定（pending）时发生，而 `run.status_changed → COMPLETED` 会把全部走秒行落定，第 2 轮的 `llm_call_started` 新建行而非复用，不会被显示成「第 N 次尝试」——本项因此是纯展示增强而非缺陷。**走查新增一处待做**：成果页「交付文件」把两轮产物并列（两份「基线实验结果图」「建模报告草稿」，产物数量 4），没有轮次标识也没有把上一轮的 superseded 产物收起，与本项同属「按轮分组」范围 |
+| 16 | 时间线 / 成果 | **已落地（2026-09-02）**。活动流：`run.log kind=revision_requested` 到达后记下轮次并以叙述行呈现回执（不再落原始 JSON），之后的「进入「X」阶段」与「阶段产出 · X」行带「（第 N 轮修改）」后缀，首轮文案逐字不变。成果页与交付清单：`stage_outputs.current_pass_artifacts` 只列每个节点最近一趟（attempt 最大）step 产出的文件——审批门承诺的正是「原有成果由本轮新结果替换」，此前从实验运行重做一轮后「交付文件」出现两份「基线实验结果图」两份「建模报告草稿」、产物数量翻倍；旧趟产物行与内容对象仍在库里、可经 `/artifacts/{id}/download` 直接取，只是不再列出；上传附件没有 producer_step 不受影响（`test_workspace_lists_only_the_latest_pass_artifacts`）。读码修正：`llm:<prompt_id>` 行复用只在上一行仍 pending 时发生，COMPLETED 会把全部走秒行落定，第 2 轮不会被显示成「第 N 次尝试」，原先担心的那处不成立 |
 | 17 | 状态接管 | 运行状态由 COMPLETED 变回 RUNNING，列表筛选、通知需能接住。**已核实**：`recent-tasks.ts` 的 `TERMINAL_STATUSES` 归桶跟着 status 走，无需改；`restore-last-task.ts` 全文无状态判断，本项不涉及该文件。**通知去重已修**（2026-09-02）：`notifications/desktop-notifications.ts` 原 `tag: omm-run-{runId}-{current}` 在第二轮完成时逐字节相同，模块级 `delivered` 与浏览器同 tag 去重会吞掉第 2 轮的「任务已完成」——且这个缺陷**不依赖修订功能**：G2 数据闸门与 G1 方案门在同一运行先后 WAITING_APPROVAL，第二道门的提醒同样被吞。现在 tag 由 `runStatusNotificationTag` 生成：等待确认带审批 id、其余状态带最新事件序号（同一次进入的重复快照 tag 相同，去重语义保留），`desktop-notifications.test.mjs` 6 例覆盖 |
 
 ### 5. 明确不做

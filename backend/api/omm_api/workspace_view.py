@@ -24,7 +24,7 @@ from .orm import (
     TaskRunRow,
 )
 from .serialize import iso_z
-from .stage_outputs import StageState, replay_stage_outputs
+from .stage_outputs import StageState, current_pass_artifacts, replay_stage_outputs
 from .workflow import STAGE_LABELS
 
 PAGE_SPECS: tuple[dict[str, Any], ...] = (
@@ -395,7 +395,9 @@ def build_modeling_workspace_view(
     step_nodes = {step.id: step.node for step in steps}
     # 项目级上传（run_id 为空）= 用户随任务提交的附件：当前产品流程一个任务
     # 对应一个项目，它们属于本次运行的输入，顶栏附件与对话上下文都要能看到。
-    artifact_rows = list(
+    # 修订回合重做（ADR-0013 第 16 项）后同一节点有多趟产物：成果页与各阶段页只列
+    # 最近一趟的文件，旧趟不再并列（审批门承诺「原有成果由本轮新结果替换」）。
+    artifact_rows = current_pass_artifacts(
         session.execute(
             select(ArtifactRow)
             .where(
@@ -403,7 +405,8 @@ def build_modeling_workspace_view(
                 or_(ArtifactRow.run_id == run.id, ArtifactRow.run_id.is_(None)),
             )
             .order_by(ArtifactRow.created_at.asc(), ArtifactRow.id.asc())
-        ).scalars()
+        ).scalars(),
+        steps,
     )
     artifacts: list[dict[str, Any]] = []
     artifact_nodes: dict[str, str | None] = {}

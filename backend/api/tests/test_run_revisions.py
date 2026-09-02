@@ -122,6 +122,38 @@ def test_approving_revision_reruns_chosen_stage_and_downstream(client) -> None:
     assert final["ended_at"] is not None and final["failure"] is None
 
 
+def test_workspace_lists_only_the_latest_pass_artifacts(client) -> None:
+    """重做后成果页与交付清单不能把两轮产物并列（ADR-0013 第 16 项）。
+
+    2026-09-02 走查：从实验运行重做一轮后，成果页「交付文件」出现两份「基线实验结果图」
+    两份「建模报告草稿」、产物数量翻倍，而审批门承诺的是「原有成果由本轮新结果替换」。
+    旧趟产物行仍在库里可直接下载，只是不再列出；上游未重做阶段与上传附件不受影响。
+    """
+    run_id = _completed_run(client)
+    before = client.get(f"{API}/task-runs/{run_id}/workspace").json()["artifacts"]
+    first_pass_ids = {a["id"] for a in before}
+    assert len(before) >= 2 and len({a["name"] for a in before}) == len(before)
+
+    _post_revision(client, run_id, "实验参数改一下再跑")
+    approve_when_asked(client, run_id, option_id="redo:EXPERIMENTING")
+    wait_until(client, run_id, run_status_is(client, run_id, "COMPLETED"))
+
+    after = client.get(f"{API}/task-runs/{run_id}/workspace").json()["artifacts"]
+    names = [a["name"] for a in after]
+    assert len(names) == len(set(names)), f"两轮产物并列：{names}"
+    assert len(after) == len(before), "只换成新一趟，数量不该翻倍"
+    assert not (first_pass_ids & {a["id"] for a in after}), "旧趟产物不再列出"
+    # 旧趟产物仍可直接下载（可审计），只是不进清单
+    stale = next(iter(first_pass_ids))
+    assert client.get(f"{API}/artifacts/{stale}/download").status_code == 200
+
+    manifest = client.get(f"{API}/task-runs/{run_id}/stage-outputs").json()["delivery_manifest"]
+    if manifest is not None:
+        manifest_names = [a["name"] for a in manifest["artifacts"]]
+        assert len(manifest_names) == len(set(manifest_names))
+        assert not (first_pass_ids & {a["id"] for a in manifest["artifacts"]})
+
+
 def test_redo_from_planning_reraises_the_plan_gate(client) -> None:
     """从建模方案重做要重新过方案确认门——那道门本来就是该阶段完成时提的。"""
     run_id = _completed_run(client)
