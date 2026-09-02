@@ -774,6 +774,9 @@ function ingestStreamEvent(
 
   switch (event.type) {
     case "run.node_changed": {
+      // COMPLETED 是端点不是阶段：服务端给不出中文名（label 落成枚举原文），
+      // 且紧随的 run.status_changed 已经叙述「全部阶段完成」，这里不再重复。
+      if (String(payload.to ?? "") === "COMPLETED") return;
       const label = String(payload.label ?? payload.to ?? "");
       if (label) streamNarration(root, `进入「${label}」阶段。`);
       return;
@@ -1563,6 +1566,22 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     });
   };
 
+  // 已完成的运行被修订要求重新打开（ADR-0013）：服务端在终态时已经发过 stream.end、
+  // 这里也把 SSE 关掉不再重连，于是 COMPLETED → WAITING_APPROVAL 这一步页面上什么都
+  // 收不到——修订门不出现、状态仍写着「已完成」、也没有「需要你确认」的提醒，直到用户
+  // 手动刷新（2026-09-02 无头浏览器走查实测）。对话层受理成功后广播本事件，这里
+  // 立刻拉一次快照并重新接上事件流（after=lastSequence，只接新增量）。
+  const onRunReopened = (event: Event): void => {
+    const detail = (event as CustomEvent<{ runId?: string }>).detail;
+    if (disposed || detail?.runId !== runId) return;
+    streamEnded = false;
+    eventSource?.close();
+    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+    void refresh(false);
+    connectEvents();
+  };
+  document.addEventListener("omm:run-reopened", onRunReopened);
+
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
     // 顶栏附件与「更多操作」：真实运行绑定后由这里接管，演示弹层不再出现。
@@ -1742,6 +1761,7 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     window.clearInterval(elapsedTicker);
     document.removeEventListener("omm:stage-shown", onStageShown);
     document.removeEventListener("omm:opening-analysis-done", onOpeningDone);
+    document.removeEventListener("omm:run-reopened", onRunReopened);
     root.removeEventListener("click", onClick, true);
     root.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("pagehide", cleanup);

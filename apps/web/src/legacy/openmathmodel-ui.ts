@@ -3481,8 +3481,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       button.textContent = "正在受理…";
       try {
         const receipt = await modelingWorkspaceApi.postRunRevision(runId, text);
-        // 重做起点由审批门里的选项说了算，这里不重复报建议值（免得两处措辞打架）；
-        // 审批门本身会经 SSE 的 approval.requested 自己出现，无需前端手动刷新。
+        // 重做起点由审批门里的选项说了算，这里不重复报建议值（免得两处措辞打架）。
+        // 审批门不会「经 SSE 自己出现」：运行到终态时事件流已经收尾（stream.end），
+        // 控制器不再重连——必须告诉它运行被重新打开，让它拉快照并重接事件流；
+        // 否则修订门、状态徽标与「需要你确认」提醒都要等用户手动刷新（走查实测）。
+        document.dispatchEvent(new CustomEvent("omm:run-reopened", { detail: { runId } }));
         settleAs(`已受理第 ${receipt.round} 轮修改：请在待确认事项中选定重做起点后生效。`);
       } catch (error) {
         const code = error instanceof WorkspaceApiError ? error.code : "";
