@@ -2243,7 +2243,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                   <label class="settings-field"><span>网络代理</span><select name="proxyMode"><option>跟随系统</option><option>不使用代理</option><option>手动配置</option></select><small>将随模型服务接入后生效，当前仅保存配置</small></label>
                   <label class="settings-field"><span>代理地址</span><input name="proxyUrl" placeholder="http://127.0.0.1:7890"><small>供服务端出站请求使用，网页自身不经过此代理</small></label>
                   <label class="settings-field"><span>请求超时</span><div class="field-with-unit"><input type="number" name="requestTimeout" value="120" min="5" max="600" step="5"><b>秒</b></div><small>作用于网页与服务端之间的接口请求（5–600 秒）</small></label>
-                  <label class="settings-field"><span>最大并发任务</span><select name="maxConcurrency"><option>3 个</option><option>1 个</option><option>5 个</option><option>8 个</option></select><small>同时排队或执行中的任务数上限，保存后立即生效</small></label>
+                  <label class="settings-field"><span>最大并发任务</span><select name="maxConcurrency"><option>3 个</option><option>1 个</option><option>5 个</option><option>8 个</option></select><small>同时排队或执行中的任务数上限，保存后立即生效；多个任务由同一执行线程逐阶段轮流推进，调大不等于并行加速</small></label>
                   <label class="settings-field"><span>下载目录</span><input name="downloadDirectory" value="E:\\OpenMathModel\\Downloads" disabled><small>桌面端功能：网页版的下载位置由浏览器决定</small></label>
                   <label class="settings-field"><span>临时文件目录</span><input name="tempDirectory" value="自动管理" disabled><small>桌面端功能：服务端临时目录由部署配置管理</small></label>
                 </div>
