@@ -388,22 +388,31 @@ def _profile_data_tables(
 #: 沙盒任务允许的工具面（§7.1 五件套；env_probe 由节点侧预先探测，不给模型）。
 SANDBOX_TOOL_NAMES = ("python_run", "ws_write", "ws_read", "ws_list")
 
+WS_WRITE_TOOL = "ws_write"
+
+#: 实验节点收束后把通过验收的最终脚本落到工作区的固定路径。沙箱每次运行的
+#: 即时副本在 steps/<step_id>/main.py（按步骤 id 命名，下游节点不知道那个 id），
+#: 这里只放最终版：验证阶段据此复跑，论文阶段（figure_render，H5）也按此路径取。
+EXPERIMENT_SCRIPT_PATH = "experiment.py"
+
 #: 显式种子（§7.1 任务卡字段）：合成数据/抽样必须使用的固定种子。
 SANDBOX_SEEDS = {"random_seed": 42}
 
 
 class _SandboxCapture:
-    """节点侧执行证据：最后一次 python_run 的 stdout/指标 + 全部产物。
+    """节点侧执行证据：最后一次 python_run 的 stdout/指标 + 全部产物 + 最终代码。
 
     sandbox-run-report.v1 不含 stdout 与指标本体（那是产物与断言的事），但
     节点输出（stage_outputs 正文）需要它们——在工具执行器上就地截获，不改
-    执行体的报告形状。
+    执行体的报告形状。``code`` 由 publish 回调顺手记下：执行体只回传产物 id，
+    节点要把脚本落到工作区固定路径还得有正文。
     """
 
     def __init__(self) -> None:
         self.stdout = ""
         self.metrics: dict[str, Any] = {}
         self.artifacts: list[Any] = []
+        self.code = ""
         self._seen: set[str] = set()
 
     def observe(self, result: ToolResult) -> None:
@@ -491,6 +500,7 @@ def _publish_code_callback(
     """publish_code 回调：脚本进内容寻址存储，产物引用并入节点产出。"""
 
     def publish(code: str) -> str:
+        capture.code = code
         if services.artifacts is None or not code:
             return ""
         ref = services.artifacts.put(
@@ -516,6 +526,23 @@ def _report_shape_problems(report: dict[str, Any]) -> list[str]:
         "seeds", "env_fingerprint", "usage",
     )
     return [f"missing required key: {key}" for key in required if key not in report]
+
+
+def _stage_final_script(ctx: NodeContext, services: NodeServices, code: str) -> str:
+    """把通过验收的最终脚本写到工作区固定路径，返回路径；写不进去如实给空串。
+
+    只影响下游复跑（验证阶段找不到脚本会如实降级为「仅判读」），不影响本
+    步骤的成败——脚本本身已作为 code 产物发布，可复现性不靠这一份副本。
+    """
+    if not code or services.tools is None:
+        return ""
+    result = services.tools.invoke(
+        ctx.run_id,
+        ctx.step_id,
+        WS_WRITE_TOOL,
+        {"path": EXPERIMENT_SCRIPT_PATH, "text": code},
+    )
+    return EXPERIMENT_SCRIPT_PATH if result.ok else ""
 
 
 # ── 数据准备：LLM 方案 → 清洗沙盒执行 → G2 影响面闸门 ─────────────────────────
@@ -1008,6 +1035,9 @@ class ExperimentExecutionNode(LlmSkillNode):
                 ref.uri.rstrip("/").rsplit("/", 1)[-1] for ref in capture.artifacts
             ]
             summary_bits.append("产物文件：" + "、".join(names))
+        # 最终脚本落工作区固定路径：验证阶段据此复跑（steps/<id>/main.py 的
+        # 即时副本下游拿不到 id）。
+        script_path = _stage_final_script(ctx, services, capture.code)
 
         return NodeResult.succeeded(
             outputs={
@@ -1019,6 +1049,8 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "progress_note": str(final_answer.get("progress_note") or ""),
                 # 复现与评测面：断言逐条结果/种子/环境指纹/预算用量
                 "sandbox_report": report,
+                # 工作区里的最终脚本路径（写入失败为空串，下游据此判断能否复跑）
+                "script_path": script_path,
             },
             metrics=node_metrics,
             artifacts=tuple(capture.artifacts),
@@ -1050,9 +1082,169 @@ def _experiment_metrics_check(evidence) -> tuple[bool, str]:
     )
 
 
+# ── 验证：LLM 判读 → 稳健性检查沙盒复跑 → G3 结果采用闸门 ─────────────────────
+
+ROBUSTNESS_PROMPT_ID = "validating.sandbox"
+
+#: G3 的「接受并记录局限」选项 id：进 review_decisions，论文阶段据此把未通过
+#: 的检查项写进局限性。
+G3_ACCEPT_OPTION_ID = "accept_with_limitations"
+
+#: G3 审批选项（§11.1）。重做与回退两项直接复用修订门的 ``redo:<STATE>`` 选项
+#: id：控制面 resolve_approval 据此回退并丢弃下游产出（ADR-0013 已落地的引擎
+#: 语义），G3 不新增任何引擎分支。推荐项按未通过比例在运行时标注。
+G3_OPTIONS = (
+    {
+        "id": G3_ACCEPT_OPTION_ID,
+        "label": "接受并记录局限",
+        "description": "采用当前实验结果继续撰写论文，未通过的检查项作为局限性如实写入论文",
+    },
+    {
+        "id": "redo:EXPERIMENTING",
+        "label": "重做实验",
+        "description": "回到实验阶段重新实现与运行，随后重新检验",
+    },
+    {
+        "id": "redo:MODEL_PLANNING",
+        "label": "回退方案阶段",
+        "description": "重新制定建模方案（需再次确认），之后重做实验与检验",
+    },
+)
+
+#: 推荐项口径：未通过项占比不到一半 → 推荐「接受并记录局限」（结论主体成立，
+#: 局限如实写进论文即可）；一半及以上 → 推荐「重做实验」。只是 CTA 预选，
+#: 最终由人拍板。
+G3_REDO_RECOMMEND_RATIO = 0.5
+
+#: 检查项下限：只有一项不算稳健性检验——单项太容易挑一个必过的。
+MIN_ROBUSTNESS_CHECKS = 2
+
+#: 任务卡里实验脚本正文的上限（超长截断并标注；模型可 ws_read 全文）。
+_EXPERIMENT_CODE_CARD_CHARS = 12_000
+
+
+def _clip_code(code: str) -> str:
+    if len(code) <= _EXPERIMENT_CODE_CARD_CHARS:
+        return code
+    return (
+        code[:_EXPERIMENT_CODE_CARD_CHARS]
+        + f"\n# …（脚本共 {len(code)} 字符，此处截断；完整内容请 ws_read {EXPERIMENT_SCRIPT_PATH}）"
+    )
+
+
+def _risk_points(plan: Mapping[str, Any], judgement: Mapping[str, Any]) -> str:
+    """检验任务卡的风险点段：方案自报风险 + 评审判读的保留意见与风险。"""
+    lines: list[str] = []
+    for risk in plan.get("risks") or []:
+        if str(risk).strip():
+            lines.append(f"- 方案风险：{str(risk).strip()}")
+    for check in judgement.get("checks") or []:
+        if isinstance(check, Mapping) and check.get("result") in ("warn", "fail"):
+            lines.append(
+                f"- 评审保留（{check.get('result')}）：{check.get('name')}——{check.get('note')}"
+            )
+    for risk in judgement.get("risks") or []:
+        if str(risk).strip():
+            lines.append(f"- 评审风险：{str(risk).strip()}")
+    return "\n".join(lines) or "- 无特别风险点：三类检查各做一项"
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _normalize_checks(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """标记行里的 checks → 节点产出形状（只收合法项；校验在断言里做）。"""
+    checks: list[dict[str, Any]] = []
+    for entry in metrics.get("checks") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        check_id = str(entry.get("id") or "").strip()
+        if not check_id or not isinstance(entry.get("passed"), bool):
+            continue
+        checks.append(
+            {
+                "id": check_id,
+                "name": str(entry.get("name") or check_id),
+                "passed": bool(entry["passed"]),
+                "value": entry.get("value"),
+                "threshold": entry.get("threshold"),
+                "detail": str(entry.get("detail") or ""),
+            }
+        )
+    return checks
+
+
+def _robustness_checks_check(evidence) -> tuple[bool, str]:
+    """断言：标记行含 ≥2 项结构完整的检查（id/name/passed/value/threshold）。"""
+    raw = evidence.metrics.get("checks") if evidence.metrics else None
+    if not isinstance(raw, list) or not raw:
+        return False, (
+            "未捕获检验结果：脚本必须原样打印一行 "
+            'OMM_METRICS_JSON: {"checks": [{"id": ..., "name": ..., "passed": true/false, '
+            '"value": 数值, "threshold": 数值, "detail": ...}, ...]}（独占一行）'
+        )
+    problems: list[str] = []
+    for index, entry in enumerate(raw, start=1):
+        if not isinstance(entry, Mapping):
+            problems.append(f"第 {index} 项不是对象")
+            continue
+        if not str(entry.get("id") or "").strip():
+            problems.append(f"第 {index} 项缺 id")
+        if not str(entry.get("name") or "").strip():
+            problems.append(f"第 {index} 项缺 name")
+        if not isinstance(entry.get("passed"), bool):
+            problems.append(f"第 {index} 项 passed 不是布尔值")
+        if not _is_number(entry.get("value")):
+            problems.append(f"第 {index} 项 value 不是数值")
+        if not (_is_number(entry.get("threshold")) or str(entry.get("threshold") or "").strip()):
+            problems.append(f"第 {index} 项缺 threshold")
+    if len(raw) < MIN_ROBUSTNESS_CHECKS:
+        problems.append(f"检查项只有 {len(raw)} 项，至少 {MIN_ROBUSTNESS_CHECKS} 项")
+    if problems:
+        return False, "检验结果不合格：" + "；".join(problems)
+    passed = sum(1 for entry in raw if entry.get("passed") is True)
+    return True, f"检查 {len(raw)} 项，通过 {passed} 项"
+
+
+def _robustness_summary_text(status: str, checks: Sequence[Mapping[str, Any]]) -> str:
+    """供论文引用的一句话稳健性结论：数字只来自检验脚本的标记行。"""
+    if status != "passed":
+        return f"稳健性检查沙盒复跑未完成（{status}），检验结论仅来自评审判读。"
+    failed = [check for check in checks if not check.get("passed")]
+    text = f"沙盒复跑稳健性检查 {len(checks)} 项，通过 {len(checks) - len(failed)} 项"
+    if not failed:
+        return text + "，全部达标。"
+    detail = "；".join(
+        f"{check.get('name')}（{check.get('id')}：value {check.get('value')}，阈值 {check.get('threshold')}）"
+        for check in failed
+    )
+    return text + f"；未通过：{detail}。"
+
+
 class ValidationNode(LlmSkillNode):
+    """验证 = LLM 判读（单轮）→ 稳健性检查沙盒复跑（子代理）→ G3 条件闸门。
+
+    沙盒复跑是尽力而为的增强（与数据阶段清洗同一纪律）：监督者 / 会话出口 /
+    工作区实验脚本任一缺席都**如实降级**为「仅判读」（robustness.executed=false
+    + 原因），绝不假装跑过。G3 只在检查真实执行、脚本跑通且至少一项未通过时
+    触发（§9.1）：判定数字来自检验脚本的标记行，节点只做计数与比例。
+    """
+
     prompt_id = "validating.default"
+    sandbox_prompt_id = ROBUSTNESS_PROMPT_ID
     state = TaskState.VALIDATING
+
+    #: R2 运行预算：检验脚本比实验脚本简单，4 次足够（§4.7 loop 行的节点内额度）。
+    max_sandbox_runs = 4
+
+    def __init__(
+        self,
+        registry: PromptRegistry,
+        available_packages: str = DEFAULT_AVAILABLE_PACKAGES,
+    ) -> None:
+        super().__init__(registry)
+        self._available_packages = available_packages
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
@@ -1066,6 +1258,230 @@ class ValidationNode(LlmSkillNode):
             ),
             "metrics": json.dumps(dict(experiment.get("metrics") or {}), ensure_ascii=False),
         }
+
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        base = super().run(ctx, services)
+        if base.status != NodeResult.SUCCEEDED:
+            return base
+
+        capture = _SandboxCapture()
+        robustness = self._execute_checks(ctx, services, base.outputs, capture)
+        outputs = {**base.outputs, "robustness": robustness}
+        artifacts = base.artifacts + tuple(capture.artifacts)
+
+        gate = self._g3_review(robustness)
+        if gate is not None:
+            reason, meta = gate
+            return NodeResult.needs_review(
+                reason=reason,
+                outputs=outputs,
+                review_meta=meta,
+                metrics=base.metrics,
+                artifacts=artifacts,
+            )
+        return NodeResult.succeeded(
+            outputs=outputs, metrics=base.metrics, artifacts=artifacts
+        )
+
+    # -- robustness checks in the sandbox ---------------------------------------
+
+    def _execute_checks(
+        self,
+        ctx: NodeContext,
+        services: NodeServices,
+        judgement: Mapping[str, Any],
+        capture: _SandboxCapture,
+    ) -> dict[str, Any]:
+        def skipped(reason: str) -> dict[str, Any]:
+            return {"executed": False, "reason": reason}
+
+        if services.tools is None:
+            return skipped("未配置工具端口，跳过稳健性复跑")
+        supervisor = (services.extras or {}).get("subagents")
+        if supervisor is None:
+            return skipped("未配置子代理监督者，跳过稳健性复跑")
+        if not supports_chat(services.llm):
+            return skipped("模型端口不支持会话式调用，跳过稳健性复跑")
+        files = _workspace_files(ctx, services)
+        if EXPERIMENT_SCRIPT_PATH not in files:
+            return skipped(f"工作区没有实验脚本 {EXPERIMENT_SCRIPT_PATH}，无法复跑")
+
+        governor = (services.extras or {}).get("budget_governor")
+        budgets: RunBudget = (
+            governor.subagent_slice() if governor is not None else RunBudget()
+        )
+        if budgets.max_sandbox_runs < 1 or budgets.max_llm_calls < 2:
+            return skipped("剩余预算不足以派发检验子代理")
+
+        try:
+            code = _workspace_reader(ctx, services)(EXPERIMENT_SCRIPT_PATH)
+        except FileNotFoundError as exc:
+            return skipped(f"读取实验脚本失败：{exc}")
+        if not code.strip():
+            return skipped(f"实验脚本 {EXPERIMENT_SCRIPT_PATH} 为空，无法复跑")
+
+        plan = chosen_plan(_require_outputs(ctx, TaskState.MODEL_PLANNING))
+        experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
+        metrics = dict(experiment.get("metrics") or {})
+        risk_points = _risk_points(plan, judgement)
+        data_files = [
+            path
+            for path in files
+            if path.startswith(DATA_DIR_PREFIX) or path.startswith("cleaned/")
+        ]
+        template = self._registry.get(self.sandbox_prompt_id)
+        system_prompt = template.render({
+            "chosen_plan": json.dumps(plan, ensure_ascii=False),
+            "experiment_summary": str(
+                experiment.get("experiment_summary") or experiment.get("stdout_tail") or "无"
+            ),
+            "metrics": json.dumps(metrics, ensure_ascii=False),
+            "experiment_code": _clip_code(code),
+            "risk_points": risk_points,
+            "data_files": "\n".join(f"- {path}" for path in data_files) or "无",
+            "available_packages": self._available_packages,
+        })
+
+        final_answer: dict[str, Any] = {}
+        task = SandboxTask(
+            task_id=f"{ctx.step_id}:robustness",
+            goal="复跑实验逻辑，在受控扰动下检验结论的稳健性并逐项给出判定",
+            system_prompt=system_prompt,
+            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
+            assertions=(
+                SandboxAssertion(
+                    id="run_ok",
+                    description="检验脚本经 python_run 成功运行（退出码 0）",
+                    check=_experiment_run_ok_check,
+                ),
+                SandboxAssertion(
+                    id="checks_reported",
+                    description=(
+                        f"打印检验结果标记行 OMM_METRICS_JSON（checks 列表 ≥ {MIN_ROBUSTNESS_CHECKS} 项，"
+                        "每项含 id/name/passed/value/threshold）"
+                    ),
+                    check=_robustness_checks_check,
+                ),
+            ),
+            seeds=dict(SANDBOX_SEEDS),
+            max_runs=max(1, min(self.max_sandbox_runs, budgets.max_sandbox_runs)),
+        )
+
+        llm_calls = {"count": 0}
+        chat = text_protocol_chat(
+            services.llm,
+            label=self.sandbox_prompt_id,
+            on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
+        )
+        executor = _sandbox_tool_executor(ctx, services, capture)
+        fingerprint = _env_fingerprint(ctx, services)
+
+        def runner(_spec: SpawnSpec) -> ResultEnvelope:
+            report = run_sandbox_task(
+                task,
+                chat=chat,
+                execute_tools=executor,
+                workspace_files=lambda: _workspace_files(ctx, services),
+                read_text=_workspace_reader(ctx, services),
+                env_fingerprint=fingerprint,
+                publish_code=_publish_code_callback(
+                    ctx, services, capture, "validation_checks.py"
+                ),
+                on_final_answer=final_answer.update,
+            )
+            return ResultEnvelope(
+                status="done",
+                output=report,
+                usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+            )
+
+        envelope = supervisor.spawn(
+            SpawnSpec(
+                kind="sandbox",
+                goal=task.goal,
+                context_slice={
+                    "chosen_plan": plan,
+                    "metrics": metrics,
+                    "risk_points": risk_points,
+                },
+                toolset=tuple(SANDBOX_TOOL_NAMES),
+                tool_tier="execute",
+                budgets=budgets,
+                output_schema_id="sandbox-run-report.v1",
+            ),
+            runner,
+            parent_tier="execute",
+            output_validator=_report_shape_problems,
+        )
+
+        if not envelope.ok or envelope.output is None:
+            return {
+                "executed": False,
+                "reason": f"检验子代理未完成（{envelope.status}"
+                + (f"，{envelope.error_code}" if envelope.error_code else "")
+                + "）；检验结论沿用评审判读",
+            }
+
+        report = envelope.output
+        status = str(report.get("status") or "failed")
+        checks = _normalize_checks(capture.metrics) if status == "passed" else []
+        failed = [check for check in checks if not check["passed"]]
+        return {
+            "executed": True,
+            "status": status,
+            "attempts": int(report.get("attempts") or 0),
+            "llm_calls": llm_calls["count"],
+            "summary": str(final_answer.get("summary") or ""),
+            "checks": checks,
+            "checks_total": len(checks),
+            "checks_failed": len(failed),
+            "failed_checks": failed,
+            "summary_text": _robustness_summary_text(status, checks),
+            "final_code_artifact": str(report.get("final_code_artifact") or ""),
+            "produced_artifacts": list(report.get("produced_artifacts") or []),
+        }
+
+    # -- G3 gate ----------------------------------------------------------------
+
+    @staticmethod
+    def _g3_review(
+        robustness: Mapping[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        if not robustness.get("executed") or robustness.get("status") != "passed":
+            return None
+        failed = [dict(check) for check in robustness.get("failed_checks") or []]
+        total = int(robustness.get("checks_total") or 0)
+        if not failed or total <= 0:
+            return None
+        names = "、".join(str(check.get("name") or check.get("id")) for check in failed)
+        reason = (
+            f"稳健性检查 {total} 项中 {len(failed)} 项未通过：{names}。"
+            "请确认实验结果的处置方式"
+        )
+        recommended = (
+            "redo:EXPERIMENTING"
+            if len(failed) / total >= G3_REDO_RECOMMEND_RATIO
+            else G3_ACCEPT_OPTION_ID
+        )
+        options = []
+        for option in G3_OPTIONS:
+            entry = dict(option)
+            if entry["id"] == recommended:
+                entry["recommended"] = True
+            options.append(entry)
+        meta = {
+            "gate": "G3",
+            "decision_type": "generic",
+            "title": reason,
+            "options": options,
+            "impact": {
+                "checks_total": total,
+                "checks_failed": len(failed),
+                "failed": failed,
+                "recommended": recommended,
+            },
+        }
+        return reason, meta
 
 
 def render_paper_markdown(document: Mapping[str, Any]) -> str:
@@ -1151,6 +1567,29 @@ def _unsourced_numbers(text: str, sources: str) -> list[str]:
     return missing
 
 
+def _validation_material(
+    validation: Mapping[str, Any], review_decisions: Mapping[str, str]
+) -> str:
+    """论文的检验材料：评审判读 + 沙盒复跑的稳健性结论 + G3 决策台账。
+
+    稳健性一句话由验证节点按标记行数字生成（不是模型转述）；用户在 G3 选了
+    「接受并记录局限」时把这条纪律写进材料——未通过的检查项必须进论文的局限性，
+    不允许因为用户点了接受就把它们淡化掉。
+    """
+    summary = str(validation.get("validation_summary") or "无")
+    robustness = validation.get("robustness")
+    if isinstance(robustness, Mapping) and robustness.get("executed"):
+        text = str(robustness.get("summary_text") or "").strip()
+        if text:
+            summary = f"{summary}\n{text}"
+    if review_decisions.get(TaskState.VALIDATING.value) == G3_ACCEPT_OPTION_ID:
+        summary += (
+            "\n用户已在结果采用闸门确认「接受并记录局限」：未通过的检查项必须在"
+            "模型检验与局限性部分如实说明，不得淡化。"
+        )
+    return summary
+
+
 def _inputs_hash(variables: Mapping[str, str]) -> str:
     """四份输入材料的指纹：断点续写只在输入未变时生效（变了就整篇重来）。"""
     canonical = json.dumps(
@@ -1174,7 +1613,7 @@ class PaperWritingNode(LlmSkillNode):
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
             "chosen_plan": json.dumps(chosen_plan(planning), ensure_ascii=False),
             "experiment_summary": str(experiment.get("experiment_summary") or "无"),
-            "validation_summary": str(validation.get("validation_summary") or "无"),
+            "validation_summary": _validation_material(validation, ctx.review_decisions),
         }
 
     def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:

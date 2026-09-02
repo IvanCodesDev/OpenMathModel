@@ -112,6 +112,61 @@ CANNED_VALIDATION = {
     "validation_summary": "线性趋势拟合显著优于均值基线，结论可信，但样本较短，外推需谨慎",
 }
 
+#: Marker the canned robustness script carries so the scripted tool invoker
+#: can tell a validation-stage python_run from an experiment-stage one
+#: without knowing step ids (both stages are sandbox agents now).
+VALIDATION_CODE_MARKER = "# omm-eval: robustness checks"
+
+#: Robustness checks the validation sandbox agent prints on its marker line
+#: (three checks, all passing — the happy path stays gate-free).
+FULL_CHAIN_ROBUSTNESS_CHECKS = [
+    {
+        "id": "sensitivity_slope",
+        "name": "趋势斜率 ±20% 扰动",
+        "passed": True,
+        "value": 0.06,
+        "threshold": 0.2,
+        "detail": "RMSE 相对退化 6%",
+    },
+    {
+        "id": "bootstrap_stability",
+        "name": "bootstrap 重采样稳定性",
+        "passed": True,
+        "value": 0.09,
+        "threshold": 0.15,
+        "detail": "重采样 RMSE 波动 9%",
+    },
+    {
+        "id": "baseline_margin",
+        "name": "对均值基线优势幅度",
+        "passed": True,
+        "value": 0.86,
+        "threshold": 0.1,
+        "detail": "RMSE 低于基线 86%",
+    },
+]
+
+#: The script the validation sandbox agent runs (re-runs the experiment
+#: logic under perturbation; scripted here, so it only prints the marker line).
+#: The check list is embedded with ``repr`` (Python ``True``/``False``), not
+#: ``json.dumps`` (``true``/``false`` is a NameError in a script) — the
+#: published validation_checks.py artifact must itself be runnable.
+CANNED_VALIDATION_CODE = (
+    VALIDATION_CODE_MARKER + "\n"
+    "import json\n"
+    "checks = " + repr(FULL_CHAIN_ROBUSTNESS_CHECKS) + "\n"
+    "print('OMM_METRICS_JSON: ' + json.dumps({'checks': checks}, ensure_ascii=False))\n"
+)
+
+#: Final answer of the validation sandbox agent.
+CANNED_ROBUSTNESS = {"summary": "三项稳健性检查均在阈值内，结论稳健"}
+
+_VALIDATION_STDOUT = (
+    "OMM_METRICS_JSON: "
+    + json.dumps({"checks": FULL_CHAIN_ROBUSTNESS_CHECKS}, ensure_ascii=False)
+    + "\n"
+)
+
 CANNED_PAPER = {
     "title": "基于线性回归与整数规划的运量预测与车辆配置优化",
     "abstract": (
@@ -220,6 +275,19 @@ def sandbox_failure(stderr: str = _FAILURE_STDERR) -> ScriptedRun:
     return ScriptedRun(ok=False, error="python exited with code 1", stderr=stderr)
 
 
+def robustness_success(
+    checks: Sequence[dict[str, Any]] | None = None,
+) -> ScriptedRun:
+    """Scripted validation-stage run: prints the robustness checks marker line.
+
+    Pass a ``checks`` list with ``passed: False`` entries to script a G3 gate.
+    """
+    if checks is None:
+        return ScriptedRun(ok=True, stdout=_VALIDATION_STDOUT)
+    stdout = "OMM_METRICS_JSON: " + json.dumps({"checks": list(checks)}, ensure_ascii=False) + "\n"
+    return ScriptedRun(ok=True, stdout=stdout)
+
+
 #: Signature of the TOOL_CALLED recording callback (engine.record_external).
 ToolEventRecorder = Callable[[EventType, dict[str, Any]], Any]
 
@@ -235,7 +303,15 @@ class FakeToolInvoker:
       ArtifactRefs in outputs point at content that really exists;
     - every call emits a TOOL_CALLED event via ``recorder`` (bound to
       ``engine.record_external`` by the session builder), with the same
-      payload fields as the production RecordingInvoker.
+      payload fields as the production RecordingInvoker;
+    - ``ws_write`` / ``ws_read`` / ``ws_list`` share one in-memory text store,
+      so the experiment stage's ``experiment.py`` really is what the
+      validation stage reads back (the production chain goes through the
+      run workspace on disk the same way);
+    - a ``python_run`` whose code carries :data:`VALIDATION_CODE_MARKER` is
+      the validation stage's robustness script and is served from
+      ``validation_run`` instead of the experiment queue, so experiment
+      repair scripts (``[failure, success]`` …) keep their exact semantics.
     """
 
     def __init__(
@@ -243,13 +319,16 @@ class FakeToolInvoker:
         runs: Sequence[ScriptedRun],
         artifacts: ArtifactStore | None = None,
         recorder: ToolEventRecorder | None = None,
+        validation_run: ScriptedRun | None = None,
     ) -> None:
         if not runs:
             raise ValueError("FakeToolInvoker needs at least one scripted run")
         self._runs = list(runs)
+        self._validation_run = validation_run or robustness_success()
         self._artifacts = artifacts
         self.recorder = recorder
         self.calls: list[tuple[str, str, str, dict[str, Any]]] = []
+        self.workspace_texts: dict[str, str] = {}
 
     def invoke(
         self,
@@ -260,9 +339,32 @@ class FakeToolInvoker:
     ) -> ToolResult:
         self.calls.append((run_id, step_id, tool_name, dict(arguments)))
         if tool_name == "ws_list":
-            # 数据准备节点的画像前置（v3.18）：本评测无附件下发，工作区为空
-            # ——返回空清单（节点如实退回摘要路径），照常审计，不消费沙箱脚本。
-            result = ToolResult(status="succeeded", output={"files": []})
+            # 本评测无附件下发：data/ 前缀永远是空清单（数据节点如实退回摘要
+            # 路径）；无前缀时列出经 ws_write 落下的文件（实验脚本）。
+            prefix = str(arguments.get("prefix") or "")
+            files = sorted(name for name in self.workspace_texts if name.startswith(prefix))
+            result = ToolResult(status="succeeded", output={"files": files})
+            self._record(step_id, tool_name, arguments, result)
+            return result
+        if tool_name == "ws_write":
+            path, text = str(arguments.get("path") or ""), str(arguments.get("text") or "")
+            self.workspace_texts[path] = text
+            result = ToolResult(
+                status="succeeded",
+                output={"path": path, "bytes": len(text.encode("utf-8"))},
+            )
+            self._record(step_id, tool_name, arguments, result)
+            return result
+        if tool_name == "ws_read":
+            path = str(arguments.get("path") or "")
+            if path in self.workspace_texts:
+                text = self.workspace_texts[path]
+                result = ToolResult(
+                    status="succeeded",
+                    output={"path": path, "text": text, "truncated": False, "total_chars": len(text)},
+                )
+            else:
+                result = ToolResult(status="failed", error=f"文件不存在：{path}")
             self._record(step_id, tool_name, arguments, result)
             return result
         if tool_name == "env_probe":
@@ -271,7 +373,10 @@ class FakeToolInvoker:
             result = ToolResult(status="succeeded", output=dict(FULL_CHAIN_ENV))
             self._record(step_id, tool_name, arguments, result)
             return result
-        run = self._runs.pop(0) if len(self._runs) > 1 else self._runs[0]
+        if VALIDATION_CODE_MARKER in str(arguments.get("code") or ""):
+            run = self._validation_run
+        else:
+            run = self._runs.pop(0) if len(self._runs) > 1 else self._runs[0]
         if run.ok:
             refs: tuple[ArtifactRef, ...] = ()
             if self._artifacts is not None:
@@ -355,7 +460,9 @@ def build_full_chain_llm() -> StubLlmPort:
 
     Two channels, mirroring production: template calls (``complete``) for the
     single-shot stages, and scripted conversations (``chat_text``) for the
-    experiment stage, which is a sandbox agent driving python_run itself.
+    two sandbox agents — the experiment stage (writes and runs the experiment)
+    and the validation stage's robustness re-run (perturbs it and prints the
+    per-check verdicts the G3 gate is decided on).
 
     The paper stage is a multipass pipeline (outline → sections → finalize);
     ``paper_writing.default`` stays stubbed so the single-call fallback path
@@ -375,7 +482,10 @@ def build_full_chain_llm() -> StubLlmPort:
         chat_scripts={
             ExperimentExecutionNode.prompt_id: [
                 canned_sandbox_agent(CANNED_EXPERIMENT, CANNED_EXPERIMENT_CODE)
-            ]
+            ],
+            ValidationNode.sandbox_prompt_id: [
+                canned_sandbox_agent(CANNED_ROBUSTNESS, CANNED_VALIDATION_CODE)
+            ],
         },
     )
 
@@ -403,23 +513,34 @@ def build_full_chain_session(
     require_confirmation: bool = True,
     record_tool_events: bool = True,
     project_id: str = "proj_eval_full_chain",
+    validation_run: ScriptedRun | None = None,
 ) -> FullChainSession:
-    """Assemble engine + all six real skill nodes over in-memory ports."""
+    """Assemble engine + all six real skill nodes over in-memory ports.
+
+    ``validation_run`` scripts the validation stage's robustness re-run
+    (default: three passing checks); script failing checks to drive the G3
+    result gate.
+    """
     registry = load_default_registry()
     sink = InMemoryEventSink()
     clock = FixedClock()
     ids = SequentialIdGenerator()
     artifacts = InMemoryArtifactStore()
     llm = llm or build_full_chain_llm()
-    tools = FakeToolInvoker(tool_runs or [sandbox_success()], artifacts=artifacts)
+    tools = FakeToolInvoker(
+        tool_runs or [sandbox_success()],
+        artifacts=artifacts,
+        validation_run=validation_run,
+    )
     services = NodeServices(
         clock=clock,
         ids=ids,
         artifacts=artifacts,
         llm=llm,
         tools=tools,
-        # 与生产装配同构：数据阶段的清洗执行经监督者派发。本评测不下发附件，
-        # 工作区为空，清洗如实跳过（reason 说的是"没有数据文件"而不是"没接线"）。
+        # 与生产装配同构：数据阶段的清洗执行与验证阶段的稳健性复跑都经监督者
+        # 派发。本评测不下发附件，工作区为空，清洗如实跳过（reason 说的是
+        # "没有数据文件"而不是"没接线"）；复跑则真的走到（实验脚本已落工作区）。
         extras={"subagents": SubagentSupervisor()},
     )
     nodes = {
@@ -471,16 +592,20 @@ FULL_CHAIN_PROMPT_SEQUENCE = [
     "paper_finalize.default",
 ]
 
-#: Conversational (``chat_text``) labels in order: one wave of the experiment
-#: sandbox agent = one tool turn + one final answer.
+#: Conversational (``chat_text``) labels in order: one wave of a sandbox agent
+#: = one tool turn + one final answer; the experiment agent first, then the
+#: validation stage's robustness re-run.
 FULL_CHAIN_CHAT_SEQUENCE = [
     "experiment_code.sandbox",
     "experiment_code.sandbox",
+    "validating.sandbox",
+    "validating.sandbox",
 ]
 
 #: Exact event-type trajectory of the full-chain happy path (review gate,
 #: one tool call publishing results.csv, the generated experiment.py published
-#: as a code artifact, paper-draft.md at the end).
+#: as a code artifact and staged into the workspace, the validation stage
+#: re-running it in the sandbox, paper-draft.md at the end).
 FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.RUN_CREATED,
     EventType.STATE_CHANGED,  # CREATED -> PROBLEM_ANALYSIS
@@ -503,11 +628,20 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.TOOL_CALLED,  # env_probe（报告的环境指纹）
     EventType.TOOL_CALLED,  # python_run（模型自主调用，scripted sandbox）
     EventType.TOOL_CALLED,  # ws_list（断言证据：产物清单）
+    EventType.TOOL_CALLED,  # ws_write（最终脚本落工作区 experiment.py，供验证阶段复跑）
     EventType.ARTIFACT_PRODUCED,  # results.csv
     EventType.ARTIFACT_PRODUCED,  # experiment.py (generated code, reproducible)
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> VALIDATING
     EventType.STEP_STARTED,
+    # 验证阶段 = LLM 判读 + 沙盒复跑：先确认工作区里有实验脚本并读回正文，
+    # 再由模型在沙盒里跑稳健性检查，收束前重列工作区作为断言证据。
+    EventType.TOOL_CALLED,  # ws_list（工作区清单：experiment.py 在场 + 数据文件）
+    EventType.TOOL_CALLED,  # ws_read（experiment.py 正文进任务卡）
+    EventType.TOOL_CALLED,  # env_probe（报告的环境指纹）
+    EventType.TOOL_CALLED,  # python_run（稳健性检查脚本，scripted validation run）
+    EventType.TOOL_CALLED,  # ws_list（断言证据）
+    EventType.ARTIFACT_PRODUCED,  # validation_checks.py (generated code, reproducible)
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> PAPER_WRITING
     EventType.STEP_STARTED,

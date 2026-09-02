@@ -17,7 +17,10 @@ from omm_agent_harness import SubagentSupervisor
 from omm_agent_skills import (
     CLEANING_PROMPT_ID,
     DEFAULT_HARDWARE_NOTE,
+    EXPERIMENT_SCRIPT_PATH,
+    G3_ACCEPT_OPTION_ID,
     PYTHON_TOOL_NAME,
+    ROBUSTNESS_PROMPT_ID,
     DataPreparationNode,
     LlmCall,
     ExperimentExecutionNode,
@@ -482,7 +485,8 @@ class SandboxToolInvoker:
     """沙盒节点的假工具面：python_run 走队列，ws_list/env_probe/ws_read 固定应答。
 
     ``files_after_run`` 模拟脚本真的产出了文件——清洗断言看的是工作区清单，
-    先跑后有才是诚实的时序。
+    先跑后有才是诚实的时序。``ws_write`` 写进的文件随后对 ws_list / ws_read
+    可见（实验节点落 experiment.py、验证节点再读它，走的就是这条链）。
     """
 
     def __init__(self, runs, files=(), files_after_run=(), texts=None, profiles=None):
@@ -494,6 +498,7 @@ class SandboxToolInvoker:
         self._ran = False
         self.calls: list[tuple[str, dict]] = []
         self.python_calls: list[tuple[str, str, str, dict]] = []
+        self.written: dict[str, str] = {}
 
     def invoke(self, run_id, step_id, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
@@ -501,8 +506,21 @@ class SandboxToolInvoker:
             self.python_calls.append((run_id, step_id, tool_name, dict(arguments)))
             self._ran = True
             return self._runs.pop(0) if len(self._runs) > 1 else self._runs[0]
+        if tool_name == "ws_write":
+            path, text = arguments["path"], arguments["text"]
+            self.written[path] = text
+            self._texts[path] = text
+            if path not in self._files:
+                self._files.append(path)
+            return ToolResult(
+                status="succeeded",
+                output={"path": path, "bytes": len(text.encode("utf-8"))},
+            )
         if tool_name == "ws_list":
             files = self._files + (self._files_after_run if self._ran else [])
+            prefix = str(arguments.get("prefix") or "")
+            if prefix:
+                files = [name for name in files if name.startswith(prefix)]
             return ToolResult(status="succeeded", output={"files": files})
         if tool_name == "env_probe":
             return ToolResult(
@@ -874,6 +892,30 @@ def test_experiment_runs_code_in_sandbox_and_reports_real_metrics(registry):
     code_ref = result.artifacts[-1]
     assert code_ref.uri.endswith("experiment.py")
     assert services.artifacts.blobs[code_ref.uri].decode("utf-8") == EXPERIMENT_CODE
+    # 最终脚本同时落到工作区固定路径：验证阶段据此复跑
+    assert tools.written == {EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE}
+    assert result.outputs["script_path"] == EXPERIMENT_SCRIPT_PATH
+
+
+def test_experiment_reports_empty_script_path_when_workspace_write_fails(registry):
+    """落工作区失败只影响下游复跑，不影响实验步骤成败，且如实给空路径。"""
+
+    class NoWriteInvoker(SandboxToolInvoker):
+        def invoke(self, run_id, step_id, tool_name, arguments):
+            if tool_name == "ws_write":
+                self.calls.append((tool_name, dict(arguments)))
+                return ToolResult(status="failed", error="workspace quota exceeded")
+            return super().invoke(run_id, step_id, tool_name, arguments)
+
+    llm = experiment_llm()
+    tools = NoWriteInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["script_path"] == ""
+    assert result.outputs["metrics"] == {"rmse": 0.12}
 
 
 def test_experiment_output_carries_sandbox_report_for_replay(registry):
@@ -1067,19 +1109,80 @@ def test_experiment_requires_prior_planning(registry):
     assert tools.python_calls == []
 
 
-# -- ValidationNode ------------------------------------------------------------
+# -- ValidationNode：LLM 判读 → 稳健性沙盒复跑 → G3 --------------------------------
 
 
-def test_validation_happy_path(registry):
-    llm = StubLlmPort({"validating.default": stub_response(VALIDATION_OK)})
-    node = ValidationNode(registry)
+def validation_prior():
     prior = prior_through_planning()
     prior[TaskState.EXPERIMENTING.value] = {
         "experiment_summary": "贪心近似 rmse=0.12",
         "metrics": {"rmse": 0.12},
         "stdout_tail": "OMM_METRICS_JSON: ...",
+        "script_path": EXPERIMENT_SCRIPT_PATH,
     }
-    ctx = make_ctx(TaskState.VALIDATING, prior=prior)
+    return prior
+
+
+def robustness_checks(*passed_flags):
+    """检验脚本标记行里的 checks：按传入的通过标志生成三类检查。"""
+    templates = [
+        ("sensitivity_demand", "需求率 ±20% 扰动", 0.05, 0.2),
+        ("bootstrap_stability", "bootstrap 重采样稳定性", 0.08, 0.15),
+        ("baseline_margin", "对基线优势幅度", 0.6, 0.1),
+    ]
+    checks = []
+    for (check_id, name, value, threshold), passed in zip(templates, passed_flags):
+        checks.append(
+            {
+                "id": check_id,
+                "name": name,
+                "passed": passed,
+                "value": value if passed else value * 5,
+                "threshold": threshold,
+                "detail": "相对退化在阈值内" if passed else "相对退化超出阈值",
+            }
+        )
+    return checks
+
+
+def robustness_stdout(*passed_flags, checks=None):
+    payload = {"checks": checks if checks is not None else robustness_checks(*passed_flags)}
+    return "OMM_METRICS_JSON: " + json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+ROBUSTNESS_CODE = "print('robustness checks')"
+ROBUSTNESS_FINAL = {"summary": "三项稳健性检查按阈值判定完毕"}
+
+
+def validation_llm(judgement=None, final=None):
+    """验证阶段的双通道端口：模板调用出判读，会话调用跑检验脚本。"""
+    return StubLlmPort(
+        {"validating.default": stub_response(judgement or VALIDATION_OK)},
+        chat_scripts={
+            ROBUSTNESS_PROMPT_ID: sandbox_script(final or ROBUSTNESS_FINAL, code=ROBUSTNESS_CODE)
+        },
+    )
+
+
+def validation_tools(*passed_flags, runs=None, files=None, texts=None):
+    return SandboxToolInvoker(
+        runs=runs or [tool_success(stdout=robustness_stdout(*passed_flags))],
+        files=[EXPERIMENT_SCRIPT_PATH, "data/orders.csv"] if files is None else files,
+        texts={EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE} if texts is None else texts,
+    )
+
+
+def validation_services(llm, tools):
+    services = make_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+    return services
+
+
+def test_validation_judgement_alone_when_no_tool_port(registry):
+    """没有工具端口 = 旧行为：单轮判读照常成功，稳健性复跑如实标注未执行。"""
+    llm = StubLlmPort({"validating.default": stub_response(VALIDATION_OK)})
+    node = ValidationNode(registry)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
 
     result = node.run(ctx, make_services(llm))
 
@@ -1087,6 +1190,8 @@ def test_validation_happy_path(registry):
     assert result.outputs["verdict"] == "concerns"
     assert "需求率参数敏感" in result.outputs["validation_summary"]
     assert json.loads(llm.calls[0].variables["metrics"]) == {"rmse": 0.12}
+    assert result.outputs["robustness"]["executed"] is False
+    assert "未配置工具端口" in result.outputs["robustness"]["reason"]
 
 
 def test_validation_requires_prior_experiment(registry):
@@ -1099,6 +1204,226 @@ def test_validation_requires_prior_experiment(registry):
     assert result.status == NodeResult.FAILED
     assert "missing required input" in result.error
     assert llm.calls == []
+
+
+def test_validation_reruns_experiment_in_sandbox_and_passes_without_gate(registry):
+    """三项检查全过：不惊动用户，稳健性结论（数字来自标记行）随产出落库。"""
+    llm = validation_llm()
+    tools = validation_tools(True, True, True)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry, available_packages="numpy、pandas").run(
+        ctx, validation_services(llm, tools)
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    robustness = result.outputs["robustness"]
+    assert robustness["executed"] is True
+    assert robustness["status"] == "passed"
+    assert robustness["checks_total"] == 3
+    assert robustness["checks_failed"] == 0
+    assert [check["id"] for check in robustness["checks"]] == [
+        "sensitivity_demand",
+        "bootstrap_stability",
+        "baseline_margin",
+    ]
+    assert robustness["summary"] == ROBUSTNESS_FINAL["summary"]
+    assert robustness["summary_text"] == "沙盒复跑稳健性检查 3 项，通过 3 项，全部达标。"
+    # 判读产出原样保留：稳健性是增强，不是替换
+    assert result.outputs["verdict"] == "concerns"
+    # 检验脚本发布为可复现产物
+    assert [ref.uri.rsplit("/", 1)[-1] for ref in result.artifacts] == ["validation_checks.py"]
+    # 任务卡：实验脚本正文、方案风险 + 评审保留意见、数据文件、包白名单进 system 段
+    card = system_prompt_of(llm.chat_calls[0])
+    assert EXPERIMENT_CODE in card
+    assert "规模过大时求解超时" in card, "方案自报风险进风险点"
+    assert "评审保留（warn）：稳健性" in card, "评审判读的保留意见进风险点"
+    assert "合成数据外推风险" in card
+    assert "- data/orders.csv" in card
+    assert "numpy、pandas" in card
+    assert '"rmse": 0.12' in card
+    # 实验脚本经 ws_read 从工作区读取，而不是从对话里转录
+    assert ("ws_read", {"path": EXPERIMENT_SCRIPT_PATH}) in tools.calls
+
+
+def test_g3_gate_triggers_when_a_check_fails_and_recommends_accept_for_minority(registry):
+    """3 项中 1 项未通过（<50%）：上 G3，推荐「接受并记录局限」。"""
+    llm = validation_llm()
+    tools = validation_tools(True, False, True)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert "3 项中 1 项未通过" in result.review_reason
+    assert "bootstrap 重采样稳定性" in result.review_reason
+    meta = result.review_meta
+    assert meta["gate"] == "G3"
+    assert meta["decision_type"] == "generic"
+    assert [option["id"] for option in meta["options"]] == [
+        G3_ACCEPT_OPTION_ID,
+        "redo:EXPERIMENTING",
+        "redo:MODEL_PLANNING",
+    ]
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == [G3_ACCEPT_OPTION_ID]
+    assert meta["impact"]["checks_total"] == 3
+    assert meta["impact"]["checks_failed"] == 1
+    assert meta["impact"]["failed"][0]["id"] == "bootstrap_stability"
+    # 判定数字来自标记行：value 与阈值原样进 evidence
+    assert meta["impact"]["failed"][0]["threshold"] == 0.15
+    # 闸门未拍板前，检验结论已随 STEP_SUCCEEDED 的 outputs 落库
+    assert result.outputs["robustness"]["checks_failed"] == 1
+    assert "未通过：bootstrap 重采样稳定性" in result.outputs["robustness"]["summary_text"]
+
+
+def test_g3_recommends_redo_experiment_when_majority_fails(registry):
+    llm = validation_llm()
+    tools = validation_tools(False, False, True)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    meta = result.review_meta
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["redo:EXPERIMENTING"]
+    assert meta["impact"]["recommended"] == "redo:EXPERIMENTING"
+
+
+@pytest.mark.parametrize(
+    "kwargs, reason_fragment",
+    [
+        ({"supervisor": False}, "子代理监督者"),
+        ({"chat": False}, "会话式调用"),
+        ({"script": False}, "没有实验脚本"),
+        ({"tools": False}, "未配置工具端口"),
+    ],
+)
+def test_robustness_degrades_honestly_when_a_precondition_is_missing(kwargs, reason_fragment):
+    """复跑是尽力而为的增强：装配缺项如实标注 executed=false，绝不假装跑过。"""
+    registry = load_default_registry()
+    llm = (
+        validation_llm()
+        if kwargs.get("chat", True)
+        else CompleteOnlyPort({"validating.default": stub_response(VALIDATION_OK)})
+    )
+    tools = (
+        validation_tools(True, True, True)
+        if kwargs.get("script", True)
+        else validation_tools(True, True, True, files=["data/orders.csv"], texts={})
+    )
+    services = make_services(llm, tools if kwargs.get("tools", True) else None)
+    if kwargs.get("supervisor", True):
+        services.extras["subagents"] = SubagentSupervisor()
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, services)
+
+    assert result.status == NodeResult.SUCCEEDED, "复跑缺席不阻塞验证阶段"
+    assert result.outputs["verdict"] == "concerns"
+    assert result.outputs["robustness"]["executed"] is False
+    assert reason_fragment in result.outputs["robustness"]["reason"]
+    if hasattr(llm, "chat_calls"):
+        assert llm.chat_calls == [], "缺项时不得派发会话"
+
+
+def test_robustness_sandbox_failure_does_not_block_and_skips_g3(registry):
+    """检验脚本真跑但没跑成：如实记 failed，沿用判读结论，不上闸门。"""
+    llm = validation_llm()
+    tools = validation_tools(runs=[tool_failure(stderr="ZeroDivisionError: division by zero")])
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    robustness = result.outputs["robustness"]
+    assert robustness["executed"] is True
+    assert robustness["status"] == "failed"
+    assert robustness["checks"] == []
+    assert "未完成" in robustness["summary_text"]
+    # 波次修复用尽（最多 3 波），每波一次运行
+    assert len(tools.python_calls) == 3
+
+
+def test_robustness_rejects_single_or_malformed_checks(registry):
+    """§7.1 硬纪律：一项检查或缺 value/threshold 的检查不算验收通过。"""
+    llm = validation_llm()
+    only_one = [
+        {"id": "sensitivity_demand", "name": "需求率扰动", "passed": True, "value": 0.05, "threshold": 0.2}
+    ]
+    malformed = [
+        {"id": "a", "name": "A", "passed": True, "value": "n/a", "threshold": 0.2},
+        {"id": "b", "name": "B", "passed": "yes", "value": 0.1},
+    ]
+    tools = validation_tools(
+        runs=[
+            tool_success(stdout=robustness_stdout(checks=only_one)),
+            tool_success(stdout=robustness_stdout(checks=malformed)),
+            tool_success(stdout=robustness_stdout(True, True, True)),
+        ]
+    )
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["robustness"]["status"] == "passed"
+    assert result.outputs["robustness"]["attempts"] == 3
+    # 第二、三波任务卡带着上一波的断言差异（结构化反馈）
+    second_wave = user_prompt_of(llm.chat_calls[2])
+    assert "至少 2 项" in second_wave
+    third_wave = user_prompt_of(llm.chat_calls[4])
+    assert "value 不是数值" in third_wave and "passed 不是布尔值" in third_wave
+
+
+def test_robustness_rejects_self_reported_success_without_running_code(registry):
+    llm = StubLlmPort(
+        {"validating.default": stub_response(VALIDATION_OK)},
+        chat_scripts={ROBUSTNESS_PROMPT_ID: [stub_response(ROBUSTNESS_FINAL)]},
+    )
+    tools = validation_tools(True, True, True)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["robustness"]["status"] == "failed"
+    assert tools.python_calls == []
+
+
+def test_paper_material_carries_robustness_and_g3_decision(registry):
+    """论文材料：稳健性一句话 + 用户「接受并记录局限」的纪律一并进检验材料。"""
+    prior = paper_prior()
+    prior[TaskState.VALIDATING.value] = {
+        **VALIDATION_OK,
+        "robustness": {
+            "executed": True,
+            "status": "passed",
+            "summary_text": "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：bootstrap 重采样稳定性（bootstrap_stability：value 0.4，阈值 0.15）。",
+        },
+    }
+    ctx = NodeContext(
+        run_id="run_1",
+        project_id="proj_1",
+        state=TaskState.PAPER_WRITING,
+        step_id="step_1",
+        attempt=1,
+        inputs={},
+        prior_outputs=prior,
+        review_decisions={TaskState.VALIDATING.value: G3_ACCEPT_OPTION_ID},
+    )
+
+    material = PaperWritingNode(registry).build_variables(ctx)["validation_summary"]
+
+    assert material.startswith(VALIDATION_OK["validation_summary"])
+    assert "通过 2 项" in material and "bootstrap_stability" in material
+    assert "接受并记录局限" in material and "不得淡化" in material
+
+    # 未执行复跑、未经 G3：材料保持旧形状（不多一个字）
+    plain = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior())
+    assert (
+        PaperWritingNode(registry).build_variables(plain)["validation_summary"]
+        == VALIDATION_OK["validation_summary"]
+    )
 
 
 # -- PaperWritingNode ----------------------------------------------------------

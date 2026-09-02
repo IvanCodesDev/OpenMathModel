@@ -337,6 +337,27 @@ function formatStageOutputs(node: string, outputs: Record<string, unknown>): str
     parts.push(section("逐项检查", checks));
     parts.push(section("主要风险", list(outputs.risks)));
     if (str(outputs.validation_summary)) parts.push(`检验结论：${str(outputs.validation_summary)}`);
+    // 沙盒复跑的稳健性检查（G3 的判定依据）：数字来自检验脚本的标记行；
+    // 没跑成/没跑时把原因如实列出，不让「未执行」看起来像「全过」
+    const robustness = outputs.robustness && typeof outputs.robustness === "object"
+      ? (outputs.robustness as Record<string, unknown>)
+      : null;
+    if (robustness && robustness.executed === true) {
+      if (str(robustness.summary_text)) parts.push(`稳健性复跑：${str(robustness.summary_text)}`);
+      const num = (value: unknown): string => (typeof value === "number" ? String(value) : str(value));
+      const robustnessChecks = Array.isArray(robustness.checks)
+        ? (robustness.checks as Array<Record<string, unknown>>)
+          .map(item => [
+            str(item?.name) || str(item?.id),
+            item?.passed === true ? "通过" : "未通过",
+            num(item?.value) ? `value ${num(item?.value)}｜阈值 ${num(item?.threshold) || "—"}` : "",
+            str(item?.detail),
+          ].filter(Boolean).join("｜")).filter(Boolean)
+        : [];
+      parts.push(section("逐项稳健性检查", robustnessChecks));
+    } else if (robustness && str(robustness.reason)) {
+      parts.push(`稳健性复跑：未执行——${str(robustness.reason)}`);
+    }
   } else if (node === "PAPER_WRITING") {
     if (str(outputs.title)) parts.push(`标题：${str(outputs.title)}`);
     if (str(outputs.abstract)) parts.push(`摘要：${str(outputs.abstract)}`);

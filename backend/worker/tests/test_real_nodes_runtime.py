@@ -25,10 +25,12 @@ from omm_agent_core import (
 )
 from omm_agent_skills import (
     CLEANING_PROMPT_ID,
+    EXPERIMENT_SCRIPT_PATH,
     PYTHON_TOOL_NAME,
     ExperimentExecutionNode,
     PromptRegistry,
     StubLlmPort,
+    ValidationNode,
     stub_response,
 )
 from omm_worker import WorkerConfig, WorkerLoop, build_real_nodes, create_real_runtime
@@ -110,6 +112,18 @@ VALIDATION_OK = {
     "validation_summary": "结果整体可信，但对需求率参数敏感",
 }
 
+#: 稳健性复跑的检验脚本（沙箱真实执行）：三项检查全过，只打印标记行。
+ROBUSTNESS_CODE = (
+    "import json\n"
+    "checks = [\n"
+    "    {'id': 'sensitivity', 'name': '参数扰动', 'passed': True, 'value': 0.05, 'threshold': 0.2},\n"
+    "    {'id': 'bootstrap', 'name': '重采样稳定性', 'passed': True, 'value': 0.08, 'threshold': 0.15},\n"
+    "]\n"
+    "print('OMM_METRICS_JSON: ' + json.dumps({'checks': checks}))\n"
+)
+
+ROBUSTNESS_OK = {"summary": "两项稳健性检查均在阈值内"}
+
 PAPER_OK = {
     "title": "基于整数规划的共享单车调度优化",
     "abstract": "本文建立整数规划模型求解调度问题……",
@@ -161,11 +175,12 @@ def sandbox_script(final, code=EXPERIMENT_CODE):
 
 
 def stage_chat_scripts(**overrides):
-    """沙盒两节点的会话脚本。worker 运行不下发附件数据（data/ 为空），
-    清洗如实跳过，清洗脚本仅作兜底不应被消费。"""
+    """沙盒三节点的会话脚本。worker 运行不下发附件数据（data/ 为空），
+    清洗如实跳过，清洗脚本仅作兜底不应被消费；实验与稳健性复跑真的走到。"""
     scripts = {
         CLEANING_PROMPT_ID: sandbox_script({"summary": "无数据文件，不应走到这里"}),
         ExperimentExecutionNode.prompt_id: sandbox_script(EXPERIMENT_OK),
+        ValidationNode.sandbox_prompt_id: sandbox_script(ROBUSTNESS_OK, code=ROBUSTNESS_CODE),
     }
     scripts.update(overrides)
     return scripts
@@ -266,25 +281,55 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     assert "# 基于整数规划的共享单车调度优化" in paper_text
     assert "## 模型检验" in paper_text
 
+    # 验证阶段真的在沙箱里复跑了检验脚本：判定数字来自标记行，全过不上 G3
+    robustness = snapshot.outputs["VALIDATING"]["robustness"]
+    assert robustness["executed"] is True and robustness["status"] == "passed"
+    assert [check["id"] for check in robustness["checks"]] == ["sensitivity", "bootstrap"]
+    assert "VALIDATING" not in snapshot.review_decisions
+    # 实验最终脚本落在 run 工作区固定路径，复跑读的就是它
+    workspace_script = tmp_path / "rt" / "workspaces" / run_id / EXPERIMENT_SCRIPT_PATH
+    assert workspace_script.read_text(encoding="utf-8") == EXPERIMENT_CODE
+    assert snapshot.outputs["EXPERIMENTING"]["script_path"] == EXPERIMENT_SCRIPT_PATH
+
     # 工具调用留痕（record_external → 事件日志）且事件序列无洞（先持久化再应用）
     events = runtime.events.load(run_id)
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     tool_events = [e for e in events if e.event_type is EventType.TOOL_CALLED]
     # 数据阶段画像前置一条 ws_list（无数据文件，清洗如实跳过）；实验阶段依次：
     # 任务卡数据清单 ws_list → 节点侧 env_probe（复现指纹）→ 沙盒 python_run
-    # → 断言取证 ws_list（验收基于工作区证据而非模型自述）。
+    # → 断言取证 ws_list（验收基于工作区证据而非模型自述）→ ws_write 落最终脚本；
+    # 验证阶段：ws_list（脚本在场）→ ws_read（脚本正文进任务卡）→ env_probe →
+    # 监督者 spawn 审计 → 沙盒 python_run → 断言取证 ws_list → 监督者 result 审计。
     assert [e.payload["tool"] for e in tool_events] == [
         "ws_list",
         "ws_list",
         "env_probe",
         "python_run",
         "ws_list",
+        "ws_write",
+        "ws_list",
+        "ws_read",
+        "env_probe",
+        "subagent:sandbox",
+        "python_run",
+        "ws_list",
+        "subagent:sandbox",
     ]
-    (sandbox_event,) = [
+    experiment_event, robustness_event = [
         e for e in tool_events if e.payload["tool"] == "python_run"
     ]
-    assert sandbox_event.payload["status"] == "succeeded"
-    assert sandbox_event.payload["artifact_ids"], "沙箱捕获的产物要进工具事件"
+    assert experiment_event.payload["status"] == "succeeded"
+    assert experiment_event.payload["artifact_ids"], "沙箱捕获的产物要进工具事件"
+    assert experiment_event.payload["step_id"] == experiment_step.step_id
+    assert robustness_event.payload["status"] == "succeeded"
+    (validation_step,) = steps_for(snapshot, TaskState.VALIDATING)
+    assert robustness_event.payload["step_id"] == validation_step.step_id
+    spawn_event, result_event = [
+        e for e in tool_events if e.payload["tool"] == "subagent:sandbox"
+    ]
+    assert spawn_event.payload["phase"] == "spawn"
+    assert result_event.payload["phase"] == "result"
+    assert result_event.payload["envelope_status"] == "done"
 
 
 def test_unattended_mode_completes_without_review(tmp_path):
@@ -345,12 +390,14 @@ def test_experiment_runtime_failure_regenerates_with_feedback(tmp_path):
     assert experiment_step.metrics["waves"] == 2, "节点内按波自愈，不产生额外步骤尝试"
     assert experiment_step.metrics["code_rounds"] == 2
 
-    # 两轮沙箱执行都留 TOOL_CALLED 痕：先失败后成功（画像前置的 ws_list 除外）
+    # 两轮沙箱执行都留 TOOL_CALLED 痕：先失败后成功（画像前置的 ws_list 与
+    # 验证阶段自己那次稳健性复跑的 python_run 不在其中——按实验步骤过滤）
     tool_events = [
         e
         for e in runtime.events.load(run_id)
         if e.event_type is EventType.TOOL_CALLED
         and e.payload["tool"] == "python_run"
+        and e.payload["step_id"] == experiment_step.step_id
     ]
     assert [e.payload["status"] for e in tool_events] == ["failed", "succeeded"]
 

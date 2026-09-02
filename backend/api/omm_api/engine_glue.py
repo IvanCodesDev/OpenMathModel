@@ -396,7 +396,8 @@ def _sandbox_hardware() -> str:
 #: 论文阶段是分章多轮管线（doc/paper-multipass-generation-plan.md）：
 #: 总编/章节/统稿三个模板与回退用的整篇模板都必须在场。
 #: H3 前置刀起实验阶段走沙盒执行体（experiment_code.sandbox 会话模板），
-#: 数据准备的清洗派发用 data_cleaning.sandbox——两者缺一同样回落模拟。
+#: 数据准备的清洗派发用 data_cleaning.sandbox，验证阶段的稳健性复跑用
+#: validating.sandbox——三者缺一同样回落模拟。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
@@ -405,6 +406,7 @@ _REQUIRED_PROMPTS = frozenset(
         "model_planning.default",
         "experiment_code.sandbox",
         "validating.default",
+        "validating.sandbox",
         "paper_outline.default",
         "paper_section.default",
         "paper_finalize.default",
@@ -434,8 +436,9 @@ def _prompt_registry() -> Optional[PromptRegistry]:
 # 时间的口径需要跨事件求和（审批等待不计时），本批次明确延后不启用。
 
 #: prompt_id → 预算记账的节点归属（论文分章管线的三个 prompt 同属论文节点；
-#: 两个 sandbox 会话标签是 H3 前置刀的沙盒执行体调用；experiment_code.default
-#: 已不再被节点消费，保留是为了历史运行的事件账本重建仍能按节点归账）。
+#: 三个 sandbox 会话标签是沙盒执行体调用（清洗 / 实验 / 稳健性复跑）；
+#: experiment_code.default 已不再被节点消费，保留是为了历史运行的事件账本
+#: 重建仍能按节点归账）。
 _PROMPT_NODE_IDS = {
     "problem_analysis.default": TaskState.PROBLEM_ANALYSIS.value,
     "data_preparation.default": TaskState.DATA_PREPARATION.value,
@@ -444,6 +447,7 @@ _PROMPT_NODE_IDS = {
     "experiment_code.default": TaskState.EXPERIMENTING.value,
     "experiment_code.sandbox": TaskState.EXPERIMENTING.value,
     "validating.default": TaskState.VALIDATING.value,
+    "validating.sandbox": TaskState.VALIDATING.value,
     "paper_outline.default": TaskState.PAPER_WRITING.value,
     "paper_section.default": TaskState.PAPER_WRITING.value,
     "paper_finalize.default": TaskState.PAPER_WRITING.value,
@@ -824,7 +828,10 @@ def _llm_wiring_impl(
                 available_packages=_sandbox_packages(),
                 hardware_note=_sandbox_hardware(),
             ),
-            TaskState.VALIDATING: ValidationNode(registry),
+            # 稳健性复跑的检验脚本与实验脚本共用同一沙箱解释器：包白名单同源
+            TaskState.VALIDATING: ValidationNode(
+                registry, available_packages=_sandbox_packages()
+            ),
             TaskState.PAPER_WRITING: PaperWritingNode(registry),
         }.items()
     }
@@ -1266,6 +1273,12 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 # 免得下个 tick 起步前工作台把重开的运行画成已完成。
                 _project_node(session, run, resume, f"第 {revision_round} 轮修改重做")
                 reason = f"第 {revision_round} 轮修改：从「{label}」重做"
+            elif payload.get("rerun"):
+                # 节点自提闸门里选了回退项（G3 的「重做实验 / 回退方案阶段」）：
+                # 与修订门同一引擎语义，current_node 同样要先摆回目标阶段，
+                # 文案说清是回退而不是「已确认」。
+                _project_node(session, run, resume, "闸门回退重做")
+                reason = f"已确认回退：从「{label}」重做"
             else:
                 reason = (
                     "方案已确认"

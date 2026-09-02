@@ -76,6 +76,7 @@ def test_default_registry_loads_all_stage_prompts():
         "paper_writing.default",
         "problem_analysis.default",
         "validating.default",
+        "validating.sandbox",
     ]
 
     # Every placeholder must be declared in the input schema, for every stage.
@@ -115,3 +116,11 @@ def test_sandbox_prompts_are_agent_task_cards_not_single_shot_templates():
     assert {"approach_summary", "progress_note"} <= set(
         experiment.output_schema.get("required", [])
     )
+
+    robustness = registry.get("validating.sandbox")
+    assert robustness.stage == "VALIDATING"
+    assert "code" not in robustness.output_schema.get("required", [])
+    # 任务卡必须带实验脚本正文与风险点：复跑不是重新发明实验
+    assert {"experiment_code", "risk_points", "metrics"} <= robustness.placeholders()
+    assert "OMM_METRICS_JSON" in robustness.body and '"checks"' in robustness.body
+    assert "禁止为了通过而事后放宽阈值" in robustness.body

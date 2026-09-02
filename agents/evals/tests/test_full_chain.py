@@ -26,15 +26,18 @@ from omm_agent_core import (
 from omm_agent_evals import (
     CANNED_EXPERIMENT_CODE,
     CANNED_PAPER,
+    CANNED_VALIDATION_CODE,
     FULL_CHAIN_CHAT_SEQUENCE,
     FULL_CHAIN_GOLDEN_EVENT_TYPES,
     FULL_CHAIN_METRICS,
     FULL_CHAIN_PROMPT_SEQUENCE,
+    FULL_CHAIN_ROBUSTNESS_CHECKS,
     build_full_chain_session,
+    robustness_success,
     sandbox_failure,
     sandbox_success,
 )
-from omm_agent_skills import PYTHON_TOOL_NAME
+from omm_agent_skills import EXPERIMENT_SCRIPT_PATH, G3_ACCEPT_OPTION_ID, PYTHON_TOOL_NAME
 
 
 def drive_through_review(session):
@@ -61,6 +64,27 @@ def tool_events(session):
         event
         for event in session.sink.events
         if event.event_type is EventType.TOOL_CALLED
+    ]
+
+
+def experiment_step_ids(session):
+    return {step.step_id for step in steps_for(session, TaskState.EXPERIMENTING)}
+
+
+def experiment_sandbox_calls(session):
+    """实验步骤的 python_run 调用（验证阶段的稳健性复跑也走 python_run，要按步骤过滤）。"""
+    ids = experiment_step_ids(session)
+    return [
+        call for call in session.tools.calls
+        if call[2] == PYTHON_TOOL_NAME and call[1] in ids
+    ]
+
+
+def experiment_sandbox_events(session):
+    ids = experiment_step_ids(session)
+    return [
+        event for event in tool_events(session)
+        if event.payload["tool"] == PYTHON_TOOL_NAME and event.payload["step_id"] in ids
     ]
 
 
@@ -93,7 +117,16 @@ def test_happy_path_all_six_stages_succeed(completed_session):
     assert "历史运量" in snapshot.outputs[TaskState.DATA_PREPARATION.value]["profile_summary"]
     assert snapshot.outputs[TaskState.MODEL_PLANNING.value]["recommended_plan_id"] == "A"
     assert snapshot.outputs[TaskState.EXPERIMENTING.value]["metrics"] == FULL_CHAIN_METRICS
+    assert snapshot.outputs[TaskState.EXPERIMENTING.value]["script_path"] == EXPERIMENT_SCRIPT_PATH
     assert snapshot.outputs[TaskState.VALIDATING.value]["verdict"] == "pass"
+    # 验证阶段真的复跑了：三项检查数字来自检验脚本的标记行，全过不惊动用户
+    robustness = snapshot.outputs[TaskState.VALIDATING.value]["robustness"]
+    assert robustness["executed"] is True and robustness["status"] == "passed"
+    assert robustness["checks_total"] == 3 and robustness["checks_failed"] == 0
+    assert [check["id"] for check in robustness["checks"]] == [
+        check["id"] for check in FULL_CHAIN_ROBUSTNESS_CHECKS
+    ]
+    assert TaskState.VALIDATING.value not in snapshot.review_decisions, "全过不上 G3"
     assert snapshot.outputs[TaskState.PAPER_WRITING.value]["title"] == CANNED_PAPER["title"]
 
     # 模型出口分两条：模板单发（complete）与沙盒会话（chat_text）。
@@ -115,38 +148,62 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
     # Tool calls recorded through the engine with production payload: the
     # data stage lists data/ once (profiling preflight, empty here); the
     # experiment stage is a sandbox agent, so it surveys the workspace and
-    # environment, runs code, then re-lists for assertion evidence.
+    # environment, runs code, re-lists for assertion evidence, then stages
+    # the final script into the workspace; the validation stage finds that
+    # script, reads it into the task card and re-runs it in the sandbox.
     all_tool_events = tool_events(completed_session)
     experiment_step = steps_for(completed_session, TaskState.EXPERIMENTING)[0]
+    validation_step = steps_for(completed_session, TaskState.VALIDATING)[0]
     data_step = steps_for(completed_session, TaskState.DATA_PREPARATION)[0]
 
-    ws_event, *sandbox_events = all_tool_events
-    assert ws_event.payload["tool"] == "ws_list"
-    assert ws_event.payload["step_id"] == data_step.step_id
-    assert [event.payload["tool"] for event in sandbox_events] == [
-        "ws_list",
-        "env_probe",
-        PYTHON_TOOL_NAME,
-        "ws_list",
-    ]
-    assert all(event.payload["status"] == "succeeded" for event in sandbox_events)
-    assert all(
-        event.payload["step_id"] == experiment_step.step_id
-        for event in sandbox_events
-    )
+    by_step = {}
+    for event in all_tool_events:
+        by_step.setdefault(event.payload["step_id"], []).append(event.payload["tool"])
+    assert by_step == {
+        data_step.step_id: ["ws_list"],
+        experiment_step.step_id: [
+            "ws_list",
+            "env_probe",
+            PYTHON_TOOL_NAME,
+            "ws_list",
+            "ws_write",
+        ],
+        validation_step.step_id: [
+            "ws_list",
+            "ws_read",
+            "env_probe",
+            PYTHON_TOOL_NAME,
+            "ws_list",
+        ],
+    }
+    assert all(event.payload["status"] == "succeeded" for event in all_tool_events)
 
-    # And the invoker itself saw exactly one python_run call, carrying the
-    # code the model wrote through the tool envelope.
-    (call,) = [
+    # The invoker saw one python_run per sandbox stage, each carrying the code
+    # the model wrote through the tool envelope; the validation stage read back
+    # exactly the script the experiment stage staged.
+    experiment_call, validation_call = [
         entry for entry in completed_session.tools.calls if entry[2] == PYTHON_TOOL_NAME
     ]
-    run_id, step_id, tool_name, arguments = call
-    assert (run_id, step_id, tool_name) == (
+    assert experiment_call[:3] == (
         completed_session.snapshot.run_id,
         experiment_step.step_id,
         PYTHON_TOOL_NAME,
     )
-    assert arguments["code"] == CANNED_EXPERIMENT_CODE
+    assert experiment_call[3]["code"] == CANNED_EXPERIMENT_CODE
+    assert validation_call[1] == validation_step.step_id
+    assert validation_call[3]["code"] == CANNED_VALIDATION_CODE
+    assert completed_session.tools.workspace_texts == {
+        EXPERIMENT_SCRIPT_PATH: CANNED_EXPERIMENT_CODE
+    }
+    robustness_card = next(
+        m["content"]
+        for call in completed_session.llm.chat_calls
+        if call.label == "validating.sandbox"
+        for m in call.messages
+        if m["role"] == "system"
+    )
+    assert CANNED_EXPERIMENT_CODE in robustness_card
+    assert "长周期外推失真" in robustness_card, "评审风险进复跑任务卡"
 
 
 def test_happy_path_publishes_real_artifacts(completed_session):
@@ -161,6 +218,13 @@ def test_happy_path_publishes_real_artifacts(completed_session):
     assert code_ref.uri.endswith("experiment.py")
     assert code_ref.kind == "code"
     assert blobs[code_ref.uri].decode("utf-8") == CANNED_EXPERIMENT_CODE
+
+    # The validation stage publishes its robustness-check script the same way.
+    validation_step = steps_for(completed_session, TaskState.VALIDATING)[0]
+    (checks_ref,) = validation_step.artifacts
+    assert checks_ref.uri.endswith("validation_checks.py")
+    assert checks_ref.kind == "code"
+    assert blobs[checks_ref.uri].decode("utf-8") == CANNED_VALIDATION_CODE
 
     paper_step = steps_for(completed_session, TaskState.PAPER_WRITING)[0]
     (paper_ref,) = paper_step.artifacts
@@ -177,7 +241,7 @@ def test_happy_path_publishes_real_artifacts(completed_session):
         for event in completed_session.sink.events
         if event.event_type is EventType.ARTIFACT_PRODUCED
     ]
-    assert produced == [results_ref.uri, code_ref.uri, paper_ref.uri]
+    assert produced == [results_ref.uri, code_ref.uri, checks_ref.uri, paper_ref.uri]
 
 
 # -- 2. replay consistency -------------------------------------------------------
@@ -207,14 +271,12 @@ def test_experiment_repair_round_feeds_error_back_and_completes():
         "waves": 2,
     }
 
-    # Two sandbox invocations: the failing one, then the regenerated one
-    # (the data stage's ws_list profiling preflight is filtered out here).
-    sandbox_calls = [call for call in session.tools.calls if call[2] == PYTHON_TOOL_NAME]
+    # Two experiment sandbox invocations: the failing one, then the regenerated
+    # one (the validation stage's robustness re-run is a third python_run on
+    # its own step and is filtered out here).
+    sandbox_calls = experiment_sandbox_calls(session)
     assert [call[2] for call in sandbox_calls] == [PYTHON_TOOL_NAME] * 2
-    recorded = [
-        event for event in tool_events(session)
-        if event.payload["tool"] == PYTHON_TOOL_NAME
-    ]
+    recorded = experiment_sandbox_events(session)
     assert [event.payload["status"] for event in recorded] == ["failed", "succeeded"]
     assert all(
         event.payload["step_id"] == experiment_step.step_id for event in recorded
@@ -321,10 +383,7 @@ def test_experiment_rounds_exhausted_fails_run_then_retry_recovers():
     assert "[run_ok]" in snapshot.failure.error
     assert "NameError" in snapshot.failure.error
 
-    def sandbox_calls():
-        return [call for call in session.tools.calls if call[2] == PYTHON_TOOL_NAME]
-
-    assert len(sandbox_calls()) == 3  # all waves of attempt 1
+    assert len(experiment_sandbox_calls(session)) == 3  # all waves of attempt 1
 
     engine.retry(snapshot)
     assert snapshot.state is TaskState.EXPERIMENTING
@@ -339,18 +398,121 @@ def test_experiment_rounds_exhausted_fails_run_then_retry_recovers():
         StepStatus.FAILED,
         StepStatus.SUCCEEDED,
     ]
-    assert len(sandbox_calls()) == 4
-    sandbox_events = [
-        event for event in tool_events(session)
-        if event.payload["tool"] == PYTHON_TOOL_NAME
-    ]
-    assert [event.payload["status"] for event in sandbox_events] == [
+    assert len(experiment_sandbox_calls(session)) == 4
+    assert [event.payload["status"] for event in experiment_sandbox_events(session)] == [
         "failed",
         "failed",
         "failed",
         "succeeded",
     ]
 
+    assert_replay_matches(session)
+
+
+# -- 6. G3 result gate: robustness check fails --------------------------------------
+
+
+def failing_robustness_run():
+    """三项检查中 bootstrap 稳定性未过（<50%）：上 G3，推荐「接受并记录局限」。"""
+    checks = [dict(check) for check in FULL_CHAIN_ROBUSTNESS_CHECKS]
+    checks[1].update(passed=False, value=0.42, detail="重采样 RMSE 波动 42%，超出阈值")
+    return robustness_success(checks=checks)
+
+
+def g3_gate_event(session):
+    gates = [
+        event for event in session.sink.events
+        if event.event_type is EventType.REVIEW_REQUESTED
+        and (event.payload.get("gate") or {}).get("gate") == "G3"
+    ]
+    return gates[-1]
+
+
+def test_g3_gate_stops_on_failed_check_and_accept_carries_limitation_into_paper():
+    session = build_full_chain_session(validation_run=failing_robustness_run())
+    engine, snapshot = session.engine, session.snapshot
+
+    outcome = drive_through_review(session)
+
+    # 验证阶段停在 G3：请求确认的是 VALIDATING，载荷带闸门元数据与推荐项
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+    assert snapshot.review is not None
+    assert snapshot.review.resume_state is TaskState.VALIDATING
+    assert "3 项中 1 项未通过" in snapshot.review.reason
+    gate = g3_gate_event(session).payload["gate"]
+    assert [option["id"] for option in gate["options"]] == [
+        G3_ACCEPT_OPTION_ID,
+        "redo:EXPERIMENTING",
+        "redo:MODEL_PLANNING",
+    ]
+    assert [o["id"] for o in gate["options"] if o.get("recommended")] == [G3_ACCEPT_OPTION_ID]
+    assert gate["impact"]["failed"][0]["id"] == "bootstrap_stability"
+    # 闸门未拍板前检验产出已落库（含未通过项），G1 之外没有别的门
+    assert snapshot.outputs[TaskState.VALIDATING.value]["robustness"]["checks_failed"] == 1
+    (validation_step,) = steps_for(session, TaskState.VALIDATING)
+    assert validation_step.status is StepStatus.SUCCEEDED
+
+    # 用户接受并记录局限：决策进台账，论文材料带上稳健性结论与「不得淡化」纪律
+    engine.resolve_review(snapshot, approved=True, reason=G3_ACCEPT_OPTION_ID)
+    outcome = engine.run_until_blocked(snapshot)
+
+    assert outcome.status == AdvanceOutcome.COMPLETED
+    assert snapshot.review_decisions[TaskState.VALIDATING.value] == G3_ACCEPT_OPTION_ID
+    outline_call = next(
+        call for call in session.llm.calls if call.prompt_id == "paper_outline.default"
+    )
+    material = outline_call.variables["validation_summary"]
+    assert "bootstrap_stability" in material and "value 0.42" in material
+    assert "接受并记录局限" in material and "不得淡化" in material
+    assert [step.state for step in snapshot.steps] == list(WORK_SEQUENCE)
+
+    types = [event.event_type for event in session.sink.events]
+    assert types.count(EventType.REVIEW_REQUESTED) == 2  # G1 + G3
+    assert types.count(EventType.REVIEW_RESOLVED) == 2
+    assert_replay_matches(session)
+
+
+def test_g3_redo_experiment_reruns_experiment_and_validation_then_completes():
+    """G3 选「重做实验」：复用修订门的回退语义——实验与验证各跑第二趟，
+    第一趟的产出被丢弃，闸门再次弹出后接受即完成。"""
+    session = build_full_chain_session(validation_run=failing_robustness_run())
+    engine, snapshot = session.engine, session.snapshot
+
+    outcome = drive_through_review(session)
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+    assert snapshot.review.resume_state is TaskState.VALIDATING
+
+    engine.resolve_review(
+        snapshot,
+        approved=True,
+        reason="redo:EXPERIMENTING",
+        resume_state=TaskState.EXPERIMENTING,
+    )
+    assert snapshot.state is TaskState.EXPERIMENTING
+    assert snapshot.force_rerun is True
+    # 回退丢弃实验及其下游的旧产出（串轮防线），上游原样保留
+    assert TaskState.EXPERIMENTING.value not in snapshot.outputs
+    assert TaskState.VALIDATING.value not in snapshot.outputs
+    assert TaskState.MODEL_PLANNING.value in snapshot.outputs
+    # G1 的决策台账（上游）保留，回退起点及下游的闸门决策一并清掉
+    assert set(snapshot.review_decisions) == {TaskState.MODEL_PLANNING.value}
+
+    # 同一份失败脚本 → 第二趟仍上 G3；这次接受
+    outcome = engine.run_until_blocked(snapshot)
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+    assert snapshot.review.resume_state is TaskState.VALIDATING
+    assert [step.attempt for step in steps_for(session, TaskState.EXPERIMENTING)] == [1, 2]
+    assert [step.attempt for step in steps_for(session, TaskState.VALIDATING)] == [1, 2]
+    assert len(experiment_sandbox_calls(session)) == 2
+
+    engine.resolve_review(snapshot, approved=True, reason=G3_ACCEPT_OPTION_ID)
+    outcome = engine.run_until_blocked(snapshot)
+
+    assert outcome.status == AdvanceOutcome.COMPLETED
+    assert snapshot.state is TaskState.COMPLETED
+    types = [event.event_type for event in session.sink.events]
+    assert types.count(EventType.REVIEW_REQUESTED) == 3  # G1 + G3 ×2
+    assert types.count(EventType.RUN_RETRIED) == 0, "回退不是 retry，是审批内的回退"
     assert_replay_matches(session)
 
 

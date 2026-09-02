@@ -123,6 +123,31 @@ VALIDATION_OUTPUT = {
     "validation_summary": "结果整体可信，但对需求率参数敏感",
 }
 
+
+def robustness_code(*passed_flags: bool) -> str:
+    """稳健性复跑沙盒会话里 stub 模型发出的检验脚本——由 python 沙箱真实执行，
+    按传入的通过标志打印逐项判定（标记行数字就是 G3 的判定依据）。"""
+    checks = [
+        {"id": "sensitivity", "name": "需求率扰动", "value": 0.05, "threshold": 0.2},
+        {"id": "bootstrap", "name": "重采样稳定性", "value": 0.08, "threshold": 0.15},
+        {"id": "baseline", "name": "对基线优势幅度", "value": 0.6, "threshold": 0.1},
+    ]
+    for check, passed in zip(checks, passed_flags):
+        check["passed"] = passed
+        if not passed:
+            check["value"] = round(check["value"] * 5, 2)
+        check["detail"] = "在阈值内" if passed else "超出阈值"
+    # 嵌进 Python 源码要用 repr（True/False），json.dumps 的 true/false 在脚本里是 NameError
+    return (
+        "import json\n"
+        f"checks = {checks!r}\n"
+        "print('OMM_METRICS_JSON: ' + json.dumps({'checks': checks}))\n"
+    )
+
+
+ROBUSTNESS_CODE = robustness_code(True, True, True)
+ROBUSTNESS_OUTPUT = {"summary": "三项稳健性检查均在阈值内，结论稳健"}
+
 PAPER_OUTPUT = {
     "title": "基于整数规划的共享单车调度优化",
     "abstract": "本文建立整数规划模型求解调度问题……",
@@ -247,6 +272,11 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
     if "实验工程师" in system:
         assert '"id": "A"' in system, "实验任务卡应携带选中的方案 A"
         return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
+    if "稳健性检验工程师" in system:
+        assert EXPERIMENT_CODE in system, "复跑任务卡应携带工作区里的实验脚本正文"
+        assert '"rmse": 0.5' in system, "复跑任务卡应携带实验真实指标"
+        assert "评审保留（warn）：稳健性" in system, "评审判读的保留意见应进风险点"
+        return _sandbox_reply(messages, ROBUSTNESS_CODE, ROBUSTNESS_OUTPUT)
     prompt = messages[-1]["content"]
     if "赛题原文" in prompt:
         return _llm_reply(ANALYSIS_OUTPUT)
@@ -889,11 +919,18 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
     assert final["status"] == "COMPLETED", "一波代码修复后任务应完整走完"
     assert len(experiment_cards) == 2, "两波各装配一次任务卡"
 
-    # 两次沙箱运行都留 TOOL_CALLED 痕：先失败后成功
+    # 两次沙箱运行都留 TOOL_CALLED 痕：先失败后成功。按 step 归属区分实验与
+    # 检验阶段——验证阶段自 G3 落地后也在沙盒里复跑一次稳健性检查。
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
     logs = [event["payload"] for event in events if event["type"] == "run.log"]
     runs = [entry for entry in logs if entry.get("tool") == "python_run"]
-    assert [entry["status"] for entry in runs] == ["failed", "succeeded"]
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    node_of_step = {step["id"]: step["node"] for step in steps}
+    by_node: dict[str, list[str]] = {}
+    for entry in runs:
+        by_node.setdefault(node_of_step[entry["step_id"]], []).append(entry["status"])
+    assert by_node["EXPERIMENTING"] == ["failed", "succeeded"]
+    assert by_node["VALIDATING"] == ["succeeded"], "修好的脚本进工作区后检验阶段照常复跑"
 
 
 def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
@@ -978,3 +1015,128 @@ def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
     assert "adopt_cleaned" in card, "G2 决策的选项 id 应进实验任务卡"
     assert "用户已确认采用清洗后的数据" in card
     assert "- cleaned/orders.csv" in card, "清洗产物目录应进入工作区数据文件清单"
+
+
+def _g3_router(passed_flags: tuple[bool, ...], outline_prompts: list[str]):
+    """稳健性复跑按给定通过标志出结果；总编规划的提示词收集起来供断言材料。"""
+
+    def router(request: httpx.Request) -> httpx.Response:
+        messages = _wire_messages(request)
+        system = _system_of(messages)
+        if "稳健性检验工程师" in system:
+            return _sandbox_reply(
+                messages,
+                robustness_code(*passed_flags),
+                {"summary": "按阈值逐项判定完毕"},
+            )
+        if "论文的总编" in messages[-1]["content"]:
+            outline_prompts.append(messages[-1]["content"])
+        return _stage_router(request)
+
+    return router
+
+
+def test_g3_result_gate_accept_with_limitations_reaches_paper(client, monkeypatch, validate_contract):
+    """G3 结果采用闸门端到端（§9.1/§11.1）：验证阶段沙盒复跑三项检查中一项未
+    通过 → 运行停在 generic 决策卡（接受并记录局限 / 重做实验 / 回退方案，少数
+    未过推荐接受、CTA 预选）→ 用户接受 → 决策进台账 → 论文材料带稳健性数字与
+    「不得淡化」纪律 → 完成。"""
+    project = create_project(client)
+    outline_prompts: list[str] = []
+    _configure_llm(client, monkeypatch, handler=_g3_router((True, False, True), outline_prompts))
+    run = create_run(client, project["id"], goal="优化共享单车调度")
+
+    approve_when_asked(client, run["id"], option_id="approve")  # G1
+
+    gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    validate_contract("approval-request.schema.json", gate)
+    assert gate["decision_type"] == "generic"
+    assert "3 项中 1 项未通过" in gate["title"] and "重采样稳定性" in gate["title"]
+    options = {option["id"]: option for option in gate["options"]}
+    assert list(options) == ["accept_with_limitations", "redo:EXPERIMENTING", "redo:MODEL_PLANNING"]
+    assert options["accept_with_limitations"].get("recommended") is True
+    assert not options["redo:EXPERIMENTING"].get("recommended")
+
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    statuses = {step["node"]: step["status"] for step in steps}
+    assert statuses["VALIDATING"] == "SUCCEEDED", "闸门未拍板前检验步骤已成功落库"
+    run_view = client.get(f"/api/v1/task-runs/{run['id']}").json()
+    assert run_view["status"] == "WAITING_APPROVAL"
+
+    workspace = client.get(f"/api/v1/task-runs/{run['id']}/workspace").json()
+    validate_contract("modeling-workspace-view.schema.json", workspace)
+    action = workspace["agent"]["action"]
+    assert action["kind"] == "approve"
+    assert action["approval_id"] == gate["id"]
+    assert action["option_id"] == "accept_with_limitations"
+
+    resolved = client.post(
+        f"/api/v1/task-runs/{run['id']}/actions",
+        json={"action": "approve", "approval_id": gate["id"], "option_id": "accept_with_limitations"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
+    assert final["status"] == "COMPLETED"
+
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    assert [step["node"] for step in steps if step["node"] == "EXPERIMENTING"] == ["EXPERIMENTING"], (
+        "接受局限不重做实验"
+    )
+    assert outline_prompts, "论文总编规划应已执行"
+    material = outline_prompts[0]
+    assert "通过 2 项" in material and "bootstrap" in material, "稳健性数字进论文材料"
+    assert "接受并记录局限" in material and "不得淡化" in material
+
+    artifacts = client.get(f"/api/v1/projects/{project['id']}/artifacts").json()["items"]
+    by_file = {a["uri"].rstrip("/").rsplit("/", 1)[-1]: a for a in artifacts}
+    assert by_file["validation_checks.py"]["kind"] == "code", "检验脚本发布为可复现的 code 产物"
+
+
+def test_g3_redo_experiment_reruns_downstream_and_gates_again(client, monkeypatch):
+    """G3 选「重做实验」：复用修订门的回退语义——实验、检验各跑第二趟（attempt 2），
+    同一份失败脚本让 G3 再次弹出，接受后完成；期间没有 RUN_RETRIED，运行状态
+    在回退时先摆回实验阶段。"""
+    project = create_project(client)
+    _configure_llm(client, monkeypatch, handler=_g3_router((False, False, True), []))
+    run = create_run(client, project["id"], goal="优化共享单车调度")
+
+    approve_when_asked(client, run["id"], option_id="approve")  # G1
+
+    gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert "3 项中 2 项未通过" in gate["title"]
+    options = {option["id"]: option for option in gate["options"]}
+    assert options["redo:EXPERIMENTING"].get("recommended") is True, "多数未过推荐重做实验"
+
+    resolved = client.post(
+        f"/api/v1/task-runs/{run['id']}/actions",
+        json={"action": "approve", "approval_id": gate["id"], "option_id": "redo:EXPERIMENTING"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    run_view = client.get(f"/api/v1/task-runs/{run['id']}").json()
+    assert run_view["status"] == "RUNNING"
+    assert run_view["current_node"] == "EXPERIMENTING", "回退时 current_node 先摆回目标阶段"
+
+    second_gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert second_gate["id"] != gate["id"]
+    assert "3 项中 2 项未通过" in second_gate["title"]
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    attempts = {}
+    for step in steps:
+        attempts.setdefault(step["node"], []).append(step["attempt"])
+    assert attempts["EXPERIMENTING"] == [1, 2]
+    assert attempts["VALIDATING"] == [1, 2]
+    assert attempts["MODEL_PLANNING"] == [1], "回退起点的上游不重做"
+
+    approve_when_asked(client, run["id"], option_id="accept_with_limitations")
+    final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
+    assert final["status"] == "COMPLETED"
+
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    types = [event["type"] for event in events]
+    assert types.count("approval.requested") == 3, "G1 + G3 ×2"
+    statuses = [
+        event["payload"] for event in events if event["type"] == "run.status_changed"
+    ]
+    assert any("从「实验运行」重做" in str(entry.get("reason") or "") for entry in statuses), (
+        "回退的状态原因要说清是回退而不是「已确认」"
+    )
