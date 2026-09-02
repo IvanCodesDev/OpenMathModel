@@ -1455,6 +1455,9 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         projectName: view.project_name,
         previous: currentView?.run_status,
         current: view.run_status,
+        // 同一运行第二次进入同一状态（G2→G1 两道门、修订第 2 轮完成）要各自提醒
+        approvalId: view.pending_approval?.id ?? null,
+        eventSequence: view.latest_event_sequence,
       });
       // 问题分析产出实际题目后服务端会自动重命名项目：侧栏「最近任务」跟着换名
       if (currentView && currentView.project_name !== view.project_name) {
@@ -1639,7 +1642,12 @@ export function mountModelingWorkspace(screen: ScreenId): void {
       }
       if (!["approve", "pause", "resume", "retry"].includes(action.kind)) return;
       if (action.kind === "approve" && !action.option_id) {
-        renderError(root, new Error("请先在当前方案页选择要采用的方案"));
+        // 多选项审批门（修订门、G2 数据闸门）的选项就摆在按钮上方；「方案页」那句
+        // 只对 G1 方案确认成立，对修订门说出来是驴唇不对马嘴。
+        const message = shouldOfferOptions(currentView.pending_approval, action)
+          ? "请先在上方选项中选定一项，再确认"
+          : "请先在当前方案页选择要采用的方案";
+        renderError(root, new Error(message));
         return;
       }
       actionPending = true;

@@ -66,6 +66,9 @@ Microsoft/Windows/PowerShell/
 
 # Cursor/Agent 本地配置与运行时产物（永久禁止入库）
 /.cursor/
+/.codex/
+# Agent 会话上下文记录（会话-YYYY-MM-DD.md），只在本机续接用
+/会话-*.md
 
 # KC-Chat 运行时产物（插件自动生成，请勿入库）
 .cursor/mcp.json

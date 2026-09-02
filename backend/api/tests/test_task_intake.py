@@ -221,6 +221,40 @@ def test_inquiry_phrasing_keeps_the_judge_verdict(client, monkeypatch):
     assert (result["intent"], result["source"]) == ("needs_info", "judge")
 
 
+def test_method_names_are_not_mistaken_for_inquiry_phrasing(client, monkeypatch):
+    """「机器学习」里的「学习」、「推荐系统」里的「推荐」是方法名/对象名，不是在提问：
+    这类任务型输入必须保住本地否决层，否则弱模型的 needs_info 误判又能拦人。"""
+    _configure_llm(
+        client,
+        monkeypatch,
+        handler=lambda request: _judge_reply({"intent": "needs_info", "reply": "请给出完整题目。"}),
+    )
+    for goal in (
+        "用机器学习方法预测二手房成交价格",
+        "优化推荐系统的召回排序策略",
+        "基于深度学习的电力负荷预测",
+    ):
+        result = _intake(client, goal)
+        assert (result["intent"], result["source"]) == ("modeling_task", "heuristic"), goal
+
+    # 真问句照旧交回判定模型，不因例外表而放行
+    asking = _intake(client, "机器学习预测房价怎么入门")
+    assert (asking["intent"], asking["source"]) == ("needs_info", "judge")
+
+
+def test_contest_abbreviations_need_letter_boundaries():
+    """MCMC（马尔可夫链蒙特卡洛）不是美赛 MCM：纯字母赛题缩写要求两侧不是字母，
+    否则贝叶斯统计的咨询会被当成赛题直接放行、连判定都不做。"""
+    from omm_api.intake import _modeling_signal
+
+    assert _modeling_signal("用 MCMC 做贝叶斯参数估计时先验怎么选") == ""
+    assert _modeling_signal("2024MCM 的 C 题，帮我做") == "problem"
+    assert _modeling_signal("MCM/ICM 2025 problem B") == "problem"
+    assert _modeling_signal("参加 mathorcup 的排产题") == "problem"
+    # 中文标识仍按子串匹配，边界规则只管纯字母缩写
+    assert _modeling_signal("国赛A题的排产优化") == "problem"
+
+
 def test_intent_alias_is_normalized(client, monkeypatch):
     """弱模型省掉后缀写成 "modeling" 时按 modeling_task 采纳，不白烧这次调用。"""
     _configure_llm(

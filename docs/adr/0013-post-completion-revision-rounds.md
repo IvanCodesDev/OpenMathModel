@@ -1,6 +1,6 @@
 # ADR-0013：跑完之后还能接着改——修订回合复用评审门，不派生新运行
 
-- 状态：Accepted（切片 1、2 已落地并通过全量回归；切片 3 的第 15 项已落地，第 12/13/14/16/17 项前端待做）
+- 状态：Accepted（切片 1、2 已落地并通过全量回归；切片 3 的第 12/13/14/15 项已落地，第 16/17 项前端待做）
 - 日期：2026-08-31
 - 关联：ADR-0011（编排状态机与有界循环）、ADR-0007、[系统架构](../architecture/system-overview.md)、设计 §11.3（运行备注）
 
@@ -95,8 +95,12 @@ intentionally out of scope until pass-aware step tracking exists.」本 ADR 就�
 ADR-0011 约束新增领域阶段要走全链路，因此**不为分诊增设节点或状态**：建议起点是
 `POST /revisions` 生成审批选项时算出来的一个字段。分两步走：
 
-- **v1（本批次）**：关键词启发式（命中「数据/清洗/缺失」→ 数据准备；「模型/目标函数/约束」→ 建模方案；
-  「图表/排版/字数」→ 论文撰写；无把握则取建模方案），**并明确告诉用户这是建议、可改选**；
+- **v1（本批次）**：关键词启发式（命中「数据/清洗/缺失」→ 数据准备；「模型/目标函数/约束/决策变量」→ 建模方案；
+  「图表/排版/字数」→ 论文撰写；一句话同时点到多个阶段时取**最早**的那个——下游本来就会一并重跑），
+  **并明确告诉用户这是建议、可改选**。落地时把「无把握」的默认值定为**论文撰写**而不是原稿写的建模方案：
+  那是花费最小的解释，猜大了要用户白付一次全链路的钱，猜小了他在审批门里往前挪一格即可
+  （`engine_glue.suggest_revision_stage`，2026-09-02 修订注记：词表补上了 ADR 点名却漏写的
+  「目标函数 / 约束 / 决策变量」——此前背景里的用户原话「目标函数改成加权总成本」一个词都不中，会被建议成从论文撰写重做）；
 - **v2（后续）**：换成一次有界 LLM 调用（读本轮成果摘要 + 这条要求，输出起点与理由）。
   接口形状不变，只换 `recommended` 的算法与 `description` 的措辞。
 
@@ -156,12 +160,12 @@ ADR-0011 约束新增领域阶段要走全链路，因此**不为分诊增设节
 
 | # | 文件 | 改动 |
 |---|---|---|
-| 12 | `openmathmodel-ui.ts` | 409 `RUN_FINISHED` 从「死路」改成 CTA：「按这条要求继续修改」，点击调 `/revisions` |
-| 13 | `modeling-workspace-api.ts` | 新增 `postRunRevision(runId, text)` |
-| 14 | 审批卡 | 渲染六阶段选项（`_preferred_option` 已优先 recommended，可直接用） |
+| 12 | `openmathmodel-ui.ts` | **已落地**（`f87bbf4`）：409 `RUN_FINISHED` 从「死路」改成 CTA「按这条要求继续修改」，点击调 `/revisions`；超 2000 字不给按钮并当场说明，三种 409 分别给话。如实备案：web 包没有 DOM 测试栈，点击路径未经真实浏览器验收 |
+| 13 | `modeling-workspace-api.ts` | **已落地**（`f87bbf4`）：新增 `postRunRevision(runId, text)` 与回执类型 `RunRevisionReceipt`，导出 `RUN_REVISION_TEXT_LIMIT=2000` 与服务端对齐 |
+| 14 | 审批卡 | **已落地**（`15817bf`）：修订门（正向选项 >1）在 CTA 上方摆出全部选项供改选，点选只记选择不提交；策略拆到 `approval-options.ts` 以便单测（8 例）。浏览器实机点选验收未做 |
 | 15 | `workspace_view.py` | **已落地**：修订门不再沿用「确认后，Agent 将从当前检查点继续执行」。`_revision_round` 以 `evidence["revision_round"]` 为判据（不是选项 id 的 `redo:` 前缀——那只是命名约定，日后同名选项会被误判），`_revision_gate_summary` 写明起点、影响面与「另计一份运行配额」，按钮改称「确认重做起点」；推荐不唯一致预选缺席时如实请用户自选。节点自提闸门逐字不变，`backend/api` 全量 287 passed |
 | 16 | 时间线 | 同一阶段出现多趟，按轮分组并标「第 2 轮」，避免看起来是重复卡片。**开工前先看**：`modeling-workspace-controller.ts` 第 785~791 行对同一 `llm:<prompt_id>` 复用行并改写标题为「（第 N 次尝试）」，第 2 轮重跑必然命中同一 prompt_id，会把用户主动要求的修订轮显示成系统失败重试——得先按 `revision_round` 拆 key 或标题，否则加了分组标题仍是错的 |
-| 17 | 状态接管 | 运行状态由 COMPLETED 变回 RUNNING，列表筛选、通知需能接住。**已核实**：`recent-tasks.ts` 的 `TERMINAL_STATUSES` 归桶跟着 status 走，无需改；`restore-last-task.ts` 全文无状态判断，本项不涉及该文件。**新发现必须改的一处**：`notifications/desktop-notifications.ts` 的 `tag: omm-run-{runId}-{current}` 在第二轮完成时逐字节相同，浏览器按 tag 去重会静默吞掉第 2 轮的「任务已完成」通知，tag 需带轮次 |
+| 17 | 状态接管 | 运行状态由 COMPLETED 变回 RUNNING，列表筛选、通知需能接住。**已核实**：`recent-tasks.ts` 的 `TERMINAL_STATUSES` 归桶跟着 status 走，无需改；`restore-last-task.ts` 全文无状态判断，本项不涉及该文件。**通知去重已修**（2026-09-02）：`notifications/desktop-notifications.ts` 原 `tag: omm-run-{runId}-{current}` 在第二轮完成时逐字节相同，模块级 `delivered` 与浏览器同 tag 去重会吞掉第 2 轮的「任务已完成」——且这个缺陷**不依赖修订功能**：G2 数据闸门与 G1 方案门在同一运行先后 WAITING_APPROVAL，第二道门的提醒同样被吞。现在 tag 由 `runStatusNotificationTag` 生成：等待确认带审批 id、其余状态带最新事件序号（同一次进入的重复快照 tag 相同，去重语义保留），`desktop-notifications.test.mjs` 6 例覆盖 |
 
 ### 5. 明确不做
 

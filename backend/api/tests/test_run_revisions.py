@@ -244,6 +244,16 @@ def test_suggestion_picks_the_earliest_stage_mentioned() -> None:
     assert suggest_revision_stage("题意理解错了") == "PROBLEM_ANALYSIS"
 
 
+def test_suggestion_recognizes_model_formulation_words() -> None:
+    """ADR-0013 §3 点名的「目标函数 / 约束」必须落到建模方案：背景里的用户原话
+    「目标函数改成加权总成本」若被建议成论文撰写，改了目标函数却只重写论文。"""
+    assert suggest_revision_stage("目标函数改成加权总成本") == "MODEL_PLANNING"
+    assert suggest_revision_stage("加一条库容约束再算") == "MODEL_PLANNING"
+    assert suggest_revision_stage("决策变量改成整数") == "MODEL_PLANNING"
+    # 更早的阶段仍然优先：题意错了就不该只从建模方案重做
+    assert suggest_revision_stage("题意理解错了，目标函数也要改") == "PROBLEM_ANALYSIS"
+
+
 def test_each_round_appends_one_more_quota() -> None:
     """账本是全 run 累计的，不按轮追加配额第二轮必然撞上首轮的额度（§3.1）。"""
     first = _run_budget_from_env(1)

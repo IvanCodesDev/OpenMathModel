@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+import zlib
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -34,6 +36,43 @@ def _text_cache_reusable(cached: ArtifactTextRow) -> bool:
         return True
     created_at = as_utc(cached.created_at)
     return created_at is not None and utcnow() - created_at < NEGATIVE_TEXT_CACHE_TTL
+
+
+#: 同一附件的正文抽取在进程内串行化（按 artifact_id 分条带的锁，常量内存）。
+#: 真实事故路径：扫描件 PDF 逐页远程 OCR 超过前端 180 秒预算 → 浏览器中止并
+#: 重发 /text；同步端点不会因客户端断开而停止，于是两次抽取并行、OCR 配额烧
+#: 两遍，最后两边都 INSERT 同一主键，后提交者在请求会话 commit 时撞唯一约束
+#: 变成 500。条带数取 64：不同附件撞同一条带只是多等一会儿，不影响正确性。
+_TEXT_LOCK_STRIPES = 64
+_TEXT_LOCKS = tuple(threading.Lock() for _ in range(_TEXT_LOCK_STRIPES))
+
+
+def _text_lock(artifact_id: str) -> threading.Lock:
+    return _TEXT_LOCKS[zlib.crc32(artifact_id.encode("utf-8")) % _TEXT_LOCK_STRIPES]
+
+
+def _load_text_cache(session: Session, artifact_id: str) -> ArtifactTextRow | None:
+    """读缓存行；``populate_existing`` 绕过会话身份映射，拿到别的请求刚提交的版本。"""
+    return session.execute(
+        select(ArtifactTextRow)
+        .where(ArtifactTextRow.artifact_id == artifact_id)
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+
+
+def _artifact_text_response(row: ArtifactRow, cached: ArtifactTextRow) -> ArtifactText:
+    return ArtifactText(
+        artifact_id=row.id,
+        name=row.name,
+        media_type=row.media_type or "application/octet-stream",
+        status=cached.status,
+        engine=cached.engine,
+        characters=cached.characters,
+        segments=cached.segments,
+        images=cached.images,
+        detail=cached.detail,
+        text=cached.text,
+    )
 
 
 def _ocr_api(settings: Settings) -> OcrApi:
@@ -170,59 +209,46 @@ def read_artifact_text(
     row = _get_owned_artifact(session, ctx, artifact_id)
     cached = session.get(ArtifactTextRow, artifact_id)
     if cached is not None and not refresh and _text_cache_reusable(cached):
-        return ArtifactText(
-            artifact_id=artifact_id,
-            name=row.name,
-            media_type=row.media_type or "application/octet-stream",
-            status=cached.status,
-            engine=cached.engine,
-            characters=cached.characters,
-            segments=cached.segments,
-            images=cached.images,
-            detail=cached.detail,
-            text=cached.text,
-        )
+        return _artifact_text_response(row, cached)
 
-    settings = request.app.state.settings
-    size = row.size_bytes or 0
-    if size > settings.attachment_text_max_bytes:
-        extraction_status, engine, text = "unsupported", "none", ""
-        detail = f"文件超过正文抽取上限 {settings.attachment_text_max_bytes} 字节，仅保留原文件"
-        segments = None
-        images = None
-    else:
-        extraction = extract_text(
-            _load_content(request, row),
-            row.name,
-            row.media_type or "",
-            ocr_languages=settings.ocr_languages,
-            ocr_api=_ocr_api(settings),
-        )
-        extraction_status, engine, text = extraction.status, extraction.engine, extraction.text
-        detail, segments, images = extraction.detail, extraction.segments, extraction.images
+    with _text_lock(artifact_id):
+        # 等锁期间另一请求可能已经抽完并提交：重读一次，命中就直接复用，
+        # 绝不对同一份字节再抽第二遍（远程 OCR 按页计费）。
+        cached = _load_text_cache(session, artifact_id)
+        if cached is not None and not refresh and _text_cache_reusable(cached):
+            return _artifact_text_response(row, cached)
 
-    if cached is None:
-        cached = ArtifactTextRow(artifact_id=artifact_id, created_at=utcnow())
-        session.add(cached)
-    cached.status = extraction_status
-    cached.engine = engine
-    cached.characters = len(text)
-    cached.segments = segments
-    cached.images = images
-    cached.detail = detail[:500] if detail else None
-    cached.text = text
-    cached.created_at = utcnow()
-    session.flush()
+        settings = request.app.state.settings
+        size = row.size_bytes or 0
+        if size > settings.attachment_text_max_bytes:
+            extraction_status, engine, text = "unsupported", "none", ""
+            detail = f"文件超过正文抽取上限 {settings.attachment_text_max_bytes} 字节，仅保留原文件"
+            segments = None
+            images = None
+        else:
+            extraction = extract_text(
+                _load_content(request, row),
+                row.name,
+                row.media_type or "",
+                ocr_languages=settings.ocr_languages,
+                ocr_api=_ocr_api(settings),
+            )
+            extraction_status, engine, text = extraction.status, extraction.engine, extraction.text
+            detail, segments, images = extraction.detail, extraction.segments, extraction.images
 
-    return ArtifactText(
-        artifact_id=artifact_id,
-        name=row.name,
-        media_type=row.media_type or "application/octet-stream",
-        status=extraction_status,
-        engine=engine,
-        characters=len(text),
-        segments=segments,
-        images=images,
-        detail=cached.detail,
-        text=text,
-    )
+        if cached is None:
+            cached = ArtifactTextRow(artifact_id=artifact_id, created_at=utcnow())
+            session.add(cached)
+        cached.status = extraction_status
+        cached.engine = engine
+        cached.characters = len(text)
+        cached.segments = segments
+        cached.images = images
+        cached.detail = detail[:500] if detail else None
+        cached.text = text
+        cached.created_at = utcnow()
+        # 提交必须落在锁内：只 flush 的话，排队的下一个请求拿到锁时读不到这行
+        # （事务未提交），会照样再抽一遍并在自己的 commit 上撞主键。
+        session.commit()
+
+    return _artifact_text_response(row, cached)

@@ -431,6 +431,44 @@ def test_text_endpoint_retries_stale_negative_cache_without_refresh(client, app)
     assert fresh["text"] == ""
 
 
+def test_text_endpoint_serializes_concurrent_extraction_of_the_same_artifact(client, monkeypatch):
+    """同一附件被并发读取时只抽取一次：真实事故路径是扫描件逐页远程 OCR 超过前端
+    180 秒预算 → 浏览器中止并重发 /text，而服务端第一次仍在抽取。修复前两次并行抽取
+    烧两遍 OCR 配额，最后都 INSERT 同一主键、后提交者 500；修复后排队等待并复用结果。"""
+
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    import omm_api.routers.artifacts as artifacts_router
+
+    project = create_project(client)
+    artifact = _upload(client, project["id"], "慢得像扫描件".encode("utf-8"), "慢.txt", "text/plain")
+
+    real_extract = artifacts_router.extract_text
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def _slow_extract(*args, **kwargs):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.4)  # 让三个请求确实重叠在抽取窗口里
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(artifacts_router, "extract_text", _slow_extract)
+
+    url = f"{API}/artifacts/{artifact['id']}/text"
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        responses = list(pool.map(lambda _: client.get(url), range(3)))
+
+    assert [response.status_code for response in responses] == [200, 200, 200], [
+        response.text for response in responses
+    ]
+    assert {response.json()["text"] for response in responses} == {"慢得像扫描件"}
+    assert calls == 1, f"同一附件被并发抽取了 {calls} 次"
+
+
 def test_text_endpoint_is_owner_scoped(client, second_client):
     project = create_project(client)
     artifact = _upload(client, project["id"], b"secret notes", "secret.txt", "text/plain")

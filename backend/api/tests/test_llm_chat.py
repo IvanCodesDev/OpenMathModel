@@ -1199,6 +1199,10 @@ class _LocalUpstream(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的约定命名
+        # 必须把请求体读完再应答。否则（HTTP/1.0 应答后即关连接）套接字关闭时接收
+        # 缓冲里还留着没读的请求体，Windows 会改发 RST 而不是 FIN，客户端若还没读完
+        # 响应就收到 WinError 10053——这就是本用例三个会话里反复出现的「偶发」根因。
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
         body = json.dumps({"choices": [{"message": {"content": "本机接口应答"}}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

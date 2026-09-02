@@ -85,6 +85,17 @@ _INQUIRY_MARKERS = (
     "有哪些", "推荐", "教我", "学习", "入门", "区别", "吗", "呢",
 )
 
+#: 问句标记的子串误命中：「机器学习」里的「学习」、「推荐系统」里的「推荐」是
+#: 方法名与对象名，不是在提问。「用机器学习预测房价」若因此被当成咨询式问句，
+#: 本地否决层就失效，又回到弱模型 needs_info 误判能拦人的老路。判问句前先把
+#: 这些复合词抹掉（只影响问句判断，不影响任务型信号——「预测」照样命中）。
+_INQUIRY_COMPOUND_EXCEPTIONS = (
+    "机器学习", "深度学习", "强化学习", "迁移学习", "监督学习", "无监督学习",
+    "半监督学习", "集成学习", "表示学习", "统计学习", "元学习", "联邦学习",
+    "在线学习", "对比学习", "自监督学习", "学习率", "学习曲线",
+    "推荐系统", "推荐算法", "推荐模型", "推荐引擎", "推荐列表", "推荐策略",
+)
+
 #: 命中任务型信号还需要的最短长度：更短的输入即便命中也没有具体对象
 #: （「帮我优化一下」6 字命中「优化」，却没说优化什么）。
 _TASK_SIGNAL_MIN_CHARS = 10
@@ -156,15 +167,38 @@ def _modeling_signal(goal: str) -> str:
     赛题标识优先于问句判断：「2024 国赛 A 题怎么做」虽是问句，题面就在手上。
     """
     lowered = goal.lower()
-    if any(marker in lowered for marker in _PROBLEM_MARKERS):
+    if any(_contains_marker(lowered, marker) for marker in _PROBLEM_MARKERS):
         return "problem"
-    if any(marker in lowered for marker in _INQUIRY_MARKERS):
+    without_compounds = lowered
+    for compound in _INQUIRY_COMPOUND_EXCEPTIONS:
+        without_compounds = without_compounds.replace(compound, " ")
+    if any(marker in without_compounds for marker in _INQUIRY_MARKERS):
         return ""
     if len(goal) >= _TASK_SIGNAL_MIN_CHARS and any(
         word in lowered for word in _TASK_SIGNALS
     ):
         return "task"
     return ""
+
+
+def _contains_marker(lowered: str, marker: str) -> bool:
+    """赛题标识匹配。纯字母标识（mcm / icm）要求两侧不是字母：否则「MCMC」
+    （马尔可夫链蒙特卡洛）会被当成美赛缩写直接放行、连判定都不做。数字与
+    符号不算边界——「2024mcm」「mcm/icm」照常命中。中文标识按子串匹配。"""
+    if not marker.isascii() or not marker.isalpha():
+        return marker in lowered
+    start = 0
+    while True:
+        index = lowered.find(marker, start)
+        if index == -1:
+            return False
+        before = lowered[index - 1] if index > 0 else ""
+        after = lowered[index + len(marker)] if index + len(marker) < len(lowered) else ""
+        if not (before.isascii() and before.isalpha()) and not (
+            after.isascii() and after.isalpha()
+        ):
+            return True
+        start = index + 1
 
 
 def _judge_prompt(goal: str, attachments: Sequence[IntakeAttachment] = ()) -> str:
