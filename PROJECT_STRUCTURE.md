@@ -1,6 +1,6 @@
 # OpenMathModel 项目结构
 
-> 当前事实基线：2026-08-11。本文描述工作树中的实际目录、运行关系和依赖入口；目标部署形态单独标记。历史目录决策见 [ADR-0003](./docs/adr/0003-workspace-roots.md) 与 [ADR-0005](./docs/adr/0005-backend-directory.md)。
+> 当前事实基线：2026-09-02。本文描述工作树中的实际目录、运行关系和依赖入口；目标部署形态单独标记。历史目录决策见 [ADR-0003](./docs/adr/0003-workspace-roots.md) 与 [ADR-0005](./docs/adr/0005-backend-directory.md)。
 
 ## 结构总览
 
@@ -54,7 +54,7 @@ flowchart LR
     WEB["apps/web\n14 个页面"] -->|"fetch / EventSource"| API["backend/api\nFastAPI"]
     API --> RUNNER["进程内 RunnerThread"]
     RUNNER --> CORE["agents/core\n状态机 + 真实/模拟节点"]
-    API --> SQLITE[("PostgreSQL")]
+    API --> PG[("PostgreSQL")]
     API --> BLOB["本地 Artifact Store"]
     CONTRACTS["packages/contracts"] --> WEB
     CONTRACTS --> API
@@ -63,9 +63,9 @@ flowchart LR
 
 当前边界：
 
-1. Web 通过同源 `/api` 代理调用 API；首页/确认页已创建真实 Project/TaskRun，账户、运行快照、审批、SSE 与 Artifact 元数据已有接线。
-2. API 既负责 HTTP 控制面，也由进程内 `RunnerThread` 推进当前模拟工作流。
-3. API 默认使用 `backend/api/data/dev.db` 和本地内容寻址 Artifact Store。
+1. Web 通过同源 `/api` 代理调用 API；首页/确认页已创建真实 Project/TaskRun，账户、运行快照、审批（G1 方案门 / G2 数据闸门 / 完成后修订门）、SSE、附件上传与文本抽取（扫描件走远程 OCR）、五类阶段正文投影与论文导出均已接线。
+2. API 既负责 HTTP 控制面，也由进程内 `RunnerThread` 推进六阶段工作流。
+3. API 使用 PostgreSQL（默认连 `tools/pg-dev.ps1` 的本地 5433 实例）和本地内容寻址 Artifact Store。
 4. `backend/worker` 已有文件队列、租约、事件日志和隔离执行能力，但 API 当前没有导入或调度 `omm_worker`。
 5. 配置了自定义 API 的用户，六个建模阶段全部由 `agents/skills` 真实节点执行，实验阶段经 `agents/tools` 的 python 沙箱运行生成代码；未配置或提示词缺失时整链回落 `SimStageNode` 模拟节点。
 
@@ -99,7 +99,7 @@ flowchart TB
 
 | 单元 | 当前职责 | 下一阶段职责 |
 |---|---|---|
-| `backend/api` | 鉴权、项目、TaskRun、审批、事件、Artifact、工作台投影；进程内 Runner 推进模拟节点 | 保持控制面协议稳定，把长任务调度移交独立执行面 |
+| `backend/api` | 鉴权、项目、TaskRun、审批、事件、Artifact、工作台与阶段正文投影；进程内 Runner 推进六阶段节点（配置模型后为真实节点，否则模拟） | 保持控制面协议稳定，把长任务调度移交独立执行面 |
 | `RunnerThread` | 本地开发中轮询并推进一次阶段 tick | 在独立 Worker 接线后退出生产执行路径 |
 | `backend/worker` | 可独立验证的队列、租约、事件恢复、沙箱与产物原型 | 消费 API 发布的幂等任务并运行真实 Agent 节点 |
 | `agents/core` | 状态机、领域事件、回放和执行端口 | 继续作为 API 与 Worker 共享的框架无关内核 |

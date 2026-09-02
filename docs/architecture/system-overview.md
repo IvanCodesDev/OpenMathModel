@@ -1,6 +1,6 @@
 # 系统架构
 
-> 状态基线：2026-08-11。本文明确区分“当前运行架构”“独立执行面原型”和“目标部署架构”，避免把规划写成已实现事实。
+> 状态基线：2026-09-02。本文明确区分“当前运行架构”“独立执行面原型”和“目标部署架构”，避免把规划写成已实现事实。
 
 ## 1. 设计目标
 
@@ -30,7 +30,7 @@ flowchart LR
   end
 
   subgraph LocalData["当前数据面"]
-    SQLite[("PostgreSQL")]
+    PG[("PostgreSQL")]
     Blob["本地内容寻址 Artifact Store"]
   end
 
@@ -42,17 +42,17 @@ flowchart LR
   FastAPI -->|"SSE"| Controller
   Account -->|"/api/auth /api/account"| FastAPI
   FastAPI --> Workspace
-  Workspace --> SQLite
+  Workspace --> PG
   FastAPI --> Runner
   Runner --> Engine
-  Engine --> SQLite
+  Engine --> PG
   Engine --> Blob
 ```
 
 当前事实：
 
 1. Web 继续由 `App.tsx` 的路径映射、`OpenMathModelScreen` 和 `openmathmodel-ui.ts` 生成页面。
-2. 首页通过 `task-start-controller.ts` 保存草稿，发送时恢复登录并直接创建真实 Project/TaskRun，把 `run_id/project_id` 交给执行页；`/confirm` 是直接访问时的草稿复核入口，共用同一套提交流程。当前附件只传播元数据。账户与安全页面使用正式 API。
+2. 首页通过 `task-start-controller.ts` 保存草稿，发送时恢复登录并直接创建真实 Project/TaskRun，把 `run_id/project_id` 交给执行页；`/confirm` 是直接访问时的草稿复核入口，共用同一套提交流程。附件支持二进制上传与服务端文本抽取（扫描件经远程 OCR）。账户与安全页面使用正式 API。
 3. 六个建模流程页面都会挂载 `modeling-workspace-controller.ts`，仅在 URL 或同标签页 sessionStorage 提供合法运行身份时请求 workspace API。
 4. `GET /api/v1/task-runs/{run_id}/workspace` 聚合运行、步骤、待审批项和产物，作为 Agent 左栏与阶段页面状态的共同语义来源；它当前不提供右侧详细正文。
 5. Web 首屏取快照，随后订阅 SSE；阶段或产物事件触发快照刷新。
@@ -76,7 +76,7 @@ flowchart LR
 
 `/confirm` 不在首页发送链路上：直接访问时恢复草稿复核，“开始任务”执行同一套提交流程；无草稿时进入显式 `demo=1`，不创建后端资源，也不复用旧 `activeRunId`。API 或身份错误停留在当前页（首页或确认页）并原位显示状态；重新发送未修改的草稿沿用已写回的 `project_id` 与幂等 token，不重复创建。
 
-工作台恢复切片随后以**后端返回的 `run_id`** 为起点，覆盖工作台快照、Agent 时间线与摘要、模型方案审批、SSE 刷新，以及实验/完成页的真实 Artifact 文件清单。它仍不包含五类页面详细正文契约、附件文件上传/解析、数据清洗确认/采用实验结果/论文交付等业务动作、可见的暂停入口、独立 Worker 和完整 Skills 的生产接线。
+工作台恢复切片随后以**后端返回的 `run_id`** 为起点，覆盖工作台快照、Agent 时间线与摘要、模型方案审批、SSE 刷新，以及实验/完成页的真实 Artifact 文件清单。五类页面正文投影（`GET /task-runs/{run_id}/stage-outputs`）、附件上传/解析、G2 数据闸门确认、论文导出与完成后修订回合（ADR-0013）也已接入；仍不包含论文编辑保存（乐观锁）、可见的暂停入口和独立 Worker 的生产接线。
 
 ```text
 URL run_id
@@ -113,7 +113,7 @@ MODEL_PLANNING
 
 `backend/worker` 已具备文件队列、租约、JSONL 事件恢复、沙箱和工作区产物能力，但当前 API 未导入或调度 `omm_worker`。它是下一阶段执行面原型，不是当前 API 请求链的一部分。
 
-同样，`agents/skills` 中已有的真实题意分析和方案规划能力还没有替换 API 的全部 `SIM_NODES`。因此文档和 UI 必须把模拟阶段产物标识为模拟，不把它描述为完整生产智能体。
+配置了自定义 API 的用户，六个建模阶段已全部由 `agents/skills` 真实节点执行（实验阶段经 `agents/tools` 的 python 沙箱运行生成代码）；未配置或提示词缺失时整链回落 `SimStageNode`。文档和 UI 仍须把模拟阶段产物标识为模拟，不把它描述为完整生产智能体。
 
 ## 5. 数据与事实来源
 
@@ -126,7 +126,7 @@ MODEL_PLANNING
 | 文件元数据 | `artifacts` | `artifacts[]` 与下载 URL |
 | 二进制内容 | 本地 Blob Store | `/api/v1/artifacts/{id}/download` 下载时校验 SHA-256 |
 | 用户头像 | `users.avatar_sha256` + 独立头像内容存储 | `user.avatar_url` 带摘要查询串，`/api/account/avatar` 仅返回本人头像 |
-| 页面详细正文 | 当前多数仍为模板数据 | 后续由版本化阶段输出契约替换 |
+| 页面详细正文 | `stage_outputs`（STEP_SUCCEEDED 最新成功产出的投影） | `GET /api/v1/task-runs/{run_id}/stage-outputs` 五类正文投影 |
 
 领域事件表是执行事实来源，控制面表和 `ModelingWorkspaceView` 是查询投影。UI 不直接读取数据库或 Worker 文件。
 
@@ -157,11 +157,14 @@ MODEL_PLANNING
 ```text
 GET  /api/health
 POST /api/auth/*
-GET/PATCH/POST/DELETE /api/account/*
+GET/PATCH/POST/DELETE /api/account/*（含 llm-config、privacy-settings、2FA、sessions）
 GET/POST/DELETE       /api/account/avatar
+POST /api/chat；POST /api/llm/test、/api/llm/models
+GET/PUT  /api/usage/*（summary、export、settings）
 
+POST     /api/v1/task-intake
 POST/GET /api/v1/projects
-GET      /api/v1/projects/{project_id}
+GET/PATCH/DELETE /api/v1/projects/{project_id}
 POST/GET /api/v1/projects/{project_id}/artifacts
 
 POST/GET /api/v1/task-runs
@@ -169,11 +172,19 @@ GET      /api/v1/task-runs/{run_id}
 GET      /api/v1/task-runs/{run_id}/steps
 GET      /api/v1/task-runs/{run_id}/approvals
 POST     /api/v1/task-runs/{run_id}/actions
+POST     /api/v1/task-runs/{run_id}/notes
+POST     /api/v1/task-runs/{run_id}/revisions
 GET      /api/v1/task-runs/{run_id}/workspace
+GET      /api/v1/task-runs/{run_id}/stage-outputs
 GET      /api/v1/task-runs/{run_id}/events/history
 GET      /api/v1/task-runs/{run_id}/events
 
+POST     /api/v1/artifacts/parse
 GET      /api/v1/artifacts/{artifact_id}/download
+GET      /api/v1/artifacts/{artifact_id}/text
+
+POST     /api/v1/paper-exports
+GET      /api/v1/paper-exports/{export_id}
 ```
 
 错误信封统一为 `code`、`message`、`request_id`、`details`。当前 TaskRun 创建与 TaskRun `/actions` 使用 `Idempotency-Key`；这不是对所有写接口的统一实现声明。受保护资源按项目 owner 隔离。
@@ -189,19 +200,19 @@ GET      /api/v1/artifacts/{artifact_id}/download
 - 带状态的产物元数据；只有 `READY` 且具有完整存储引用与哈希的 Artifact 才提供 `download_url`；
 - 当前待审批项与最新事件序号。
 
-### 7.3 下一批页面正文契约
+### 7.3 页面正文契约（已发布，只读投影）
 
-工作台快照解决“当前在哪、Agent 显示什么、可以做什么、有哪些文件”，但不替代各阶段正文数据。以下契约仍需按顺序落地：
+工作台快照解决“当前在哪、Agent 显示什么、可以做什么、有哪些文件”，各阶段正文数据由五类契约经 `GET /api/v1/task-runs/{run_id}/stage-outputs` 提供（STEP_SUCCEEDED 最新成功产出的只读投影，交付清单只列最近一趟产物）：
 
-| 页面 | 下一契约 | 关键内容 |
+| 页面 | 契约 | 关键内容 |
 |---|---|---|
 | 数据准备 | `DatasetProfile` | 指标、问题、预览、清洗记录、字段字典 |
 | 建模方案 | `PlanProposal` | 2–3 个角色化方案、假设、符号、实现计划 |
 | 实验结果 | `ExperimentSummary` | 指标、图表、稳健性、运行环境、产物分组 |
-| 论文编辑 | `DocumentDraft` | 版本、大纲、章节、引用、检查与乐观锁 |
+| 论文编辑 | `DocumentDraft` | 版本、大纲、章节、引用与检查 |
 | 最终成果 | `DeliveryManifest` | 摘要、限制、交付文件、哈希与一致性检查 |
 
-在这些契约发布前，右侧详细指标和论文示例仍属于页面模板；不得从日志文本反向解析填充。
+论文编辑的保存与版本冲突处理（乐观锁写路径）尚未落地；正文缺失时对应区域回落页面模板，不得从日志文本反向解析填充。
 
 Artifact 投影是一份真实文件清单，而不是由前端生成的交付压缩包。`PENDING`、`STALE`、`DELETED` 仍可作为状态行显示，但下载按钮禁用；“导出文件清单”只导出名称、类型、状态、大小与下载地址的文本清单，不创建 ZIP 或合并归档。
 
@@ -226,12 +237,11 @@ flowchart LR
 
 ## 9. 当前关键缺口
 
-1. API 与独立 Worker 尚未贯通。
+1. API 与独立 Worker 尚未贯通；执行面是进程内 `RunnerThread` 单线程逐节点轮转，「最大并发任务」设置尚不产生真并行。
 2. 真实节点依赖用户配置自定义 API；未配置时仍为 `SimStageNode` 模拟链路。
-3. `STEP_SUCCEEDED` 的结构化 outputs/metrics 尚未投影为版本化阶段输出。
-4. 五类页面正文契约、论文保存与版本冲突处理尚未落地。
-5. 新任务附件当前只进入 TaskRun 参数元数据；二进制上传、解析和 Artifact 血缘绑定尚未接通。
-6. Artifact 血缘目前仍未完整投影。
-7. 当前 API 自动化已经覆盖排队、待审批、完成态、完成页产物聚合、非 READY Artifact、跨项目异常关联、跨账户 404 与 OpenAPI 组件兼容；新任务状态纯函数已有 4 个用例。Web 控制器 DOM、真实登录后的创建链、SSE 重连、错页导航和非 READY Artifact 的浏览器自动化仍待补齐，现阶段已有关键流程的人工浏览器验收。
+3. 论文编辑的保存与版本冲突处理（`DocumentDraft` 乐观锁写路径）尚未落地。
+4. 六阶段节点读取附件时仅使用浏览器摘录（每附件前 1200 字、合计 4000 字）；服务端全文抽取（含远程 OCR 结果）当前只服务对话路径，尚未注入六阶段节点。
+5. Artifact 血缘目前仍未完整投影。
+6. 当前 API 自动化已经覆盖排队、待审批、完成态、完成页产物聚合、非 READY Artifact、跨项目异常关联、跨账户 404、删除/清扫链路（PostgreSQL 双方言）与 OpenAPI 组件兼容。web 包无 DOM 测试栈，浏览器自动化仍待补齐；ADR-0013 修订回合已于 2026-09-02 经无头浏览器实机走查验收。
 
 这些项是后续开发清单，不影响当前工作台状态、审批和产物元数据闭环的可用性。
