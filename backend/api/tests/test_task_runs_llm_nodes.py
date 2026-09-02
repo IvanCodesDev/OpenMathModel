@@ -12,6 +12,7 @@ import re
 
 import httpx
 from conftest import (
+    SERVICE_ROOT,
     approve_when_asked,
     create_project,
     create_run,
@@ -487,7 +488,7 @@ def test_sandbox_hardware_note_follows_gpu_probe(monkeypatch):
         engine_glue._sandbox_hardware.cache_clear()
 
 
-def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch):
+def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path):
     """全链真实节点：审批前三个阶段 + 审批后实验（沙箱真跑代码）/检验/论文。"""
     project = create_project(client)
     _configure_llm(client, monkeypatch)
@@ -521,6 +522,17 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch):
     assert by_file["experiment.py"]["kind"] == "code"
     assert "paper-draft.md" in by_file, "论文草稿应发布为产物"
     assert by_file["paper-draft.md"]["kind"] == "paper"
+
+    # 沙盒工作区必须落在 create_app 注入的 workspaces_dir（本用例的 tmp_path），
+    # 而不是进程 .env 指向的真实 backend/api/data/workspaces：曾因 engine_glue 直读
+    # get_settings() 让每次跑测试都往开发数据目录写几十个 run_* 目录，还触发
+    # 监视该目录的 uvicorn --reload 反复重启。
+    assert (tmp_path / "workspaces" / run["id"] / "experiment.py").is_file(), (
+        "最终实验脚本应落在测试自己的工作区根"
+    )
+    assert not (SERVICE_ROOT / "data" / "workspaces" / run["id"]).exists(), (
+        "测试不得污染开发数据目录"
+    )
 
     csv_download = client.get(f"/api/v1/artifacts/{by_file['results.csv']['id']}/download")
     assert csv_download.status_code == 200

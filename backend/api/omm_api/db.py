@@ -7,10 +7,20 @@ from pathlib import Path
 from fastapi import Request
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.schema import CreateColumn
 
 logger = logging.getLogger(__name__)
+
+# 非 SQLite 后端的单次建连上限（秒）。libpq 默认无限等待，本地库没起时每次探测
+# 都要拖到驱动自己的超时才报错；5 秒足以覆盖本机与内网，远端库可在连接串里覆盖。
+CONNECT_TIMEOUT_SECONDS = 5
+
+
+def _first_line(error: BaseException) -> str:
+    text_ = str(error).strip()
+    return text_.splitlines()[0] if text_ else type(error).__name__
 
 
 class Base(DeclarativeBase):
@@ -67,10 +77,23 @@ class Database:
                     cursor.execute("PRAGMA busy_timeout=30000")
                     cursor.close()
         else:
-            self.engine = create_engine(database_url, pool_pre_ping=True)
+            self.engine = create_engine(
+                database_url,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+            )
         self.session_factory = sessionmaker(
             bind=self.engine, autoflush=False, expire_on_commit=False
         )
+
+    def ping(self) -> str | None:
+        """探一次连接：可达返回 None，否则返回一行可读的失败原因（不带 traceback）。"""
+        try:
+            with self.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except DBAPIError as exc:
+            return _first_line(exc.orig if exc.orig is not None else exc)
+        return None
 
     def create_all(self) -> None:
         from . import models, orm  # noqa: F401  确保任务面与账户面模型都已注册

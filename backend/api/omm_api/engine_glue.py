@@ -77,7 +77,7 @@ from omm_contracts import (
 )
 
 from .blobstore import ArtifactBlobStore, LocalContentStore
-from .config import get_settings
+from .config import Settings, get_settings
 from .errors import ApiError
 from .events import append_event
 from .ids import new_id
@@ -130,6 +130,24 @@ class _ApiIds:
         return new_id(prefix)
 
 
+# ── 运行时配置：进程级绑定（create_app 时注入；缺省读进程环境） ──────────────
+# 工作区根、沙箱时限必须与 create_app 拿到的那份 Settings 一致：测试夹具把
+# workspaces_dir 指到 tmp_path，这里若仍读 get_settings()（.env / 环境变量），
+# 沙盒就会把每个用例的代码写进真实的 backend/api/data/workspaces，既污染开发
+# 数据目录，又会触发监视该目录的 uvicorn --reload 反复重启。
+
+_settings: Settings | None = None
+
+
+def set_settings(settings: Settings) -> None:
+    global _settings
+    _settings = settings
+
+
+def runtime_settings() -> Settings:
+    return _settings if _settings is not None else get_settings()
+
+
 # ── Artifact 存储端口：进程级绑定（create_app 时注入；缺省按配置构建） ──────
 
 _blobstore: ArtifactBlobStore | None = None
@@ -143,7 +161,7 @@ def set_blobstore(store: ArtifactBlobStore) -> None:
 def get_blobstore() -> ArtifactBlobStore:
     global _blobstore
     if _blobstore is None:
-        _blobstore = LocalContentStore(get_settings().artifacts_dir)
+        _blobstore = LocalContentStore(runtime_settings().artifacts_dir)
     return _blobstore
 
 
@@ -1513,7 +1531,7 @@ def _build_tool_invoker(
     工具事件走引擎 record_external（序列分配必须留在引擎单路径上），
     随 _ProjectingSink 投影成 v1 run.log，工作台执行轨迹可见每次调用。
     """
-    settings = get_settings()
+    settings = runtime_settings()
     workspace = TaskWorkspace(settings.workspaces_dir, run.id)
     _stage_attachment_tables(session, run, workspace)
     sandbox = PythonSandbox(

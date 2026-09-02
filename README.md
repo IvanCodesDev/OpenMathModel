@@ -82,15 +82,18 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 统一入口诊断时可分别启动两个进程：
 
 ```powershell
-# 终端 A：API（--timeout-graceful-shutdown 必带：页面的 SSE 长连接永不排空，
-# 不设上限时 --reload 的优雅停机会无限等待，表现为改代码后 API 失联）
-.venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --timeout-graceful-shutdown 5 --port 8000
+# 终端 A：API
+# --timeout-graceful-shutdown 必带：页面的 SSE 长连接永不排空，不设上限时 --reload 的
+#   优雅停机会无限等待，表现为改代码后 API 失联；
+# --reload-dir 必带：不加时 --reload 监视整个当前目录（含 backend/api/data/），沙盒每写
+#   一个 .py（steps/*/main.py、experiment.py）API 就重启一次，会把运行中的任务打断。
+.venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --reload-dir backend/api/omm_api --reload-dir agents --timeout-graceful-shutdown 5 --port 8000
 
 # 终端 B：Web
 npm run dev:web
 ```
 
-数据库限定 PostgreSQL：默认连 `tools/pg-dev.ps1` 的本地实例（port 5433），Docker 底座（port 5432）需显式覆盖 `OMM_DATABASE_URL`。手动路径不经过统一入口的自动拉起，启动 API 前先 `.\tools\pg-dev.ps1 start`。API 文档位于 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)，完整配置见 [`backend/api/README.md`](./backend/api/README.md)。
+数据库限定 PostgreSQL：默认连 `tools/pg-dev.ps1` 的本地实例（port 5433），Docker 底座（port 5432）需显式覆盖 `OMM_DATABASE_URL`。API 启动时先探库：连不上且目标是这台本地实例，会自动执行一次 `.\tools\pg-dev.ps1 start`（`OMM_LOCAL_PG_AUTOSTART=false` 可关）；仍连不上则用一行提示退出，而不是抛驱动 traceback。首次使用仍需 `.\tools\pg-dev.ps1 init` 建库。API 文档位于 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)，完整配置见 [`backend/api/README.md`](./backend/api/README.md)。
 
 ### 4. 用真实 `run_id` 验证工作台
 

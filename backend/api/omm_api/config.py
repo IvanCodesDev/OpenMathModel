@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # （tools/pg-dev.ps1，port 5433；Docker 底座为 5432，见 infra/docker/compose.dev.yaml）。
     # SQLite 不再是任何默认路径：仅测试夹具显式传入临时库，或应急排查时显式覆盖本变量。
     database_url: str = "postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel"
+    # 启动探库失败且目标就是 tools/pg-dev.ps1 管的本地实例时自动 `start` 一次（仅 Windows、
+    # 仅 127.0.0.1/localhost:5433），让单独起 uvicorn 与 `npm run dev` 一样不用先手动拉库。
+    local_pg_autostart: bool = True
 
     # 内嵌模拟工作流推进器（T5 将替换为 agents/core 驱动的 worker）。
     # tick 即模拟阶段的停留时长：每 tick 完成一个阶段。1.2s 会让审批后的

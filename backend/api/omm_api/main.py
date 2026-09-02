@@ -13,6 +13,7 @@ from . import engine_glue
 from .blobstore import LocalContentStore
 from .config import Settings, get_settings
 from .db import Database
+from .db_ready import ensure_database_ready
 from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
 from .paper_export import PaperExportProcessor, PaperExportThread
@@ -40,6 +41,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # 先探库再建表：连不上时给一行能照着做的提示（本地 pg-dev 实例还会自动拉起），
+        # 而不是让 create_all 抛出百行 psycopg 超时 traceback。
+        ensure_database_ready(db, resolved)
         # 开发环境用 create_all 保证可用；PostgreSQL 部署走 Alembic 迁移。
         db.create_all()
         runner: Optional[RunnerThread] = None
@@ -82,6 +86,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     blobs = LocalContentStore(resolved.artifacts_dir)
     app.state.blobs = blobs
     engine_glue.set_blobstore(blobs)
+    # 沙盒工作区根等运行时配置也用这一份 Settings（测试夹具指向 tmp_path 才真隔离）
+    engine_glue.set_settings(resolved)
     # 用户头像共用同一存储实现，但目录独立于运行产物（归属与回收边界不同）
     app.state.avatars = LocalContentStore(resolved.avatars_dir)
     # 测试与内部工具可直接驱动推进（runner_enabled=False 时手动 tick）

@@ -24,8 +24,10 @@ npm run dev
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
 
-# 启动：数据库为 PostgreSQL，先确保其在运行（见下节；自动拉起仅在 `npm run dev`，单独起 uvicorn 前需手动 start）
-.venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --port 8000
+# 启动：数据库为 PostgreSQL（见下节）。启动时先探库，本地 pg-dev 实例没起会自动 start 一次；
+# --reload-dir 必带——不加时 --reload 监视整个 cwd（含 backend/api/data/），沙盒每写一个 .py
+# 就把 API 重启一次；--timeout-graceful-shutdown 让 SSE 长连接不拖死重载
+.venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --reload-dir backend/api/omm_api --reload-dir agents --timeout-graceful-shutdown 5 --port 8000
 ```
 
 - 文档：http://127.0.0.1:8000/docs
@@ -43,7 +45,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 
 ```powershell
 # A. 免安装用户级 PG（tools/pg-dev.ps1，port 5433；默认连接目标，无 Docker 即可用）
-.\tools\pg-dev.ps1 init      # 首次；之后 npm run dev 会自动拉起（仅单独起 uvicorn 时需手动 start）
+.\tools\pg-dev.ps1 init      # 首次建库；之后 npm run dev 与 API 启动探库都会自动 start（OMM_LOCAL_PG_AUTOSTART=false 可关）
 
 # B. Docker 底座（tools/dev-up.ps1，port 5432，见 infra/docker/compose.dev.yaml）——需显式覆盖连接串
 $env:OMM_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel-dev@127.0.0.1:5432/openmathmodel"
@@ -59,7 +61,8 @@ cd backend/api
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `OMM_DATABASE_URL` | `postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel` | 数据库限定 PostgreSQL；仅端口/凭据不同（如 Docker 底座 5432）时覆盖 |
+| `OMM_DATABASE_URL` | `postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel` | 数据库限定 PostgreSQL；仅端口/凭据不同（如 Docker 底座 5432）时覆盖。PG 单次建连上限固定 5 秒，库没起时快速报错而不是拖到驱动超时 |
+| `OMM_LOCAL_PG_AUTOSTART` | `true` | 启动探库失败且目标是 `tools/pg-dev.ps1` 管的本地实例（Windows、127.0.0.1/localhost:5433）时自动 `start` 一次；Docker 5432、远端库、非 Windows 不触发 |
 | `OMM_SECRET_KEY` | `dev-secret-change-me` | 2FA 挑战令牌签名密钥，生产必须覆盖 |
 | `OMM_RUNNER_ENABLED` | `true` | API 进程内推进线程；当前由 `agents/core` 与 `SimStageNode` 驱动 |
 | `OMM_RUNNER_TICK_SECONDS` | `1.2` | 推进节奏 |
