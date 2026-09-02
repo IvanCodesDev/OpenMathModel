@@ -107,6 +107,103 @@ def test_delete_project_cascades_runs_artifacts_and_blobs(client):
     assert client.get(f"{API}/projects/{survivor['id']}").status_code == 200
 
 
+def test_delete_project_also_clears_stage_outputs_notes_and_paper_exports(client, tick):
+    """删除任务必须连带 stage_outputs / run_notes / paper_exports 三张从属表。
+
+    2026-09-02 实机 DELETE /projects 在 PostgreSQL 上撞 run_notes_run_id_fkey 返回 500：
+    这三张表比 purge 逻辑晚加入（0016~0018 迁移），从未被清理。SQLite 默认不查外键，
+    所以这里除了断言 204，还要逐表数行——否则本用例在 SQLite 上会假绿。
+    """
+
+    from sqlalchemy import func, select
+
+    from omm_api.orm import PaperExportRow, RunNoteRow, StageOutputRow, StepRunRow
+
+    app = client.app
+    project = create_project(client, "带从属数据的任务")
+    run = create_run(client, project["id"], auto_start=True)
+    # 推进出至少一段已成功的步骤（stage_outputs.producer_step_id 要引用它）
+    tick(run["id"], times=3)
+
+    note = client.post(
+        f"{API}/task-runs/{run['id']}/notes",
+        json={"text": "请补一段灵敏度分析", "scope": "global"},
+    )
+    assert note.status_code == 201, note.text
+
+    # 论文导出行：既引用 run 又引用项目级产物，是外键链上最靠前的一环
+    source_sha = _add_artifact(
+        app, project["id"], run["id"], b"\\documentclass{article}", "paper.tex"
+    )
+    session = app.state.db.session_factory()
+    try:
+        step_id = session.execute(
+            select(StepRunRow.id)
+            .where(StepRunRow.run_id == run["id"])
+            .order_by(StepRunRow.created_at.asc())
+        ).scalars().first()
+        assert step_id, "前置：推进后应有步骤行"
+        # 模拟节点的产出只有 {"label"}、不落 stage_outputs；真实节点每段都会落。
+        # 这里按真实链路的形状直接补一行，专测删除链路而不依赖 LLM。
+        session.add(
+            StageOutputRow(
+                id=new_id(),
+                run_id=run["id"],
+                node="PROBLEM_ANALYSIS",
+                version=1,
+                schema_id="problem-frame.v1",
+                content={"title": "测试题面"},
+                content_hash="0" * 64,
+                producer_step_id=step_id,
+                status="current",
+                created_at=utcnow(),
+            )
+        )
+        source_artifact_id = session.execute(
+            select(ArtifactRow.id).where(
+                ArtifactRow.sha256 == source_sha, ArtifactRow.run_id == run["id"]
+            )
+        ).scalar_one()
+        session.add(
+            PaperExportRow(
+                id=new_id(),
+                project_id=project["id"],
+                run_id=run["id"],
+                format="pdf",
+                status="QUEUED",
+                source_artifact_id=source_artifact_id,
+                source_sha256=source_sha,
+                created_at=utcnow(),
+            )
+        )
+        session.commit()
+
+        def rows(model, column):
+            return session.execute(
+                select(func.count()).select_from(model).where(column == run["id"])
+            ).scalar_one()
+
+        assert rows(StageOutputRow, StageOutputRow.run_id) == 1
+        assert rows(RunNoteRow, RunNoteRow.run_id) == 1
+        assert rows(PaperExportRow, PaperExportRow.run_id) == 1
+        assert rows(StepRunRow, StepRunRow.run_id) >= 1
+
+        deleted = client.delete(f"{API}/projects/{project['id']}")
+        assert deleted.status_code == 204, deleted.text
+
+        session.expire_all()
+        for model, column in (
+            (StageOutputRow, StageOutputRow.run_id),
+            (RunNoteRow, RunNoteRow.run_id),
+            (PaperExportRow, PaperExportRow.run_id),
+            (StepRunRow, StepRunRow.run_id),
+        ):
+            assert rows(model, column) == 0, f"{model.__tablename__} 残留行"
+        assert client.get(f"{API}/task-runs/{run['id']}").status_code == 404
+    finally:
+        session.close()
+
+
 def test_project_maintenance_requires_ownership(client, second_client):
     project = create_project(client, "私有任务")
 

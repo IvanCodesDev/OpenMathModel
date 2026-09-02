@@ -40,7 +40,10 @@ from .orm import (
     ArtifactRow,
     ArtifactTextRow,
     DomainEventRow,
+    PaperExportRow,
     ProjectRow,
+    RunNoteRow,
+    StageOutputRow,
     StepRunRow,
     TaskRunRow,
 )
@@ -141,11 +144,26 @@ def _delete_runs(session: Session, run_ids: list[str], blobs: Optional[LocalCont
     if not run_ids:
         return 0
 
+    # 从属表必须先于被引用表删除，顺序由外键决定（PostgreSQL 强制外键；SQLite
+    # 默认不查，测试夹具因此发现不了漏删——2026-09-02 实机 DELETE /projects 撞
+    # run_notes_run_id_fkey 才暴露 stage_outputs / run_notes / paper_exports 三张表
+    # 从未被清理，「删除任务」与任务保留清扫在 PG 上全部 500）：
+    # paper_exports → artifacts（artifact_id/source_artifact_id 引用产物）
+    # stage_outputs → step_runs（producer_step_id）与 task_runs
+    # run_notes / approval_requests / agent_events / run_domain_events → task_runs
+    session.execute(delete(PaperExportRow).where(PaperExportRow.run_id.in_(run_ids)))
     artifact_rows = session.execute(
         select(ArtifactRow.id, ArtifactRow.sha256).where(ArtifactRow.run_id.in_(run_ids))
     ).all()
     _delete_artifacts(session, list(artifact_rows), blobs)
-    for model in (ApprovalRequestRow, AgentEventRow, StepRunRow, DomainEventRow):
+    for model in (
+        StageOutputRow,
+        RunNoteRow,
+        ApprovalRequestRow,
+        AgentEventRow,
+        StepRunRow,
+        DomainEventRow,
+    ):
         session.execute(delete(model).where(model.run_id.in_(run_ids)))
     session.execute(delete(TaskRunRow).where(TaskRunRow.id.in_(run_ids)))
     session.flush()
@@ -165,6 +183,8 @@ def purge_project(
         session.scalars(select(TaskRunRow.id).where(TaskRunRow.project_id == project.id))
     )
     deleted_runs = _delete_runs(session, run_ids, blobs)
+    # 不挂在任何 run 上的论文导出（run_id 为空）引用项目与项目级产物，先于两者删。
+    session.execute(delete(PaperExportRow).where(PaperExportRow.project_id == project.id))
     # 项目级附件（run_id 为空）不属于任何 run，此处一并清理。
     leftover = session.execute(
         select(ArtifactRow.id, ArtifactRow.sha256).where(ArtifactRow.project_id == project.id)

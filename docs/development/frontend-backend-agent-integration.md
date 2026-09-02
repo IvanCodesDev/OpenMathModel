@@ -490,6 +490,16 @@ GET /api/health
 | Web | 完成页 | 真实 Artifact 或空状态；仅 READY 可下载 |
 | Web | 导出文件清单 | 生成 TXT 清单，不生成压缩包 |
 | Build | typecheck/check/build | 全部退出码 0 |
+| API | 删除 / 清扫链路（PostgreSQL） | 凡改动 `privacy.py` 的删除逻辑、或新增带外键指向 `task_runs` / `projects` / `artifacts` 的表，本地必须用 `OMM_TEST_DATABASE_URL=postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel_test` 指向 `tools/pg-dev.ps1` 的测试库再跑一遍相关用例；并在用例里**逐表数行**断言从属行已清空 |
+
+### 12.1 为什么删除链路不能只看 SQLite 绿
+
+测试夹具默认用 SQLite，而 SQLite **默认不检查外键**、时间列取回是 naive。两类只有 PostgreSQL 才会暴露的缺陷因此在本地全绿、到线上才炸：
+
+- **外键漏删**（2026-09-02，B8）：`stage_outputs`（0017）、`run_notes`（0018）、`paper_exports`（0016）三张表加入后，`privacy._delete_runs` 一直没有连带删除；SQLite 上 `DELETE /projects` 照样 204，PostgreSQL 上则 `ForeignKeyViolation`——侧栏「删除任务」与「任务保留」清扫对任何有阶段产出 / 追问备注 / 论文导出的运行一律 500。修复后新增的用例除了断言 204，还逐表数行，让 SQLite 也能抓到漏删；
+- **时区比较**（此前 CI `api-postgres` 作业翻车）：`ended_at` 在 SQLite 取回 naive、PostgreSQL 取回 aware，裸比较在 PG 抛 TypeError，见 `privacy._expired_run_ids` 的 `as_utc`。
+
+CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，但它只能拦住**有用例覆盖**的路径；新增带外键的表时，删除链路的用例要一并补上，否则 CI 也是假绿。
 
 ## 13. 当前已验证证据
 
