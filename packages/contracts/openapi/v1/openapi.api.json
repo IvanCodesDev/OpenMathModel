@@ -675,6 +675,40 @@
         "title": "AttachmentParseResult",
         "type": "object"
       },
+      "AuditFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "description": "人可读说明。",
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/omm_contracts__v1__document_draft__Kind"
+          },
+          "numbers": {
+            "description": "对不上账的数值原样 token（取样，最多 8 个）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Numbers",
+            "type": "array"
+          },
+          "scope": {
+            "description": "发现所在位置：「第 N 章《…》」或「摘要」。",
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "kind",
+          "numbers",
+          "detail"
+        ],
+        "title": "AuditFinding",
+        "type": "object"
+      },
       "Body_parse_attachment_adhoc_api_v1_artifacts_parse_post": {
         "properties": {
           "file": {
@@ -1396,6 +1430,36 @@
             "title": "Abstract",
             "type": "string"
           },
+          "audit_findings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AuditFinding"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "终稿数字审计发现（G4 定稿闸门的证据）；空数组 = 审计过且 0 违规；未审计（旧运行、模拟节点）为 null。可选字段：旧消费者可忽略。",
+            "title": "Audit Findings"
+          },
+          "frozen_numbers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FrozenNumber"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "数字冻结清单（H5）：正文数值的合法来源——上游各阶段结构化产出里确定性抽取的「值 + 出处」，不经模型转述。论文节点未产出该字段（2026-09-03 之前的运行、模拟节点）时为 null。可选字段：旧消费者可忽略。",
+            "title": "Frozen Numbers"
+          },
           "keywords": {
             "description": "关键词；节点未给出时为空列表。",
             "items": {
@@ -1482,7 +1546,7 @@
                 "type": "null"
               }
             ],
-            "description": "VALIDATING 阶段的检验报告；该阶段未成功完成时为 null。"
+            "description": "VALIDATING 阶段的检验报告（评审判读 + 沙盒复跑的稳健性检查）；该阶段未成功完成时为 null。"
           }
         },
         "required": [
@@ -1524,6 +1588,44 @@
         ],
         "title": "Format",
         "type": "string"
+      },
+      "FrozenNumber": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "清单内稳定编号（如 metrics.rmse、robustness.bootstrap.value），论文与卡片按它引用。",
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "description": "人可读含义（如「实验指标 rmse」「稳健性检查「bootstrap 稳定性」阈值」）。",
+            "title": "Label",
+            "type": "string"
+          },
+          "source_path": {
+            "description": "阶段产出内的路径（如 metrics.rmse、robustness.checks[0].threshold、cleaning.rows_before、plans[A].steps[2]）。",
+            "title": "Source Path",
+            "type": "string"
+          },
+          "source_stage": {
+            "$ref": "#/components/schemas/SourceStage"
+          },
+          "value": {
+            "description": "冻结的数值，来自上游阶段的结构化产出（沙盒标记行 / 清洗统计 / 方案文本），原样不改写。",
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "value",
+          "source_stage",
+          "source_path"
+        ],
+        "title": "FrozenNumber",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2917,6 +3019,131 @@
         "title": "Result",
         "type": "string"
       },
+      "RobustnessCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "description": "依据，一句话；无则空串。",
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "description": "检查项 id（脚本自定，稳定可引用）。",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "检查名（扰动敏感性、重采样稳定性、对基线优势幅度等）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "passed": {
+            "description": "是否达标：脚本按写死在代码里的阈值判定。",
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "判定阈值：数值，或脚本给出的文字口径（如「≤ 0.05」）；未给时为 null。",
+            "title": "Threshold"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实测值（来自标记行）；脚本未给数值时为 null。",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "passed",
+          "value",
+          "threshold",
+          "detail"
+        ],
+        "title": "RobustnessCheck",
+        "type": "object"
+      },
+      "RobustnessReport": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "description": "逐项稳健性检查；未执行或复跑未成功时为空列表。",
+            "items": {
+              "$ref": "#/components/schemas/RobustnessCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "checks_failed": {
+            "description": "未通过项数；≥1 即触发 G3 结果采用闸门。",
+            "minimum": 0.0,
+            "title": "Checks Failed",
+            "type": "integer"
+          },
+          "checks_total": {
+            "description": "检查项总数（= checks 长度）。",
+            "minimum": 0.0,
+            "title": "Checks Total",
+            "type": "integer"
+          },
+          "executed": {
+            "description": "沙盒复跑是否真的执行过。false 时 checks 为空列表、reason 说明原因（工具 / 监督者 / 会话出口 / 实验脚本 / 预算任一缺席，或子代理未完成）。",
+            "title": "Executed",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "未执行 / 未完成的原因（executed=false 时非空）；执行成功时为空串。",
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "沙盒会话终态（sandbox-run-report 的 status，如 passed / failed）；未执行时为 null。非 passed 时 checks 为空、G3 不触发。",
+            "title": "Status"
+          },
+          "summary_text": {
+            "description": "供论文引用的一句话稳健性结论，数字只来自标记行（不是模型转述）；未执行时为空串。",
+            "title": "Summary Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "executed",
+          "status",
+          "summary_text",
+          "checks",
+          "checks_total",
+          "checks_failed",
+          "reason"
+        ],
+        "title": "RobustnessReport",
+        "type": "object"
+      },
       "Route": {
         "enum": [
           "/task/running",
@@ -3076,6 +3303,17 @@
       "Sha256": {
         "pattern": "^[a-f0-9]{64}$",
         "title": "Sha256",
+        "type": "string"
+      },
+      "SourceStage": {
+        "description": "产出该数值的阶段。",
+        "enum": [
+          "DATA_PREPARATION",
+          "MODEL_PLANNING",
+          "EXPERIMENTING",
+          "VALIDATING"
+        ],
+        "title": "SourceStage",
         "type": "string"
       },
       "StageOutputs": {
@@ -3772,7 +4010,7 @@
         "additionalProperties": false,
         "properties": {
           "checks": {
-            "description": "逐项检查列表。",
+            "description": "逐项检查列表（评审判读，模型给出）。",
             "items": {
               "$ref": "#/components/schemas/ValidationCheck"
             },
@@ -3786,6 +4024,17 @@
             },
             "title": "Risks",
             "type": "array"
+          },
+          "robustness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RobustnessReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "沙盒复跑的稳健性检查（G3 结果采用闸门的判定依据），数字来自检验脚本的标记行而非模型转述；验证节点未产出该字段（沙盒化之前的运行、模拟节点）时为 null。可选字段：旧消费者可忽略。"
           },
           "validation_summary": {
             "description": "一段话的检验结论（如实包含保留意见），供论文阶段引用。",
@@ -3949,6 +4198,14 @@
           "DELETED"
         ],
         "title": "Status",
+        "type": "string"
+      },
+      "omm_contracts__v1__document_draft__Kind": {
+        "description": "发现类型；目前只有「无出处数值」，审计链（H5 切片 2）按需新增取值。",
+        "enum": [
+          "unsourced_number"
+        ],
+        "title": "Kind",
         "type": "string"
       },
       "omm_contracts__v1__modeling_workspace_view__ArtifactProjection": {
