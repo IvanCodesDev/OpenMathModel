@@ -3318,6 +3318,157 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   padding: 38px clamp(44px, 6vw, 82px) 90px;
 }
 
+/* ── 论文页「数字审计」条（H5 数字冻结清单 + 终稿审计，G4 定稿闸门的证据面）：
+   工具栏与纸面之间的一行结论（<details>），展开后是发现列表 + 冻结清单表。
+   单色为主：有发现用琥珀警示、对账通过用绿色勾，与稳健性小节同一套色阶。 ── */
+.paper-only-editor .paper-audit {
+  flex: 0 0 auto;
+  border-bottom: 1px solid #e3e3df;
+  background: #fafaf8;
+  color: #3a3a37;
+  font-family: Inter, "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.paper-only-editor .paper-audit-summary {
+  min-height: 38px;
+  padding: 7px 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.paper-only-editor .paper-audit-summary::-webkit-details-marker { display: none; }
+
+.paper-only-editor .paper-audit-summary > i {
+  font-size: 16px !important;
+  flex: 0 0 auto;
+}
+
+.paper-only-editor .paper-audit.is-warn .paper-audit-summary > i { color: #a76a00; }
+.paper-only-editor .paper-audit.is-clean .paper-audit-summary > i { color: #1d8a4e; }
+.paper-only-editor .paper-audit.is-muted .paper-audit-summary > i { color: #8a8a85; }
+
+.paper-only-editor .paper-audit-summary strong { font-weight: 600; color: #1d1d1b; }
+
+.paper-only-editor .paper-audit-verdict { min-width: 0; flex: 1 1 auto; }
+
+.paper-only-editor .paper-audit.is-warn .paper-audit-verdict { color: #7a4d00; }
+
+.paper-only-editor .paper-audit-hint {
+  flex: 0 0 auto;
+  color: #8a8a85;
+  font-size: 12px;
+}
+
+.paper-only-editor .paper-audit[open] .paper-audit-hint { display: none; }
+
+.paper-only-editor .paper-audit-body {
+  max-height: 42vh;
+  padding: 2px 18px 14px;
+  overflow: auto;
+  border-top: 1px dashed #e3e3df;
+}
+
+.paper-only-editor .paper-audit-body h4 {
+  margin: 12px 0 6px;
+  color: #8a8a85;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+.paper-only-editor .paper-audit-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paper-only-editor .paper-audit-findings li {
+  padding: 5px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.paper-only-editor .paper-audit-findings li > i {
+  margin-top: 2px;
+  color: #a76a00;
+  font-size: 15px !important;
+}
+
+.paper-only-editor .paper-audit-findings strong { font-weight: 600; color: #1d1d1b; }
+
+.paper-only-editor .paper-audit-reason { margin-left: 6px; color: #6a6a65; }
+
+.paper-only-editor .paper-audit-chip {
+  margin: 0 3px;
+  padding: 1px 7px;
+  border: 1px solid #e3e3df;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d1d1b;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.paper-only-editor .paper-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.paper-only-editor .paper-audit-table th,
+.paper-only-editor .paper-audit-table td {
+  padding: 5px 10px 5px 0;
+  vertical-align: top;
+  text-align: left;
+  border-bottom: 1px solid #ececea;
+}
+
+.paper-only-editor .paper-audit-table th {
+  color: #8a8a85;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 编号 / 出处是机器路径（metrics.rmse、robustness.checks[1].value）：不在 token 中间折行，
+   宁可让表在 body 里横向滚动，也不把 value 拆成 valu / e。 */
+.paper-only-editor .paper-audit-id,
+.paper-only-editor .paper-audit-source {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: 12px;
+  color: #6a6a65;
+  white-space: nowrap;
+}
+
+.paper-only-editor .paper-audit-value { white-space: nowrap; }
+
+.paper-only-editor .paper-audit-empty,
+.paper-only-editor .paper-audit-note {
+  margin: 8px 0 0;
+  color: #8a8a85;
+  font-size: 12px;
+}
+
+html[data-theme="dark"] .paper-only-editor .paper-audit {
+  border-bottom-color: #3a3a37;
+  background: #262624;
+  color: #d5d5d0;
+}
+html[data-theme="dark"] .paper-only-editor .paper-audit-summary strong,
+html[data-theme="dark"] .paper-only-editor .paper-audit-findings strong,
+html[data-theme="dark"] .paper-only-editor .paper-audit-chip { color: #f0f0ec; }
+html[data-theme="dark"] .paper-only-editor .paper-audit-body { border-top-color: #3a3a37; }
+html[data-theme="dark"] .paper-only-editor .paper-audit-chip { border-color: #3f3f3c; background: #2e2e2c; }
+html[data-theme="dark"] .paper-only-editor .paper-audit-table th,
+html[data-theme="dark"] .paper-only-editor .paper-audit-table td { border-bottom-color: #3a3a37; }
+html[data-theme="dark"] .paper-only-editor .paper-audit.is-warn .paper-audit-verdict { color: #e0b15c; }
+
 @container (max-width: 700px) {
   .paper-only-editor .editor-layout {
     grid-template-columns: 160px minmax(520px, 1fr);

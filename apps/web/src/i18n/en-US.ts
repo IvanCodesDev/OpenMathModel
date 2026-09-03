@@ -1073,6 +1073,25 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "摘要": "Abstract",
   "关键词": "Keywords",
   "产物数量": "Artifact count",
+  // 论文页「数字审计」条（DocumentDraft.frozen_numbers / audit_findings，G4 定稿闸门的证据面；按片段拼接）
+  "数字审计": "Number audit",
+  "项冻结数字": "frozen numbers",
+  "处无出处数值": "unsourced numbers",
+  "正文数值全部对账通过": "all in-text numbers reconciled",
+  "未做终稿数值审计": "final draft not audited",
+  "展开查看清单与发现": "Expand for the list and findings",
+  "审计发现": "Findings",
+  "数字冻结清单": "Frozen number list",
+  "不在冻结清单与材料中": "not in the frozen list or source materials",
+  "上游阶段没有可冻结的数字，正文数值只能引用材料中已有的数值":
+    "Upstream stages produced no numbers to freeze; the text may only cite numbers already in the source materials",
+  "口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行）；一位数不计。":
+    "Rule: in-text numbers must come from the frozen list or the input materials (problem-statement constants pass via the materials); single digits are not counted.",
+  "编号": "ID",
+  "数值": "Value",
+  "出处": "Source",
+  "实验运行": "Experiment run",
+  // （「含义」「数据准备」「建模方案」「结果验证」已在数据 / 方案阶段词典里）
 };
 
 /** 赛题库、论文库与方法库。 */

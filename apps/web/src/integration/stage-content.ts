@@ -22,6 +22,7 @@ import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
 import { describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
+import { describePaperAudit, paperAuditStamp } from "./paper-audit";
 
 const PAPER_DRAFT_PREFIX = "openmathmodel.paperDraft.v1.";
 
@@ -1039,6 +1040,109 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
   settle();
 }
 
+// ── 论文页「数字审计」条（DocumentDraft.frozen_numbers / audit_findings → 编辑器上方） ──
+//
+// G4 定稿交付闸门的证据面：卡片 title 只点得出前两处发现，完整清单与发现在契约字段里。
+// 条挂在 article.paper-editor 的工具栏与纸面之间——不进 contenteditable 纸面（不会被本机
+// 草稿保存 / 导出带走），也不受「用户草稿优先」早退影响（审计说的是智能体这一版）。
+// 原生 <details>：一行结论默认收起，展开看发现与清单，不引入新交互模型。
+
+const PAPER_AUDIT_CLASS = "paper-audit";
+
+function paperAuditChip(text: string): HTMLElement {
+  return el("code", "paper-audit-chip", text);
+}
+
+function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
+  const article = root.querySelector<HTMLElement>(".paper-editor-workspace article.paper-editor");
+  if (!article) return;
+  const existing = article.querySelector<HTMLElement>(`:scope > .${PAPER_AUDIT_CLASS}`);
+  const section = describePaperAudit(draft);
+  if (section.kind === "absent") {
+    // 旧运行 / 模拟节点没有审计字段：不拿空条示人；换到这类运行时把上一份的条摘掉
+    existing?.remove();
+    return;
+  }
+  const stamp = paperAuditStamp(draft);
+  if (existing?.dataset.paperAuditStamp === stamp) return;
+
+  const tone = section.kind === "findings" ? "warn" : section.kind === "clean" ? "clean" : "muted";
+  const details = el("details", `${PAPER_AUDIT_CLASS} is-${tone}`);
+  details.dataset.paperAuditStamp = stamp;
+  // 有发现默认展开：这正是用户在 G4 要看的东西；干净时收起，不挤纸面
+  details.open = section.kind === "findings";
+
+  const summary = el("summary", "paper-audit-summary");
+  const iconName = tone === "warn" ? "warning-circle" : tone === "clean" ? "check-circle" : "list-numbers";
+  const rows = section.rows;
+  const verdict = section.kind === "findings"
+    ? `${section.findings.length} ${t("处无出处数值")}`
+    : section.kind === "clean"
+      ? t("正文数值全部对账通过")
+      : t("未做终稿数值审计");
+  summary.append(
+    icon(iconName),
+    el("strong", "", `${t("数字审计")}：`),
+    el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}`),
+    el("span", "paper-audit-hint", t("展开查看清单与发现")),
+  );
+  details.append(summary);
+
+  const body = el("div", "paper-audit-body");
+  if (section.kind === "findings") {
+    const list = el("ul", "paper-audit-findings");
+    for (const finding of section.findings) {
+      const item = el("li");
+      const text = el("div");
+      text.append(el("strong", "", `${finding.scope}：`));
+      if (finding.kind === "unsourced_number") {
+        // 数值 token 原样成 chip，用户可直接去正文里搜
+        finding.numbers.forEach(number => text.append(paperAuditChip(number)));
+        text.append(el("span", "paper-audit-reason", t("不在冻结清单与材料中")));
+      } else {
+        // 审计链后续新增的发现类型（引用 / 图表）：先按节点给的说明原样示人
+        text.append(el("span", "paper-audit-reason", finding.detail || finding.kind));
+      }
+      item.append(icon("warning-circle"), text);
+      list.append(item);
+    }
+    body.append(el("h4", "", t("审计发现")), list);
+  }
+
+  body.append(el("h4", "", t("数字冻结清单")));
+  if (rows.length === 0) {
+    body.append(el("p", "paper-audit-empty", t("上游阶段没有可冻结的数字，正文数值只能引用材料中已有的数值")));
+  } else {
+    const table = el("table", "paper-audit-table");
+    const thead = el("thead");
+    const head = el("tr");
+    for (const label of ["编号", "数值", "含义", "出处"]) head.append(el("th", "", t(label)));
+    thead.append(head);
+    const tbody = el("tbody");
+    for (const row of rows) {
+      const tr = el("tr");
+      const value = el("td", "paper-audit-value");
+      value.append(paperAuditChip(row.value));
+      tr.append(
+        el("td", "paper-audit-id", row.id),
+        value,
+        el("td", "", row.label),
+        el("td", "paper-audit-source", `${t(row.stage)} · ${row.path}`),
+      );
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    body.append(table);
+  }
+  body.append(el("p", "paper-audit-note", t("口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行）；一位数不计。")));
+  details.append(body);
+
+  const toolbar = article.querySelector<HTMLElement>(":scope > .editor-toolbar");
+  if (existing) existing.replaceWith(details);
+  else if (toolbar) toolbar.after(details);
+  else article.prepend(details);
+}
+
 // ── 最终成果页（DeliveryManifest → final-summary 面板） ─────────────────────
 
 function summaryRow(label: string, content: string | HTMLElement): HTMLElement {
@@ -1086,6 +1190,9 @@ export function renderStageContent(root: HTMLElement, outputs: StageOutputsPaylo
   if (outputs.dataset_profile) renderDataPanel(root, outputs.dataset_profile);
   if (outputs.plan_proposal) renderModelPanel(root, outputs.plan_proposal);
   if (outputs.experiment_summary) renderExperimentsPanel(root, outputs.experiment_summary);
-  if (outputs.document_draft) renderEditorPanel(root, outputs.document_draft);
+  if (outputs.document_draft) {
+    renderPaperAudit(root, outputs.document_draft);
+    renderEditorPanel(root, outputs.document_draft);
+  }
   if (outputs.delivery_manifest) renderCompletePanel(root, outputs.delivery_manifest);
 }
