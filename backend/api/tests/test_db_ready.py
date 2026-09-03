@@ -8,10 +8,12 @@ ECONNREFUSED；按文档「分开启动」直接跑 uvicorn 的人拿不到 dev-
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
-
 from omm_api import db_ready, engine_glue
 from omm_api.config import Settings
 from omm_api.db import Database
@@ -123,6 +125,115 @@ def test_autostart_disabled_or_failed_still_raises(monkeypatch: pytest.MonkeyPat
             _FakeDb("connection refused", "still down"),  # type: ignore[arg-type]
             Settings(database_url=LOCAL_URL, local_pg_autostart=True),
         )
+
+
+class _ScriptedProcess:
+    """替身 Popen 返回值：按参数决定 wait() 的结局。"""
+
+    def __init__(self, returncode: int = 0, hang: bool = False) -> None:
+        self.returncode = returncode
+        self.hang = hang
+        self.killed = False
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.hang and not self.killed:
+            raise subprocess.TimeoutExpired("powershell", timeout or 0)
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_start_local_pg_isolates_console_and_never_reads_pipes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """2026-09-03 事故的两条护栏：子进程不共享控制台（uvicorn --reload 的 CTRL_C_EVENT 会
+    广播给同控制台的 postgres 触发 fast shutdown）；输出不走管道（pg_ctl 留下的 cmd.exe 持有
+    管道句柄，communicate() 永远等不到 EOF，API 启动卡死）。"""
+    calls: dict[str, object] = {}
+
+    def fake_popen(command: list[str], **kwargs: object) -> _ScriptedProcess:
+        calls["command"] = command
+        calls["kwargs"] = kwargs
+        kwargs["stdout"].write("PostgreSQL 已启动（port 5433，PID 1）".encode())  # type: ignore[attr-defined]
+        return _ScriptedProcess(returncode=0)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    script = Path("tools") / "pg-dev.ps1"
+
+    with caplog.at_level("INFO", logger="omm_api.db_ready"):
+        assert db_ready.start_local_pg(script) is True
+
+    command = calls["command"]
+    assert command[-2:] == [str(script), "start"]  # type: ignore[index]
+    kwargs = calls["kwargs"]
+    assert kwargs["stdin"] is subprocess.DEVNULL  # type: ignore[index]
+    assert kwargs["stderr"] is subprocess.STDOUT  # type: ignore[index]
+    assert kwargs["stdout"] is not subprocess.PIPE and hasattr(kwargs["stdout"], "read")  # type: ignore[index]
+    if sys.platform == "win32":
+        assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW  # type: ignore[index, attr-defined]
+    assert "PostgreSQL 已启动" in caplog.text, "脚本输出要进日志"
+
+
+def test_start_local_pg_gives_up_after_timeout_and_reports_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    hung = _ScriptedProcess(hang=True)
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: hung)
+    with caplog.at_level("WARNING", logger="omm_api.db_ready"):
+        assert db_ready.start_local_pg(Path("pg-dev.ps1"), timeout_seconds=0.01) is False
+    assert hung.killed, "超时必须杀掉 PowerShell，不能留着继续等"
+    assert "未返回" in caplog.text
+
+    def failing_popen(command: list[str], **kwargs: object) -> _ScriptedProcess:
+        kwargs["stdout"].write("未找到 PostgreSQL 二进制".encode())  # type: ignore[attr-defined]
+        return _ScriptedProcess(returncode=1)
+
+    monkeypatch.setattr(subprocess, "Popen", failing_popen)
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="omm_api.db_ready"):
+        assert db_ready.start_local_pg(Path("pg-dev.ps1")) is False
+    # uvicorn 默认只透出 WARNING 及以上：失败原因必须是 WARNING，用户在终端才看得见
+    assert any(
+        record.levelname == "WARNING" and "未找到 PostgreSQL 二进制" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="pg-dev.ps1 只在 Windows 上被调用")
+def test_start_local_pg_returns_while_grandchild_still_holds_inherited_handles(
+    tmp_path: Path,
+) -> None:
+    """真实 PowerShell 复现事故形态：脚本用 -NoNewWindow 起一个继承标准句柄、存活 15 秒的
+    cmd.exe 后立刻退出（pg_ctl → cmd.exe → postgres 就是这个结构）。start_local_pg 必须在
+    脚本退出后立刻返回，而不是等那个孙进程；旧实现（capture_output 管道）在这里要等满 15 秒。"""
+    pid_file = tmp_path / "grandchild.pid"
+    script = tmp_path / "pg-dev.ps1"
+    script.write_text(
+        "\n".join(
+            [
+                "param([string]$Action)",
+                "$p = Start-Process -FilePath cmd.exe "
+                "-ArgumentList '/c','ping -n 16 127.0.0.1 > nul' -NoNewWindow -PassThru",
+                f"Set-Content -Path '{pid_file}' -Value $p.Id",
+                'Write-Output "stub $Action ok"',
+                "exit 0",
+            ]
+        ),
+        encoding="ascii",
+    )
+    started = time.monotonic()
+    try:
+        assert db_ready.start_local_pg(script, timeout_seconds=30) is True
+        elapsed = time.monotonic() - started
+        assert elapsed < 10, f"不该等孙进程：耗时 {elapsed:.1f}s"
+    finally:
+        if pid_file.exists():
+            pid = pid_file.read_text(encoding="utf-8").strip()
+            if pid.isdigit():
+                subprocess.run(
+                    ["taskkill", "/PID", pid, "/T", "/F"], capture_output=True, check=False
+                )
 
 
 def test_create_app_binds_runtime_settings_for_sandbox_workspace(tmp_path: Path) -> None:
