@@ -1,0 +1,29 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "title": "基于整数规划的共享单车调度优化",
+  "abstract": "本文建立整数规划模型求解调度问题，贪心基线 rmse=0.12，稳健性复跑三项检查通过两项。",
+  "keywords": ["整数规划", "调度"],
+  "sections": [
+    { "heading": "1 问题重述", "content": "题目要求给出调度方案……" },
+    { "heading": "5 模型建立与求解", "content": "清洗后保留 1180 行数据，求解得 rmse=0.12。" },
+    { "heading": "6 结果分析与检验", "content": "bootstrap 稳定性 0.31 超出阈值 0.2，结论需谨慎外推；文献常见值为 0.87。" }
+  ],
+  "version": 2,
+  "updated_at": "2026-09-03T08:10:00.000000Z",
+  "frozen_numbers": [
+    { "id": "metrics.rmse", "label": "实验指标 rmse", "value": 0.12, "source_stage": "EXPERIMENTING", "source_path": "metrics.rmse" },
+    { "id": "robustness.bootstrap.value", "label": "稳健性检查「bootstrap 稳定性」实测值", "value": 0.31, "source_stage": "VALIDATING", "source_path": "robustness.checks[1].value" },
+    { "id": "robustness.bootstrap.threshold", "label": "稳健性检查「bootstrap 稳定性」阈值", "value": 0.2, "source_stage": "VALIDATING", "source_path": "robustness.checks[1].threshold" },
+    { "id": "cleaning.rows_before", "label": "清洗前数据行数", "value": 1200, "source_stage": "DATA_PREPARATION", "source_path": "cleaning.rows_before" },
+    { "id": "cleaning.rows_after", "label": "清洗后数据行数", "value": 1180, "source_stage": "DATA_PREPARATION", "source_path": "cleaning.rows_after" },
+    { "id": "plan.A.steps[2].0", "label": "方案「整数规划」steps[2]：…多次重启 20 轮对比…", "value": 20, "source_stage": "MODEL_PLANNING", "source_path": "plans[A].steps[2]" }
+  ],
+  "audit_findings": [
+    {
+      "scope": "第3章《6 结果分析与检验》",
+      "kind": "unsourced_number",
+      "numbers": ["0.87"],
+      "detail": "第3章《6 结果分析与检验》有 1 个数值不在冻结清单与材料中（0.87）"
+    }
+  ]
+}

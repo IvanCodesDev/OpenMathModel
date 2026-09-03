@@ -172,6 +172,21 @@ def approve_when_asked(
     return response.json()
 
 
+G4_OPTION_IDS = ["confirm_delivery", "redo:PAPER_WRITING"]
+
+
+def confirm_delivery(client: TestClient, run_id: str) -> dict:
+    """G4 定稿交付闸门（必停，H5）：真实论文节点发布草稿后停下等确认，选「确认交付」。
+
+    只对真实链有意义（模拟论文节点不挂门）；等到的必须是 G4 的审批行，防止把
+    别的门误批成交付。审批接口只透出契约形状（`gate` 键留在行内 evidence、不出
+    接口），所以按选项 id 认门。
+    """
+    approval = wait_until(client, run_id, pending_approval(client, run_id))
+    assert [option["id"] for option in approval["options"]] == G4_OPTION_IDS, approval
+    return approve_when_asked(client, run_id, option_id="confirm_delivery")
+
+
 @pytest.fixture()
 def make_project(client: TestClient):
     def _make(name: str = "测试项目") -> dict:

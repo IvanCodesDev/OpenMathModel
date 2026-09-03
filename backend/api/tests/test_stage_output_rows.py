@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from conftest import (
     approve_when_asked,
+    confirm_delivery,
     create_project,
     create_run,
     pending_approval,
@@ -40,6 +41,7 @@ def test_real_chain_persists_versioned_rows_per_node(client, monkeypatch):
     run = create_run(client, create_project(client)["id"], goal="优化共享单车调度")
 
     approve_when_asked(client, run["id"], option_id="approve")
+    confirm_delivery(client, run["id"])
     wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
 
     rows = _rows(client, run["id"])

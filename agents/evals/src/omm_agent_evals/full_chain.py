@@ -551,7 +551,10 @@ def build_full_chain_session(
         ),
         TaskState.EXPERIMENTING: ExperimentExecutionNode(registry),
         TaskState.VALIDATING: ValidationNode(registry),
-        TaskState.PAPER_WRITING: PaperWritingNode(registry),
+        # G1 与 G4 同一把开关：无人值守评测两个必停门都关，只留条件门（G2/G3）
+        TaskState.PAPER_WRITING: PaperWritingNode(
+            registry, require_confirmation=require_confirmation
+        ),
     }
     engine = TaskRunEngine(
         sink=sink, clock=clock, ids=ids, nodes=nodes, services=services
@@ -647,5 +650,7 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.STEP_STARTED,
     EventType.ARTIFACT_PRODUCED,  # paper-draft.md
     EventType.STEP_SUCCEEDED,
+    EventType.REVIEW_REQUESTED,  # G4 定稿交付闸门（必停）：审计发现进卡片
+    EventType.REVIEW_RESOLVED,  # user confirms delivery
     EventType.RUN_COMPLETED,
 ]

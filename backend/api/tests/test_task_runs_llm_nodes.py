@@ -14,6 +14,7 @@ import httpx
 from conftest import (
     SERVICE_ROOT,
     approve_when_asked,
+    confirm_delivery,
     create_project,
     create_run,
     pending_approval,
@@ -22,6 +23,7 @@ from conftest import (
 )
 
 from omm_api import llm as llm_module
+from omm_api.orm import ApprovalRequestRow
 
 ANALYSIS_OUTPUT = {
     "viability": "ok",
@@ -504,6 +506,34 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert by_node["MODEL_PLANNING"]["status"] == "SUCCEEDED", "方案产出成功后停在审批"
 
     approve_when_asked(client, run["id"], option_id="approve")
+    # 论文发布后停在 G4 定稿闸门（必停）：草稿与审计已落库，卡片给「确认交付 / 退回修改」
+    gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert gate["decision_type"] == "generic"
+    assert gate["title"].startswith("论文草稿已生成（3 章")
+    assert "全部对账通过" in gate["title"]
+    assert [option["id"] for option in gate["options"]] == [
+        "confirm_delivery",
+        "redo:PAPER_WRITING",
+    ]
+    assert gate["options"][0].get("recommended") is True, "0 审计发现 → 推荐确认交付"
+    assert not gate["options"][1].get("recommended")
+    run_view = client.get(f"/api/v1/task-runs/{run['id']}").json()
+    assert run_view["status"] == "WAITING_APPROVAL"
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    paper_status = {s["node"]: s["status"] for s in steps}["PAPER_WRITING"]
+    assert paper_status == "SUCCEEDED", "闸门前论文步骤已成功落库"
+    # 闸门元数据（gate / impact）留在审批行 evidence 里供投影与审计用，不出契约接口
+    with client.app.state.db.session_factory() as session:
+        row = session.get(ApprovalRequestRow, gate["id"])
+        assert row.evidence["gate"] == "G4"
+        assert row.evidence["impact"]["audit_findings_total"] == 0
+        assert row.evidence["impact"]["frozen_numbers_total"] >= 1
+        assert row.evidence["impact"]["recommended"] == "confirm_delivery"
+    draft = client.get(f"/api/v1/task-runs/{run['id']}/stage-outputs").json()["document_draft"]
+    assert draft is not None, "等待交付确认期间论文页已能看到草稿"
+    assert {e["id"] for e in draft["frozen_numbers"]} >= {"metrics.rmse"}
+    assert draft["audit_findings"] == []
+    confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
     assert final["status"] == "COMPLETED", "确认后实验/检验/论文全部真实走完"
 
@@ -877,6 +907,7 @@ def test_paper_stage_retry_resumes_from_completed_chapters(client, monkeypatch):
     recovered.append(True)
     retried = client.post(f"/api/v1/task-runs/{run['id']}/actions", json={"action": "retry"})
     assert retried.status_code == 200, retried.text
+    confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
     assert final["status"] == "COMPLETED"
 
@@ -898,6 +929,76 @@ def test_paper_stage_retry_resumes_from_completed_chapters(client, monkeypatch):
     steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
     paper_steps = [step for step in steps if step["node"] == "PAPER_WRITING"]
     assert [step["status"] for step in paper_steps] == ["FAILED", "SUCCEEDED"]
+
+
+def test_g4_redo_rewrites_paper_from_scratch_and_gates_again(client, monkeypatch):
+    """G4 选「退回修改」（§11.1 必停闸门的第二个选项）：已交稿那趟的章节检查点
+    不得被当成断点续写——输入指纹原样不变，但用户的修改要求走运行中备注注入，
+    重做必须从总编起整篇重写、每章都带上「用户补充要求」，写完再次挂 G4，确认后完成。
+    与上一例对照：崩溃重试续写（没交稿）vs 人要求重做（已交稿）。"""
+    section_prompts: list[str] = []
+
+    def router(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.content)["messages"][-1]["content"]
+        if "章节写手" in prompt:
+            section_prompts.append(prompt)
+            return _llm_reply(_section_reply(prompt))
+        return _stage_router(request)
+
+    _configure_llm(client, monkeypatch, handler=router)
+    run = create_run(client, create_project(client)["id"])
+
+    approve_when_asked(client, run["id"], option_id="approve")  # G1
+    gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert [o["id"] for o in gate["options"]] == ["confirm_delivery", "redo:PAPER_WRITING"]
+    first_round_calls = len(section_prompts)
+    assert first_round_calls == 3, "首趟三章各写一次（达标稿不触发重写）"
+
+    # 用户先在聊天框写明修改要求（§11.3 运行中备注），再选「退回修改」
+    note = client.post(
+        f"/api/v1/task-runs/{run['id']}/notes",
+        json={"text": "每章开头先给出本章结论", "scope": "PAPER_WRITING"},
+    )
+    assert note.status_code == 201, note.text
+    resolved = client.post(
+        f"/api/v1/task-runs/{run['id']}/actions",
+        json={"action": "approve", "approval_id": gate["id"], "option_id": "redo:PAPER_WRITING"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    run_view = client.get(f"/api/v1/task-runs/{run['id']}").json()
+    assert run_view["status"] == "RUNNING"
+    assert run_view["current_node"] == "PAPER_WRITING", "退回修改：current_node 摆回论文阶段"
+
+    second_gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert second_gate["id"] != gate["id"]
+    assert [o["id"] for o in second_gate["options"]] == ["confirm_delivery", "redo:PAPER_WRITING"]
+
+    # 整篇重写：三章各再写一次，且每一章的重写调用都带上了用户的修改要求
+    rewrite_prompts = section_prompts[first_round_calls:]
+    assert len(rewrite_prompts) == 3, "已交稿的章节不得被当成断点续写复用"
+    assert all("每章开头先给出本章结论" in p for p in rewrite_prompts), "备注注入每一章的重写"
+    assert not any("每章开头先给出本章结论" in p for p in section_prompts[:first_round_calls])
+
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    assert len([e for e in logs if e.get("kind") == "paper_outline"]) == 2, "重做从总编起"
+    assert len([e for e in logs if e.get("kind") == "paper_published"]) == 2, "两趟各交稿一次"
+
+    steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+    paper_steps = [step for step in steps if step["node"] == "PAPER_WRITING"]
+    assert [(s["attempt"], s["status"]) for s in paper_steps] == [
+        (1, "SUCCEEDED"),
+        (2, "SUCCEEDED"),
+    ]
+    assert not any(s["node"] == "VALIDATING" and s["attempt"] > 1 for s in steps), "上游不重做"
+
+    confirm_delivery(client, run["id"])
+    final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
+    assert final["status"] == "COMPLETED"
+    types = [event["type"] for event in client.get(
+        f"/api/v1/task-runs/{run['id']}/events/history"
+    ).json()["items"]]
+    assert types.count("approval.requested") == 3, "G1 + G4 ×2"
 
 
 def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatch):
@@ -926,6 +1027,7 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
     run = create_run(client, create_project(client)["id"])
 
     approve_when_asked(client, run["id"], option_id="approve")
+    confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
 
     assert final["status"] == "COMPLETED", "一波代码修复后任务应完整走完"
@@ -1017,8 +1119,9 @@ def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
     )
     assert resolved.status_code == 200, resolved.text
 
-    # G2 之后照常走到 G1 方案确认，批准后全链完成
+    # G2 之后照常走到 G1 方案确认，批准后走到 G4 定稿确认，再批准全链完成
     approve_when_asked(client, run["id"], option_id="approve")
+    confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
     assert final["status"] == "COMPLETED"
 
@@ -1087,6 +1190,7 @@ def test_g3_result_gate_accept_with_limitations_reaches_paper(client, monkeypatc
         json={"action": "approve", "approval_id": gate["id"], "option_id": "accept_with_limitations"},
     )
     assert resolved.status_code == 200, resolved.text
+    confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
     assert final["status"] == "COMPLETED"
 
@@ -1098,6 +1202,8 @@ def test_g3_result_gate_accept_with_limitations_reaches_paper(client, monkeypatc
     material = outline_prompts[0]
     assert "通过 2 项" in material and "bootstrap" in material, "稳健性数字进论文材料"
     assert "接受并记录局限" in material and "不得淡化" in material
+    # 未通过项的实测值进数字冻结清单（总编 prompt 的「数字冻结清单」段）：论文只能原样引用
+    assert "robustness.bootstrap" in material and "稳健性检查「" in material
 
     artifacts = client.get(f"/api/v1/projects/{project['id']}/artifacts").json()["items"]
     by_file = {a["uri"].rstrip("/").rsplit("/", 1)[-1]: a for a in artifacts}
@@ -1140,12 +1246,13 @@ def test_g3_redo_experiment_reruns_downstream_and_gates_again(client, monkeypatc
     assert attempts["MODEL_PLANNING"] == [1], "回退起点的上游不重做"
 
     approve_when_asked(client, run["id"], option_id="accept_with_limitations")
+    confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
     assert final["status"] == "COMPLETED"
 
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
     types = [event["type"] for event in events]
-    assert types.count("approval.requested") == 3, "G1 + G3 ×2"
+    assert types.count("approval.requested") == 4, "G1 + G3 ×2 + G4"
     statuses = [
         event["payload"] for event in events if event["type"] == "run.status_changed"
     ]

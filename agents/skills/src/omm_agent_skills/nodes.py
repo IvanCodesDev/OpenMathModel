@@ -45,6 +45,15 @@ from omm_agent_harness import (
 )
 
 from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
+from .frozen_numbers import (
+    AUDIT_SAMPLE_LIMIT,
+    allowed_number_tokens,
+    audit_document,
+    build_frozen_numbers,
+    number_tokens,
+    render_frozen_numbers,
+    unsourced_numbers,
+)
 from .prompt_registry import PromptRegistry, PromptTemplate
 from .schema import validate
 
@@ -1525,7 +1534,7 @@ _DIGEST_CHARS = 150
 _DIGESTS_TOTAL_CHARS = 1200
 #: 章节字数带宽（软校验）：偏离目标 ±30% 触发一次有界重写，仍越界则记警告。
 _SECTION_LENGTH_TOLERANCE = 0.3
-#: 全文的字数重写总额度（控成本：不给多话的模型每章都加一次调用）。
+#: 全文的有界重写总额度（字数越界与无出处数字共享；控成本：不给多话的模型每章都加一次调用）。
 _MAX_LENGTH_REVISIONS = 2
 #: source_keys 的合法取值与材料标题（总编给每章指定材料，缺失时给全量）。
 _MATERIAL_LABELS = {
@@ -1533,9 +1542,44 @@ _MATERIAL_LABELS = {
     "chosen_plan": "已确认的建模方案（JSON）",
     "experiment_summary": "实验过程摘要",
     "validation_summary": "检验结论",
+    "frozen_numbers": "数字冻结清单（正文数值只准引用此表与上述材料中的数字）",
 }
+#: 冻结清单不受总编的 source_keys 路由影响：每章都必须看到它（§9 硬规则）。
+_ALWAYS_MATERIAL_KEYS = ("frozen_numbers",)
+#: 四份叙述材料（审计允许集的文本来源；冻结清单本身按值进允许集）。
+_NARRATIVE_MATERIAL_KEYS = (
+    "problem_analysis",
+    "chosen_plan",
+    "experiment_summary",
+    "validation_summary",
+)
 
-_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+# ── G4 定稿交付闸门（§11.1「必停」）────────────────────────────────────────
+#
+# 论文草稿发布后不直接 succeeded：草稿是产品交付物，定稿前必须过人的眼。
+# 「确认交付」走正向推进（末节点 → COMPLETED）；「退回修改」复用修订门的
+# ``redo:<STATE>`` 选项 id（引擎零改动）——用户先在聊天框写明修改要求（§11.3
+# 运行中备注会作为「用户补充要求」注入重写的每一次调用），再选它。
+
+G4_CONFIRM_OPTION_ID = "confirm_delivery"
+G4_REDO_OPTION_ID = "redo:PAPER_WRITING"
+G4_OPTIONS = (
+    {
+        "id": G4_CONFIRM_OPTION_ID,
+        "label": "确认交付",
+        "description": "接受当前论文草稿作为交付稿，任务进入已完成；之后仍可在结果页发起修改",
+    },
+    {
+        "id": G4_REDO_OPTION_ID,
+        "label": "退回修改",
+        "description": (
+            "重写论文（数据、方案与实验结果不变）。请先在聊天框写明修改要求，"
+            "重写时会作为「用户补充要求」注入每一章"
+        ),
+    },
+)
+#: 卡片标题里最多点名几处审计发现（完整清单在 impact / DocumentDraft）。
+_G4_TITLE_FINDINGS = 2
 
 
 def _emit_progress(services: NodeServices, payload: dict[str, Any]) -> None:
@@ -1547,24 +1591,6 @@ def _emit_progress(services: NodeServices, payload: dict[str, Any]) -> None:
         callback(payload)
     except Exception:  # noqa: BLE001 - 过程展示绝不允许拖垮任务本身
         pass
-
-
-def _unsourced_numbers(text: str, sources: str) -> list[str]:
-    """正文里在材料中找不到的数值（防编造的软校验）。
-
-    一位数不计（章节号/序号会大量误报），同一数值只报一次，最多取样 8 个。
-    """
-    missing: list[str] = []
-    seen: set[str] = set()
-    for token in _NUMBER_PATTERN.findall(text):
-        if len(token) < 2 or token in seen:
-            continue
-        seen.add(token)
-        if token not in sources:
-            missing.append(token)
-        if len(missing) >= 8:
-            break
-    return missing
 
 
 def _validation_material(
@@ -1599,10 +1625,21 @@ def _inputs_hash(variables: Mapping[str, str]) -> str:
 
 
 class PaperWritingNode(LlmSkillNode):
-    """论文撰写：分章多轮生成，总编失败自动回退单次调用（不比旧链路差）。"""
+    """论文撰写：分章多轮生成，总编失败自动回退单次调用（不比旧链路差）。
+
+    H5 切片 1 加了两道纪律：**数字冻结**——上游结构化产出里的数值确定性抽成清单
+    进每章材料，章级审计对不上账的数值先有界重写、仍对不上记审计发现；**G4 定稿
+    闸门**——草稿发布后必停，审计发现进卡片，由人「确认交付 / 退回修改」。
+    """
 
     prompt_id = "paper_writing.default"
     state = TaskState.PAPER_WRITING
+
+    def __init__(self, registry: PromptRegistry, require_confirmation: bool = True) -> None:
+        super().__init__(registry)
+        # G4 定稿闸门是产品的人工门（§11.1 必停）；与 G1 同一把开关：评测 /
+        # 无人值守自动化可显式关掉，审计照做、只是不停。
+        self._require_confirmation = require_confirmation
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
@@ -1614,6 +1651,7 @@ class PaperWritingNode(LlmSkillNode):
             "chosen_plan": json.dumps(chosen_plan(planning), ensure_ascii=False),
             "experiment_summary": str(experiment.get("experiment_summary") or "无"),
             "validation_summary": _validation_material(validation, ctx.review_decisions),
+            "frozen_numbers": render_frozen_numbers(build_frozen_numbers(ctx.prior_outputs)),
         }
 
     def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
@@ -1634,6 +1672,14 @@ class PaperWritingNode(LlmSkillNode):
                 "prompt input invalid: " + "; ".join(input_problems)
             )
 
+        # 数字冻结清单（值 + 出处）与审计允许集：冻结值 ∪ 四份材料里出现的数值。
+        # 允许集用全部材料而非本章路由到的那几份——审计问的是「有没有出处」，
+        # 不是「总编有没有把那份材料发给这一章」；题面常数就靠这里放行。
+        frozen = build_frozen_numbers(ctx.prior_outputs)
+        allowed = allowed_number_tokens(
+            frozen, *(variables[key] for key in _NARRATIVE_MATERIAL_KEYS)
+        )
+
         attempts_total = 0
         inputs_hash = _inputs_hash(variables)
 
@@ -1648,7 +1694,9 @@ class PaperWritingNode(LlmSkillNode):
             if outline is not None and (structural := self._outline_problems(outline)):
                 outline, error = None, structural
             if outline is None:
-                return self._run_single_call(ctx, services, variables, attempts_total, str(error))
+                return self._run_single_call(
+                    ctx, services, variables, attempts_total, str(error), frozen, allowed
+                )
 
         chapters: list[Mapping[str, Any]] = outline["chapters"]
         total = len(chapters)
@@ -1670,6 +1718,7 @@ class PaperWritingNode(LlmSkillNode):
         digests: list[str] = []
         warnings: list[str] = []
         revisions_used = 0
+        audit_rewrites = 0
         if resume is not None:
             for done_index, entry in enumerate(resume["completed"], start=1):
                 sections.append({"heading": entry["heading"], "content": entry["content"]})
@@ -1723,10 +1772,37 @@ class PaperWritingNode(LlmSkillNode):
                     if candidate and abs(len(candidate) - target) < abs(len(content) - target):
                         section = revised
                         content = candidate
+            # 数字审计 → 一次有界重写（与字数重写共享全文额度）：把对不上账的数值
+            # 逐个点名喂回去，只有重写后无出处数字更少才采纳；仍有剩余的进审计发现，
+            # 由 G4 交人裁决——不硬阻断，清单本身也可能漏（单位换算、题面常数）。
+            unsourced = unsourced_numbers(content, allowed)
+            if unsourced and revisions_used < _MAX_LENGTH_REVISIONS:
+                revisions_used += 1
+                audit_rewrites += 1
+                revised, extra_attempts, _audit_error = complete_validated(
+                    services,
+                    section_template,
+                    {
+                        **section_vars,
+                        "__repair_error": (
+                            f"content 里有 {len(unsourced)} 个数值在数字冻结清单与材料中"
+                            f"找不到出处：{'、'.join(unsourced)}。请逐个改为清单/材料中的原始"
+                            "数值，或删去无法溯源的数字与相应表述；其余内容、公式与结构不变，"
+                            "只输出同格式 JSON。"
+                        ),
+                        "__previous_output": content[:2000],
+                    },
+                )
+                attempts_total += extra_attempts
+                if revised is not None:
+                    candidate = str(revised.get("content") or "").strip()
+                    if candidate and len(unsourced_numbers(candidate, allowed)) < len(unsourced):
+                        section = revised
+                        content = candidate
             digest = str(section.get("digest") or "").strip()[:_DIGEST_CHARS]
             sections.append({"heading": heading, "content": content})
             digests.append(f"第{index}章《{heading}》：{digest or '（无摘要）'}")
-            warnings.extend(self._section_warnings(index, heading, content, target, materials))
+            warnings.extend(self._section_warnings(index, heading, content, target, allowed))
             truncated = len(content) > _SECTION_EVENT_MAX_CHARS
             _emit_progress(services, {
                 "kind": "paper_section",
@@ -1747,6 +1823,7 @@ class PaperWritingNode(LlmSkillNode):
             "digests": "\n".join(digests),
             "metrics": metrics_json,
             "validation_summary": variables["validation_summary"],
+            "frozen_numbers": variables["frozen_numbers"],
         }
         finalize, attempts, error = complete_validated(
             services, self._registry.get(PAPER_FINALIZE_PROMPT), finalize_vars
@@ -1760,10 +1837,13 @@ class PaperWritingNode(LlmSkillNode):
             }
 
         abstract = str(finalize.get("abstract") or "").strip()
-        unsourced = _unsourced_numbers(abstract, metrics_json + "\n".join(digests))
+        # 摘要转述各章：各章摘要里的数值也算有出处（那些章节已各自过审计）
+        abstract_allowed = allowed | number_tokens(*digests)
+        unsourced = unsourced_numbers(abstract, abstract_allowed)
         if unsourced:
             warnings.append(
-                f"摘要有 {len(unsourced)} 个数值未在指标与各章摘要中找到出处（如 {'、'.join(unsourced[:3])}）"
+                f"摘要有 {len(unsourced)} 个数值未在冻结清单、材料与各章摘要中找到出处"
+                f"（如 {'、'.join(unsourced[:3])}）"
             )
 
         keywords = [
@@ -1786,9 +1866,13 @@ class PaperWritingNode(LlmSkillNode):
             metrics_payload["resumed_chapters"] = len(resume["completed"])
         if revisions_used:
             metrics_payload["length_revisions"] = revisions_used
+        if audit_rewrites:
+            metrics_payload["audit_rewrites"] = audit_rewrites
         if warnings:
             metrics_payload["quality_warnings"] = warnings
-        return self._publish(ctx, services, outputs, metrics_payload)
+        return self._publish(
+            ctx, services, outputs, metrics_payload, frozen, allowed, abstract_allowed
+        )
 
     # -- helpers -------------------------------------------------------------
 
@@ -1854,13 +1938,19 @@ class PaperWritingNode(LlmSkillNode):
 
     @staticmethod
     def _materials(variables: Mapping[str, str], source_keys: Any) -> str:
-        """按总编指定的 source_keys 组装本章材料；无有效指定时给全量。"""
+        """按总编指定的 source_keys 组装本章材料；无有效指定时给全量。
+
+        数字冻结清单不受路由影响，每章必带（总编漏写也补上）。
+        """
         keys = [
             key for key in (source_keys if isinstance(source_keys, list) else [])
             if key in _MATERIAL_LABELS
         ]
         if not keys:
             keys = list(_MATERIAL_LABELS)
+        for key in _ALWAYS_MATERIAL_KEYS:
+            if key not in keys:
+                keys.append(key)
         return "\n\n".join(
             f"### {_MATERIAL_LABELS[key]}\n{variables[key]}" for key in keys
         )
@@ -1876,7 +1966,7 @@ class PaperWritingNode(LlmSkillNode):
 
     @staticmethod
     def _section_warnings(
-        index: int, heading: str, content: str, target: int, materials: str
+        index: int, heading: str, content: str, target: int, allowed: set[str]
     ) -> list[str]:
         """章级软校验：只记警告不阻断（执行事实如实上报，人来裁量）。"""
         warnings: list[str] = []
@@ -1886,10 +1976,11 @@ class PaperWritingNode(LlmSkillNode):
             warnings.append(
                 f"第{index}章《{heading}》字数 {len(content)} 偏离目标 {target}（±30%）"
             )
-        unsourced = _unsourced_numbers(content, materials)
+        unsourced = unsourced_numbers(content, allowed)
         if unsourced:
             warnings.append(
-                f"第{index}章《{heading}》有 {len(unsourced)} 个数值未在材料中找到出处（如 {'、'.join(unsourced[:3])}）"
+                f"第{index}章《{heading}》有 {len(unsourced)} 个数值未在冻结清单与材料中找到出处"
+                f"（如 {'、'.join(unsourced[:3])}）"
             )
         return warnings
 
@@ -1900,8 +1991,10 @@ class PaperWritingNode(LlmSkillNode):
         variables: dict[str, Any],
         attempts_before: int,
         fallback_reason: str,
+        frozen: list[dict[str, Any]],
+        allowed: set[str],
     ) -> NodeResult:
-        """回退路径：总编规划失败时整篇单次生成（paper_writing.default v4）。"""
+        """回退路径：总编规划失败时整篇单次生成（paper_writing.default v5）。"""
         template = self._registry.get(self.prompt_id)
         parsed, attempts, error = complete_validated(services, template, variables)
         if parsed is None:
@@ -1914,7 +2007,7 @@ class PaperWritingNode(LlmSkillNode):
             "fallback": "single_call",
             "fallback_reason": fallback_reason,
         }
-        return self._publish(ctx, services, parsed, metrics_payload)
+        return self._publish(ctx, services, parsed, metrics_payload, frozen, allowed)
 
     def _publish(
         self,
@@ -1922,7 +2015,23 @@ class PaperWritingNode(LlmSkillNode):
         services: NodeServices,
         outputs: dict[str, Any],
         metrics: dict[str, Any],
+        frozen: list[dict[str, Any]],
+        allowed: set[str],
+        abstract_allowed: set[str] | None = None,
     ) -> NodeResult:
+        """发布草稿产物 → 终稿数字审计 → G4 必停。
+
+        审计在这里对**终稿**做（分章路径已按章重写过一次，这里是最终对账；
+        回退单次生成的路径没有章级重写，全靠这一道），结果同时进 outputs
+        （DocumentDraft 契约的 frozen_numbers / audit_findings）与 G4 卡片。
+        """
+        sections = [
+            section for section in outputs.get("sections") or [] if isinstance(section, Mapping)
+        ]
+        findings = audit_document(
+            sections, str(outputs.get("abstract") or ""), allowed, abstract_allowed
+        )
+        outputs = {**outputs, "frozen_numbers": list(frozen), "audit_findings": findings}
         markdown = render_paper_markdown(outputs)
         ref = services.artifacts.put(
             ctx.run_id,
@@ -1932,4 +2041,70 @@ class PaperWritingNode(LlmSkillNode):
             "text/markdown",
             ctx.step_id,
         )
-        return NodeResult.succeeded(outputs=outputs, metrics=metrics, artifacts=(ref,))
+        chars = sum(len(str(section.get("content") or "")) for section in sections)
+        # 发布标记：告诉断点续写的读取器「这一趟已经交稿」。之后若人在 G4 / 修订门
+        # 要求重写，同样的输入指纹也不得复用这趟的章节——否则重做等于原样重发。
+        _emit_progress(services, {
+            "kind": "paper_published",
+            "chapters": len(sections),
+            "chars": chars,
+            "audit_findings": len(findings),
+        })
+        if not self._require_confirmation:
+            return NodeResult.succeeded(outputs=outputs, metrics=metrics, artifacts=(ref,))
+        reason, meta = self._g4_review(len(sections), chars, len(frozen), findings)
+        return NodeResult.needs_review(
+            reason=reason,
+            outputs=outputs,
+            review_meta=meta,
+            metrics=metrics,
+            artifacts=(ref,),
+        )
+
+    # -- G4 gate ----------------------------------------------------------------
+
+    @staticmethod
+    def _g4_review(
+        chapters: int,
+        chars: int,
+        frozen_total: int,
+        findings: Sequence[Mapping[str, Any]],
+    ) -> tuple[str, dict[str, Any]]:
+        """G4 卡片：0 审计发现推荐「确认交付」，否则推荐「退回修改」（人可改选）。"""
+        if findings:
+            named = "；".join(
+                str(f.get("detail") or f.get("scope")) for f in findings[:_G4_TITLE_FINDINGS]
+            )
+            more = f" 等 {len(findings)} 处" if len(findings) > _G4_TITLE_FINDINGS else ""
+            reason = (
+                f"论文草稿已生成（{chapters} 章，约 {chars} 字）；数字审计发现 {len(findings)} 处"
+                f"无出处数值{more}：{named}。请确认是否交付，或写明修改要求后退回修改"
+            )
+            recommended = G4_REDO_OPTION_ID
+        else:
+            reason = (
+                f"论文草稿已生成（{chapters} 章，约 {chars} 字，冻结数字 {frozen_total} 项"
+                "全部对账通过）。请确认是否交付"
+            )
+            recommended = G4_CONFIRM_OPTION_ID
+        options = []
+        for option in G4_OPTIONS:
+            entry = dict(option)
+            if entry["id"] == recommended:
+                entry["recommended"] = True
+            options.append(entry)
+        meta = {
+            "gate": "G4",
+            "decision_type": "generic",
+            "title": reason,
+            "options": options,
+            "impact": {
+                "chapters": chapters,
+                "chars": chars,
+                "frozen_numbers_total": frozen_total,
+                "audit_findings_total": len(findings),
+                "audit_findings": [dict(f) for f in findings[:AUDIT_SAMPLE_LIMIT]],
+                "recommended": recommended,
+            },
+        }
+        return reason, meta

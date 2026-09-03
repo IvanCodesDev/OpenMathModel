@@ -2,7 +2,7 @@
 id: paper_section.default
 stage: PAPER_WRITING
 variant: section
-version: 1
+version: 2
 input_schema: {"type": "object", "required": ["title", "notation", "chapter_heading", "chapter_brief", "target_chars", "materials", "previous_digests"], "properties": {"title": {"type": "string"}, "notation": {"type": "string"}, "chapter_heading": {"type": "string"}, "chapter_brief": {"type": "string"}, "target_chars": {"type": "string"}, "materials": {"type": "string"}, "previous_digests": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["content", "digest"], "properties": {"content": {"type": "string"}, "digest": {"type": "string"}}}
 ---
@@ -34,6 +34,6 @@ output_schema: {"type": "object", "required": ["content", "digest"], "properties
   - 数学公式一律 LaTeX：行内 `$...$`，独立公式 `$$...$$`；涉及模型构建时必须给出目标函数与约束的公式化表述；
   - 符号只准使用上方符号约定中的记号；确需新符号时必须在正文中先行定义；
   - 数据表用 Markdown 表格；
-  - 所有数值只能来自「可引用的真实材料」，禁止编造材料中不存在的数字；
+  - 所有数值只能来自「可引用的真实材料」——优先引用其中「数字冻结清单」表里的数值并保持原样（不换算单位、不四舍五入、不改精度），其余数字只能是材料原文里已有的；禁止编造材料中不存在的数字，宁可不写数字也不要估一个；
   - 不复述前文已写内容，需要衔接时用一句话引用前文结论即可。
 - `digest`：本章 150 字以内摘要（写了什么、给出了什么结论/数值），供后续章节承接与最终统稿使用。

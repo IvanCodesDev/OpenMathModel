@@ -376,6 +376,65 @@ def _experiment_summary(
     )
 
 
+#: 冻结清单条目允许的出处阶段（契约 enum；论文阶段自己不产数字）。
+_FROZEN_SOURCE_STAGES = frozenset(
+    {"DATA_PREPARATION", "MODEL_PLANNING", "EXPERIMENTING", "VALIDATING"}
+)
+_AUDIT_FINDING_KINDS = frozenset({"unsourced_number"})
+
+
+def _frozen_numbers(raw: Any) -> Optional[list[dict[str, Any]]]:
+    """节点 outputs.frozen_numbers → 契约 frozen_number[]。
+
+    键不存在（H5 之前的运行、回退单次生成之前的旧草稿）→ null；畸形条目
+    （值不是数、缺 id、出处阶段不在 enum）逐条剔除——契约 additionalProperties=false，
+    直接透传等于让一条脏数据把整个 stage-outputs 接口打成 500。
+    """
+    if not isinstance(raw, list):
+        return None
+    entries: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        entry_id = str(item.get("id") or "").strip()
+        value = _number_or_none(item.get("value"))
+        stage = str(item.get("source_stage") or "")
+        if not entry_id or value is None or stage not in _FROZEN_SOURCE_STAGES:
+            continue
+        entries.append(
+            {
+                "id": entry_id,
+                "label": str(item.get("label") or entry_id),
+                "value": value,
+                "source_stage": stage,
+                "source_path": str(item.get("source_path") or ""),
+            }
+        )
+    return entries
+
+
+def _audit_findings(raw: Any) -> Optional[list[dict[str, Any]]]:
+    """节点 outputs.audit_findings → 契约 audit_finding[]（同上：缺省 null、畸形剔除）。"""
+    if not isinstance(raw, list):
+        return None
+    findings: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "")
+        if kind not in _AUDIT_FINDING_KINDS:
+            continue
+        findings.append(
+            {
+                "scope": str(item.get("scope") or ""),
+                "kind": kind,
+                "numbers": _strs(item.get("numbers")),
+                "detail": str(item.get("detail") or ""),
+            }
+        )
+    return findings
+
+
 def _document_draft(run_id: str, state: Optional[StageState]) -> Optional[DocumentDraft]:
     if state is None:
         return None
@@ -401,6 +460,8 @@ def _document_draft(run_id: str, state: Optional[StageState]) -> Optional[Docume
         sections=sections,
         version=max(state.count, 1),
         updated_at=iso_z(state.at),
+        frozen_numbers=_frozen_numbers(outputs.get("frozen_numbers")),
+        audit_findings=_audit_findings(outputs.get("audit_findings")),
     )
 
 

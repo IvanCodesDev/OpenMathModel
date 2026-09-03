@@ -254,10 +254,19 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
 
     state_after = runtime.apply_action(run_id, "approve", reason="方案可行")
     assert state_after == TaskState.MODEL_PLANNING.value
+    # 论文发布后停在 G4 定稿闸门（必停）：草稿已落库，等人确认交付
+    assert drain(loop) == [AdvanceOutcome.REVIEW_REQUESTED]
+    snapshot = runtime.get_snapshot(run_id)
+    assert snapshot.review.resume_state is TaskState.PAPER_WRITING
+    assert "论文草稿已生成" in snapshot.review.reason
+    assert snapshot.outputs["PAPER_WRITING"]["audit_findings"] == []
+    state_after = runtime.apply_action(run_id, "approve", reason="confirm_delivery")
+    assert state_after == TaskState.PAPER_WRITING.value
     assert drain(loop) == [AdvanceOutcome.COMPLETED]
 
     snapshot = runtime.get_snapshot(run_id)
     assert snapshot.state is TaskState.COMPLETED
+    assert snapshot.review_decisions["PAPER_WRITING"] == "confirm_delivery"
     for state in WORK_SEQUENCE:
         assert [step.status for step in steps_for(snapshot, state)] == [
             StepStatus.SUCCEEDED
@@ -510,7 +519,10 @@ def test_reject_redoes_planning_and_asks_again(tmp_path):
     )
     assert rejected.payload["reason"] == "方案不满足预算约束"
 
-    # 第二版方案获批后全链走完
+    # 第二版方案获批后全链走到 G4 定稿闸门，确认交付即完成
     runtime.apply_action(run_id, "approve", reason="第二版方案可行")
+    assert drain(loop) == [AdvanceOutcome.REVIEW_REQUESTED]
+    assert runtime.get_snapshot(run_id).review.resume_state is TaskState.PAPER_WRITING
+    runtime.apply_action(run_id, "approve", reason="confirm_delivery")
     assert drain(loop) == [AdvanceOutcome.COMPLETED]
     assert runtime.get_snapshot(run_id).state is TaskState.COMPLETED

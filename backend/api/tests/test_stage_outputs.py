@@ -11,6 +11,7 @@ from __future__ import annotations
 from conftest import (
     API,
     approve_when_asked,
+    confirm_delivery,
     create_project,
     create_run,
     register_user,
@@ -44,6 +45,7 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     run = create_run(client, project["id"], goal="优化共享单车调度")
 
     approve_when_asked(client, run["id"], option_id="approve")
+    confirm_delivery(client, run["id"])
     wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
 
     payload = _stage_outputs(client, run["id"])
@@ -103,6 +105,14 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert document_draft["title"] == PAPER_OUTPUT["title"]
     assert document_draft["keywords"] == PAPER_OUTPUT["keywords"]
     assert document_draft["version"] == 1
+    # H5 数字冻结：清单（值 + 出处）与终稿审计发现随草稿进契约投影
+    frozen = {entry["id"]: entry for entry in document_draft["frozen_numbers"]}
+    # 指标来自沙盒标记行（不在 stub 的 EXPERIMENT_OUTPUT 里），与上面投影断言同一口径
+    assert frozen["metrics.rmse"]["value"] == 0.5
+    assert frozen["metrics.rmse"]["source_stage"] == "EXPERIMENTING"
+    assert frozen["metrics.rmse"]["source_path"] == "metrics.rmse"
+    assert any(key.startswith("robustness.") for key in frozen), "稳健性复跑数值也冻结"
+    assert document_draft["audit_findings"] == [], "桩章节只引用 rmse=0.5，审计应干净"
 
     delivery_manifest = payload["delivery_manifest"]
     validate_contract("delivery-manifest.schema.json", delivery_manifest)

@@ -674,6 +674,11 @@ def _paper_resume_reader(session: Session, run_id: str) -> Callable[[], Optional
     检查点就是事件日志本身（paper_outline 事件带 inputs_hash 与完整骨架，
     paper_section 事件带全文与摘要）：零新增表、零新端口，持久性与事件同级。
     数据一致性（哈希匹配、章节前缀连续、标题对得上）由节点侧校验。
+
+    只有**没交稿**的那趟才算检查点：节点发布草稿时会发 paper_published，
+    之后人在 G4 / 修订门要求「从论文撰写重做」，输入指纹多半原样不变（用户的
+    修改要求走运行中备注注入提示词，不进指纹）——若仍把已交稿那趟的章节当
+    断点续写，重做就成了原样重发。崩溃 / 失败重试没有发布标记，照旧续写。
     """
 
     def read() -> Optional[dict]:
@@ -698,6 +703,10 @@ def _paper_resume_reader(session: Session, run_id: str) -> Callable[[], Optional
                 index = data.get("index")
                 if isinstance(index, int):
                     sections[index] = data
+            elif kind == "paper_published":
+                # 这趟已经交稿：检查点消费完毕，下一趟从零起
+                outline_payload = None
+                sections = {}
         if outline_payload is None:
             return None
         return {
@@ -1679,8 +1688,11 @@ def resolve_approval(session: Session, run: TaskRunRow, option_id: str) -> None:
     redo = _redo_target(option_id)
     if redo is not None:
         # 修订审批选了重做起点：以所选阶段覆盖请求里的建议值，引擎据此回退并
-        # 丢弃该阶段及其下游的旧产出。
-        engine.resolve_review(snapshot, approved=True, reason=option_id, resume_state=redo)
+        # 丢弃该阶段及其下游的旧产出。rerun 显式给出：G4 的「退回修改」重做的
+        # 正是提出闸门的 PAPER_WRITING 本身，引擎按状态推断会误判成正向放行。
+        engine.resolve_review(
+            snapshot, approved=True, reason=option_id, resume_state=redo, rerun=True
+        )
         return
     engine.resolve_review(snapshot, approved=True, reason=option_id)  # 决策台账：option_id 进 review_decisions
 

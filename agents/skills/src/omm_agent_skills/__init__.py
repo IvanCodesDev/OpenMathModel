@@ -5,6 +5,13 @@
 """
 
 from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
+from .frozen_numbers import (
+    allowed_number_tokens,
+    audit_document,
+    build_frozen_numbers,
+    render_frozen_numbers,
+    unsourced_numbers,
+)
 from .llm import ChatCall, LlmCall, ScriptedLlmPort, StubLlmPort, stub_response
 from .nodes import (
     CLEANING_PROMPT_ID,
@@ -15,6 +22,9 @@ from .nodes import (
     G3_ACCEPT_OPTION_ID,
     G3_OPTIONS,
     G3_REDO_RECOMMEND_RATIO,
+    G4_CONFIRM_OPTION_ID,
+    G4_OPTIONS,
+    G4_REDO_OPTION_ID,
     MIN_ROBUSTNESS_CHECKS,
     PYTHON_TOOL_NAME,
     ROBUSTNESS_PROMPT_ID,
@@ -52,6 +62,9 @@ __all__ = [
     "G3_ACCEPT_OPTION_ID",
     "G3_OPTIONS",
     "G3_REDO_RECOMMEND_RATIO",
+    "G4_CONFIRM_OPTION_ID",
+    "G4_OPTIONS",
+    "G4_REDO_OPTION_ID",
     "MIN_ROBUSTNESS_CHECKS",
     "PYTHON_TOOL_NAME",
     "ROBUSTNESS_PROMPT_ID",
@@ -71,15 +84,20 @@ __all__ = [
     "ScriptedLlmPort",
     "StubLlmPort",
     "ValidationNode",
+    "allowed_number_tokens",
+    "audit_document",
+    "build_frozen_numbers",
     "chosen_plan",
     "extract_json",
     "gpu_hardware_note",
     "load_default_registry",
     "parse_prompt_text",
+    "render_frozen_numbers",
     "render_paper_markdown",
     "stub_response",
     "supports_chat",
     "text_protocol_chat",
     "tool_protocol_note",
+    "unsourced_numbers",
     "validate",
 ]

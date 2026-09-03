@@ -37,7 +37,12 @@ from omm_agent_evals import (
     sandbox_failure,
     sandbox_success,
 )
-from omm_agent_skills import EXPERIMENT_SCRIPT_PATH, G3_ACCEPT_OPTION_ID, PYTHON_TOOL_NAME
+from omm_agent_skills import (
+    EXPERIMENT_SCRIPT_PATH,
+    G3_ACCEPT_OPTION_ID,
+    G4_CONFIRM_OPTION_ID,
+    PYTHON_TOOL_NAME,
+)
 
 
 def drive_through_review(session):
@@ -48,6 +53,24 @@ def drive_through_review(session):
     assert session.snapshot.review.resume_state is TaskState.MODEL_PLANNING
     session.engine.resolve_review(session.snapshot, approved=True, reason="采用方案 A")
     return session.engine.run_until_blocked(session.snapshot)
+
+
+def confirm_delivery(session, outcome):
+    """G4 定稿交付闸门（必停）：论文发布后停在 PAPER_WRITING，确认交付 → COMPLETED。"""
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+    assert session.snapshot.review is not None
+    assert session.snapshot.review.resume_state is TaskState.PAPER_WRITING
+    session.engine.resolve_review(session.snapshot, approved=True, reason=G4_CONFIRM_OPTION_ID)
+    return session.engine.run_until_blocked(session.snapshot)
+
+
+def g4_gate_event(session):
+    gates = [
+        event for event in session.sink.events
+        if event.event_type is EventType.REVIEW_REQUESTED
+        and (event.payload.get("gate") or {}).get("gate") == "G4"
+    ]
+    return gates[-1]
 
 
 def assert_replay_matches(session):
@@ -99,7 +122,7 @@ def _user_prompt(chat_call):
 @pytest.fixture()
 def completed_session():
     session = build_full_chain_session()
-    outcome = drive_through_review(session)
+    outcome = confirm_delivery(session, drive_through_review(session))
     assert outcome.status == AdvanceOutcome.COMPLETED
     return session
 
@@ -110,6 +133,20 @@ def test_happy_path_all_six_stages_succeed(completed_session):
     assert snapshot.state is TaskState.COMPLETED
     assert [step.state for step in snapshot.steps] == list(WORK_SEQUENCE)
     assert all(step.status is StepStatus.SUCCEEDED for step in snapshot.steps)
+    # G4 定稿闸门：论文发布后必停，卡片带数字冻结清单与审计发现的统计；确认进台账
+    gate = g4_gate_event(completed_session).payload["gate"]
+    assert [option["id"] for option in gate["options"]] == [
+        G4_CONFIRM_OPTION_ID, "redo:PAPER_WRITING",
+    ]
+    assert [o["id"] for o in gate["options"] if o.get("recommended")] == [G4_CONFIRM_OPTION_ID]
+    assert gate["impact"]["audit_findings_total"] == 0
+    assert gate["impact"]["frozen_numbers_total"] >= len(FULL_CHAIN_METRICS)
+    assert snapshot.review_decisions[TaskState.PAPER_WRITING.value] == G4_CONFIRM_OPTION_ID
+    paper = snapshot.outputs[TaskState.PAPER_WRITING.value]
+    assert {e["id"] for e in paper["frozen_numbers"]} >= {
+        f"metrics.{name}" for name in FULL_CHAIN_METRICS
+    }
+    assert paper["audit_findings"] == []
 
     # Outputs accumulated for every work stage, with real node content.
     assert set(snapshot.outputs) == {state.value for state in WORK_SEQUENCE}
@@ -259,7 +296,7 @@ def test_experiment_repair_round_feeds_error_back_and_completes():
         tool_runs=[sandbox_failure(), sandbox_success()]
     )
 
-    outcome = drive_through_review(session)
+    outcome = confirm_delivery(session, drive_through_review(session))
 
     assert outcome.status == AdvanceOutcome.COMPLETED
     (experiment_step,) = steps_for(session, TaskState.EXPERIMENTING)
@@ -325,14 +362,14 @@ def test_review_rejection_then_retry_replans_and_completes():
     assert all(step.status is StepStatus.SUCCEEDED for step in planning_steps)
 
     engine.resolve_review(snapshot, approved=True, reason="第二版方案通过")
-    outcome = engine.run_until_blocked(snapshot)
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
     assert outcome.status == AdvanceOutcome.COMPLETED
     assert snapshot.state is TaskState.COMPLETED
 
-    # Trajectory shape: two gates, two resolutions, one explicit retry.
+    # Trajectory shape: two plan gates + the delivery gate, three resolutions, one explicit retry.
     types = [event.event_type for event in session.sink.events]
-    assert types.count(EventType.REVIEW_REQUESTED) == 2
-    assert types.count(EventType.REVIEW_RESOLVED) == 2
+    assert types.count(EventType.REVIEW_REQUESTED) == 3
+    assert types.count(EventType.REVIEW_RESOLVED) == 3
     assert types.count(EventType.RUN_RETRIED) == 1
 
     assert_replay_matches(session)
@@ -348,7 +385,7 @@ def test_experiment_double_failure_recovers_within_single_attempt():
         tool_runs=[sandbox_failure(), sandbox_failure(), sandbox_success()]
     )
 
-    outcome = drive_through_review(session)
+    outcome = confirm_delivery(session, drive_through_review(session))
 
     assert outcome.status == AdvanceOutcome.COMPLETED
     (experiment_step,) = steps_for(session, TaskState.EXPERIMENTING)
@@ -388,7 +425,7 @@ def test_experiment_rounds_exhausted_fails_run_then_retry_recovers():
     engine.retry(snapshot)
     assert snapshot.state is TaskState.EXPERIMENTING
 
-    outcome = engine.run_until_blocked(snapshot)
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
     assert outcome.status == AdvanceOutcome.COMPLETED
     assert snapshot.state is TaskState.COMPLETED
 
@@ -454,7 +491,7 @@ def test_g3_gate_stops_on_failed_check_and_accept_carries_limitation_into_paper(
 
     # 用户接受并记录局限：决策进台账，论文材料带上稳健性结论与「不得淡化」纪律
     engine.resolve_review(snapshot, approved=True, reason=G3_ACCEPT_OPTION_ID)
-    outcome = engine.run_until_blocked(snapshot)
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
 
     assert outcome.status == AdvanceOutcome.COMPLETED
     assert snapshot.review_decisions[TaskState.VALIDATING.value] == G3_ACCEPT_OPTION_ID
@@ -464,11 +501,18 @@ def test_g3_gate_stops_on_failed_check_and_accept_carries_limitation_into_paper(
     material = outline_call.variables["validation_summary"]
     assert "bootstrap_stability" in material and "value 0.42" in material
     assert "接受并记录局限" in material and "不得淡化" in material
+    # 未通过项的实测值 / 阈值进了数字冻结清单：论文只能原样引用，不能改写
+    frozen = {
+        e["id"]: e["value"]
+        for e in snapshot.outputs[TaskState.PAPER_WRITING.value]["frozen_numbers"]
+    }
+    assert frozen["robustness.bootstrap_stability.value"] == 0.42
+    assert "robustness.bootstrap_stability.value" in outline_call.variables["frozen_numbers"]
     assert [step.state for step in snapshot.steps] == list(WORK_SEQUENCE)
 
     types = [event.event_type for event in session.sink.events]
-    assert types.count(EventType.REVIEW_REQUESTED) == 2  # G1 + G3
-    assert types.count(EventType.REVIEW_RESOLVED) == 2
+    assert types.count(EventType.REVIEW_REQUESTED) == 3  # G1 + G3 + G4
+    assert types.count(EventType.REVIEW_RESOLVED) == 3
     assert_replay_matches(session)
 
 
@@ -506,13 +550,49 @@ def test_g3_redo_experiment_reruns_experiment_and_validation_then_completes():
     assert len(experiment_sandbox_calls(session)) == 2
 
     engine.resolve_review(snapshot, approved=True, reason=G3_ACCEPT_OPTION_ID)
-    outcome = engine.run_until_blocked(snapshot)
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
 
     assert outcome.status == AdvanceOutcome.COMPLETED
     assert snapshot.state is TaskState.COMPLETED
     types = [event.event_type for event in session.sink.events]
-    assert types.count(EventType.REVIEW_REQUESTED) == 3  # G1 + G3 ×2
+    assert types.count(EventType.REVIEW_REQUESTED) == 4  # G1 + G3 ×2 + G4
     assert types.count(EventType.RUN_RETRIED) == 0, "回退不是 retry，是审批内的回退"
+    assert_replay_matches(session)
+
+
+def test_g4_redo_rewrites_paper_from_scratch_and_gates_again():
+    """G4 选「退回修改」：复用修订门的回退语义——论文阶段跑第二趟（总编重新
+    规划、逐章重写），第一趟产出被丢弃，闸门再次弹出后确认即完成。"""
+    session = build_full_chain_session()
+    engine, snapshot = session.engine, session.snapshot
+
+    outcome = drive_through_review(session)
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+    assert snapshot.review.resume_state is TaskState.PAPER_WRITING
+    first_paper_calls = len([c for c in session.llm.calls if c.prompt_id.startswith("paper_")])
+
+    # 重做的正是提出闸门的阶段：引擎按状态推断不出「要重跑」，控制面显式传 rerun
+    engine.resolve_review(
+        snapshot,
+        approved=True,
+        reason="redo:PAPER_WRITING",
+        resume_state=TaskState.PAPER_WRITING,
+        rerun=True,
+    )
+    assert snapshot.state is TaskState.PAPER_WRITING
+    assert snapshot.force_rerun is True
+    assert TaskState.PAPER_WRITING.value not in snapshot.outputs
+    assert TaskState.VALIDATING.value in snapshot.outputs, "上游产出原样保留"
+
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
+
+    assert outcome.status == AdvanceOutcome.COMPLETED
+    assert [step.attempt for step in steps_for(session, TaskState.PAPER_WRITING)] == [1, 2]
+    # 第二趟整篇重写：总编 + 三章 + 统稿又各调一次（不是复用第一趟的章节）
+    second_paper_calls = len([c for c in session.llm.calls if c.prompt_id.startswith("paper_")])
+    assert second_paper_calls == first_paper_calls * 2
+    types = [event.event_type for event in session.sink.events]
+    assert types.count(EventType.REVIEW_REQUESTED) == 3  # G1 + G4 ×2
     assert_replay_matches(session)
 
 

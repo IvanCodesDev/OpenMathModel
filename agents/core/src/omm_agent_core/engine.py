@@ -268,6 +268,7 @@ class TaskRunEngine:
         approved: bool,
         reason: str | None = None,
         resume_state: TaskState | None = None,
+        rerun: bool | None = None,
     ) -> list[AgentEvent]:
         """Resolve a pending human review.
 
@@ -282,6 +283,12 @@ class TaskRunEngine:
         move on" — so the event carries ``rerun`` to force a fresh pass. The
         key is omitted when it is not needed, keeping forward-only payloads
         byte-identical to earlier versions (golden traces stay stable).
+
+        ``rerun`` makes the intent explicit when inference cannot: a gate may
+        offer "redo THIS stage" (G4's 退回修改 restarts PAPER_WRITING, the very
+        state that raised the gate), which looks exactly like a forward
+        approval to the inference above. Callers resolving a ``redo:<STATE>``
+        option pass ``rerun=True``; ``None`` keeps the inferred behaviour.
         """
         if snapshot.state is not TaskState.NEEDS_REVIEW or snapshot.review is None:
             raise ValueError("no pending review to resolve")
@@ -294,7 +301,9 @@ class TaskRunEngine:
             "resume_state": resume.value,
             "reason": reason,
         }
-        if approved and (review.revision_round > 0 or resume is not review.resume_state):
+        if rerun is None:
+            rerun = review.revision_round > 0 or resume is not review.resume_state
+        if approved and rerun:
             payload["rerun"] = True
         if review.revision_round > 0:
             # Which gate this was cannot be recovered from the pair of states

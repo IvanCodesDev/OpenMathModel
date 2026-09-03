@@ -75,9 +75,9 @@ def build_real_nodes(
 ) -> dict[TaskState, StepNode]:
     """六阶段真实节点注册表。
 
-    ``unattended=True`` 关闭规划阶段的人工审批门（require_confirmation=False），
-    供无人值守评测整链直跑；默认保持产品语义：方案产出后停在 REVIEW_REQUESTED
-    等待确认。
+    ``unattended=True`` 关闭两个必停的人工审批门（方案确认 G1、定稿交付 G4，
+    require_confirmation=False），供无人值守评测整链直跑；默认保持产品语义：
+    方案产出后停在 REVIEW_REQUESTED 等待确认，论文发布后再停一次等确认交付。
     """
     registry = prompts or load_default_registry()
     missing = REQUIRED_PROMPT_IDS - set(registry.ids())
@@ -94,7 +94,9 @@ def build_real_nodes(
         ),
         TaskState.EXPERIMENTING: ExperimentExecutionNode(registry),
         TaskState.VALIDATING: ValidationNode(registry),
-        TaskState.PAPER_WRITING: PaperWritingNode(registry),
+        TaskState.PAPER_WRITING: PaperWritingNode(
+            registry, require_confirmation=not unattended
+        ),
     }
 
 

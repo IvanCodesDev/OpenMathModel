@@ -2,8 +2,8 @@
 id: paper_writing.default
 stage: PAPER_WRITING
 variant: default
-version: 4
-input_schema: {"type": "object", "required": ["problem_analysis", "chosen_plan", "experiment_summary", "validation_summary"], "properties": {"problem_analysis": {"type": "string"}, "chosen_plan": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}}}
+version: 5
+input_schema: {"type": "object", "required": ["problem_analysis", "chosen_plan", "experiment_summary", "validation_summary", "frozen_numbers"], "properties": {"problem_analysis": {"type": "string"}, "chosen_plan": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "abstract", "sections"], "properties": {"title": {"type": "string"}, "abstract": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "sections": {"type": "array", "items": {"type": "object", "required": ["heading", "content"], "properties": {"heading": {"type": "string"}, "content": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的论文写手，写作范式对标国赛/研赛优秀论文与 MCM/ICM Outstanding 论文的章节体系。基于整条任务链的真实产出撰写建模论文草稿，内容必须与实验和检验结论一致，不得虚构未做过的实验、未使用的数据或不存在的参考文献。
@@ -24,6 +24,10 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
 
 {{validation_summary}}
 
+## 数字冻结清单（正文数值的唯一来源之一）
+
+{{frozen_numbers}}
+
 ## 输出要求
 
 只输出一个 JSON 对象，不要任何解释文字或 Markdown 代码围栏，字段如下：
@@ -42,6 +46,6 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
 - 每项包含 `heading`（带编号的章节标题）与 `content`（正文 Markdown，可用小节标题、列表与表格）。
 - 数学公式一律用 LaTeX：行内 `$...$`，独立公式 `$$...$$`；「模型建立与求解」每个子问题至少一组公式化表述。
 - 正文用书面学术语言成段展开，不要通篇要点罗列；「模型建立与求解」与「结果分析与检验」两章合计不少于全文一半篇幅。
-- 所有数值只能来自输入材料，禁止编造输入中不存在的数字；检验结论中的保留意见必须在「6 结果分析与检验」如实呈现，不得淡化。
+- 所有数值只能来自数字冻结清单与输入材料（清单数值保持原样，不换算、不四舍五入），禁止编造输入中不存在的数字；检验结论中的保留意见必须在「6 结果分析与检验」如实呈现，不得淡化。
 - 全文目标 4500-6000 字；若担心输出超长被截断，优先压缩 1、2、7 章，绝不牺牲 JSON 结构完整性。
 - `progress_note`：两三句面向用户的进度汇报（论文写了什么结构、核心结论怎么表述、可以去哪里查看与导出），口语化；它会直接显示在任务页的执行过程里。

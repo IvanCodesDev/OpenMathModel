@@ -30,12 +30,16 @@ from omm_agent_skills import (
     ScriptedLlmPort,
     StubLlmPort,
     ValidationNode,
+    allowed_number_tokens,
+    build_frozen_numbers,
     chosen_plan,
     extract_json,
     gpu_hardware_note,
     load_default_registry,
+    render_frozen_numbers,
     render_paper_markdown,
     stub_response,
+    unsourced_numbers,
 )
 
 ANALYSIS_OK = {
@@ -1449,7 +1453,9 @@ def test_paper_writing_multipass_publishes_markdown_artifact(registry):
 
     result = node.run(ctx, services)
 
-    assert result.status == NodeResult.SUCCEEDED
+    # H5 起论文发布后必停 G4（草稿是交付物，定稿前过人的眼）；产出照常齐全
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_meta["gate"] == "G4"
     assert result.outputs["title"] == PAPER_OUTLINE_OK["title"]
     # 章节顺序与总编规划一致；摘要与关键词来自统稿调用
     assert [s["heading"] for s in result.outputs["sections"]] == [
@@ -1467,12 +1473,13 @@ def test_paper_writing_multipass_publishes_markdown_artifact(registry):
         "paper_section.default",
         "paper_finalize.default",
     ]
-    # 进度事件：骨架一条 + 每章一条，index/total 正确
+    # 进度事件：骨架一条 + 每章一条 + 发布标记一条（断点续写的读取器据此作废本趟检查点）
     assert [event["kind"] for event in progress] == [
-        "paper_outline", "paper_section", "paper_section", "paper_section",
+        "paper_outline", "paper_section", "paper_section", "paper_section", "paper_published",
     ]
+    assert progress[-1]["chapters"] == 3 and progress[-1]["audit_findings"] == 0
     assert progress[0]["total"] == 3
-    assert [event["index"] for event in progress[1:]] == [1, 2, 3]
+    assert [event["index"] for event in progress[1:4]] == [1, 2, 3]
     assert progress[2]["heading"] == "2 模型建立与求解"
     # 产物：markdown 草稿
     assert len(result.artifacts) == 1
@@ -1492,17 +1499,28 @@ def test_paper_writing_sections_receive_rolling_digests_and_materials(registry):
 
     result = node.run(ctx, make_services(llm))
 
-    assert result.status == NodeResult.SUCCEEDED
+    assert result.status == NodeResult.NEEDS_REVIEW
     section_calls = [call for call in llm.calls if call.prompt_id == "paper_section.default"]
     # 滚动摘要：第一章无前文，第三章能看到前两章摘要
     assert section_calls[0].variables["previous_digests"] == "无（本章是全文第一章）"
     assert "第1章《1 问题重述》" in section_calls[2].variables["previous_digests"]
     assert "第2章《2 模型建立与求解》" in section_calls[2].variables["previous_digests"]
-    # 材料路由：第一章只带 problem_analysis；第三章未指定 source_keys → 全量四份
+    # 材料路由：第一章只带 problem_analysis；第三章未指定 source_keys → 全量材料
     assert "问题分析结果" in section_calls[0].variables["materials"]
     assert "已确认的建模方案" not in section_calls[0].variables["materials"]
     for label in ("问题分析结果", "已确认的建模方案", "实验过程摘要", "检验结论"):
         assert label in section_calls[2].variables["materials"]
+    # 数字冻结清单不受路由影响：第一章只要了 problem_analysis 也照样带上
+    for call in section_calls:
+        assert "数字冻结清单" in call.variables["materials"]
+        assert "metrics.rmse" in call.variables["materials"]
+    # 总编与统稿同样看到清单
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    assert "| metrics.rmse | 0.12 | 实验指标 rmse | EXPERIMENTING.metrics.rmse |" in (
+        outline_call.variables["frozen_numbers"]
+    )
+    finalize_call = next(c for c in llm.calls if c.prompt_id == "paper_finalize.default")
+    assert "metrics.rmse" in finalize_call.variables["frozen_numbers"]
     # 符号表逐章注入
     assert "$x_i$" in section_calls[1].variables["notation"]
 
@@ -1518,7 +1536,11 @@ def test_paper_writing_outline_failure_falls_back_to_single_call(registry):
 
     result = node.run(ctx, services)
 
-    assert result.status == NodeResult.SUCCEEDED
+    # 回退路径同样必停 G4，且终稿审计照做（这条路没有章级重写，全靠这一道）
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_meta["gate"] == "G4"
+    assert result.outputs["audit_findings"] == []
+    assert result.outputs["frozen_numbers"][0]["id"] == "metrics.rmse"
     assert result.outputs["title"] == PAPER_OK["title"]
     assert result.metrics["fallback"] == "single_call"
     assert len(result.artifacts) == 1
@@ -1538,7 +1560,7 @@ def test_paper_writing_degenerate_outline_falls_back(registry):
 
     result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
 
-    assert result.status == NodeResult.SUCCEEDED
+    assert result.status == NodeResult.NEEDS_REVIEW
     assert result.metrics["fallback"] == "single_call"
     assert "章节数" in result.metrics["fallback_reason"]
 
@@ -1572,7 +1594,7 @@ def test_paper_writing_finalize_failure_assembles_abstract(registry):
 
     result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
 
-    assert result.status == NodeResult.SUCCEEDED
+    assert result.status == NodeResult.NEEDS_REVIEW
     assert result.outputs["abstract"]  # 摘要由各章摘要拼接，不弃全文
     assert result.outputs["keywords"] == PAPER_OUTLINE_OK["keywords"]
     assert any("统稿调用失败" in w for w in result.metrics["quality_warnings"])
@@ -1624,7 +1646,7 @@ def test_paper_writing_resumes_from_event_checkpoint(registry):
 
     result = node.run(ctx, services)
 
-    assert result.status == NodeResult.SUCCEEDED
+    assert result.status == NodeResult.NEEDS_REVIEW
     assert result.metrics["resumed_chapters"] == 1
     # 总编不再调用；章节只写第 2、3 章
     assert [call.prompt_id for call in llm.calls] == [
@@ -1652,7 +1674,7 @@ def test_paper_writing_stale_checkpoint_regenerates(registry):
 
     result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), services)
 
-    assert result.status == NodeResult.SUCCEEDED
+    assert result.status == NodeResult.NEEDS_REVIEW
     assert "resumed_chapters" not in result.metrics
     assert [call.prompt_id for call in llm.calls][0] == "paper_outline.default"
 
@@ -1672,7 +1694,7 @@ def test_paper_writing_length_revision_is_bounded(registry):
 
     result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
 
-    assert result.status == NodeResult.SUCCEEDED
+    assert result.status == NodeResult.NEEDS_REVIEW
     # 第 1 章重写并被采纳；第 2 章（目标 1200）600 字仍越界，用掉第二次额度但
     # 重写结果没有更接近目标 → 保留原稿并记警告；第 3 章（目标 700）600 字在带宽内。
     assert result.metrics["length_revisions"] == 2
@@ -1689,3 +1711,196 @@ def test_render_paper_markdown_skips_blank_sections():
         {"title": "题", "sections": [{"heading": "", "content": ""}, "not-a-dict"]}
     )
     assert markdown == "# 题\n"
+
+
+# -- 数字冻结清单 + G4 定稿闸门（H5 切片 1）--------------------------------------
+
+
+def frozen_prior():
+    """四类来源齐备的上游产出：指标 / 稳健性（含文字阈值）/ 清洗统计 / 方案文本数值。"""
+    prior = paper_prior()
+    prior[TaskState.EXPERIMENTING.value] = {
+        "experiment_summary": "贪心近似 rmse=0.12，mae=1.5",
+        "metrics": {"rmse": 0.12, "mae": 1.5, "note": "not-a-number", "flag": True},
+    }
+    prior[TaskState.VALIDATING.value] = {
+        **VALIDATION_OK,
+        "robustness": {
+            "executed": True,
+            "status": "passed",
+            "checks": [
+                {
+                    "id": "sensitivity", "name": "需求率扰动", "passed": True,
+                    "value": 0.031, "threshold": 0.05,
+                },
+                {
+                    "id": "bootstrap", "name": "bootstrap 稳定性", "passed": False,
+                    "value": 0.31, "threshold": "≤ 0.2",
+                },
+                {
+                    "id": "baseline", "name": "基线对比", "passed": True,
+                    "value": None, "threshold": None,
+                },
+            ],
+            "checks_total": 3,
+            "checks_failed": 1,
+            "summary_text": "三项检查通过两项",
+        },
+    }
+    prior[TaskState.DATA_PREPARATION.value] = {
+        "profile_summary": "两张表",
+        "cleaning": {
+            "executed": True,
+            "status": "passed",
+            "rows_before": 1200,
+            "rows_after": 1180,
+            "rows_deleted_ratio": 0.0167,
+            "imputed_columns": ["demand"],
+        },
+    }
+    prior[TaskState.MODEL_PLANNING.value] = {
+        "plans": [
+            {
+                "id": "A",
+                "name": "整数规划",
+                "approach": "MILP 建模，分支定界求解，求解时限 300 秒",
+                "steps": ["定义决策变量", "构建 3 类约束", "多次重启 20 轮对比"],
+                "risks": ["规模超过 10 万变量时求解超时"],
+            }
+        ],
+        "recommended_plan_id": "A",
+    }
+    return prior
+
+
+def test_build_frozen_numbers_covers_four_sources_in_fixed_order():
+    entries = build_frozen_numbers(frozen_prior())
+
+    assert [(e["id"], e["value"]) for e in entries] == [
+        ("metrics.rmse", 0.12),
+        ("metrics.mae", 1.5),
+        ("robustness.sensitivity.value", 0.031),
+        ("robustness.sensitivity.threshold", 0.05),
+        ("robustness.bootstrap.value", 0.31),
+        ("robustness.bootstrap.threshold.0", 0.2),  # 文字阈值「≤ 0.2」里的数值
+        ("cleaning.rows_before", 1200),
+        ("cleaning.rows_after", 1180),
+        ("cleaning.rows_deleted_ratio", 0.0167),
+        ("plan.A.approach.0", 300),
+        ("plan.A.steps[2].1", 20),  # 「3 类约束」的一位数不计；risks 不算方案参数
+    ]
+    by_id = {e["id"]: e for e in entries}
+    assert by_id["metrics.rmse"]["source_stage"] == "EXPERIMENTING"
+    assert by_id["robustness.bootstrap.value"]["source_path"] == "robustness.checks[1].value"
+    assert by_id["robustness.bootstrap.value"]["label"] == "稳健性检查「bootstrap 稳定性」实测值"
+    assert by_id["cleaning.rows_after"]["source_stage"] == "DATA_PREPARATION"
+    assert by_id["plan.A.approach.0"]["source_stage"] == "MODEL_PLANNING"
+    assert "300 秒" in by_id["plan.A.approach.0"]["label"]
+    # 表格渲染：每条一行，编号 / 数值 / 含义 / 出处
+    table = render_frozen_numbers(entries)
+    assert "| metrics.mae | 1.5 | 实验指标 mae | EXPERIMENTING.metrics.mae |" in table
+    assert "不换算、不四舍五入" in table
+
+
+def test_build_frozen_numbers_skips_unexecuted_and_missing_sources():
+    prior = frozen_prior()
+    prior[TaskState.VALIDATING.value]["robustness"]["executed"] = False
+    prior[TaskState.DATA_PREPARATION.value]["cleaning"] = {
+        "executed": False, "reason": "无数据文件",
+    }
+    del prior[TaskState.MODEL_PLANNING.value]
+
+    ids = [e["id"] for e in build_frozen_numbers(prior)]
+
+    assert ids == ["metrics.rmse", "metrics.mae"], "未执行的沙盒结果与缺席阶段一律不冻结"
+    assert render_frozen_numbers([]).startswith("（无")
+
+
+def test_unsourced_numbers_normalizes_tokens_and_samples():
+    allowed = allowed_number_tokens(
+        [{"value": 0.5}, {"value": 1200}], "题面给定预算 100 万，周期 3 天"
+    )
+    # 0.50 ≡ 0.5、1200.0 ≡ 1200；100 来自材料；一位数 3 不计；同一数值只报一次；取样上限 8
+    text = "预算 100 万内，0.50 的比例，1200.0 行，第 3 问；编造 0.87、0.87、42" + "".join(
+        f"、{n}" for n in range(60, 80)
+    )
+    assert unsourced_numbers(text, allowed)[:3] == ["0.87", "42", "60"]
+    assert len(unsourced_numbers(text, allowed)) == 8
+
+
+def test_paper_writing_stops_at_g4_and_recommends_confirm_when_audit_is_clean(registry):
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    services = make_services(llm)
+    progress = []
+    services.extras["progress"] = progress.append
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=frozen_prior()), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert "论文草稿已生成（3 章" in result.review_reason
+    assert "冻结数字 11 项全部对账通过" in result.review_reason
+    meta = result.review_meta
+    assert meta["gate"] == "G4" and meta["decision_type"] == "generic"
+    assert [o["id"] for o in meta["options"]] == ["confirm_delivery", "redo:PAPER_WRITING"]
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["confirm_delivery"]
+    assert meta["impact"]["audit_findings_total"] == 0
+    assert meta["impact"]["frozen_numbers_total"] == 11
+    assert meta["impact"]["recommended"] == "confirm_delivery"
+    # 清单与审计发现随产出进 StageOutput（DocumentDraft 契约的两个新字段）
+    frozen_ids = [e["id"] for e in result.outputs["frozen_numbers"]]
+    assert frozen_ids[:2] == ["metrics.rmse", "metrics.mae"]
+    assert result.outputs["audit_findings"] == []
+    assert result.metrics.get("audit_rewrites") is None
+    assert progress[-1]["kind"] == "paper_published"
+
+
+def test_paper_writing_unsourced_numbers_get_one_bounded_rewrite_then_audit_findings(registry):
+    """章级数字审计：对不上账 → 带违规清单重写一次（与字数重写共享 2 次额度）；
+    重写仍有剩余 / 额度用尽 → 审计发现进 G4 卡片，推荐「退回修改」。"""
+    pad = lambda text, target: text + "析" * (target - len(text))  # noqa: E731
+    ch1_bad = pad("rmse=0.12，文献常见值 0.87。", 600)
+    ch1_fixed = pad("rmse=0.12，与文献量级一致。", 600)
+    ch2_bad = pad("rmse=0.12；另取 300 组对照。", 1200)     # 300 编造
+    ch2_still_bad = pad("rmse=0.12；对照 300 组不变。", 1200)  # 重写没改好 → 保留原稿
+    ch3_bad = pad("最终 rmse=0.12，提升 99 个百分点。", 800)   # 额度已尽 → 直接进发现
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(PAPER_OUTLINE_OK)],
+        "paper_section.default": [
+            stub_response({"content": ch1_bad, "digest": "d1"}),
+            stub_response({"content": ch1_fixed, "digest": "d1"}),
+            stub_response({"content": ch2_bad, "digest": "d2"}),
+            stub_response({"content": ch2_still_bad, "digest": "d2"}),
+            stub_response({"content": ch3_bad, "digest": "d3"}),
+        ],
+        "paper_finalize.default": [stub_response({
+            "abstract": "rmse=0.12，样本 1180 行。", "keywords": ["k"],
+        })],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    assert len(section_calls) == 5  # 3 章正稿 + 2 次审计重写
+    assert "0.87" in section_calls[1].variables["__repair_error"]
+    assert "找不到出处" in section_calls[1].variables["__repair_error"]
+    assert result.metrics["audit_rewrites"] == 2
+    assert result.metrics["length_revisions"] == 2, "审计重写与字数重写共享同一额度"
+    assert result.outputs["sections"][0]["content"] == ch1_fixed
+    assert result.outputs["sections"][1]["content"] == ch2_bad, "重写没有减少违规就保留原稿"
+    findings = result.outputs["audit_findings"]
+    assert [f["scope"] for f in findings] == [
+        "第2章《2 模型建立与求解》", "第3章《3 结果分析与检验》", "摘要",
+    ]
+    assert findings[0]["numbers"] == ["300"] and findings[1]["numbers"] == ["99"]
+    assert findings[0]["kind"] == "unsourced_number"
+    # 摘要里的 1180 不在材料（paper_prior 无清洗统计）也不在各章摘要 → 同样记发现
+    assert findings[2]["numbers"] == ["1180"]
+    meta = result.review_meta
+    assert meta["impact"]["audit_findings_total"] == 3
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["redo:PAPER_WRITING"]
+    assert "数字审计发现 3 处" in result.review_reason
+    assert "第2章《2 模型建立与求解》有 1 个数值" in result.review_reason
+    assert any("未在冻结清单与材料中找到出处" in w for w in result.metrics["quality_warnings"])
