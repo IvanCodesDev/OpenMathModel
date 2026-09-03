@@ -1,0 +1,25 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "构造合成需求数据，贪心近似求解并与随机基线对比",
+  "metrics": { "rmse": 0.5 },
+  "stdout_tail": "",
+  "experiment_summary": "贪心近似求解并与随机基线对比",
+  "validation": {
+    "verdict": "pass",
+    "checks": [
+      { "name": "结果合理性", "result": "pass", "note": "指标数量级正常" }
+    ],
+    "risks": [],
+    "validation_summary": "结果可信",
+    "robustness": {
+      "executed": false,
+      "status": null,
+      "summary_text": "",
+      "checks": [],
+      "checks_total": 0,
+      "checks_failed": 0,
+      "reason": "工作区中没有实验脚本 experiment.py，无法复跑；检验结论仅来自评审判读"
+    }
+  },
+  "updated_at": "2026-09-03T00:51:00.000000Z"
+}

@@ -20,6 +20,7 @@ import type {
 import { t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
+import { describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 
 const PAPER_DRAFT_PREFIX = "openmathmodel.paperDraft.v1.";
@@ -526,15 +527,6 @@ const VERDICT_COPY: Record<string, { icon: string; label: string; tone: string }
   fail: { icon: "x-circle", label: "结果未通过", tone: "fail" },
 };
 
-/** 指标值展示：千分位 + 有限小数；非数值原样。大数不带小数尾巴，小数保留 4 位。 */
-function formatMetricValue(value: unknown): string {
-  const num = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(num)) return String(value);
-  return num.toLocaleString("en-US", {
-    maximumFractionDigits: Math.abs(num) >= 100 ? 2 : 4,
-  });
-}
-
 function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="experiment-report"]');
   if (!panel || !shouldRender(panel, "experiments", summary.updated_at)) return;
@@ -582,6 +574,7 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   const notes = panel.querySelectorAll<HTMLElement>(".focused-experiment-notes article");
   const robustness = notes[0];
   if (robustness) {
+    const heading: HTMLElement[] = [el("h2", "", t("稳健性与风险结论"))];
     const list = el("ul");
     const noteItem = (tone: string, iconName: string, label: string, detail: string): HTMLElement => {
       const item = el("li", `is-${tone}`);
@@ -592,6 +585,33 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
       item.append(icon(iconName), body);
       return item;
     };
+    // 沙盒复跑的稳健性检查放最前：数字来自检验脚本的标记行（G3 结果采用闸门的
+    // 判定依据），一句话结论与论文引用的是同一句；没跑成 / 没跑时把原因摆出来，
+    // 不让「未执行」看起来像「全过」。评审判读（模型给出）与风险列在其后。
+    const rerun = describeRobustness(validation?.robustness);
+    if (rerun.kind === "executed") {
+      if (rerun.summary) {
+        const summary = el("p");
+        summary.append(richInline(rerun.summary));
+        heading.push(summary);
+      }
+      for (const row of rerun.rows) {
+        const facts = [t(row.tone === "pass" ? "通过" : "未通过")];
+        if (row.value !== null) facts.push(`${t("实测")} ${row.value}`);
+        if (row.threshold !== null) facts.push(`${t("阈值")} ${row.threshold}`);
+        const detail = row.detail ? `${facts.join("｜")} — ${row.detail}` : facts.join("｜");
+        list.append(noteItem(
+          row.tone,
+          row.tone === "pass" ? "check-circle" : "x-circle",
+          row.name,
+          detail,
+        ));
+      }
+    } else if (rerun.kind === "unfinished") {
+      list.append(noteItem("warn", "warning-circle", t("稳健性复跑未完成"), rerun.summary));
+    } else if (rerun.kind === "skipped") {
+      list.append(noteItem("warn", "warning-circle", t("稳健性复跑未执行"), rerun.reason));
+    }
     for (const check of validation?.checks ?? []) {
       const tone = check.result === "pass" ? "pass" : check.result === "warn" ? "warn" : "fail";
       list.append(noteItem(
@@ -604,7 +624,7 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
     for (const risk of validation?.risks ?? []) {
       list.append(noteItem("warn", "shield-warning", t("风险"), risk));
     }
-    robustness.replaceChildren(el("h2", "", t("稳健性与风险结论")), list);
+    robustness.replaceChildren(...heading, list);
     robustness.hidden = list.childElementCount === 0;
   }
   const advice = notes[1];

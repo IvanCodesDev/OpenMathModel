@@ -773,6 +773,12 @@ const EXPERIMENT_STAGE: Record<string, string> = {
   "满足率": "Fill rate",
   "平衡度": "Balance",
   "稳健性与风险结论": "Robustness and risk",
+  "稳健性复跑未执行": "Robustness rerun not executed",
+  "稳健性复跑未完成": "Robustness rerun did not finish",
+  "通过": "Passed",
+  "未通过": "Failed",
+  "实测": "Observed",
+  "阈值": "Threshold",
   "在 5 个不同随机种子下波动较小，最大标准差 1.52%。":
     "Across five random seeds the spread stays small, with a maximum standard deviation of 1.52%.",
   "跨时段与区域验证均优于基线，整体性能稳定。":

@@ -18,6 +18,8 @@ from conftest import (
     wait_until,
 )
 
+from omm_api.stage_outputs import StageState, _robustness_report, _validation_report
+from omm_contracts.v1.experiment_summary import ValidationReport
 from test_task_runs_llm_nodes import (
     ANALYSIS_OUTPUT,
     EXPERIMENT_OUTPUT,
@@ -75,6 +77,26 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert experiment_summary["validation"] is not None
     assert experiment_summary["validation"]["verdict"] == VALIDATION_OUTPUT["verdict"]
     assert experiment_summary["validation"]["validation_summary"] == VALIDATION_OUTPUT["validation_summary"]
+    # 稳健性复跑在沙盒里真跑（stub 模型发出三项全过的检验脚本）：判定数字来自
+    # 标记行，投影只带契约七键——过程字段留在活动流，不进正文契约
+    robustness = experiment_summary["validation"]["robustness"]
+    assert robustness is not None, "验证节点沙盒化后，全链里稳健性复跑应真实执行并进投影"
+    assert robustness["executed"] is True and robustness["status"] == "passed"
+    assert robustness["checks_total"] == 3 and robustness["checks_failed"] == 0
+    assert [check["id"] for check in robustness["checks"]] == ["sensitivity", "bootstrap", "baseline"]
+    assert all(check["passed"] is True for check in robustness["checks"])
+    assert robustness["checks"][0] == {
+        "id": "sensitivity",
+        "name": "需求率扰动",
+        "passed": True,
+        "value": 0.05,
+        "threshold": 0.2,
+        "detail": "在阈值内",
+    }
+    assert robustness["summary_text"] == "沙盒复跑稳健性检查 3 项，通过 3 项，全部达标。"
+    assert robustness["reason"] == ""
+    for key in ("attempts", "llm_calls", "summary", "failed_checks", "final_code_artifact", "produced_artifacts"):
+        assert key not in robustness, f"过程字段 {key} 不得进入投影"
 
     document_draft = payload["document_draft"]
     validate_contract("document-draft.schema.json", document_draft)
@@ -153,6 +175,124 @@ def test_stage_outputs_completed_sim_chain_returns_nulls_not_500(
     assert manifest["paper_citation"] is None, "sim 论文阶段无标题等契约字段，引用应为 null"
     kinds = sorted(a["kind"] for a in manifest["artifacts"])
     assert kinds == ["figure", "report"], "成果清单应列出模拟链的两个真实产物"
+
+
+def _validation_with(robustness: dict | None) -> dict:
+    return {
+        "verdict": "pass",
+        "checks": [],
+        "risks": [],
+        "validation_summary": "结果可信",
+        "robustness": robustness,
+    }
+
+
+def test_robustness_projection_fills_unexecuted_shape():
+    """节点如实降级为「仅判读」时只给 {executed, reason}：投影补齐契约七键。"""
+    report = _robustness_report({"executed": False, "reason": "未配置工具端口，跳过稳健性复跑"})
+    assert report == {
+        "executed": False,
+        "status": None,
+        "summary_text": "",
+        "checks": [],
+        "checks_total": 0,
+        "checks_failed": 0,
+        "reason": "未配置工具端口，跳过稳健性复跑",
+    }
+    ValidationReport.model_validate(_validation_with(report))
+
+
+def test_robustness_projection_strips_process_fields_and_recounts():
+    """已执行形状带过程字段（契约 additionalProperties=false 会把接口打成 500）：
+    投影剔除它们；畸形检查项剔除后计数重算，保住 checks_total == len(checks)。"""
+    raw = {
+        "executed": True,
+        "status": "passed",
+        "attempts": 2,
+        "llm_calls": 3,
+        "summary": "模型转述的总结",
+        "failed_checks": [{"id": "sensitivity"}],
+        "final_code_artifact": "art_" + "0" * 32,
+        "produced_artifacts": ["checks.png"],
+        "summary_text": "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：需求率扰动（sensitivity：value 0.25，阈值 0.2）。",
+        "checks": [
+            {
+                "id": "sensitivity",
+                "name": "需求率扰动",
+                "passed": False,
+                "value": 0.25,
+                "threshold": 0.2,
+                "detail": "超出阈值",
+            },
+            # name 缺省回落 id；value 是 bool 不算数字；threshold 允许文字口径
+            {"id": "baseline", "name": "", "passed": True, "value": True, "threshold": "≥ 0.1"},
+            {"id": "", "passed": True, "value": 1},  # 缺 id → 剔除
+            {"id": "bogus", "passed": "yes"},  # passed 非布尔 → 剔除
+            "not-a-dict",
+        ],
+        "checks_total": 5,
+        "checks_failed": 1,
+    }
+    report = _robustness_report(raw)
+    assert set(report) == {
+        "executed",
+        "status",
+        "summary_text",
+        "checks",
+        "checks_total",
+        "checks_failed",
+        "reason",
+    }
+    assert report["checks"] == [
+        {
+            "id": "sensitivity",
+            "name": "需求率扰动",
+            "passed": False,
+            "value": 0.25,
+            "threshold": 0.2,
+            "detail": "超出阈值",
+        },
+        {
+            "id": "baseline",
+            "name": "baseline",
+            "passed": True,
+            "value": None,
+            "threshold": "≥ 0.1",
+            "detail": "",
+        },
+    ]
+    assert report["checks_total"] == 2 and report["checks_failed"] == 1
+    assert report["summary_text"] == raw["summary_text"]
+    assert report["reason"] == ""
+    ValidationReport.model_validate(_validation_with(report))
+
+
+def test_robustness_projection_unfinished_sandbox_and_absent_field():
+    """沙盒会话没跑成（status ≠ passed）：checks 为空、结论句如实说「未完成」；
+    沙盒化之前的运行 / 模拟节点没有该键 → null，而不是编一个「未执行」。"""
+    unfinished = _robustness_report(
+        {
+            "executed": True,
+            "status": "failed",
+            "attempts": 4,
+            "checks": [],
+            "checks_total": 0,
+            "checks_failed": 0,
+            "summary_text": "稳健性检查沙盒复跑未完成（failed），检验结论仅来自评审判读。",
+        }
+    )
+    assert unfinished["executed"] is True and unfinished["status"] == "failed"
+    assert unfinished["checks"] == [] and unfinished["checks_total"] == 0
+    assert "未完成" in unfinished["summary_text"] and unfinished["reason"] == ""
+    ValidationReport.model_validate(_validation_with(unfinished))
+
+    assert _robustness_report(None) is None
+    assert _robustness_report("garbage") is None
+
+    legacy = StageState()
+    legacy.outputs = {"verdict": "pass", "checks": [], "risks": [], "validation_summary": "旧运行"}
+    assert _validation_report(legacy)["robustness"] is None
+    ValidationReport.model_validate(_validation_report(legacy))
 
 
 def test_stage_outputs_requires_ownership(client, second_client, make_run):

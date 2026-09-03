@@ -264,6 +264,67 @@ def _plan_proposal(run_id: str, state: Optional[StageState]) -> Optional[PlanPro
     )
 
 
+def _number_or_none(value: Any) -> Optional[float]:
+    """标记行里的数值；bool 是 int 的子类但不算数字，其它非数值一律 null。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _threshold(value: Any) -> Any:
+    """阈值允许数值或脚本给出的文字口径（如「≤ 0.05」）；空串 / 其它类型 → null。"""
+    number = _number_or_none(value)
+    if number is not None:
+        return number
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
+    """验证节点 ``robustness`` 输出 → 契约 ``robustness_report``（experiment-summary.v1）。
+
+    节点产出两种形状（ValidationNode._execute_checks）：未执行 ``{executed: false,
+    reason}``（工具 / 监督者 / 会话出口 / 实验脚本 / 预算任一缺席）；已执行时还带
+    过程字段（attempts / llm_calls / summary / failed_checks / final_code_artifact /
+    produced_artifacts）。契约七键全必填且 additionalProperties=false：未执行形状
+    补齐空值，过程字段剔除（活动流另有展示）。沙盒化之前的运行与模拟节点没有该键
+    → null（契约允许）。计数按投影后的 checks 重算，保证 ``checks_total ==
+    len(checks)`` 的契约不变量不受个别畸形项被剔除的影响。
+    """
+    if not isinstance(raw, dict):
+        return None
+    executed = raw.get("executed") is True
+    checks: list[dict[str, Any]] = []
+    if executed:
+        for entry in raw.get("checks") or []:
+            if not isinstance(entry, dict):
+                continue
+            check_id = str(entry.get("id") or "").strip()
+            if not check_id or not isinstance(entry.get("passed"), bool):
+                continue
+            checks.append(
+                {
+                    "id": check_id,
+                    "name": str(entry.get("name") or check_id),
+                    "passed": entry["passed"],
+                    "value": _number_or_none(entry.get("value")),
+                    "threshold": _threshold(entry.get("threshold")),
+                    "detail": str(entry.get("detail") or ""),
+                }
+            )
+    status = raw.get("status") if executed else None
+    return {
+        "executed": executed,
+        "status": str(status) if status is not None else None,
+        "summary_text": str(raw.get("summary_text") or "") if executed else "",
+        "checks": checks,
+        "checks_total": len(checks),
+        "checks_failed": sum(1 for check in checks if not check["passed"]),
+        "reason": str(raw.get("reason") or ""),
+    }
+
+
 def _validation_report(state: Optional[StageState]) -> Optional[dict[str, Any]]:
     if state is None:
         return None
@@ -287,6 +348,7 @@ def _validation_report(state: Optional[StageState]) -> Optional[dict[str, Any]]:
         "checks": checks,
         "risks": _strs(outputs.get("risks")),
         "validation_summary": str(outputs.get("validation_summary") or ""),
+        "robustness": _robustness_report(outputs.get("robustness")),
     }
 
 

@@ -1,0 +1,30 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "构造合成需求数据，贪心近似求解并与随机基线对比",
+  "metrics": { "rmse": 0.5, "improvement_pct": 12.3 },
+  "stdout_tail": "OMM_METRICS_JSON: {\"rmse\": 0.5, \"improvement_pct\": 12.3}\n",
+  "experiment_summary": "贪心近似求解并与随机基线对比\n核心指标：{\"rmse\": 0.5}\n产物文件：results.csv",
+  "validation": {
+    "verdict": "concerns",
+    "checks": [
+      { "name": "结果合理性", "result": "pass", "note": "指标数量级正常" },
+      { "name": "稳健性", "result": "warn", "note": "对需求率参数敏感" }
+    ],
+    "risks": ["合成数据外推风险"],
+    "validation_summary": "结果整体可信，但对需求率参数敏感",
+    "robustness": {
+      "executed": true,
+      "status": "passed",
+      "summary_text": "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：需求率扰动（sensitivity：value 0.25，阈值 0.2）。",
+      "checks": [
+        { "id": "sensitivity", "name": "需求率扰动", "passed": false, "value": 0.25, "threshold": 0.2, "detail": "超出阈值" },
+        { "id": "bootstrap", "name": "重采样稳定性", "passed": true, "value": 0.08, "threshold": 0.15, "detail": "在阈值内" },
+        { "id": "baseline", "name": "对基线优势幅度", "passed": true, "value": 0.6, "threshold": "≥ 0.1", "detail": "" }
+      ],
+      "checks_total": 3,
+      "checks_failed": 1,
+      "reason": ""
+    }
+  },
+  "updated_at": "2026-09-03T00:50:00.000000Z"
+}
