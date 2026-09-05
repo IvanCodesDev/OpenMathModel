@@ -203,6 +203,28 @@ def test_happy_path_all_six_stages_succeed(completed_session):
         "模型假设检验：A1「车辆数与预算均为硬约束」未被检验覆盖，须在局限性中说明；"
         "G1「运量趋势在规划期内近似线性」通过（sensitivity_slope）。"
     ) in outline.variables["validation_summary"]
+    # 方案阶段两张表进下游材料（切片 4）：实验卡与总编都拿到所选方案 A 的符号（共享 + A），
+    # 论文另带假设表；总编符号约定只写了 $y_t$ → 节点按表把漏掉的记号补进每章符号约定
+    assert "## 模型符号" in experiment_system
+    assert "- n_k（决策变量｜方案 A）＝k 型车辆配置数［单位：辆；取值：非负整数］" in experiment_system
+    assert "\\hat{y}" not in experiment_system, "方案 B 的符号不进方案 A 的实验"
+    assert outline.variables["model_symbols"].splitlines() == [
+        "- t \\in \\mathcal{T}（集合 / 索引｜共享）＝季度索引［取值：1…T］",
+        "- y_t（参数｜共享）＝第 t 季度运量［单位：万吨；取值：≥ 0］",
+        "- n_k（决策变量｜方案 A）＝k 型车辆配置数［单位：辆；取值：非负整数］",
+    ]
+    assert "- A1【重点验证｜影响高｜方案 A】车辆数与预算均为硬约束（依据：题面）" in outline.variables["model_assumptions"]
+    assert "B1【" not in outline.variables["model_assumptions"]
+    section = next(call for call in completed_session.llm.calls if call.prompt_id == "paper_section.default")
+    assert section.variables["notation"].startswith("| 符号 | 含义 | 单位 |")
+    assert "方案阶段符号表补充" in section.variables["notation"]
+    assert "- $n_k$：k 型车辆配置数（单位：辆；取值：非负整数）" in section.variables["notation"]
+    assert "- $y_t$" not in section.variables["notation"], "总编已写的记号不重复补"
+    (paper_step,) = [step for step in snapshot.steps if step.state is TaskState.PAPER_WRITING]
+    assert paper_step.metrics["notation_filled"] == 2
+    assert paper_step.metrics["quality_warnings"] == [
+        "总编符号约定漏列 2 个方案符号（t \\in \\mathcal{T}、n_k），已按方案符号表补齐",
+    ]
     assert snapshot.outputs[TaskState.PAPER_WRITING.value]["title"] == CANNED_PAPER["title"]
 
     # 模型出口分两条：模板单发（complete）与沙盒会话（chat_text）。
@@ -479,6 +501,11 @@ def test_g1_gate_offers_every_reduced_plan_and_adopting_b_flows_downstream():
     paper_calls = [call for call in session.llm.calls if call.prompt_id == "paper_outline.default"]
     assert "时间序列 + 启发式" in paper_calls[0].variables["chosen_plan"]
     assert "B1「样本平稳可定阶」未被检验覆盖" in paper_calls[0].variables["validation_summary"]
+    # 符号表随选案切换：B 的预测量进实验卡与论文材料，A 的 n_k 不进
+    assert "- \\hat{y}_{t+1}（决策变量｜方案 B）＝下季度运量预测［单位：万吨；取值：≥ 0］" in experiment_system
+    assert "n_k（" not in experiment_system
+    assert "- \\hat{y}_{t+1}（决策变量｜方案 B）" in paper_calls[0].variables["model_symbols"]
+    assert "n_k（" not in paper_calls[0].variables["model_symbols"]
 
     assert_replay_matches(session)
 

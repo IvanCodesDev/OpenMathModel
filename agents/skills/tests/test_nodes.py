@@ -35,13 +35,17 @@ from omm_agent_skills import (
     assumptions_to_verify,
     build_frozen_numbers,
     chosen_plan,
+    complete_notation,
     extract_json,
     gpu_hardware_note,
     load_default_registry,
+    missing_symbols,
     plan_assumptions,
+    plan_symbols,
     render_frozen_numbers,
     render_paper_markdown,
     stub_response,
+    symbol_material,
     unsourced_numbers,
 )
 
@@ -2072,6 +2076,230 @@ def test_paper_material_reports_assumption_coverage(registry):
         "G2「候选点之间需求独立」未通过（demand_corr）；"
         "A2「开店成本与规模线性」未被检验覆盖，须在局限性中说明。"
     )
+
+
+# -- 符号表的下游消费：实验任务卡 / 论文材料 / 总编符号约定兜底 -----------------------
+
+
+PLANNING_SYMBOLS = [
+    {"symbol": "i \\in \\mathcal{I}", "kind": "set", "definition": "候选点索引", "unit": None, "range": "1…N", "plan_id": None},
+    {"symbol": "d_i", "kind": "parameter", "definition": "候选点 i 的需求量", "unit": "件/日", "range": "≥ 0", "plan_id": None},
+    {"symbol": "x_i", "kind": "variable", "definition": "是否在点 i 选址", "unit": None, "range": "{0,1}", "plan_id": "A"},
+    {"symbol": "z", "kind": "objective", "definition": "总成本", "unit": "万元", "range": None, "plan_id": "A"},
+    {"symbol": "T", "kind": "parameter", "definition": "退火温度", "unit": None, "range": "> 0", "plan_id": "B"},
+    {"symbol": "y", "kind": "other", "definition": "", "unit": None, "range": None, "plan_id": None},
+]
+
+
+def planning_with_tables():
+    return dict(planning_with_assumptions(), symbols=[dict(row) for row in PLANNING_SYMBOLS])
+
+
+def paper_prior_with_tables():
+    prior = paper_prior()
+    prior[TaskState.MODEL_PLANNING.value] = planning_with_tables()
+    return prior
+
+
+def test_symbol_helpers_scope_order_and_material():
+    planning = planning_with_tables()
+    rows_a = plan_symbols(planning, "A")
+    assert [row["symbol"] for row in rows_a] == ["i \\in \\mathcal{I}", "d_i", "x_i", "z"], "共享 + 本方案，原顺序；缺定义行忽略"
+    assert [row["symbol"] for row in plan_symbols(planning, "B")] == ["i \\in \\mathcal{I}", "d_i", "T"]
+    assert plan_symbols(PLANNING_OK, "A") == [], "旧运行没有符号表"
+
+    assert symbol_material(rows_a).splitlines() == [
+        "- i \\in \\mathcal{I}（集合 / 索引｜共享）＝候选点索引［取值：1…N］",
+        "- d_i（参数｜共享）＝候选点 i 的需求量［单位：件/日；取值：≥ 0］",
+        "- x_i（决策变量｜方案 A）＝是否在点 i 选址［取值：{0,1}］",
+        "- z（目标函数｜方案 A）＝总成本［单位：万元］",
+    ]
+    assert symbol_material([]) == "无（方案阶段未生成符号表）"
+
+
+def test_notation_completion_ignores_delimiters_and_is_idempotent():
+    rows = plan_symbols(planning_with_tables(), "A")
+    # 总编把 x_i 写成 $x_{i}$、索引写成 \(i \in \mathcal{I}\)：视为同一记号；d_i 与 z 漏了
+    # （「size」里的 z、另一个量 $x_{ij}$ 里的 x_i 都不算出现）
+    notation = (
+        "| 符号 | 含义 |\n| $x_{i}$ | 是否选址 |\n| \\(i \\in \\mathcal{I}\\) | 索引 |\n"
+        "| $x_{ij}$ | problem size 相关的调度量 |"
+    )
+    assert [row["symbol"] for row in missing_symbols(notation, rows)] == ["d_i", "z"]
+    d_and_z = [row for row in rows if row["symbol"] in ("d_i", "z")]
+    assert missing_symbols("目标 $z$ 与需求 $d_{i}$", d_and_z) == [], "单字母记号靠边界识别"
+    assert [row["symbol"] for row in missing_symbols("size 与 $d_{i,t}$", d_and_z)] == ["z"]
+
+    completed, filled = complete_notation(notation, rows)
+    assert [row["symbol"] for row in filled] == ["d_i", "z"]
+    assert completed.endswith(
+        "方案阶段符号表补充（总编符号约定漏列，按方案符号表原样补齐）：\n"
+        "- $d_i$：候选点 i 的需求量（单位：件/日；取值：≥ 0）\n"
+        "- $z$：总成本（单位：万元）"
+    )
+    assert completed.startswith(notation), "原符号约定原样保留，只在末尾追加"
+    # 幂等：续写路径对同一骨架再过一遍，不会重复追加
+    again, filled_again = complete_notation(completed, rows)
+    assert again == completed and filled_again == []
+    # 全覆盖 / 无表：原样返回
+    assert complete_notation(completed, []) == (completed, [])
+    assert complete_notation("", rows)[0].startswith("方案阶段符号表补充")
+
+
+def test_experiment_task_card_carries_the_chosen_plans_symbols(registry):
+    prior = prior_through_planning()
+    prior[TaskState.MODEL_PLANNING.value] = planning_with_tables()
+    node = ExperimentExecutionNode(registry)
+
+    material = node.build_variables(make_ctx(TaskState.EXPERIMENTING, prior=prior))["model_symbols"]
+    assert "- x_i（决策变量｜方案 A）＝是否在点 i 选址［取值：{0,1}］" in material
+    assert "- d_i（参数｜共享）" in material
+    assert "T（参数｜方案 B）" not in material, "只带所选方案与共享符号"
+
+    # 旧运行 / 单次调用路径没有符号表：如实写「无」，模板照常渲染
+    variables = node.build_variables(make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning()))
+    assert variables["model_symbols"] == "无（方案阶段未生成符号表）"
+    rendered = registry.get("experiment_code.sandbox").render({**variables, "data_files": "无"})
+    assert "## 模型符号（方案阶段确认" in rendered and "无（方案阶段未生成符号表）" in rendered
+
+
+def test_paper_materials_carry_both_tables_and_route_by_source_keys(registry):
+    outline = dict(PAPER_OUTLINE_OK, chapters=[
+        {"heading": "1 模型假设", "brief": "按表逐条列出", "target_chars": 600, "source_keys": ["model_assumptions"]},
+        {"heading": "2 符号说明", "brief": "按符号约定列表", "target_chars": 600, "source_keys": ["model_symbols"]},
+        {"heading": "3 模型建立与求解", "brief": "全量材料", "target_chars": 800},
+    ])
+
+    def section_reply(variables):
+        # 「{0,1}」「≥ 0」只出现在符号表里：数字审计得认它们有出处
+        lead = f"决策变量取值 {{0,1}}，需求量 ≥ 0，rmse=0.12。（{variables['chapter_heading']}）"
+        target = int(variables["target_chars"])
+        return stub_response({
+            "content": lead + "析" * max(target - len(lead), 0),
+            "digest": f"{variables['chapter_heading']}摘要",
+        })
+
+    llm = StubLlmPort({
+        "paper_outline.default": stub_response(outline),
+        "paper_section.default": section_reply,
+        "paper_finalize.default": stub_response(PAPER_FINALIZE_OK),
+    })
+    node = PaperWritingNode(registry)
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_tables())
+
+    variables = node.build_variables(ctx)
+    assert variables["model_assumptions"].splitlines()[0] == "- G1【已确认｜影响中｜全局】需求服从泊松分布（依据：题面给定）"
+    assert "B1【" not in variables["model_assumptions"], "论文只带所选方案的假设"
+    assert variables["model_symbols"].splitlines()[2] == "- x_i（决策变量｜方案 A）＝是否在点 i 选址［取值：{0,1}］"
+
+    result = node.run(ctx, make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    rendered = registry.get("paper_outline.default").render(outline_call.variables)
+    assert "## 模型假设表" in rendered and "## 模型符号表" in rendered
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    assert "### 模型假设表" in section_calls[0].variables["materials"]
+    assert "### 模型符号表" not in section_calls[0].variables["materials"]
+    assert "### 模型符号表" in section_calls[1].variables["materials"]
+    assert "### 模型假设表" not in section_calls[1].variables["materials"]
+    for label in ("### 模型假设表", "### 模型符号表", "### 数字冻结清单"):
+        assert label in section_calls[2].variables["materials"], "未指定 source_keys → 全量材料"
+    assert not any("未在冻结清单" in w for w in result.metrics.get("quality_warnings", [])), (
+        "符号取值 / 假设文本里的数字进审计允许集"
+    )
+    assert result.outputs["audit_findings"] == []
+
+
+def test_paper_outline_notation_gets_missing_symbols_filled_and_warned(registry):
+    # PAPER_OUTLINE_OK 的符号约定只有 $x_i$：共享的索引 / 需求量与目标 z 都漏了
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_tables())
+
+    result = node.run(ctx, make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.metrics["notation_filled"] == 3
+    assert result.metrics["quality_warnings"] == [
+        "总编符号约定漏列 3 个方案符号（i \\in \\mathcal{I}、d_i、z），已按方案符号表补齐",
+    ]
+    for call in (c for c in llm.calls if c.prompt_id == "paper_section.default"):
+        notation = call.variables["notation"]
+        assert notation.startswith(PAPER_OUTLINE_OK["notation"])
+        assert "- $d_i$：候选点 i 的需求量（单位：件/日；取值：≥ 0）" in notation
+        assert "$T$" not in notation, "方案 B 的符号不进方案 A 的论文"
+    # 骨架事件存的是总编原始产出（检查点），补齐是节点每趟重算的
+    assert [c.prompt_id for c in llm.calls].count("paper_outline.default") == 1
+
+
+def test_paper_outline_notation_covering_all_symbols_leaves_no_trace(registry):
+    outline = dict(PAPER_OUTLINE_OK, notation=(
+        "| 符号 | 含义 |\n| $i \\in \\mathcal{I}$ | 索引 |\n| $d_{i}$ | 需求 |\n| $x_i$ | 选址 |\n| $z$ | 总成本 |"
+    ))
+
+    def section_reply(variables):
+        lead = f"围绕 rmse=0.12 展开的正文。（{variables['chapter_heading']}）"
+        target = int(variables["target_chars"])
+        return stub_response({
+            "content": lead + "析" * max(target - len(lead), 0),
+            "digest": f"{variables['chapter_heading']}摘要",
+        })
+
+    llm = StubLlmPort({
+        "paper_outline.default": stub_response(outline),
+        "paper_section.default": section_reply,
+        "paper_finalize.default": stub_response(PAPER_FINALIZE_OK),
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_tables()), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert "notation_filled" not in result.metrics and "quality_warnings" not in result.metrics
+    section_call = next(c for c in llm.calls if c.prompt_id == "paper_section.default")
+    assert section_call.variables["notation"] == outline["notation"]
+
+
+def test_paper_resume_path_completes_notation_too(registry):
+    """检查点里的骨架是总编原始产出：续写时同样按方案符号表补齐（幂等，不重复追加）。"""
+    from omm_agent_skills.nodes import _inputs_hash
+
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+    services = make_services(llm)
+    prior = paper_prior_with_tables()
+    services.extras["paper_resume"] = lambda: {
+        "inputs_hash": _inputs_hash(node.build_variables(make_ctx(TaskState.PAPER_WRITING, prior=prior))),
+        "outline": PAPER_OUTLINE_OK,
+        "sections": [
+            {"index": 1, "heading": "1 问题重述", "content": "检查点里的第一章。", "digest": "第一章摘要", "truncated": False},
+        ],
+    }
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=prior), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.metrics["resumed_chapters"] == 1 and result.metrics["notation_filled"] == 3
+    assert llm.calls[0].prompt_id == "paper_section.default"
+    assert llm.calls[0].variables["notation"].count("方案阶段符号表补充") == 1
+
+
+def test_paper_single_call_fallback_receives_both_tables(registry):
+    llm = ScriptedLlmPort({
+        "paper_outline.default": ["不是 JSON", "还是不是 JSON"],
+        "paper_writing.default": [stub_response(PAPER_OK)],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_tables()), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW and result.metrics["fallback"] == "single_call"
+    fallback_call = next(c for c in llm.calls if c.prompt_id == "paper_writing.default")
+    assert "- A1【重点验证｜影响高｜方案 A】预算约束为硬约束（依据：题面）" in fallback_call.variables["model_assumptions"]
+    assert "- z（目标函数｜方案 A）＝总成本［单位：万元］" in fallback_call.variables["model_symbols"]
+    rendered = registry.get("paper_writing.default").render(fallback_call.variables)
+    assert "## 模型符号表" in rendered and "以「模型符号表」为底稿" in rendered
 
 
 # -- PaperWritingNode ----------------------------------------------------------

@@ -370,6 +370,18 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
         ("A1", ["sensitivity"], True),
     ]
     assert robustness["uncovered_focus"] == []
+    # 方案阶段两张表进下游材料（切片 4）：实验任务卡带所选方案 A 的符号（共享 + A）；
+    # 回退整篇生成的论文调用同样拿到假设表与符号表
+    experiment_chat = next(c for c in llm.chat_calls if c.label == ExperimentExecutionNode.prompt_id)
+    experiment_card = next(m["content"] for m in experiment_chat.messages if m["role"] == "system")
+    assert "## 模型符号" in experiment_card
+    assert "- x_i（决策变量｜方案 A）＝调度点 i 是否设站［取值：{0,1}］" in experiment_card
+    (paper_call,) = prompt_calls(llm, "paper_writing.default")
+    assert paper_call.variables["model_symbols"].splitlines() == [
+        "- i \\in \\mathcal{I}（集合 / 索引｜共享）＝调度点索引",
+        "- x_i（决策变量｜方案 A）＝调度点 i 是否设站［取值：{0,1}］",
+    ]
+    assert "- A1【重点验证｜影响高｜方案 A】预算约束为硬约束（依据：题面）" in paper_call.variables["model_assumptions"]
     # 实验最终脚本落在 run 工作区固定路径，复跑读的就是它
     workspace_script = tmp_path / "rt" / "workspaces" / run_id / EXPERIMENT_SCRIPT_PATH
     assert workspace_script.read_text(encoding="utf-8") == EXPERIMENT_CODE

@@ -741,6 +741,10 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
         prompt = messages[-1]["content"]
         if "论文的总编" in prompt:
             seen["outline_prompt"] = prompt
+        if "章节写手" in prompt and "section_notation" not in seen:
+            # 章节卡的「全文符号约定」段：总编原文 + 节点补齐的方案符号
+            segment = prompt.split("## 全文符号约定", 1)[1].split("## 前文各章摘要", 1)[0]
+            seen["section_notation"] = segment.split("\n", 1)[1].strip()
         if "评审专家" in prompt:
             seen["judgement_prompt"] = prompt
         return _stage_router(request)
@@ -770,9 +774,24 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
     assert "- G2【待检验｜影响低｜全局】调度点之间需求独立" in seen["robustness_system"]
     assert "- B1【待检验｜影响中｜方案 B】" in seen["robustness_system"]
     assert "A1【" not in seen["robustness_system"]
+    # 符号表随选案进实验任务卡（切片 4）：共享 + B 的记号（模型写的「Plan B」已归一到 B），A 的 x_i / z 不进
+    assert "## 模型符号" in seen["experiment_system"]
+    assert "- d_i（参数｜共享）＝调度点 i 的需求量［单位：辆；取值：≥ 0］" in seen["experiment_system"]
+    assert "- \\mathcal{N}(s)（集合 / 索引｜方案 B）＝解 s 的邻域" in seen["experiment_system"]
+    assert "x_i（" not in seen["experiment_system"] and "- z（" not in seen["experiment_system"]
     # 总编材料里的选中方案是 B（材料以 JSON 给出，id 与方法名一起核对）
     assert '"id": "B"' in seen["outline_prompt"] and "启发式" in seen["outline_prompt"]
     assert '"id": "A"' not in seen["outline_prompt"]
+    # 方案阶段两张表进论文材料：假设按选案（G1 / G2 / B1），符号以方案符号表为底稿
+    assert "## 模型假设表" in seen["outline_prompt"] and "## 模型符号表" in seen["outline_prompt"]
+    assert "- B1【待检验｜影响中｜方案 B】局部搜索邻域可覆盖可行域" in seen["outline_prompt"]
+    assert "A1【" not in seen["outline_prompt"]
+    assert "- \\mathcal{N}(s)（集合 / 索引｜方案 B）＝解 s 的邻域" in seen["outline_prompt"]
+    assert "- z（" not in seen["outline_prompt"]
+    # 总编的符号约定只写了 $x_{ij}$：漏掉的方案记号由节点按表补进每章的符号约定
+    assert "方案阶段符号表补充" in seen["section_notation"]
+    assert "- $\\mathcal{N}(s)$：解 s 的邻域" in seen["section_notation"]
+    assert seen["section_notation"].startswith(PAPER_OUTLINE_OUTPUT["notation"])
     # 检验脚本回指全局假设 G2 → 论文材料按覆盖表逐条说：G2 通过、B1 未被覆盖进局限性
     assert (
         "模型假设检验：G2「调度点之间需求独立」通过（sensitivity）；"

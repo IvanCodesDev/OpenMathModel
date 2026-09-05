@@ -998,6 +998,126 @@ def assumption_material(rows: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines) or NO_ASSUMPTIONS_NOTE
 
 
+# ── 符号表的下游消费（实验任务卡 / 论文材料共用） ──────────────────────────────
+
+_SYMBOL_KIND_LABELS = {
+    "set": "集合 / 索引",
+    "parameter": "参数",
+    "variable": "决策变量",
+    "objective": "目标函数",
+    "other": "其他",
+}
+NO_SYMBOLS_NOTE = "无（方案阶段未生成符号表）"
+#: 符号比对时抹掉的字符：数学定界符与花括号（``x_{i}`` 与 ``x_i`` 视为同一记号）。
+_SYMBOL_STRIP = re.compile(r"[${}]|\\\(|\\\)|\\\[|\\\]")
+
+
+def _symbol_pattern(symbol: str) -> re.Pattern[str] | None:
+    """记号 → 在符号约定文本里找它的正则：字符间容忍空白，两端不能紧贴字母 / 数字。
+
+    边界规则挡住两类误判：单字母记号 ``z`` 不能靠「size」里的 z 算作出现；``x_i`` 不能
+    靠 ``x_{ij}`` 算作出现（那是另一个量）。
+    """
+    core = re.sub(r"\s+", "", _SYMBOL_STRIP.sub("", symbol))
+    if not core:
+        return None
+    body = r"\s*".join(re.escape(char) for char in core)
+    return re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])")
+
+
+def plan_symbols(planning: Mapping[str, Any], plan_id: Any) -> list[dict[str, Any]]:
+    """选定方案适用的符号：共享（plan_id null）+ 该方案专有，保持方案阶段的顺序。
+
+    只收 symbol / definition 非空的行；旧运行与单次调用路径没有 ``symbols`` 键 →
+    空表，下游一律按「未生成符号表」处理，不报错。
+    """
+    rows: list[dict[str, Any]] = []
+    for item in planning.get("symbols") or []:
+        if not isinstance(item, Mapping):
+            continue
+        symbol = str(item.get("symbol") or "").strip()
+        definition = str(item.get("definition") or "").strip()
+        if not symbol or not definition:
+            continue
+        owner = item.get("plan_id")
+        if owner not in (None, "") and str(owner) != str(plan_id):
+            continue
+        rows.append(
+            {
+                "symbol": symbol,
+                "kind": str(item.get("kind") or "other"),
+                "definition": definition,
+                "unit": _optional_text(item.get("unit")),
+                "range": _optional_text(item.get("range")),
+                "plan_id": None if owner in (None, "") else str(owner),
+            }
+        )
+    return rows
+
+
+def symbol_material(rows: Sequence[Mapping[str, Any]]) -> str:
+    """符号表 → 提示词材料段（每行一条：记号（类型｜范围）＝定义［单位；取值］）。
+
+    记号按契约原样给（不带 ``$``）：实验代码照它命名变量，论文总编再包成行内 LaTeX。
+    """
+    lines: list[str] = []
+    for row in rows:
+        kind = _SYMBOL_KIND_LABELS.get(str(row.get("kind")), str(row.get("kind")))
+        owner = row.get("plan_id")
+        scope_label = "共享" if owner in (None, "") else f"方案 {owner}"
+        line = f"- {row['symbol']}（{kind}｜{scope_label}）＝{row['definition']}"
+        extras = []
+        if row.get("unit"):
+            extras.append(f"单位：{row['unit']}")
+        if row.get("range"):
+            extras.append(f"取值：{row['range']}")
+        if extras:
+            line += f"［{'；'.join(extras)}］"
+        lines.append(line)
+    return "\n".join(lines) or NO_SYMBOLS_NOTE
+
+
+def missing_symbols(
+    notation: str, rows: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """总编的符号约定里漏掉的方案符号（比对忽略定界符 / 花括号 / 字符间空白）。"""
+    haystack = _SYMBOL_STRIP.sub("", notation)
+    missing: list[dict[str, Any]] = []
+    for row in rows:
+        pattern = _symbol_pattern(str(row.get("symbol") or ""))
+        if pattern is not None and pattern.search(haystack) is None:
+            missing.append(dict(row))
+    return missing
+
+
+def complete_notation(
+    notation: str, rows: Sequence[Mapping[str, Any]]
+) -> tuple[str, list[dict[str, Any]]]:
+    """按方案符号表把总编漏掉的记号补进符号约定（确定性，不烧调用；幂等）。
+
+    方案阶段的符号表是全文记号的底稿：总编可以补实验阶段新引入的量，但不能
+    丢掉底稿里的记号——丢了就由这里补一段「方案阶段符号表补充」，各章照样看到。
+    返回 (补齐后的 notation, 补进去的行)。
+    """
+    missing = missing_symbols(notation, rows)
+    if not missing:
+        return notation, []
+    lines = ["方案阶段符号表补充（总编符号约定漏列，按方案符号表原样补齐）："]
+    for row in missing:
+        line = f"- ${row['symbol']}$：{row['definition']}"
+        extras = []
+        if row.get("unit"):
+            extras.append(f"单位：{row['unit']}")
+        if row.get("range"):
+            extras.append(f"取值：{row['range']}")
+        if extras:
+            line += f"（{'；'.join(extras)}）"
+        lines.append(line)
+    base = notation.rstrip()
+    completed = ("\n\n".join([base, "\n".join(lines)]) if base else "\n".join(lines))
+    return completed, missing
+
+
 #: 数据阶段工具名（装配期契约，与 omm_agent_tools 的注册名对齐，不 import）。
 TABLE_PROFILE_TOOL = "table_profile"
 WS_LIST_TOOL = "ws_list"
@@ -1600,6 +1720,9 @@ class ExperimentExecutionNode(LlmSkillNode):
             "model_assumptions": assumption_material(
                 plan_assumptions(planning, plan.get("id"))
             ),
+            # 符号表进实验任务卡：代码里的常量 / 变量 / 指标按方案记号命名与注释，
+            # 论文引用同一套符号时才对得上（§9.1「同一符号贯穿」）。
+            "model_symbols": symbol_material(plan_symbols(planning, plan.get("id"))),
             "available_packages": self._available_packages,
             "hardware_note": self._hardware_note,
         }
@@ -2326,16 +2449,21 @@ _MAX_LENGTH_REVISIONS = 2
 _MATERIAL_LABELS = {
     "problem_analysis": "问题分析结果（JSON）",
     "chosen_plan": "已确认的建模方案（JSON）",
+    "model_assumptions": "模型假设表（方案阶段确认；编号【状态｜影响｜适用范围】内容）",
+    "model_symbols": "模型符号表（方案阶段确认；记号（类型｜范围）＝定义［单位；取值］）",
     "experiment_summary": "实验过程摘要",
     "validation_summary": "检验结论",
     "frozen_numbers": "数字冻结清单（正文数值只准引用此表与上述材料中的数字）",
 }
 #: 冻结清单不受总编的 source_keys 路由影响：每章都必须看到它（§9 硬规则）。
 _ALWAYS_MATERIAL_KEYS = ("frozen_numbers",)
-#: 四份叙述材料（审计允许集的文本来源；冻结清单本身按值进允许集）。
+#: 叙述材料（审计允许集的文本来源；冻结清单本身按值进允许集）。两表也算：
+#: 假设文本与符号取值里的数字（「删行 ≤ 5%」「{0,1}」）是有出处的。
 _NARRATIVE_MATERIAL_KEYS = (
     "problem_analysis",
     "chosen_plan",
+    "model_assumptions",
+    "model_symbols",
     "experiment_summary",
     "validation_summary",
 )
@@ -2460,15 +2588,26 @@ class PaperWritingNode(LlmSkillNode):
         planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
         experiment = ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {}
         validation = ctx.prior_outputs.get(TaskState.VALIDATING.value) or {}
+        plan = chosen_plan(planning, ctx.review_decisions)
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
-            "chosen_plan": json.dumps(
-                chosen_plan(planning, ctx.review_decisions), ensure_ascii=False
+            "chosen_plan": json.dumps(plan, ensure_ascii=False),
+            # 方案阶段的两张表进论文材料：「模型假设」章按表逐条列、「符号说明」与
+            # 全文记号以符号表为底稿（§9.1「同一符号贯穿」）；缺表如实写「无」。
+            "model_assumptions": assumption_material(
+                plan_assumptions(planning, plan.get("id"))
             ),
+            "model_symbols": symbol_material(plan_symbols(planning, plan.get("id"))),
             "experiment_summary": str(experiment.get("experiment_summary") or "无"),
             "validation_summary": _validation_material(validation, ctx.review_decisions),
             "frozen_numbers": render_frozen_numbers(build_frozen_numbers(ctx.prior_outputs)),
         }
+
+    @staticmethod
+    def _plan_symbol_rows(ctx: NodeContext) -> list[dict[str, Any]]:
+        planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
+        plan = chosen_plan(planning, ctx.review_decisions)
+        return plan_symbols(planning, plan.get("id"))
 
     def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
         if services.llm is None:
@@ -2517,7 +2656,17 @@ class PaperWritingNode(LlmSkillNode):
         chapters: list[Mapping[str, Any]] = outline["chapters"]
         total = len(chapters)
         title = str(outline.get("title") or "建模论文草稿").strip()
-        notation = str(outline.get("notation") or "")
+        # 方案符号表是全文记号的底稿：总编漏列的记号确定性补进符号约定（不烧调用），
+        # 只记警告；续写路径拿到的是原始骨架，这里同样过一遍（幂等）。
+        notation, filled_symbols = complete_notation(
+            str(outline.get("notation") or ""), self._plan_symbol_rows(ctx)
+        )
+        warnings: list[str] = []
+        if filled_symbols:
+            warnings.append(
+                f"总编符号约定漏列 {len(filled_symbols)} 个方案符号"
+                f"（{'、'.join(row['symbol'] for row in filled_symbols)}），已按方案符号表补齐"
+            )
         if resume is None:
             # 骨架事件同时是断点续写的检查点：携带输入指纹与完整骨架
             _emit_progress(services, {
@@ -2532,7 +2681,6 @@ class PaperWritingNode(LlmSkillNode):
         section_template = self._registry.get(PAPER_SECTION_PROMPT)
         sections: list[dict[str, str]] = []
         digests: list[str] = []
-        warnings: list[str] = []
         revisions_used = 0
         audit_rewrites = 0
         if resume is not None:
@@ -2684,6 +2832,8 @@ class PaperWritingNode(LlmSkillNode):
             metrics_payload["length_revisions"] = revisions_used
         if audit_rewrites:
             metrics_payload["audit_rewrites"] = audit_rewrites
+        if filled_symbols:
+            metrics_payload["notation_filled"] = len(filled_symbols)
         if warnings:
             metrics_payload["quality_warnings"] = warnings
         return self._publish(
