@@ -48,9 +48,10 @@ def test_run_level_llm_call_cap_hard_stops_with_e310(client, monkeypatch):
 
 
 def test_node_level_token_cap_hard_stops_with_e320(client, monkeypatch):
-    """节点 token 上限只打节点自己：前五阶段各一次调用无碍，论文分章管线
-    在本节点累计越线（stub 每次调用 30 tokens，上限 50 → 第二次章节调用被拦）。"""
-    monkeypatch.setenv("OMM_NODE_MAX_TOKENS", "50")
+    """节点 token 上限只打节点自己：stub 每次调用 30 tokens，上限 100——方案阶段
+    三路提议 + 归约共 4 次调用（第 4 次调用前累计 90，未越线）与其余阶段都无碍；
+    论文分章管线（总编 + 三章 + 统稿）在第 5 次调用前累计 120 越线被拦。"""
+    monkeypatch.setenv("OMM_NODE_MAX_TOKENS", "100")
     _configure_llm(client, monkeypatch)
     run = create_run(client, create_project(client)["id"], goal="优化共享单车调度")
 

@@ -306,6 +306,332 @@ def test_model_planning_requires_prior_analysis(registry):
     assert llm.calls == []
 
 
+# -- ModelPlanningNode：三视角 Proposer 并行提议 → 归约 → G1 三选（H3） ---------
+
+PROPOSALS_BY_VIEW = {
+    "机理建模": {
+        "name": "排队论模型",
+        "approach": "把门店看作 M/M/c 排队系统，用到达率与服务率刻画客流。",
+        "steps": ["估计到达率", "拟合服务时间", "求稳态指标", "按布局枢举比较", "敏感性分析"],
+        "risks": ["到达过程非泊松时失效"],
+        "fit": "题面给出需求服从泊松分布，与排队机理契合",
+    },
+    "数据驱动": {
+        "name": "需求回归预测",
+        "approach": "以历史销量为标签训练梯度提升回归，预测各候选点需求。",
+        "steps": ["整理特征", "交叉验证", "训练回归", "预测候选点", "按预测排序"],
+        "risks": ["历史数据不足时过拟合"],
+        "fit": "依赖历史销量数据，画像显示数据量中等",
+    },
+    "运筹优化": {
+        "name": "整数规划",
+        "approach": "MILP 建模，分支定界求解，预算作硬约束。",
+        "steps": ["定义决策变量", "构建约束", "求解", "敏感性分析", "输出布局"],
+        "risks": ["规模过大时求解超时"],
+        "fit": "预算约束与离散选址天然是整数规划",
+    },
+}
+
+REDUCE_OK = {
+    "plans": [
+        {
+            "id": "A",
+            "name": "整数规划",
+            "approach": "MILP 建模，分支定界求解，预算作硬约束。",
+            "steps": ["定义决策变量", "构建约束", "求解", "敏感性分析", "输出布局"],
+            "risks": ["规模过大时求解超时"],
+            "role": "primary",
+            "source_views": ["operations_research"],
+        },
+        {
+            "id": "B",
+            "name": "排队论模型",
+            "approach": "把门店看作 M/M/c 排队系统。",
+            "steps": ["估计到达率", "拟合服务时间", "求稳态指标"],
+            "risks": ["到达过程非泊松时失效"],
+            "role": "baseline",
+            "source_views": ["mechanism"],
+        },
+        {
+            "id": "C",
+            "name": "需求回归预测",
+            "approach": "梯度提升回归预测候选点需求。",
+            "steps": ["整理特征", "交叉验证", "训练回归"],
+            "risks": ["历史数据不足时过拟合"],
+            "role": "fallback",
+            "source_views": ["data_driven"],
+            "fallback_condition": "历史销量数据覆盖全部候选点时",
+        },
+    ],
+    "recommended_plan_id": "A",
+    "rationale": "预算约束与离散选址是整数规划的典型场景；排队论作对照基线。",
+    "dropped": [],
+    "progress_note": "三路提议各有侧重，推荐整数规划。",
+}
+
+
+def proposer_stub(failing_views=(), barrier=None):
+    """按 view_name 回提案；failing_views 里的视角回垃圾（两次都过不了校验）。"""
+
+    def reply(variables):
+        if barrier is not None:
+            barrier.wait()
+        view = variables["view_name"]
+        if view in failing_views:
+            return "这不是 JSON"
+        return stub_response(PROPOSALS_BY_VIEW[view])
+
+    return reply
+
+
+def make_fanout_services(llm, audit=None):
+    services = make_services(llm)
+    services.extras["subagents"] = SubagentSupervisor(audit=audit)
+    return services
+
+
+def test_model_planning_fans_out_three_proposers_in_parallel_then_reduces(registry):
+    import threading
+
+    # 三路必须同时在飞：屏障要等满 3 个线程才放行，串行执行会在 5 秒后炸掉
+    barrier = threading.Barrier(3, timeout=5)
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(barrier=barrier),
+        "model_planning.reduce": stub_response(REDUCE_OK),
+    })
+    audits = []
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm, audit=audits.append))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason.startswith("请确认建模方案：推荐 A「整数规划」")
+    assert "备选 B「排队论模型」 / C「需求回归预测」" in result.review_reason
+    meta = result.review_meta
+    assert meta["gate"] == "G1" and meta["decision_type"] == "confirm_plan"
+    assert [option["id"] for option in meta["options"]] == [
+        "approve", "adopt:B", "adopt:C", "reject",
+    ]
+    assert meta["options"][0]["recommended"] is True
+    assert meta["options"][0]["label"] == "采用推荐方案 A（整数规划）"
+    assert meta["options"][2]["description"].startswith("条件回退：")
+    assert "触发条件：历史销量数据覆盖全部候选点时" in meta["options"][2]["description"]
+    assert meta["impact"]["proposers"] == {
+        "succeeded": ["mechanism", "data_driven", "operations_research"],
+        "failed": [],
+    }
+    assert [plan["role"] for plan in meta["impact"]["plans"]] == ["primary", "baseline", "fallback"]
+
+    outputs = result.outputs
+    assert [plan["id"] for plan in outputs["plans"]] == ["A", "B", "C"]
+    assert outputs["recommended_plan_id"] == "A"
+    assert outputs["rationale"] == REDUCE_OK["rationale"]
+    assert outputs["progress_note"] == REDUCE_OK["progress_note"]
+    # 三路提议按视角顺序留档（去重前原样），与线程完成顺序无关
+    assert [proposal["view"] for proposal in outputs["proposals"]] == [
+        "mechanism", "data_driven", "operations_research",
+    ]
+    assert outputs["proposer_failures"] == [] and outputs["quality_warnings"] == []
+    assert outputs["llm_attempts"] == 4
+
+    # 调用形状：三次提议人调用都在归约之前；归约拿到三份提案与视角说明
+    prompt_ids = [call.prompt_id for call in llm.calls]
+    assert prompt_ids[:3] == ["model_planning.proposer"] * 3
+    assert prompt_ids[3:] == ["model_planning.reduce"]
+    briefs = {call.variables["view_name"]: call.variables["view_brief"] for call in llm.calls[:3]}
+    assert set(briefs) == {"机理建模", "数据驱动", "运筹优化"}
+    assert all("泊松分布" in call.variables["problem_analysis"] for call in llm.calls[:3])
+    proposals_sent = json.loads(llm.calls[3].variables["proposals"])
+    assert [entry["view"] for entry in proposals_sent] == [
+        "mechanism", "data_driven", "operations_research",
+    ]
+    assert {entry["name"] for entry in proposals_sent} == {"排队论模型", "需求回归预测", "整数规划"}
+
+    # Supervisor 双审计：每路 spawn + result，kind 带视角
+    spawns = [payload for payload in audits if payload["phase"] == "spawn"]
+    results = [payload for payload in audits if payload["phase"] == "result"]
+    assert sorted(payload["tool"] for payload in spawns) == [
+        "subagent:proposer:data_driven",
+        "subagent:proposer:mechanism",
+        "subagent:proposer:operations_research",
+    ]
+    assert [payload["envelope_status"] for payload in results] == ["done"] * 3
+    assert all(payload["tool_tier"] == "readonly" for payload in spawns)
+
+
+def test_model_planning_quorum_two_of_three_reduces_and_records_the_failure(registry):
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(failing_views=("运筹优化",)),
+        "model_planning.reduce": stub_response(REDUCE_OK),
+    })
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason.endswith("；1 路视角提议未成功")
+    assert result.outputs["proposer_failures"] == result.outputs["quality_warnings"]
+    [failure] = result.outputs["proposer_failures"]
+    assert failure.startswith("视角「运筹优化」未成功（failed")
+    succeeded = ["mechanism", "data_driven"]
+    assert [proposal["view"] for proposal in result.outputs["proposals"]] == succeeded
+    assert result.review_meta["impact"]["proposers"]["succeeded"] == succeeded
+    # 归约照做（≥2 路成功），并被告知哪一路缺席
+    proposals_sent = json.loads(llm.calls[-1].variables["proposals"])
+    assert proposals_sent[-1]["status"] == "failed" and "运筹优化" in proposals_sent[-1]["note"]
+    # 失败那一路用掉一次修复重试：2 + 1 + 1 + 归约 1
+    assert result.outputs["llm_attempts"] == 5
+
+
+def test_model_planning_single_success_degrades_to_one_plan_without_reduce(registry):
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(failing_views=("数据驱动", "运筹优化")),
+        "model_planning.reduce": stub_response(REDUCE_OK),
+    })
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert "model_planning.reduce" not in [call.prompt_id for call in llm.calls]
+    plans = result.outputs["plans"]
+    assert [(plan["id"], plan["name"], plan["role"]) for plan in plans] == [
+        ("A", "排队论模型", "primary"),
+    ]
+    assert result.outputs["recommended_plan_id"] == "A"
+    assert result.outputs["rationale"].startswith("按「机理建模」视角的提议作为推荐方案：")
+    assert [option["id"] for option in result.review_meta["options"]] == ["approve", "reject"]
+    assert result.review_reason == "请确认建模方案：推荐 A「排队论模型」；2 路视角提议未成功"
+    [*_, degraded] = result.outputs["quality_warnings"]
+    assert degraded.startswith("仅「机理建模」一路视角成功，未做归约")
+    assert len(result.outputs["proposer_failures"]) == 2
+
+
+def test_model_planning_fails_when_every_proposer_fails(registry):
+    every_view = ("机理建模", "数据驱动", "运筹优化")
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(failing_views=every_view),
+        "model_planning.reduce": stub_response(REDUCE_OK),
+    })
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.FAILED
+    assert result.error.startswith("全部视角的方案提议都未成功：")
+    assert result.error.count("视角「") == 3
+    assert result.metrics["llm_attempts"] == 6
+
+
+def test_model_planning_budget_stop_propagates_instead_of_degrading(registry):
+    """预算硬停（E310）是运行级事实：不能被当成「某一路视角未成功」吞掉。"""
+    from omm_agent_core.errors import AgentError, ErrorCode
+
+    def reply(variables):
+        if variables["view_name"] == "数据驱动":
+            raise AgentError(ErrorCode.BUDGET_RUN, "LLM 调用次数将超过上限 2")
+        return stub_response(PROPOSALS_BY_VIEW[variables["view_name"]])
+
+    llm = StubLlmPort({
+        "model_planning.proposer": reply,
+        "model_planning.reduce": stub_response(REDUCE_OK),
+    })
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    with pytest.raises(AgentError) as raised:
+        node.run(ctx, make_fanout_services(llm))
+
+    assert raised.value.code is ErrorCode.BUDGET_RUN
+    assert "[E310]" in str(raised.value)
+    # 另两路照常跑完（fan-out 已收束），归约没有开始
+    assert [call.prompt_id for call in llm.calls] == ["model_planning.proposer"] * 3
+
+
+def test_model_planning_reduce_failure_falls_back_to_direct_candidates(registry):
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(),
+        "model_planning.reduce": "归约人跑题了",
+    })
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    plans = result.outputs["plans"]
+    assert [(plan["id"], plan["name"], plan["role"]) for plan in plans] == [
+        ("A", "排队论模型", "primary"),
+        ("B", "需求回归预测", "candidate"),
+        ("C", "整数规划", "candidate"),
+    ]
+    assert [plan["source_views"] for plan in plans] == [
+        ["mechanism"], ["data_driven"], ["operations_research"],
+    ]
+    assert [option["id"] for option in result.review_meta["options"]] == [
+        "approve", "adopt:B", "adopt:C", "reject",
+    ]
+    assert result.review_meta["options"][1]["description"].startswith("候选：")
+    [warning] = result.outputs["quality_warnings"]
+    assert warning.startswith("方案归约未成功（")
+    # 归约的一次修复也算进去：3 + 2
+    assert result.outputs["llm_attempts"] == 5
+
+
+def test_model_planning_rejects_an_inconsistent_reduction(registry):
+    bad = dict(REDUCE_OK, plans=[dict(REDUCE_OK["plans"][0]), dict(REDUCE_OK["plans"][1], id="A")])
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(),
+        "model_planning.reduce": stub_response(bad),
+    })
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.FAILED
+    assert "方案 id 'A' 重复" in result.error
+
+
+def test_model_planning_fanout_can_run_unattended(registry):
+    llm = StubLlmPort({
+        "model_planning.proposer": proposer_stub(),
+        "model_planning.reduce": stub_response(REDUCE_OK),
+    })
+    node = ModelPlanningNode(registry, require_confirmation=False)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert [plan["id"] for plan in result.outputs["plans"]] == ["A", "B", "C"]
+    assert result.metrics == {"llm_attempts": 4}
+
+
+def test_model_planning_without_views_keeps_the_single_call_path(registry):
+    llm = StubLlmPort({"model_planning.default": stub_response(PLANNING_OK)})
+    node = ModelPlanningNode(registry, proposer_views=())
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_meta is None
+    assert [call.prompt_id for call in llm.calls] == ["model_planning.default"]
+
+
+def test_chosen_plan_honours_the_g1_ledger():
+    assert chosen_plan(PLANNING_OK)["id"] == "A"
+    assert chosen_plan(PLANNING_OK, {"MODEL_PLANNING": "approve"})["id"] == "A"
+    assert chosen_plan(PLANNING_OK, {"MODEL_PLANNING": "adopt:B"})["id"] == "B"
+    # 台账指向不存在的方案（旧运行重做后 id 变了）：回到推荐案而不是炸
+    assert chosen_plan(PLANNING_OK, {"MODEL_PLANNING": "adopt:Z"})["id"] == "A"
+
+
 # -- shared fixtures for the downstream stages --------------------------------
 
 

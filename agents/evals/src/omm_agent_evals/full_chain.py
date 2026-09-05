@@ -23,7 +23,7 @@ canned constants + build functions + a golden event-type trajectory.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,7 +56,13 @@ from omm_agent_skills import (
 )
 from omm_agent_tools import failure_detail, summarize
 
-from .scenario import CANNED_ANALYSIS, CANNED_PLANNING, PROBLEM_STATEMENT
+from .scenario import (
+    CANNED_ANALYSIS,
+    CANNED_PLANNING,
+    CANNED_REDUCE,
+    PROBLEM_STATEMENT,
+    canned_proposer,
+)
 
 # -- canned answers for the four stages scenario.py does not stub -------------
 # Same problem domain as CANNED_ANALYSIS/CANNED_PLANNING (freight-volume
@@ -455,7 +461,9 @@ def canned_sandbox_agent(
     return reply
 
 
-def build_full_chain_llm() -> StubLlmPort:
+def build_full_chain_llm(
+    overrides: Mapping[str, str | Callable[[dict[str, Any]], str]] | None = None,
+) -> StubLlmPort:
     """Stub responses for every prompt id the six real nodes may consult.
 
     Two channels, mirroring production: template calls (``complete``) for the
@@ -466,18 +474,24 @@ def build_full_chain_llm() -> StubLlmPort:
 
     The paper stage is a multipass pipeline (outline → sections → finalize);
     ``paper_writing.default`` stays stubbed so the single-call fallback path
-    remains exercisable from evals.
+    remains exercisable from evals. ``overrides`` replaces individual template
+    stubs (e.g. a proposer that fails for one view to drive the quorum path).
     """
     return StubLlmPort(
         {
             "problem_analysis.default": stub_response(CANNED_ANALYSIS, fenced=True),
             "data_preparation.default": stub_response(CANNED_PREPARATION),
+            # 方案阶段（H3）：三路 Proposer 并行 + 一次归约；default 只在无监督者
+            # 的装配里被消费，本会话有监督者，留着是让回落路径仍可从评测触达
             "model_planning.default": stub_response(CANNED_PLANNING),
+            "model_planning.proposer": canned_proposer,
+            "model_planning.reduce": stub_response(CANNED_REDUCE),
             "validating.default": stub_response(CANNED_VALIDATION),
             "paper_outline.default": stub_response(CANNED_PAPER_OUTLINE),
             "paper_section.default": canned_paper_section,
             "paper_finalize.default": stub_response(CANNED_PAPER_FINALIZE),
             "paper_writing.default": stub_response(CANNED_PAPER),
+            **dict(overrides or {}),
         },
         chat_scripts={
             ExperimentExecutionNode.prompt_id: [
@@ -581,12 +595,17 @@ def build_full_chain_session(
 
 #: Template (``complete``) prompt ids in stage order. The experiment stage is
 #: absent by design: it is a sandbox agent now, driven through ``chat_text``
-#: conversations (see :data:`FULL_CHAIN_CHAT_SEQUENCE`). The paper stage is a
-#: multipass pipeline: outline → one call per chapter → finalize.
+#: conversations (see :data:`FULL_CHAIN_CHAT_SEQUENCE`). The planning stage is
+#: three parallel proposers (same template id, so the recorded order is stable
+#: whichever thread lands first) followed by one reduce call. The paper stage
+#: is a multipass pipeline: outline → one call per chapter → finalize.
 FULL_CHAIN_PROMPT_SEQUENCE = [
     "problem_analysis.default",
     "data_preparation.default",
-    "model_planning.default",
+    "model_planning.proposer",
+    "model_planning.proposer",
+    "model_planning.proposer",
+    "model_planning.reduce",
     "validating.default",
     "paper_outline.default",
     "paper_section.default",

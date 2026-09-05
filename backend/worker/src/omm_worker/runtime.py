@@ -16,6 +16,7 @@ Execution-plane rules implemented here (PROJECT_STRUCTURE / system-overview):
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -242,6 +243,14 @@ class WorkerRuntime:
             registry.register(spec)
         # 最小授权：允许列表与调用方层级封顶 execute；工具事件
         # 经引擎 record_external 落日志（序列分配必须留在引擎单路径上）。
+        # 方案阶段的三路 Proposer 子代理并行（H3 fan-out），审计会从多个线程到达：
+        # 引擎的 emit→apply 单路径不是线程安全的，外部记录一律经同一把锁串行。
+        record_lock = threading.Lock()
+
+        def record(event_type: EventType, payload: dict[str, Any]) -> None:
+            with record_lock:
+                engine.record_external(snapshot, event_type, payload)
+
         services.tools = RecordingInvoker(
             registry.with_allowlist(
                 {
@@ -253,18 +262,14 @@ class WorkerRuntime:
                     "env_probe",
                 }
             ),
-            recorder=lambda event_type, payload: engine.record_external(
-                snapshot, event_type, payload
-            ),
+            recorder=record,
             caller_max_tier="execute",
         )
         # 沙盒执行体（H3）：清洗/实验节点经监督者派发子代理；spawn 与结果
         # 审计走 record_external 落 TOOL_CALLED（payload.tool="subagent:<kind>"，
         # §8.3），与工具调用同一条事件序列（与 API 侧落 run.log 的定位同构）。
         services.extras["subagents"] = SubagentSupervisor(
-            audit=lambda payload: engine.record_external(
-                snapshot, EventType.TOOL_CALLED, payload
-            )
+            audit=lambda payload: record(EventType.TOOL_CALLED, payload)
         )
         return engine, snapshot
 

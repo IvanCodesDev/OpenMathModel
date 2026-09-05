@@ -43,11 +43,14 @@ from .full_chain import (
 from .scenario import (
     CANNED_ANALYSIS,
     CANNED_PLANNING,
+    CANNED_PROPOSALS_BY_VIEW,
+    CANNED_REDUCE,
     EXPERIMENT_CODE,
     GOLDEN_EVENT_TYPES,
     PROBLEM_STATEMENT,
     build_llm,
     build_runtime,
+    canned_proposer,
 )
 
 __all__ = [
@@ -59,6 +62,8 @@ __all__ = [
     "CANNED_PAPER_OUTLINE",
     "CANNED_PLANNING",
     "CANNED_PREPARATION",
+    "CANNED_PROPOSALS_BY_VIEW",
+    "CANNED_REDUCE",
     "CANNED_ROBUSTNESS",
     "CANNED_VALIDATION",
     "CANNED_VALIDATION_CODE",
@@ -81,6 +86,7 @@ __all__ = [
     "build_llm",
     "build_runtime",
     "canned_paper_section",
+    "canned_proposer",
     "canned_sandbox_agent",
     "robustness_success",
     "sandbox_failure",

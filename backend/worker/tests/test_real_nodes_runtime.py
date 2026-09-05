@@ -86,6 +86,55 @@ PLANNING_OK = {
     "rationale": "数据规模中等，精确解可行",
 }
 
+#: 方案阶段（H3）：三视角提议人各回一案，归约桩把它们收成 PLANNING_OK 的 A/B
+#: （多出 role / source_views 两个归约字段；投影只取契约五键，下游断言不漂移）。
+PROPOSAL_BY_VIEW = {
+    "机理建模": {
+        "name": "排队论",
+        "approach": "把调度点当排队系统",
+        "steps": ["估计到达率", "求稳态指标", "比较布局"],
+        "risks": ["到达非泊松"],
+        "fit": "机理可解释",
+    },
+    "数据驱动": {
+        "name": "需求预测",
+        "approach": "回归预测各点需求",
+        "steps": ["整理特征", "交叉验证", "预测"],
+        "risks": ["数据不足"],
+        "fit": "依赖历史数据",
+    },
+    "运筹优化": {
+        "name": "整数规划",
+        "approach": "MILP 建模",
+        "steps": ["定义变量", "求解"],
+        "risks": ["规模过大求解慢"],
+        "fit": "离散调度天然是整数规划",
+    },
+}
+
+
+def proposer_reply(variables):
+    return stub_response(PROPOSAL_BY_VIEW[variables["view_name"]])
+
+
+REDUCE_OK = {
+    **PLANNING_OK,
+    "plans": [
+        {
+            **PLANNING_OK["plans"][0],
+            "role": "primary",
+            "source_views": ["operations_research"],
+        },
+        {
+            **PLANNING_OK["plans"][1],
+            "role": "baseline",
+            "source_views": ["mechanism", "data_driven"],
+        },
+    ],
+    "dropped": [],
+    "progress_note": "三路提议归约为两案，推荐整数规划。",
+}
+
 #: 沙箱真实执行的实验脚本：写产物文件并打印指标行。
 #: newline='' 禁止平台换行转换，产物字节在 Windows 与 POSIX 上一致。
 EXPERIMENT_CODE = (
@@ -139,7 +188,10 @@ def stage_responses(**overrides):
     responses = {
         "problem_analysis.default": stub_response(ANALYSIS_OK),
         "data_preparation.default": stub_response(PREPARATION_OK),
+        # 方案阶段走三路提议 + 归约；default 只在无监督者时才会被消费（worker 有）
         "model_planning.default": stub_response(PLANNING_OK),
+        "model_planning.proposer": proposer_reply,
+        "model_planning.reduce": stub_response(REDUCE_OK),
         "validating.default": stub_response(VALIDATION_OK),
         # 论文阶段是分章多轮管线：总编规划（paper_outline）在本桩给非法输出，
         # 节点走「总编失败回退整篇单次生成」路径消费 paper_writing 桩——worker
@@ -244,8 +296,9 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
 
     snapshot = runtime.get_snapshot(run_id)
     assert snapshot.state is TaskState.NEEDS_REVIEW
-    # 审批文案来自 LLM 规划节点（而非模拟节点），审批门确实由真实节点触发
-    assert snapshot.review.reason == "请确认建模方案（A/B）后继续实验"
+    # 审批文案来自 LLM 规划节点（而非模拟节点），审批门确实由真实节点触发；
+    # 归约后的推荐 / 备选案点名进文案（G1 三选，H3）
+    assert snapshot.review.reason == "请确认建模方案：推荐 A「整数规划」；备选 B「启发式」"
     assert snapshot.review.resume_state is TaskState.MODEL_PLANNING
     # goal → problem_statement 的装配映射真实生效
     first = llm.calls[0]
@@ -304,6 +357,22 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     events = runtime.events.load(run_id)
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     tool_events = [e for e in events if e.event_type is EventType.TOOL_CALLED]
+    # 方案阶段：三路 Proposer 子代理并行，spawn / result 各三条审计；三路的到达
+    # 顺序随线程调度而变，只断言集合与相位，不断言先后。
+    proposer_events = [
+        e for e in tool_events if e.payload["tool"].startswith("subagent:proposer:")
+    ]
+    spawns = [e for e in proposer_events if e.payload["phase"] == "spawn"]
+    results = [e for e in proposer_events if e.payload["phase"] == "result"]
+    assert sorted(e.payload["tool"] for e in spawns) == [
+        "subagent:proposer:data_driven",
+        "subagent:proposer:mechanism",
+        "subagent:proposer:operations_research",
+    ]
+    assert [e.payload["envelope_status"] for e in results] == ["done", "done", "done"]
+    assert {e.payload["tool_tier"] for e in spawns} == {"readonly"}
+    assert snapshot.outputs["MODEL_PLANNING"]["plans"][1]["role"] == "baseline"
+    tool_events = [e for e in tool_events if e not in proposer_events]
     # 数据阶段画像前置一条 ws_list（无数据文件，清洗如实跳过）；实验阶段依次：
     # 任务卡数据清单 ws_list → 节点侧 env_probe（复现指纹）→ 沙盒 python_run
     # → 断言取证 ws_list（验收基于工作区证据而非模型自述）→ ws_write 落最终脚本；
@@ -459,7 +528,9 @@ def test_crash_midway_fresh_runtime_resumes_to_completion(tmp_path):
     for prompt_id, expected in {
         "problem_analysis.default": 1,
         "data_preparation.default": 1,
-        "model_planning.default": 1,
+        "model_planning.default": 0,
+        "model_planning.proposer": 3,
+        "model_planning.reduce": 1,
         "validating.default": 2,
         "paper_writing.default": 1,
     }.items():
@@ -500,7 +571,10 @@ def test_reject_redoes_planning_and_asks_again(tmp_path):
         (1, StepStatus.SUCCEEDED),
         (2, StepStatus.SUCCEEDED),
     ]
-    assert len(prompt_calls(llm, "model_planning.default")) == 2
+    # 重做 = 三路提议与归约整个重来一遍
+    assert len(prompt_calls(llm, "model_planning.proposer")) == 6
+    assert len(prompt_calls(llm, "model_planning.reduce")) == 2
+    assert prompt_calls(llm, "model_planning.default") == []
 
     # 审批事件轨迹：请求 → 拒绝 → 重做 → 再请求；拒绝原因落在事件日志里
     events = runtime.events.load(run_id)

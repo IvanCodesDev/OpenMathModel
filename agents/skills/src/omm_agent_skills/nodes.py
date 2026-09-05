@@ -24,10 +24,12 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from typing import Any
 
 from omm_agent_core import NodeContext, NodeResult, NodeServices, TaskState
+from omm_agent_core.errors import AgentError
 from omm_agent_core.models import ToolResult
 from omm_agent_harness import (
     LoopBudget,
@@ -263,15 +265,160 @@ class ProblemAnalysisNode(LlmSkillNode):
         return super().to_result(parsed, attempts)
 
 
+# ── 方案阶段（H3）：三视角 Proposer 并行提议 → 归约 → G1 三选 ──────────────
+
+
+@dataclass(frozen=True)
+class ProposerView:
+    """一路提议视角（§8.4：多样性由 SpawnSpec 固定视角保证，不靠温度）。
+
+    ``id`` 进 SpawnSpec.kind（``proposer:<id>``）与审计事件；``name`` / ``brief``
+    进提议人 prompt。
+    """
+
+    id: str
+    name: str
+    brief: str
+
+
+#: §8.2 角色目录：Proposer ×3（机理 / 数据驱动 / 运筹）。
+PROPOSER_VIEWS: tuple[ProposerView, ...] = (
+    ProposerView(
+        "mechanism",
+        "机理建模",
+        "从问题的内在机理出发：守恒关系、动力学、微分 / 差分方程、排队、博弈、"
+        "元胞自动机等解释性模型；参数要有物理或经济含义，结论可被机理解释；"
+        "数据用于标定参数与检验，而不是模型本身。",
+    ),
+    ProposerView(
+        "data_driven",
+        "数据驱动",
+        "从数据出发：统计回归、时间序列、聚类 / 分类、树模型与神经网络等以预测"
+        "精度与泛化为目标的方法；强调特征工程、交叉验证、基线对比与不确定性"
+        "量化；数据量不支持时如实降级到简单统计模型。",
+    ),
+    ProposerView(
+        "operations_research",
+        "运筹优化",
+        "把问题写成决策变量 + 目标函数 + 约束：线性 / 整数 / 非线性规划、多目标、"
+        "动态规划、图论与网络流，以及规模过大时的启发式与元启发式；强调可解性、"
+        "最优性证明或界，以及对参数的敏感性。",
+    ),
+)
+
+PROPOSER_PROMPT_ID = "model_planning.proposer"
+REDUCE_PROMPT_ID = "model_planning.reduce"
+#: 提议人 Envelope 的 output_schema_id（§8.3 协议字段；校验器在本模块）。
+PROPOSAL_SCHEMA_ID = "model-planning-proposal.v1"
+
+#: quorum（§8.4）：≥2 路成功走归约；只剩 1 路降级为单案（记警告、卡片点明）；
+#: 0 路成功节点失败（引擎重试一次）。
+PROPOSER_QUORUM = 2
+
+#: G1 选项 id。approve 保留（= 采用推荐案；既有 e2e / 金轨迹 / 前端 CTA 都用它），
+#: 其它候选用 adopt:<plan_id>；reject 由控制面特判为「退回重做方案」。
+G1_APPROVE_OPTION_ID = "approve"
+G1_REJECT_OPTION_ID = "reject"
+ADOPT_OPTION_PREFIX = "adopt:"
+
+PLAN_ROLE_LABELS = {
+    "primary": "主候选",
+    "baseline": "可用基线",
+    "fallback": "条件回退",
+    "candidate": "候选",
+}
+
+_PROPOSAL_KEYS = ("view", "view_name", "name", "approach", "steps", "risks", "fit")
+
+
+def _clean_strs(value: Any) -> list[str]:
+    """列表项转字符串并去掉空白项（模型偶尔回空串 / 数字）。"""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _proposal_problems(output: Mapping[str, Any]) -> list[str]:
+    """提议人 Envelope 的形状校验（Supervisor 的 output_validator，E520）。"""
+    problems: list[str] = []
+    for key in ("name", "approach", "fit"):
+        if not str(output.get(key) or "").strip():
+            problems.append(f"{key} 为空")
+    steps = output.get("steps")
+    if not isinstance(steps, list) or not any(str(step).strip() for step in steps):
+        problems.append("steps 为空")
+    if not isinstance(output.get("risks"), list):
+        problems.append("risks 不是列表")
+    return problems
+
+
+def _plan_set_problems(reduced: Mapping[str, Any]) -> list[str]:
+    """方案卡集合的不变量：id 唯一、推荐项存在、每张卡五键齐且非空。"""
+    plans = reduced.get("plans")
+    if not isinstance(plans, list) or not plans:
+        return ["plans 为空"]
+    problems: list[str] = []
+    ids: list[str] = []
+    for index, plan in enumerate(plans):
+        if not isinstance(plan, Mapping):
+            problems.append(f"plans[{index}] 不是对象")
+            continue
+        plan_id = str(plan.get("id") or "").strip()
+        if not plan_id:
+            problems.append(f"plans[{index}].id 为空")
+        elif plan_id in ids:
+            problems.append(f"方案 id {plan_id!r} 重复")
+        ids.append(plan_id)
+        for key in ("name", "approach"):
+            if not str(plan.get(key) or "").strip():
+                problems.append(f"plans[{index}].{key} 为空")
+        steps = plan.get("steps")
+        if not isinstance(steps, list) or not any(str(step).strip() for step in steps):
+            problems.append(f"plans[{index}].steps 为空")
+        if not isinstance(plan.get("risks"), list):
+            problems.append(f"plans[{index}].risks 不是列表")
+    if reduced.get("recommended_plan_id") not in ids:
+        problems.append("recommended_plan_id does not reference a returned plan")
+    return problems
+
+
+def _plan_blurb(plan: Mapping[str, Any]) -> str:
+    """G1 选项 description：角色 + 思路首句（卡片版面有限）。"""
+    role = PLAN_ROLE_LABELS.get(str(plan.get("role") or ""), PLAN_ROLE_LABELS["candidate"])
+    approach = str(plan.get("approach") or "").strip()
+    lead = re.split(r"(?<=[。；;.!?！？])", approach, maxsplit=1)[0].strip() or approach
+    if len(lead) > 80:
+        lead = lead[:79] + "…"
+    condition = str(plan.get("fallback_condition") or "").strip()
+    if condition:
+        return f"{role}：{lead}（触发条件：{condition}）"
+    return f"{role}：{lead}"
+
+
 class ModelPlanningNode(LlmSkillNode):
+    """方案阶段：三视角 Proposer 并行提议 → 归约 → G1 必停（三选）。
+
+    - 有 ``subagents`` 监督者时：每个视角一个 ``proposer:<view>`` 子代理（readonly、
+      预算切片、spawn / 结果双审计），线程并行 fan-out；≥2 路成功走一次归约调用
+      （去重、定主候选 / 基线 / 条件回退）；只剩 1 路降级为单案并记警告；0 路失败。
+    - 无监督者（旧装配 / 单节点测试）或 ``proposer_views`` 为空：走 v3.21 的单次
+      调用路径，行为与载荷逐字节不变（fan-out 是配置不是架构，§17）。
+    """
+
     prompt_id = "model_planning.default"
     state = TaskState.MODEL_PLANNING
 
-    def __init__(self, registry: PromptRegistry, require_confirmation: bool = True) -> None:
+    def __init__(
+        self,
+        registry: PromptRegistry,
+        require_confirmation: bool = True,
+        proposer_views: Sequence[ProposerView] = PROPOSER_VIEWS,
+    ) -> None:
         super().__init__(registry)
         # Plan confirmation is the product's human gate (roadmap: 方案 A/B 生成、
         # 用户确认). Evals/automation may disable it explicitly.
         self._require_confirmation = require_confirmation
+        self._views = tuple(proposer_views)
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value)
@@ -306,6 +453,268 @@ class ModelPlanningNode(LlmSkillNode):
             outputs=parsed, metrics={"llm_attempts": attempts}
         )
 
+    # -- fan-out path ------------------------------------------------------------
+
+    def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
+        if services.llm is None:
+            return NodeResult.failed("no LLM port configured for this run")
+        supervisor = (services.extras or {}).get("subagents")
+        if not self._views or supervisor is None:
+            return super().run(ctx, services)
+        try:
+            variables = self.build_variables(ctx)
+        except KeyError as exc:
+            return NodeResult.failed(f"missing required input: {exc}")
+
+        proposals, failures, llm_calls = self._propose(ctx, services, supervisor, variables)
+        if not proposals:
+            return NodeResult.failed(
+                "全部视角的方案提议都未成功：" + "；".join(failures),
+                metrics={"llm_attempts": llm_calls},
+            )
+
+        warnings = list(failures)
+        reduced: dict[str, Any] | None = None
+        if len(proposals) >= PROPOSER_QUORUM:
+            reduced, attempts, error = self._reduce(services, variables, proposals, failures)
+            llm_calls += attempts
+            if reduced is None:
+                warnings.append(f"方案归约未成功（{error}），按视角顺序直接列为候选")
+        else:
+            warnings.append(
+                f"仅「{proposals[0]['view_name']}」一路视角成功，未做归约：只有一套候选方案"
+            )
+        if reduced is None:
+            reduced = self._direct_plans(proposals)
+        problems = _plan_set_problems(reduced)
+        if problems:
+            return NodeResult.failed(
+                "方案归约结果不合法：" + "；".join(problems),
+                metrics={"llm_attempts": llm_calls},
+            )
+
+        outputs: dict[str, Any] = {
+            "plans": [dict(plan) for plan in reduced["plans"]],
+            "recommended_plan_id": reduced["recommended_plan_id"],
+            "rationale": reduced.get("rationale"),
+            "progress_note": reduced.get("progress_note"),
+            "dropped": list(reduced.get("dropped") or []),
+            # 三路提议的原样留档（去重前）：论文 / 复盘可回看被合并或舍弃的思路
+            "proposals": [
+                {key: proposal[key] for key in _PROPOSAL_KEYS} for proposal in proposals
+            ],
+            "proposer_failures": list(failures),
+            "quality_warnings": warnings,
+            "llm_attempts": llm_calls,
+        }
+        if not self._require_confirmation:
+            return NodeResult.succeeded(outputs=outputs, metrics={"llm_attempts": llm_calls})
+        reason, meta = self._g1_review(reduced, proposals, failures)
+        return NodeResult.needs_review(reason=reason, outputs=outputs, review_meta=meta)
+
+    def _propose(
+        self,
+        ctx: NodeContext,
+        services: NodeServices,
+        supervisor: Any,
+        variables: Mapping[str, str],
+    ) -> tuple[list[dict[str, Any]], list[str], int]:
+        """三路视角并行提议（每路一个子代理），按视角顺序返回成功的提案。"""
+        governor = (services.extras or {}).get("budget_governor")
+        budgets: RunBudget = (
+            governor.subagent_slice() if governor is not None else RunBudget()
+        )
+        template = self._registry.get(PROPOSER_PROMPT_ID)
+        analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value) or {}
+
+        def spawn_one(
+            view: ProposerView,
+        ) -> tuple[ProposerView, ResultEnvelope | None, int, str, AgentError | None]:
+            trace: dict[str, Any] = {"attempts": 0, "error": "", "agent_error": None}
+
+            def runner(_spec: SpawnSpec) -> ResultEnvelope:
+                try:
+                    parsed, attempts, error = complete_validated(
+                        services,
+                        template,
+                        {**variables, "view_name": view.name, "view_brief": view.brief},
+                    )
+                except AgentError as exc:
+                    # 预算硬停（E31x/E32x）是运行级事实，不是这一路的软失败：
+                    # 留住异常对象，fan-out 收束后按原样抛给节点外层（与单次调用
+                    # 路径同一条 _BudgetGuardedNode 出口）；Supervisor 照常收割审计
+                    trace["agent_error"] = exc
+                    raise
+                trace["attempts"] = attempts
+                if parsed is None:
+                    trace["error"] = str(error or "模型输出未通过校验")
+                    return ResultEnvelope(status="failed")
+                return ResultEnvelope(status="done", output=dict(parsed))
+
+            try:
+                envelope = supervisor.spawn(
+                    SpawnSpec(
+                        kind=f"proposer:{view.id}",
+                        goal=f"从「{view.name}」视角提出一套可执行的建模方案",
+                        context_slice={
+                            "view": view.id,
+                            "problem_analysis": analysis,
+                            "data_profile": variables["data_profile"],
+                        },
+                        toolset=(),
+                        tool_tier="readonly",
+                        budgets=budgets,
+                        output_schema_id=PROPOSAL_SCHEMA_ID,
+                    ),
+                    runner,
+                    parent_tier="readonly",
+                    output_validator=lambda output: _proposal_problems(output),
+                )
+            except AgentError as exc:
+                # 装配 / 切片缺陷（E510 等）：这一路按未成功计，不炸整个节点
+                return view, None, trace["attempts"], f"{exc.code.value}：{exc}", None
+            return view, envelope, trace["attempts"], trace["error"], trace["agent_error"]
+
+        with ThreadPoolExecutor(max_workers=max(1, len(self._views))) as pool:
+            outcomes = list(pool.map(spawn_one, self._views))
+
+        for _view, _envelope, _attempts, _error, agent_error in outcomes:
+            if agent_error is not None and agent_error.code.value.startswith("E3"):
+                raise agent_error
+
+        proposals: list[dict[str, Any]] = []
+        failures: list[str] = []
+        llm_calls = 0
+        for view, envelope, attempts, error, _agent_error in outcomes:
+            llm_calls += attempts
+            if envelope is not None and envelope.ok and envelope.output is not None:
+                proposals.append({
+                    "view": view.id,
+                    "view_name": view.name,
+                    "name": str(envelope.output.get("name") or "").strip(),
+                    "approach": str(envelope.output.get("approach") or "").strip(),
+                    "steps": _clean_strs(envelope.output.get("steps")),
+                    "risks": _clean_strs(envelope.output.get("risks")),
+                    "fit": str(envelope.output.get("fit") or "").strip(),
+                })
+                continue
+            detail = envelope.status if envelope is not None else "spawn 被拒绝"
+            if envelope is not None and envelope.error_code:
+                detail += f" {envelope.error_code}"
+            if error:
+                detail += f"，{error}"
+            failures.append(f"视角「{view.name}」未成功（{detail}）")
+        return proposals, failures, llm_calls
+
+    def _reduce(
+        self,
+        services: NodeServices,
+        variables: Mapping[str, str],
+        proposals: Sequence[Mapping[str, Any]],
+        failures: Sequence[str],
+    ) -> tuple[dict[str, Any] | None, int, str | None]:
+        """一次归约调用：去重、定角色（主候选 / 基线 / 条件回退）、给推荐理由。"""
+        template = self._registry.get(REDUCE_PROMPT_ID)
+        payload: list[dict[str, Any]] = [dict(proposal) for proposal in proposals]
+        for failure in failures:
+            payload.append({"status": "failed", "note": failure})
+        return complete_validated(
+            services,
+            template,
+            {
+                "proposals": json.dumps(payload, ensure_ascii=False),
+                "problem_analysis": variables["problem_analysis"],
+                "data_profile": variables["data_profile"],
+            },
+        )
+
+    @staticmethod
+    def _direct_plans(proposals: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """归约不可用时的降级：按视角顺序直接列为候选，第一路为推荐。"""
+        plans: list[dict[str, Any]] = []
+        for index, proposal in enumerate(proposals[:3]):
+            plans.append({
+                "id": "ABC"[index],
+                "name": proposal["name"],
+                "approach": proposal["approach"],
+                "steps": list(proposal["steps"]),
+                "risks": list(proposal["risks"]),
+                "role": "primary" if index == 0 else "candidate",
+                "source_views": [proposal["view"]],
+            })
+        lead = proposals[0]
+        rationale = f"按「{lead['view_name']}」视角的提议作为推荐方案：{lead['fit']}"
+        if len(proposals) > 1:
+            rationale += "；其余视角的提议未经归约、按顺序列为候选，请对照取舍"
+        return {
+            "plans": plans,
+            "recommended_plan_id": "A",
+            "rationale": rationale,
+            "progress_note": None,
+            "dropped": [],
+        }
+
+    @staticmethod
+    def _g1_review(
+        reduced: Mapping[str, Any],
+        proposals: Sequence[Mapping[str, Any]],
+        failures: Sequence[str],
+    ) -> tuple[str, dict[str, Any]]:
+        """G1 卡片元数据：推荐案 approve + 其余 adopt:<id> + reject。"""
+        plans = [dict(plan) for plan in reduced["plans"]]
+        recommended_id = str(reduced["recommended_plan_id"])
+        recommended = next(plan for plan in plans if plan.get("id") == recommended_id)
+        others = [plan for plan in plans if plan.get("id") != recommended_id]
+
+        title = f"请确认建模方案：推荐 {recommended_id}「{recommended['name']}」"
+        if others:
+            title += "；备选 " + " / ".join(f"{plan['id']}「{plan['name']}」" for plan in others)
+        if failures:
+            title += f"；{len(failures)} 路视角提议未成功"
+
+        options: list[dict[str, Any]] = [
+            {
+                "id": G1_APPROVE_OPTION_ID,
+                "label": f"采用推荐方案 {recommended_id}（{recommended['name']}）",
+                "description": _plan_blurb(recommended),
+                "recommended": True,
+            }
+        ]
+        for plan in others:
+            options.append({
+                "id": f"{ADOPT_OPTION_PREFIX}{plan['id']}",
+                "label": f"改用方案 {plan['id']}（{plan['name']}）",
+                "description": _plan_blurb(plan),
+            })
+        options.append({
+            "id": G1_REJECT_OPTION_ID,
+            "label": "退回重做方案",
+            "description": "重新执行建模方案阶段（三路提议与归约重来一遍）并再次确认",
+        })
+        meta = {
+            "gate": "G1",
+            "decision_type": "confirm_plan",
+            "title": title[:200],
+            "options": options,
+            "impact": {
+                "plans": [
+                    {
+                        "id": plan.get("id"),
+                        "name": plan.get("name"),
+                        "role": plan.get("role"),
+                        "source_views": list(plan.get("source_views") or []),
+                    }
+                    for plan in plans
+                ],
+                "proposers": {
+                    "succeeded": [str(proposal["view"]) for proposal in proposals],
+                    "failed": list(failures),
+                },
+                "dropped": list(reduced.get("dropped") or []),
+            },
+        }
+        return title, meta
+
 
 def _require_outputs(ctx: NodeContext, state: TaskState) -> Mapping[str, Any]:
     outputs = ctx.prior_outputs.get(state.value)
@@ -314,14 +723,23 @@ def _require_outputs(ctx: NodeContext, state: TaskState) -> Mapping[str, Any]:
     return outputs
 
 
-def chosen_plan(planning: Mapping[str, Any]) -> dict[str, Any]:
-    """The plan the run proceeds with: recommended if present, else the first.
+def chosen_plan(
+    planning: Mapping[str, Any],
+    review_decisions: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """The plan the run proceeds with.
 
-    The product's approval gate offers "adopt current plan" (the recommended
-    one) or "redo planning" — there is no per-plan pick, so downstream stages
-    resolve the plan the same way the approval card presents it.
+    G1 的决策台账优先：用户选了 ``adopt:<id>`` 就用那一案；``approve``（采用推荐案）
+    或没有台账（无人值守 / 旧运行）回到 recommended；都没有则取第一案。下游各阶段
+    与审批卡呈现的是同一套选择规则。
     """
     plans = [plan for plan in planning.get("plans") or [] if isinstance(plan, Mapping)]
+    decision = str((review_decisions or {}).get(TaskState.MODEL_PLANNING.value) or "")
+    if decision.startswith(ADOPT_OPTION_PREFIX):
+        wanted = decision[len(ADOPT_OPTION_PREFIX):]
+        for plan in plans:
+            if plan.get("id") == wanted:
+                return dict(plan)
     recommended = planning.get("recommended_plan_id")
     for plan in plans:
         if plan.get("id") == recommended:
@@ -923,7 +1341,9 @@ class ExperimentExecutionNode(LlmSkillNode):
             }
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
-            "chosen_plan": json.dumps(chosen_plan(planning), ensure_ascii=False),
+            "chosen_plan": json.dumps(
+                chosen_plan(planning, ctx.review_decisions), ensure_ascii=False
+            ),
             "data_preparation": (
                 json.dumps(preparation, ensure_ascii=False) if preparation else "无"
             ),
@@ -963,7 +1383,9 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "prompt input invalid: " + "; ".join(input_problems)
             )
 
-        plan = chosen_plan(_require_outputs(ctx, TaskState.MODEL_PLANNING))
+        plan = chosen_plan(
+            _require_outputs(ctx, TaskState.MODEL_PLANNING), ctx.review_decisions
+        )
         capture = _SandboxCapture()
         final_answer: dict[str, Any] = {}
         llm_calls = {"count": 0}
@@ -1259,7 +1681,9 @@ class ValidationNode(LlmSkillNode):
         planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
         experiment = _require_outputs(ctx, TaskState.EXPERIMENTING)
         return {
-            "chosen_plan": json.dumps(chosen_plan(planning), ensure_ascii=False),
+            "chosen_plan": json.dumps(
+                chosen_plan(planning, ctx.review_decisions), ensure_ascii=False
+            ),
             "experiment_summary": str(
                 experiment.get("experiment_summary")
                 or experiment.get("stdout_tail")
@@ -1329,7 +1753,9 @@ class ValidationNode(LlmSkillNode):
         if not code.strip():
             return skipped(f"实验脚本 {EXPERIMENT_SCRIPT_PATH} 为空，无法复跑")
 
-        plan = chosen_plan(_require_outputs(ctx, TaskState.MODEL_PLANNING))
+        plan = chosen_plan(
+            _require_outputs(ctx, TaskState.MODEL_PLANNING), ctx.review_decisions
+        )
         experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
         metrics = dict(experiment.get("metrics") or {})
         risk_points = _risk_points(plan, judgement)
@@ -1648,7 +2074,9 @@ class PaperWritingNode(LlmSkillNode):
         validation = ctx.prior_outputs.get(TaskState.VALIDATING.value) or {}
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
-            "chosen_plan": json.dumps(chosen_plan(planning), ensure_ascii=False),
+            "chosen_plan": json.dumps(
+                chosen_plan(planning, ctx.review_decisions), ensure_ascii=False
+            ),
             "experiment_summary": str(experiment.get("experiment_summary") or "无"),
             "validation_summary": _validation_material(validation, ctx.review_decisions),
             "frozen_numbers": render_frozen_numbers(build_frozen_numbers(ctx.prior_outputs)),

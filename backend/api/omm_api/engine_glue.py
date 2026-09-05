@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -416,12 +417,16 @@ def _sandbox_hardware() -> str:
 #: H3 前置刀起实验阶段走沙盒执行体（experiment_code.sandbox 会话模板），
 #: 数据准备的清洗派发用 data_cleaning.sandbox，验证阶段的稳健性复跑用
 #: validating.sandbox——三者缺一同样回落模拟。
+#: H3 方案阶段是三视角 Proposer 并行提议（model_planning.proposer）+ 一次归约
+#: （model_planning.reduce）；model_planning.default 保留给无监督者的单次调用路径。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
         "data_preparation.default",
         "data_cleaning.sandbox",
         "model_planning.default",
+        "model_planning.proposer",
+        "model_planning.reduce",
         "experiment_code.sandbox",
         "validating.default",
         "validating.sandbox",
@@ -462,6 +467,8 @@ _PROMPT_NODE_IDS = {
     "data_preparation.default": TaskState.DATA_PREPARATION.value,
     "data_cleaning.sandbox": TaskState.DATA_PREPARATION.value,
     "model_planning.default": TaskState.MODEL_PLANNING.value,
+    "model_planning.proposer": TaskState.MODEL_PLANNING.value,
+    "model_planning.reduce": TaskState.MODEL_PLANNING.value,
     "experiment_code.default": TaskState.EXPERIMENTING.value,
     "experiment_code.sandbox": TaskState.EXPERIMENTING.value,
     "validating.default": TaskState.VALIDATING.value,
@@ -811,10 +818,18 @@ def _llm_wiring_impl(
     # 的下一次 checkpoint，一个阶段几分钟的模型调用期间工作台会完全静默、结束时
     # 一次性闪现整批过程行。HTTP 动作路径（checkpoint=False）保持整请求一个
     # 事务，不在中途提交。每次成功调用同时记入 llm_usage_records（用量监控）。
+    #
+    # 并发纪律（H3 fan-out）：方案阶段三路 Proposer 子代理从三个线程同时调用模型
+    # 端口并触发审计 / 过程事件 / 用量记账，而这里只有一个 Session——控制面的全部
+    # 写入共用一把可重入锁：模型端口内部的记账、进度事件、Supervisor 审计都从
+    # 这把锁进出，模型 HTTP 调用本身不上锁仍然并行。
+    control_lock = threading.RLock()
+
     def _process_event(payload: dict) -> None:
-        append_event(session, run.id, AgentEventType.run_log.value, payload)
-        if checkpoint:
-            session.commit()
+        with control_lock:
+            append_event(session, run.id, AgentEventType.run_log.value, payload)
+            if checkpoint:
+                session.commit()
 
     # 预算治理（C9 接线）：账本从事件重建，run/node 级硬停在真实链路生效
     governor = _build_budget_governor(session, run)
@@ -843,6 +858,7 @@ def _llm_wiring_impl(
         budget=governor,
         node_for_prompt=_PROMPT_NODE_IDS,
         user_notes=user_notes,
+        lock=control_lock,
     )
     overrides = {
         state: _BudgetGuardedNode(node)

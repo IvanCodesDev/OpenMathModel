@@ -23,6 +23,7 @@ import ipaddress
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -1449,6 +1450,12 @@ class EngineLlmPort:
     结束时产出一条 llm_call 摘要（模型/接口/耗时/用量），推理模型另有一条
     thinking（思考内容），供工作台把「智能体正在做什么」逐条展示出来
     （设计文档 §12.4 微技能级文案）。
+
+    并发纪律：方案阶段的三路 Proposer 子代理会从多个线程同时调用本端口
+    （H3 fan-out），而 on_event / on_usage / 预算治理都落在同一个 SQLAlchemy
+    Session 与同一份账本上——它们只能串行。``lock`` 罩住全部记账与事件回调
+    （模型调用本身不上锁，仍然并行）；调用方把同一把锁交给 Supervisor 的
+    审计回调，保证「一个运行的控制面写入永远单线程」。
     """
 
     def __init__(
@@ -1460,6 +1467,7 @@ class EngineLlmPort:
         budget: Optional[Any] = None,
         node_for_prompt: Optional[dict[str, str]] = None,
         user_notes: Sequence[tuple[str, str]] = (),
+        lock: Optional[threading.RLock] = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -1472,12 +1480,19 @@ class EngineLlmPort:
         # 运行中用户备注（(scope, text) 时间序）：端口按 tick 重建，新备注在
         # 下一次节点执行自然生效（§11.3「下一次节点执行注入」的落点）。
         self._user_notes = tuple(user_notes)
+        self._lock = lock if lock is not None else threading.RLock()
+
+    @property
+    def lock(self) -> threading.RLock:
+        """控制面写入锁（与 Supervisor 审计等同一运行的其它回调共用）。"""
+        return self._lock
 
     def _emit(self, payload: dict[str, Any]) -> None:
         if self._on_event is None:
             return
         try:
-            self._on_event(payload)
+            with self._lock:
+                self._on_event(payload)
         except Exception:  # noqa: BLE001 - 过程展示事件绝不允许影响执行本身
             logger.exception("llm 过程事件回调失败")
 
@@ -1503,7 +1518,8 @@ class EngineLlmPort:
             # 墙钟 / 调用数达限时绝不靠重试续命），AgentError 上抛由节点层
             # 转成带 E31x/E32x 错误码的干净失败信息。
             if self._budget is not None:
-                self._budget.check_llm_call(node_id)
+                with self._lock:
+                    self._budget.check_llm_call(node_id)
             # 调用开始即发过程事件：模型一次调用动辄一两分钟，没有这条事件的话
             # 工作台在整个阶段里收不到任何东西，结束时才一次性收到全部过程行。
             self._emit({
@@ -1620,16 +1636,17 @@ class EngineLlmPort:
                 outcome.text + outcome.reasoning
             )
             estimated = True
-        if self._budget is not None:
-            tokens = int(outcome.usage.get("prompt_tokens") or 0) + int(
-                outcome.usage.get("completion_tokens") or 0
-            )
-            self._budget.charge_llm(tokens, node_id)
-        if self._on_usage is not None:
-            try:
-                self._on_usage(outcome)
-            except Exception:  # noqa: BLE001 - 用量记账绝不允许影响任务执行
-                logger.exception("llm 用量记账回调失败")
+        with self._lock:
+            if self._budget is not None:
+                tokens = int(outcome.usage.get("prompt_tokens") or 0) + int(
+                    outcome.usage.get("completion_tokens") or 0
+                )
+                self._budget.charge_llm(tokens, node_id)
+            if self._on_usage is not None:
+                try:
+                    self._on_usage(outcome)
+                except Exception:  # noqa: BLE001 - 用量记账绝不允许影响任务执行
+                    logger.exception("llm 用量记账回调失败")
         if outcome.reasoning:
             self._emit({
                 "kind": "thinking",

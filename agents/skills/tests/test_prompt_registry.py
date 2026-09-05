@@ -70,6 +70,8 @@ def test_default_registry_loads_all_stage_prompts():
         "experiment_code.default",
         "experiment_code.sandbox",
         "model_planning.default",
+        "model_planning.proposer",
+        "model_planning.reduce",
         "paper_finalize.default",
         "paper_outline.default",
         "paper_section.default",

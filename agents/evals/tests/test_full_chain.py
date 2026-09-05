@@ -26,12 +26,15 @@ from omm_agent_core import (
 from omm_agent_evals import (
     CANNED_EXPERIMENT_CODE,
     CANNED_PAPER,
+    CANNED_PROPOSALS_BY_VIEW,
+    CANNED_REDUCE,
     CANNED_VALIDATION_CODE,
     FULL_CHAIN_CHAT_SEQUENCE,
     FULL_CHAIN_GOLDEN_EVENT_TYPES,
     FULL_CHAIN_METRICS,
     FULL_CHAIN_PROMPT_SEQUENCE,
     FULL_CHAIN_ROBUSTNESS_CHECKS,
+    build_full_chain_llm,
     build_full_chain_session,
     robustness_success,
     sandbox_failure,
@@ -42,6 +45,7 @@ from omm_agent_skills import (
     G3_ACCEPT_OPTION_ID,
     G4_CONFIRM_OPTION_ID,
     PYTHON_TOOL_NAME,
+    stub_response,
 )
 
 
@@ -372,6 +376,95 @@ def test_review_rejection_then_retry_replans_and_completes():
     assert types.count(EventType.REVIEW_RESOLVED) == 3
     assert types.count(EventType.RUN_RETRIED) == 1
 
+    assert_replay_matches(session)
+
+
+# -- 4b. G1 三选（H3）：归约出的每一案都是选项，选 B 就按 B 往下做 ----------------
+
+
+def g1_gate_event(session):
+    gates = [
+        event for event in session.sink.events
+        if event.event_type is EventType.REVIEW_REQUESTED
+        and (event.payload.get("gate") or {}).get("gate") == "G1"
+    ]
+    return gates[-1]
+
+
+def test_g1_gate_offers_every_reduced_plan_and_adopting_b_flows_downstream():
+    session = build_full_chain_session()
+    engine, snapshot = session.engine, session.snapshot
+
+    outcome = engine.run_until_blocked(snapshot)
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+
+    gate = g1_gate_event(session).payload["gate"]
+    assert gate["decision_type"] == "confirm_plan"
+    assert [option["id"] for option in gate["options"]] == ["approve", "adopt:B", "reject"]
+    assert [o["id"] for o in gate["options"] if o.get("recommended")] == ["approve"]
+    assert gate["title"] == (
+        "请确认建模方案：推荐 A「线性回归 + 整数规划」；备选 B「时间序列 + 启发式」"
+    )
+    assert gate["impact"]["proposers"] == {
+        "succeeded": ["mechanism", "data_driven", "operations_research"],
+        "failed": [],
+    }
+    assert gate["impact"]["dropped"] == CANNED_REDUCE["dropped"]
+    planning = snapshot.outputs[TaskState.MODEL_PLANNING.value]
+    assert [plan["role"] for plan in planning["plans"]] == ["primary", "baseline"]
+    assert planning["quality_warnings"] == []
+
+    # 用户改选 B：决策进台账，实验任务卡 / 论文材料都按 B 走
+    engine.resolve_review(snapshot, approved=True, reason="adopt:B")
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
+    assert outcome.status == AdvanceOutcome.COMPLETED
+    assert snapshot.review_decisions[TaskState.MODEL_PLANNING.value] == "adopt:B"
+    experiment_system = next(
+        call.messages[0]["content"]
+        for call in session.llm.chat_calls
+        if call.label == "experiment_code.sandbox"
+    )
+    assert '"id": "B"' in experiment_system and "时间序列 + 启发式" in experiment_system
+    assert '"id": "A"' not in experiment_system
+    paper_calls = [call for call in session.llm.calls if call.prompt_id == "paper_outline.default"]
+    assert "时间序列 + 启发式" in paper_calls[0].variables["chosen_plan"]
+
+    assert_replay_matches(session)
+
+
+def test_planning_quorum_one_failed_proposer_still_reaches_the_gate_with_a_warning():
+    def flaky_proposer(variables):
+        if variables["view_name"] == "数据驱动":
+            return "（该视角的模型抽风了，两次都不是 JSON）"
+        return stub_response(CANNED_PROPOSALS_BY_VIEW[variables["view_name"]])
+
+    session = build_full_chain_session(
+        llm=build_full_chain_llm({"model_planning.proposer": flaky_proposer})
+    )
+    engine, snapshot = session.engine, session.snapshot
+
+    outcome = engine.run_until_blocked(snapshot)
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+
+    # quorum：2/3 成功照常归约；缺席的那一路点名进警告、卡片与归约输入
+    planning = snapshot.outputs[TaskState.MODEL_PLANNING.value]
+    [failure] = planning["proposer_failures"]
+    assert failure.startswith("视角「数据驱动」未成功（failed")
+    assert planning["quality_warnings"] == [failure]
+    assert [proposal["view"] for proposal in planning["proposals"]] == [
+        "mechanism", "operations_research",
+    ]
+    gate = g1_gate_event(session).payload["gate"]
+    assert gate["title"].endswith("；1 路视角提议未成功")
+    assert gate["impact"]["proposers"]["failed"] == [failure]
+    prompt_ids = [call.prompt_id for call in session.llm.calls]
+    # 失败那一路用掉一次修复重试：3 + 1 次提议调用，归约仍只一次
+    assert prompt_ids.count("model_planning.proposer") == 4
+    assert prompt_ids.count("model_planning.reduce") == 1
+
+    engine.resolve_review(snapshot, approved=True, reason="approve")
+    outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))
+    assert outcome.status == AdvanceOutcome.COMPLETED
     assert_replay_matches(session)
 
 

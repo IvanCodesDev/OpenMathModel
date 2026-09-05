@@ -73,6 +73,48 @@ CANNED_PLANNING = {
     "rationale": "数据量小且趋势近线性，方案 A 可解释性与评审友好度更高",
 }
 
+#: 方案阶段（H3）：三视角 Proposer 并行各回一案，归约桩把它们收成 CANNED_PLANNING
+#: 的 A/B 两案（多出归约字段 role / source_views；投影只取契约五键）。
+CANNED_PROPOSALS_BY_VIEW = {
+    "机理建模": {
+        "name": "库存-运量动力学",
+        "approach": "把运量当作受季节因子驱动的一阶动力学过程",
+        "steps": ["辨识季节因子", "拟合动力学参数", "外推下季度"],
+        "risks": ["外部冲击不可解释"],
+        "fit": "运量趋势近线性，机理项可退化为线性趋势",
+    },
+    "数据驱动": {
+        "name": "时间序列 + 启发式",
+        "approach": "ARIMA 预测 + 遗传算法搜索配置",
+        "steps": ["定阶建模", "编码搜索", "对比验证"],
+        "risks": ["样本过短导致过拟合"],
+        "fit": "样本较短，需谨慎定阶",
+    },
+    "运筹优化": {
+        "name": "线性回归 + 整数规划",
+        "approach": "最小二乘拟合运量趋势，再以 MILP 求最优车辆配置",
+        "steps": ["拟合线性趋势", "构建配置模型", "灵敏度分析"],
+        "risks": ["非线性冲击场景失效"],
+        "fit": "车辆数与预算都是硬约束，整数规划直接可解",
+    },
+}
+
+
+def canned_proposer(variables: dict) -> str:
+    """提议人桩：按 view_name 回对应视角的方案（callable 桩拿到的是渲染变量）。"""
+    return stub_response(CANNED_PROPOSALS_BY_VIEW[variables["view_name"]])
+
+
+CANNED_REDUCE = {
+    **CANNED_PLANNING,
+    "plans": [
+        {**CANNED_PLANNING["plans"][0], "role": "primary", "source_views": ["operations_research"]},
+        {**CANNED_PLANNING["plans"][1], "role": "baseline", "source_views": ["data_driven"]},
+    ],
+    "dropped": ["机理建模：动力学项退化为线性趋势，已并入方案 A"],
+    "progress_note": "三路提议归约为两案：推荐线性回归 + 整数规划，时间序列作对照基线。",
+}
+
 #: Real python executed in the sandbox: closed-form least squares on y≈2x+1.
 EXPERIMENT_CODE = """\
 import json
@@ -172,7 +214,9 @@ def build_llm() -> StubLlmPort:
     return StubLlmPort(
         {
             "problem_analysis.default": stub_response(CANNED_ANALYSIS, fenced=True),
-            "model_planning.default": stub_response(CANNED_PLANNING),
+            # worker 运行时注入了子代理监督者：方案阶段走三路提议 + 归约
+            "model_planning.proposer": canned_proposer,
+            "model_planning.reduce": stub_response(CANNED_REDUCE),
         }
     )
 
@@ -210,6 +254,14 @@ GOLDEN_EVENT_TYPES = [
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> MODEL_PLANNING
     EventType.STEP_STARTED,
+    # 三路 Proposer 子代理并行：每路 spawn + result 两条监督者审计（六条 TOOL_CALLED，
+    # 三路的先后随线程调度而变，事件类型序列不变）
+    EventType.TOOL_CALLED,
+    EventType.TOOL_CALLED,
+    EventType.TOOL_CALLED,
+    EventType.TOOL_CALLED,
+    EventType.TOOL_CALLED,
+    EventType.TOOL_CALLED,
     EventType.STEP_SUCCEEDED,
     EventType.REVIEW_REQUESTED,
     EventType.REVIEW_RESOLVED,  # user approves plan A

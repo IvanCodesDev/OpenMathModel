@@ -23,7 +23,8 @@ from conftest import (
 )
 
 from omm_api import llm as llm_module
-from omm_api.orm import ApprovalRequestRow
+from omm_api.orm import ApprovalRequestRow, LlmUsageRow
+from sqlalchemy import select
 
 ANALYSIS_OUTPUT = {
     "viability": "ok",
@@ -80,6 +81,50 @@ PLANNING_OUTPUT = {
     ],
     "recommended_plan_id": "A",
     "rationale": "数据规模中等，精确解可行",
+}
+
+#: 方案阶段（H3）：三视角提议人并行各回一案；归约桩把它们收成 PLANNING_OUTPUT 的
+#: A/B 两案（多出归约字段 role / source_views，投影只取契约五键）。
+PROPOSAL_OUTPUT_BY_VIEW = {
+    "机理建模": {
+        "name": "排队论",
+        "approach": "把调度点当排队系统",
+        "steps": ["估计到达率", "求稳态指标", "比较布局"],
+        "risks": ["到达非泊松"],
+        "fit": "机理可解释",
+    },
+    "数据驱动": {
+        "name": "需求预测",
+        "approach": "回归预测各点需求",
+        "steps": ["整理特征", "交叉验证", "预测"],
+        "risks": ["数据不足"],
+        "fit": "依赖历史数据",
+    },
+    "运筹优化": {
+        "name": "整数规划",
+        "approach": "MILP 建模",
+        "steps": ["定义变量", "求解"],
+        "risks": ["规模过大求解慢"],
+        "fit": "离散调度天然是整数规划",
+    },
+}
+
+REDUCE_OUTPUT = {
+    **PLANNING_OUTPUT,
+    "plans": [
+        {
+            **PLANNING_OUTPUT["plans"][0],
+            "role": "primary",
+            "source_views": ["operations_research"],
+        },
+        {
+            **PLANNING_OUTPUT["plans"][1],
+            "role": "baseline",
+            "source_views": ["mechanism", "data_driven"],
+        },
+    ],
+    "dropped": [],
+    "progress_note": "三路提议归约为两案，推荐整数规划。",
 }
 
 #: 实验沙盒会话（H3）里 stub 模型发出的脚本——由 python 沙箱真实执行：
@@ -286,7 +331,18 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
     if "数据工程师" in prompt:
         assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "数据准备应携带分析产出"
         return _llm_reply(PREPARATION_OUTPUT)
+    proposer = re.search(r"「(.+?)」方案提议人", prompt)
+    if proposer:
+        # 方案阶段三路 Proposer 子代理（并行，各带自己的视角）
+        assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "提议人应携带分析产出"
+        assert PREPARATION_OUTPUT["profile_summary"] in prompt, "提议人应携带数据画像摘要"
+        return _llm_reply(PROPOSAL_OUTPUT_BY_VIEW[proposer.group(1)])
+    if "方案组长" in prompt:
+        for view_output in PROPOSAL_OUTPUT_BY_VIEW.values():
+            assert view_output["name"] in prompt, "归约应拿到三路提议"
+        return _llm_reply(REDUCE_OUTPUT)
     if "两套可执行的建模方案" in prompt:
+        # 无监督者装配的单次调用回落路径；API 装配有监督者，happy path 不应走到
         assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "规划节点应携带分析产出"
         assert PREPARATION_OUTPUT["profile_summary"] in prompt, "规划节点应携带数据画像摘要"
         return _llm_reply(PLANNING_OUTPUT)
@@ -497,13 +553,43 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     run = create_run(client, project["id"], goal="优化共享单车调度")
 
     approval = wait_until(client, run["id"], pending_approval(client, run["id"]))
-    assert approval["title"] == "请确认建模方案（A/B）后继续实验", "标题来自 LLM 节点而非模拟节点"
+    # G1 三选（H3）：标题与选项来自归约后的方案卡（LLM 节点经 review_meta 声明），
+    # 推荐案保留 approve id，其余候选 adopt:<id>，退回仍是 reject
+    assert approval["title"] == "请确认建模方案：推荐 A「整数规划」；备选 B「启发式」", (
+        "标题来自 LLM 节点而非模拟节点"
+    )
+    assert approval["decision_type"] == "confirm_plan"
+    assert [option["id"] for option in approval["options"]] == ["approve", "adopt:B", "reject"]
+    assert approval["options"][0]["label"] == "采用推荐方案 A（整数规划）"
+    assert approval["options"][0].get("recommended") is True
+    assert approval["options"][1]["label"] == "改用方案 B（启发式）"
+    assert approval["options"][1]["description"].startswith("可用基线：")
+    with client.app.state.db.session_factory() as session:
+        row = session.get(ApprovalRequestRow, approval["id"])
+        assert row.evidence["gate"] == "G1"
+        assert row.evidence["impact"]["proposers"] == {
+            "succeeded": ["mechanism", "data_driven", "operations_research"],
+            "failed": [],
+        }
+        assert [plan["role"] for plan in row.evidence["impact"]["plans"]] == ["primary", "baseline"]
 
     steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
     by_node = {step["node"]: step for step in steps}
     assert by_node["PROBLEM_ANALYSIS"]["status"] == "SUCCEEDED"
     assert by_node["DATA_PREPARATION"]["status"] == "SUCCEEDED", "数据准备走真实节点"
     assert by_node["MODEL_PLANNING"]["status"] == "SUCCEEDED", "方案产出成功后停在审批"
+    # 方案页契约投影：三路提议归约后的两案，多出的归约字段不进契约五键
+    proposal = client.get(f"/api/v1/task-runs/{run['id']}/stage-outputs").json()["plan_proposal"]
+    assert [plan["id"] for plan in proposal["plans"]] == ["A", "B"]
+    assert set(proposal["plans"][0]) == {"id", "name", "approach", "steps", "risks"}
+    assert proposal["recommended_plan_id"] == "A"
+    # 三路提议 + 归约 = 方案阶段 4 次模型调用，全部记入用量监控并归属方案节点
+    with client.app.state.db.session_factory() as session:
+        usage_rows = session.execute(
+            select(LlmUsageRow).where(LlmUsageRow.run_id == run["id"])
+        ).scalars().all()
+    assert len(usage_rows) == 6, "题意 1 + 数据 1 + 提议 3 + 归约 1（尚未审批）"
+    assert sum(1 for row in usage_rows if row.run_id == run["id"]) == 6
 
     approve_when_asked(client, run["id"], option_id="approve")
     # 论文发布后停在 G4 定稿闸门（必停）：草稿与审计已落库，卡片给「确认交付 / 退回修改」
@@ -584,12 +670,63 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert section_events[0]["heading"] == "1 问题重述"
     assert "rmse=0.5" in section_events[0]["content"]
 
-    # 工具调用留痕：python_run 的 TOOL_CALLED 事件投影到 run.log
+    # 工具调用留痕：python_run 的 TOOL_CALLED 事件投影到 run.log；三路提议子代理
+    # 的 spawn / result 审计同路落 run.log（工作台执行轨迹可见）
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
     logs = [event["payload"] for event in events if event["type"] == "run.log"]
     tool_calls = [entry for entry in logs if entry.get("tool") == "python_run"]
     assert tool_calls, "沙箱执行应产生 TOOL_CALLED 过程事件"
     assert tool_calls[0]["status"] == "succeeded"
+    proposer_audits = [
+        entry for entry in logs if str(entry.get("tool") or "").startswith("subagent:proposer:")
+    ]
+    spawns = [entry for entry in proposer_audits if entry.get("phase") == "spawn"]
+    results = [entry for entry in proposer_audits if entry.get("phase") == "result"]
+    assert sorted(entry["tool"] for entry in spawns) == [
+        "subagent:proposer:data_driven",
+        "subagent:proposer:mechanism",
+        "subagent:proposer:operations_research",
+    ]
+    assert [entry["envelope_status"] for entry in results] == ["done"] * 3
+
+
+def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
+    """G1 三选（H3）：用户改选备选案 B，实验任务卡与论文材料都按 B 走，台账记 adopt:B。"""
+    seen: dict[str, str] = {}
+
+    def router(request: httpx.Request) -> httpx.Response:
+        messages = _wire_messages(request)
+        system = _system_of(messages)
+        if "实验工程师" in system:
+            seen["experiment_system"] = system
+            return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
+        prompt = messages[-1]["content"]
+        if "论文的总编" in prompt:
+            seen["outline_prompt"] = prompt
+        return _stage_router(request)
+
+    project = create_project(client)
+    _configure_llm(client, monkeypatch, handler=router)
+    run = create_run(client, project["id"], goal="优化共享单车调度")
+
+    approval = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert [option["id"] for option in approval["options"]] == ["approve", "adopt:B", "reject"]
+    approve_when_asked(client, run["id"], option_id="adopt:B")
+
+    gate = wait_until(client, run["id"], pending_approval(client, run["id"]))
+    assert gate["title"].startswith("论文草稿已生成"), "选 B 后照常走到 G4"
+    assert '"id": "B"' in seen["experiment_system"] and "启发式" in seen["experiment_system"]
+    assert '"id": "A"' not in seen["experiment_system"], "实验任务卡只带用户选定的方案"
+    # 总编材料里的选中方案是 B（材料以 JSON 给出，id 与方法名一起核对）
+    assert '"id": "B"' in seen["outline_prompt"] and "启发式" in seen["outline_prompt"]
+    assert '"id": "A"' not in seen["outline_prompt"]
+    resolved = client.get(f"/api/v1/task-runs/{run['id']}/approvals").json()["items"]
+    g1 = next(item for item in resolved if item["id"] == approval["id"])
+    assert g1["status"] == "RESOLVED" and g1["resolution"]["option_id"] == "adopt:B"
+
+    confirm_delivery(client, run["id"])
+    final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
+    assert final["status"] == "COMPLETED"
 
 
 def test_unconfigured_run_keeps_sim_workflow(client):

@@ -72,10 +72,13 @@ def test_tool_call_is_recorded_inside_experiment_step(runtime):
     run_id = drive(runtime)
     events = runtime.events.load(run_id)
 
-    tool_events = [e for e in events if e.event_type is EventType.TOOL_CALLED]
+    tool_events = [
+        e
+        for e in events
+        if e.event_type is EventType.TOOL_CALLED and e.payload["tool"] == "python_run"
+    ]
     assert len(tool_events) == 1
     tool_event = tool_events[0]
-    assert tool_event.payload["tool"] == "python_run"
     assert tool_event.payload["status"] == "succeeded"
 
     snapshot = runtime.get_snapshot(run_id)
@@ -99,6 +102,53 @@ def test_tool_call_is_recorded_inside_experiment_step(runtime):
     )
     assert started_seq < tool_event.seq < succeeded_seq
     assert types_by_seq[tool_event.seq] is EventType.TOOL_CALLED
+
+
+def test_planning_fanout_audits_sit_inside_the_planning_step(runtime):
+    """三路 Proposer 子代理的 spawn / result 审计都落在方案步骤区间内（H3）。"""
+    run_id = drive(runtime)
+    events = runtime.events.load(run_id)
+    snapshot = runtime.get_snapshot(run_id)
+
+    proposer_events = [
+        e
+        for e in events
+        if e.event_type is EventType.TOOL_CALLED
+        and e.payload["tool"].startswith("subagent:proposer:")
+    ]
+    assert sorted(e.payload["tool"] for e in proposer_events if e.payload["phase"] == "spawn") == [
+        "subagent:proposer:data_driven",
+        "subagent:proposer:mechanism",
+        "subagent:proposer:operations_research",
+    ]
+    results = [e for e in proposer_events if e.payload["phase"] == "result"]
+    assert [e.payload["envelope_status"] for e in results] == ["done"] * 3
+
+    planning_step = next(
+        step for step in snapshot.steps if step.state is TaskState.MODEL_PLANNING
+    )
+    started_seq = next(
+        e.seq
+        for e in events
+        if e.event_type is EventType.STEP_STARTED
+        and e.payload["step_id"] == planning_step.step_id
+    )
+    succeeded_seq = next(
+        e.seq
+        for e in events
+        if e.event_type is EventType.STEP_SUCCEEDED
+        and e.payload["step_id"] == planning_step.step_id
+    )
+    assert all(started_seq < e.seq < succeeded_seq for e in proposer_events)
+    # 归约后的方案卡带角色，投影只取契约五键；被并入 A 的机理提议留在 dropped 里
+    planning = snapshot.outputs[TaskState.MODEL_PLANNING.value]
+    assert [plan["role"] for plan in planning["plans"]] == ["primary", "baseline"]
+    assert planning["dropped"] == ["机理建模：动力学项退化为线性趋势，已并入方案 A"]
+    assert [proposal["view"] for proposal in planning["proposals"]] == [
+        "mechanism",
+        "data_driven",
+        "operations_research",
+    ]
 
 
 def test_artifacts_exist_on_disk_with_matching_checksums(runtime):
