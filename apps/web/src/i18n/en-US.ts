@@ -749,6 +749,20 @@ const MODEL_STAGE: Record<string, string> = {
   "主要风险": "Main risks",
   "推荐理由": "Why recommended",
   "推荐理由与风险见下方方案详情": "see the plan details below for rationale and risks",
+  // 模型假设 / 符号表两分页（stage-content：PlanProposal.assumptions / symbols，H3 切片 2）
+  "项全局假设": "global assumptions",
+  "项方案特定假设": "plan-specific assumptions",
+  "全部假设均由题面或数据直接支持。": "Every assumption is directly supported by the problem statement or the data.",
+  "项假设待检验或需重点验证，实验阶段将据此安排敏感性与稳健性检验。":
+    "assumptions still need checking or close verification; sensitivity and robustness checks in the experiment stage follow from them.",
+  "建议围绕以下假设做敏感性与稳健性检验：": "Run sensitivity and robustness checks around these assumptions: ",
+  "个共享符号": "shared symbols",
+  "个方案专有符号": "plan-specific symbols",
+  "个符号": "symbols",
+  "适用方案": "Applies to",
+  "共享": "Shared",
+  "其它": "Other",
+  "同一含义在各方案中使用同一符号": "The same meaning uses the same symbol across plans",
 };
 
 /** 实验与验证页。 */

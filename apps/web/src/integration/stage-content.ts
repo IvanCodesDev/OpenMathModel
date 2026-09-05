@@ -23,6 +23,13 @@ import { typesetMath } from "../text/math-typeset";
 import { describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 import { describePaperAudit, paperAuditStamp } from "./paper-audit";
+import {
+  IMPACT_LABELS,
+  KIND_LABELS,
+  STATUS_LABELS,
+  describeAssumptions,
+  describeSymbols,
+} from "./plan-tables";
 
 const PAPER_DRAFT_PREFIX = "openmathmodel.paperDraft.v1.";
 
@@ -183,13 +190,14 @@ const STAGE_TAB_PLAN: Array<{
   fillable: string[];
 }> = [
   { workspace: ".data-report-workspace", primary: "data-report", demo: ["raw-data", "clean-data"], fillable: ["field-guide"] },
-  { workspace: ".model-plan-workspace", primary: "model-plan", demo: ["assumptions", "symbols"], fillable: ["implementation"] },
+  // 模型假设 / 符号表自 H3 切片 2 起有真实数据源（plan-proposal.assumptions / symbols）
+  { workspace: ".model-plan-workspace", primary: "model-plan", demo: [], fillable: ["assumptions", "symbols", "implementation"] },
 ];
 
 /**
  * 真实运行的子分页纪律（R4）：进入真实任务即撤走纯演示分页（原始数据、
- * 清洗数据、模型假设、符号表——当前契约下没有它们的真实数据源），可填充
- * 分页（字段说明、实现计划）先藏起，等对应阶段的真实内容渲染后再放出。
+ * 清洗数据——当前契约下没有它们的真实数据源），可填充分页（字段说明、
+ * 模型假设、符号表、实现计划）先藏起，等对应阶段的真实内容渲染后再放出。
  * 幂等，控制器每次快照刷新都可安全调用；演示页（无运行身份）不受影响。
  */
 export function prepareStageTabs(root: HTMLElement): void {
@@ -459,9 +467,170 @@ function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
   );
   renderDetail(recommendedPlan);
 
-  // 实现计划页用推荐方案的真实步骤填充（模型假设/符号表这类没有真实数据源的
-  // 演示分页由 prepareStageTabs 统一撤走）
+  // 三个子分页都由方案契约填充：假设表 / 符号表来自归约后的规范化（缺席时
+  // 分页保持藏起），实现计划用推荐方案的真实步骤
+  renderAssumptionsPanel(root, proposal);
+  renderSymbolsPanel(root, proposal);
   renderImplementationPanel(root, proposal, recommendedPlan);
+}
+
+/** 可填充分页的真实内容这次没有到（规范化失败 / 旧运行）：清空并收回入口。 */
+function withdrawWorkspaceTab(root: HTMLElement, workspaceSelector: string, key: string, primary: string): void {
+  const workspace = root.querySelector<HTMLElement>(workspaceSelector);
+  const panel = workspace?.querySelector<HTMLElement>(`[data-workspace-panel="${key}"]`);
+  if (!workspace || !panel) return;
+  delete panel.dataset.stageContentSource;
+  panel.replaceChildren();
+  hideWorkspaceTab(workspace, key, primary);
+}
+
+/** 「方案 A」/「全局」/「共享」这类归属列的文案（sharedLabel 已翻译）。 */
+function scopeLabel(planId: string | null, sharedLabel: string): string {
+  return planId === null ? sharedLabel : `${t("方案")} ${planId}`;
+}
+
+/** 表头 + 表体的骨架（沿用演示表格的类名，样式无需新增）。 */
+function focusedTable(className: string, headers: string[]): { table: HTMLTableElement; tbody: HTMLTableSectionElement } {
+  const table = el("table", `focused-table focused-template-table ${className}`);
+  const thead = el("thead");
+  const headRow = el("tr");
+  headers.forEach(label => headRow.append(el("th", "", label)));
+  thead.append(headRow);
+  const tbody = el("tbody");
+  table.append(thead, tbody);
+  return { table, tbody };
+}
+
+/**
+ * 「模型假设」分页：全局假设 + 方案特定假设六列表（编号 / 假设 / 适用范围 /
+ * 依据 / 影响 / 状态），底部「验证重点」点名待检验与重点验证的条目——这是
+ * 用户在 G1 决策卡前核对方案前提的地方，也是论文「模型假设」一节的底稿。
+ */
+function renderAssumptionsPanel(root: HTMLElement, proposal: PlanProposal): void {
+  const section = describeAssumptions(proposal);
+  if (section.kind === "absent") {
+    withdrawWorkspaceTab(root, ".model-plan-workspace", "assumptions", "model-plan");
+    return;
+  }
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="assumptions"]');
+  if (!panel) return;
+  panel.dataset.stageContentSource = "api";
+
+  const header = el("header", "focused-template-heading");
+  const heading = el("div");
+  heading.append(
+    el("h1", "", t("模型假设")),
+    el("p", "", `${section.globalCount} ${t("项全局假设")} · ${section.planCount} ${t("项方案特定假设")}`),
+  );
+  header.append(heading, el("span", "focused-template-status neutral", `${section.rows.length} ${t("项")}`));
+
+  const notice = el("div", "focused-conclusion-strip focused-template-notice");
+  if (section.focus.length === 0) {
+    notice.append(icon("check-circle"), el("span", "", t("全部假设均由题面或数据直接支持。")));
+  } else {
+    notice.append(
+      icon("warning-circle"),
+      el("span", "", `${section.focus.length} ${t("项假设待检验或需重点验证，实验阶段将据此安排敏感性与稳健性检验。")}`),
+    );
+  }
+
+  const { table, tbody } = focusedTable("assumption-table", [
+    "#", t("假设"), t("适用范围"), t("依据"), t("影响"), t("状态"),
+  ]);
+  section.rows.forEach(row => {
+    const tr = el("tr");
+    const text = el("td");
+    text.append(richInline(row.text));
+    const status = el("td", "", t(STATUS_LABELS[row.status]));
+    status.dataset.stageAssumptionStatus = row.status;
+    tr.append(
+      el("td", "", row.id),
+      text,
+      el("td", "", scopeLabel(row.planId, t("全局"))),
+      el("td", "", row.basis || "—"),
+      el("td", "", t(IMPACT_LABELS[row.impact])),
+      status,
+    );
+    tbody.append(tr);
+  });
+  const wrap = el("div", "focused-table-wrap");
+  wrap.append(table);
+  const tableSection = el("section", "focused-template-section");
+  tableSection.append(wrap);
+
+  const template = el("section", "focused-template");
+  template.append(header, notice, tableSection);
+  if (section.focus.length) {
+    const callout = el("footer", "focused-template-callout");
+    callout.append(
+      el("strong", "", t("验证重点")),
+      el("span", "", `${t("建议围绕以下假设做敏感性与稳健性检验：")}${section.focus.join("、")}`),
+    );
+    template.append(callout);
+  }
+  panel.replaceChildren(template);
+  revealWorkspaceTab(root, "assumptions");
+  typesetMath(panel);
+}
+
+/**
+ * 「符号表」分页：共享符号 + 方案专有符号六列表（符号 / 类型 / 定义 / 单位 /
+ * 范围 / 适用方案）。符号是不带 $ 的 LaTeX，这里统一包成行内公式交给排版器。
+ */
+function renderSymbolsPanel(root: HTMLElement, proposal: PlanProposal): void {
+  const section = describeSymbols(proposal);
+  if (section.kind === "absent") {
+    withdrawWorkspaceTab(root, ".model-plan-workspace", "symbols", "model-plan");
+    return;
+  }
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="symbols"]');
+  if (!panel) return;
+  panel.dataset.stageContentSource = "api";
+
+  const header = el("header", "focused-template-heading");
+  const heading = el("div");
+  heading.append(
+    el("h1", "", t("符号表")),
+    el("p", "", `${section.sharedCount} ${t("个共享符号")} · ${section.planCount} ${t("个方案专有符号")}`),
+  );
+  header.append(heading, el("span", "focused-template-status neutral", `${section.rows.length} ${t("个符号")}`));
+
+  const { table, tbody } = focusedTable("symbol-table", [
+    t("符号"), t("类型"), t("定义"), t("单位"), t("范围"), t("适用方案"),
+  ]);
+  section.rows.forEach(row => {
+    const tr = el("tr");
+    const symbol = el("td");
+    const strong = el("strong");
+    strong.append(richInline(`$${row.symbol}$`));
+    symbol.append(strong);
+    const definition = el("td");
+    definition.append(richInline(row.definition));
+    tr.append(
+      symbol,
+      el("td", "", t(KIND_LABELS[row.kind])),
+      definition,
+      el("td", "", row.unit ?? "—"),
+      el("td", "", row.range ?? "—"),
+      el("td", "", scopeLabel(row.planId, t("共享"))),
+    );
+    tbody.append(tr);
+  });
+  const wrap = el("div", "focused-table-wrap");
+  wrap.append(table);
+  const footer = el("footer", "focused-template-footer");
+  footer.append(
+    el("span", "", `${section.rows.length} ${t("个符号")}`),
+    el("span", "", t("同一含义在各方案中使用同一符号")),
+  );
+  const tableSection = el("section", "focused-template-section");
+  tableSection.append(wrap, footer);
+
+  const template = el("section", "focused-template");
+  template.append(header, tableSection);
+  panel.replaceChildren(template);
+  revealWorkspaceTab(root, "symbols");
+  typesetMath(panel);
 }
 
 /** 「实现计划」分页：推荐方案的实验步骤 + 主要风险 + 推荐理由（真实产出）。 */

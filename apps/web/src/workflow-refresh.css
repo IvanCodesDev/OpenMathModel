@@ -6207,6 +6207,26 @@ html[data-theme="dark"] .stage-field-chip { border-color: #3a3a37; background: #
 .focused-workspace .stage-field-table td:first-child { white-space: nowrap; font-variant-ligatures: none; }
 .focused-workspace .stage-field-table th:nth-child(2) { width: 46%; }
 
+/* 方案页真实假设表 / 符号表：假设与定义列折行显示全文（演示表的定宽截断在这里
+   会把「15 分钟内区域需求…」这类正文吃掉），编号 / 符号列不折行 */
+.focused-workspace .assumption-table th,
+.focused-workspace .symbol-table th { white-space: nowrap; }
+.focused-workspace .assumption-table td,
+.focused-workspace .symbol-table td { vertical-align: top; line-height: 1.6; white-space: normal; height: auto; padding: 9px 14px; }
+.focused-workspace .assumption-table td:first-child,
+.focused-workspace .assumption-table td:nth-child(5),
+.focused-workspace .assumption-table td:nth-child(6),
+.focused-workspace .symbol-table td:first-child,
+.focused-workspace .symbol-table td:nth-child(2) { white-space: nowrap; }
+.focused-workspace .assumption-table th:nth-child(1) { width: 8%; }
+.focused-workspace .assumption-table th:nth-child(2) { width: 36%; }
+.focused-workspace .assumption-table th:nth-child(4) { width: 20%; }
+.focused-workspace .assumption-table th:nth-child(5) { width: 9%; }
+.focused-workspace .symbol-table th:nth-child(1) { width: 14%; }
+.focused-workspace .symbol-table th:nth-child(2) { width: 12%; }
+.focused-workspace .symbol-table th:nth-child(3) { width: 32%; }
+.focused-workspace .symbol-table th:nth-child(4) { width: 11%; }
+
 /* 真实实验总结无指标时隐藏指标带：.focused-metrics 的作者级 display:grid
    会压过 UA 的 [hidden]，必须显式还原 display:none。 */
 .focused-metrics[hidden] { display: none; }
