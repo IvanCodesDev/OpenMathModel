@@ -19,6 +19,7 @@ from .nodes import (
     DEFAULT_AVAILABLE_PACKAGES,
     DEFAULT_HARDWARE_NOTE,
     EXPERIMENT_SCRIPT_PATH,
+    FORMALIZE_PROMPT_ID,
     G1_APPROVE_OPTION_ID,
     G1_REJECT_OPTION_ID,
     G2_ROW_DELETION_THRESHOLD,
@@ -47,6 +48,8 @@ from .nodes import (
     chosen_plan,
     extract_json,
     gpu_hardware_note,
+    normalize_assumptions,
+    normalize_symbols,
     render_paper_markdown,
 )
 from .prompt_registry import (
@@ -67,6 +70,7 @@ __all__ = [
     "DEFAULT_HARDWARE_NOTE",
     "DEFAULT_PROMPTS_DIR",
     "EXPERIMENT_SCRIPT_PATH",
+    "FORMALIZE_PROMPT_ID",
     "G1_APPROVE_OPTION_ID",
     "G1_REJECT_OPTION_ID",
     "G2_ROW_DELETION_THRESHOLD",
@@ -107,6 +111,8 @@ __all__ = [
     "extract_json",
     "gpu_hardware_note",
     "load_default_registry",
+    "normalize_assumptions",
+    "normalize_symbols",
     "parse_prompt_text",
     "render_frozen_numbers",
     "render_paper_markdown",

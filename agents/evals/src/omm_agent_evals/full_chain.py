@@ -58,6 +58,7 @@ from omm_agent_tools import failure_detail, summarize
 
 from .scenario import (
     CANNED_ANALYSIS,
+    CANNED_FORMALIZE,
     CANNED_PLANNING,
     CANNED_REDUCE,
     PROBLEM_STATEMENT,
@@ -481,11 +482,13 @@ def build_full_chain_llm(
         {
             "problem_analysis.default": stub_response(CANNED_ANALYSIS, fenced=True),
             "data_preparation.default": stub_response(CANNED_PREPARATION),
-            # 方案阶段（H3）：三路 Proposer 并行 + 一次归约；default 只在无监督者
-            # 的装配里被消费，本会话有监督者，留着是让回落路径仍可从评测触达
+            # 方案阶段（H3）：三路 Proposer 并行 + 一次归约 + 一次规范化（假设表 /
+            # 符号表）；default 只在无监督者的装配里被消费，本会话有监督者，留着
+            # 是让回落路径仍可从评测触达
             "model_planning.default": stub_response(CANNED_PLANNING),
             "model_planning.proposer": canned_proposer,
             "model_planning.reduce": stub_response(CANNED_REDUCE),
+            "model_planning.formalize": stub_response(CANNED_FORMALIZE),
             "validating.default": stub_response(CANNED_VALIDATION),
             "paper_outline.default": stub_response(CANNED_PAPER_OUTLINE),
             "paper_section.default": canned_paper_section,
@@ -597,8 +600,9 @@ def build_full_chain_session(
 #: absent by design: it is a sandbox agent now, driven through ``chat_text``
 #: conversations (see :data:`FULL_CHAIN_CHAT_SEQUENCE`). The planning stage is
 #: three parallel proposers (same template id, so the recorded order is stable
-#: whichever thread lands first) followed by one reduce call. The paper stage
-#: is a multipass pipeline: outline → one call per chapter → finalize.
+#: whichever thread lands first) followed by one reduce call and one formalize
+#: call (assumption table + symbol table, §9.1). The paper stage is a multipass
+#: pipeline: outline → one call per chapter → finalize.
 FULL_CHAIN_PROMPT_SEQUENCE = [
     "problem_analysis.default",
     "data_preparation.default",
@@ -606,6 +610,7 @@ FULL_CHAIN_PROMPT_SEQUENCE = [
     "model_planning.proposer",
     "model_planning.proposer",
     "model_planning.reduce",
+    "model_planning.formalize",
     "validating.default",
     "paper_outline.default",
     "paper_section.default",

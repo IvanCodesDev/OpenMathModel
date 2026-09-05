@@ -42,6 +42,7 @@ from .full_chain import (
 )
 from .scenario import (
     CANNED_ANALYSIS,
+    CANNED_FORMALIZE,
     CANNED_PLANNING,
     CANNED_PROPOSALS_BY_VIEW,
     CANNED_REDUCE,
@@ -57,6 +58,7 @@ __all__ = [
     "CANNED_ANALYSIS",
     "CANNED_EXPERIMENT",
     "CANNED_EXPERIMENT_CODE",
+    "CANNED_FORMALIZE",
     "CANNED_PAPER",
     "CANNED_PAPER_FINALIZE",
     "CANNED_PAPER_OUTLINE",

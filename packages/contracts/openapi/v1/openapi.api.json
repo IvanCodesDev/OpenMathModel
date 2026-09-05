@@ -596,6 +596,50 @@
         "title": "ArtifactText",
         "type": "object"
       },
+      "Assumption": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "description": "依据：题面 / 数据画像 / 领域常识 / 简化需要；空串表示节点未给出。",
+            "title": "Basis",
+            "type": "string"
+          },
+          "id": {
+            "description": "表内稳定编号：全局假设 G1、G2…，方案特定假设 <方案 id>1、<方案 id>2…（如 A1、B1）。",
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "impact": {
+            "$ref": "#/components/schemas/Impact"
+          },
+          "scope": {
+            "description": "适用范围：\"global\" 或 plans 中某个方案的 id。",
+            "minLength": 1,
+            "title": "Scope",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/omm_contracts__v1__plan_proposal__Status"
+          },
+          "text": {
+            "description": "假设陈述（一句话）。",
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "scope",
+          "basis",
+          "impact",
+          "status"
+        ],
+        "title": "Assumption",
+        "type": "object"
+      },
       "AttachmentParseResult": {
         "description": "对话附件的即席解析结果（ADR-0010 批次三）。\n\n与 ``ArtifactText`` 同一套状态语义，但不落库、不建产物：对话历史保存在页面\n内存、服务端无状态，附件解析也保持同样的隐私姿态。",
         "properties": {
@@ -1640,6 +1684,16 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "Impact": {
+        "description": "假设不成立时对结论的影响程度。",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "title": "Impact",
+        "type": "string"
+      },
       "Kind1": {
         "enum": [
           "dataset",
@@ -2525,8 +2579,23 @@
         "additionalProperties": false,
         "description": "建模方案页正文投影：MODEL_PLANNING 阶段真实 LLM 节点的最新成功输出（审批门的确认对象）。节点侧已保证 recommended_plan_id 指向 plans 中的方案；llm_attempts 等过程杂项不进入本投影。",
         "properties": {
+          "assumptions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Assumption"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "模型假设表（H3）：全局假设（scope=global）与各方案特定假设（scope=方案 id），由方案阶段归约后的一次规范化调用整理，供方案页「模型假设」分页与后续论文引用。节点未产出（2026-09-05 之前的运行、模拟节点、规范化调用失败）时为 null。可选字段：旧消费者可忽略。",
+            "title": "Assumptions"
+          },
           "plans": {
-            "description": "候选方案列表（当前提示词约定为 A/B 两套）。",
+            "description": "候选方案列表（归约后 1~3 套：A 主候选 / B 可用基线 / C 条件回退；无监督者的单次调用路径为 A/B 两套）。",
             "items": {
               "$ref": "#/components/schemas/PlanOption"
             },
@@ -2553,6 +2622,21 @@
           },
           "run_id": {
             "$ref": "#/components/schemas/RunId"
+          },
+          "symbols": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Symbol"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "符号表（H3）：题面共有的集合 / 参数（plan_id=null）与各方案自己的决策变量 / 目标（plan_id=方案 id），共享符号在前。未产出时为 null。可选字段：旧消费者可忽略。",
+            "title": "Symbols"
           },
           "updated_at": {
             "$ref": "#/components/schemas/Timestamp"
@@ -3532,6 +3616,72 @@
         "title": "Subquestion",
         "type": "object"
       },
+      "Symbol": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "description": "含义（一句话）。",
+            "minLength": 1,
+            "title": "Definition",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/omm_contracts__v1__plan_proposal__Kind"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "所属方案 id；题面共有的集合 / 参数为 null。",
+            "title": "Plan Id"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "取值范围或定义域（如「非负整数」「0…K_i」）；不适用为 null。",
+            "title": "Range"
+          },
+          "symbol": {
+            "description": "符号本身，LaTeX 记法、不带 $ 定界（如 x_{ijt}、\\mathcal{I}）；前端按行内公式排版。",
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "单位；无量纲或不适用为 null。",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "symbol",
+          "kind",
+          "definition",
+          "unit",
+          "range",
+          "plan_id"
+        ],
+        "title": "Symbol",
+        "type": "object"
+      },
       "TaskAgentAction": {
         "additionalProperties": false,
         "properties": {
@@ -4311,6 +4461,28 @@
           "READY",
           "FAILED",
           "UNSUPPORTED"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "omm_contracts__v1__plan_proposal__Kind": {
+        "description": "集合 / 参数（含常数与输入数据）/ 决策变量或状态量 / 目标函数 / 其它。",
+        "enum": [
+          "set",
+          "parameter",
+          "variable",
+          "objective",
+          "other"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "omm_contracts__v1__plan_proposal__Status": {
+        "description": "confirmed = 题面或数据直接支持；to_verify = 需在实验中用数据检验；critical = 影响大且需做敏感性 / 稳健性分析。",
+        "enum": [
+          "confirmed",
+          "to_verify",
+          "critical"
         ],
         "title": "Status",
         "type": "string"

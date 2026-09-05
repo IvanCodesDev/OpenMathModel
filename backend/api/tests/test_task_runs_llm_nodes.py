@@ -127,6 +127,25 @@ REDUCE_OUTPUT = {
     "progress_note": "三路提议归约为两案，推荐整数规划。",
 }
 
+#: 归约之后的规范化桩（H3 切片 2）：假设表 + 符号表。故意混入模型常犯的毛病
+#: （$ 定界、枚举别名、写错的方案 id），由节点归一化、投影再清洗——两表进
+#: plan-proposal 契约的 assumptions / symbols。
+FORMALIZE_OUTPUT = {
+    "assumptions": [
+        {"id": "G1", "text": "需求服从泊松分布", "scope": "global", "basis": "题面", "impact": "medium", "status": "confirmed"},
+        {"id": "G2", "text": "调度点之间需求独立", "scope": "GLOBAL", "basis": "简化需要", "impact": "low", "status": "to_verify"},
+        {"id": "A1", "text": "预算约束为硬约束", "scope": "方案 A", "basis": "题面", "impact": "High", "status": "critical"},
+        {"id": "B1", "text": "局部搜索邻域可覆盖可行域", "scope": "B", "basis": "领域常识", "impact": "medium", "status": "to_verify"},
+    ],
+    "symbols": [
+        {"symbol": "i \\in \\mathcal{I}", "kind": "set", "definition": "调度点索引", "unit": None, "range": "1…N", "plan_id": None},
+        {"symbol": "$d_i$", "kind": "parameter", "definition": "调度点 i 的需求量", "unit": "辆", "range": "≥ 0", "plan_id": None},
+        {"symbol": "x_i", "kind": "decision variable", "definition": "调度点 i 是否设站", "unit": "无", "range": "{0,1}", "plan_id": "A"},
+        {"symbol": "z", "kind": "objective", "definition": "总调度成本", "unit": "元", "range": "最小化", "plan_id": "A"},
+        {"symbol": "\\mathcal{N}(s)", "kind": "set", "definition": "解 s 的邻域", "unit": None, "range": None, "plan_id": "Plan B"},
+    ],
+}
+
 #: 实验沙盒会话（H3）里 stub 模型发出的脚本——由 python 沙箱真实执行：
 #: 写产物文件并打印指标行。newline='' 禁止平台换行转换，产物字节在
 #: Windows 与 POSIX 上一致。
@@ -337,6 +356,13 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "提议人应携带分析产出"
         assert PREPARATION_OUTPUT["profile_summary"] in prompt, "提议人应携带数据画像摘要"
         return _llm_reply(PROPOSAL_OUTPUT_BY_VIEW[proposer.group(1)])
+    if "建模规范员" in prompt:
+        # 归约之后的规范化（假设表 / 符号表）：拿到的是归约后的 A/B 两案与分析产出。
+        # 规范化模板正文也提到「方案组长」，必须先于归约锚点判断。
+        assert '"id": "A"' in prompt and '"id": "B"' in prompt, "规范化应携带归约后的方案卡"
+        assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "规范化应携带分析产出"
+        assert PREPARATION_OUTPUT["profile_summary"] in prompt, "规范化应携带数据画像摘要"
+        return _llm_reply(FORMALIZE_OUTPUT)
     if "方案组长" in prompt:
         for view_output in PROPOSAL_OUTPUT_BY_VIEW.values():
             assert view_output["name"] in prompt, "归约应拿到三路提议"
@@ -583,13 +609,18 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert [plan["id"] for plan in proposal["plans"]] == ["A", "B"]
     assert set(proposal["plans"][0]) == {"id", "name", "approach", "steps", "risks"}
     assert proposal["recommended_plan_id"] == "A"
-    # 三路提议 + 归约 = 方案阶段 4 次模型调用，全部记入用量监控并归属方案节点
+    # 假设表 / 符号表随方案卡一起在 G1 之前就位（切片 2）
+    assert [entry["id"] for entry in proposal["assumptions"]] == ["G1", "G2", "A1", "B1"]
+    assert [entry["symbol"] for entry in proposal["symbols"]] == [
+        "i \\in \\mathcal{I}", "d_i", "x_i", "z", "\\mathcal{N}(s)",
+    ]
+    # 三路提议 + 归约 + 规范化 = 方案阶段 5 次模型调用，全部记入用量监控并归属方案节点
     with client.app.state.db.session_factory() as session:
         usage_rows = session.execute(
             select(LlmUsageRow).where(LlmUsageRow.run_id == run["id"])
         ).scalars().all()
-    assert len(usage_rows) == 6, "题意 1 + 数据 1 + 提议 3 + 归约 1（尚未审批）"
-    assert sum(1 for row in usage_rows if row.run_id == run["id"]) == 6
+    assert len(usage_rows) == 7, "题意 1 + 数据 1 + 提议 3 + 归约 1 + 规范化 1（尚未审批）"
+    assert sum(1 for row in usage_rows if row.run_id == run["id"]) == 7
 
     approve_when_asked(client, run["id"], option_id="approve")
     # 论文发布后停在 G4 定稿闸门（必停）：草稿与审计已落库，卡片给「确认交付 / 退回修改」

@@ -255,13 +255,101 @@ def _plan_proposal(run_id: str, state: Optional[StageState]) -> Optional[PlanPro
     if not plans:
         # sim 节点或退化输出：契约要求 plans 至少一项（minItems=1），空表投影为 null
         return None
+    plan_ids = {plan["id"] for plan in plans if plan["id"]}
     return PlanProposal(
         run_id=run_id,
         plans=plans,
         recommended_plan_id=str(outputs.get("recommended_plan_id") or ""),
         rationale=outputs.get("rationale"),
+        assumptions=_assumptions(outputs.get("assumptions"), plan_ids),
+        symbols=_symbols(outputs.get("symbols"), plan_ids),
         updated_at=iso_z(state.at),
     )
+
+
+#: 假设表 / 符号表的契约枚举（plan-proposal.v1 $defs.assumption / $defs.symbol）。
+_ASSUMPTION_IMPACTS = frozenset({"low", "medium", "high"})
+_ASSUMPTION_STATUSES = frozenset({"confirmed", "to_verify", "critical"})
+_SYMBOL_KINDS = frozenset({"set", "parameter", "variable", "objective", "other"})
+_GLOBAL_SCOPE = "global"
+
+
+def _text_or_none(value: Any) -> Optional[str]:
+    """可空文本列（unit / range）：非字符串或空白 → null。"""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _assumptions(raw: Any, plan_ids: set[str]) -> Optional[list[dict[str, Any]]]:
+    """节点 outputs.assumptions → 契约 assumption[]（H3 切片 2）。
+
+    键不存在（切片 2 之前的运行、无监督者的单次调用路径）或规范化失败写下的 null
+    → null；畸形条目（缺 id / text、枚举值不在契约内）逐条剔除——契约
+    additionalProperties=false 且枚举硬约束，透传等于让一条脏数据把整个接口打成
+    500。scope 不是 "global" 也不是现有方案 id 时归为全局：方案被归约改名后，
+    假设本身仍是有效信息，不因归属对不上而丢。
+    """
+    if not isinstance(raw, list):
+        return None
+    entries: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        entry_id = str(item.get("id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        impact = item.get("impact")
+        status = item.get("status")
+        if not entry_id or not text:
+            continue
+        if impact not in _ASSUMPTION_IMPACTS or status not in _ASSUMPTION_STATUSES:
+            continue
+        scope = str(item.get("scope") or "").strip()
+        if scope not in plan_ids:
+            scope = _GLOBAL_SCOPE
+        entries.append(
+            {
+                "id": entry_id,
+                "text": text,
+                "scope": scope,
+                "basis": str(item.get("basis") or ""),
+                "impact": impact,
+                "status": status,
+            }
+        )
+    return entries
+
+
+def _symbols(raw: Any, plan_ids: set[str]) -> Optional[list[dict[str, Any]]]:
+    """节点 outputs.symbols → 契约 symbol[]（同上：缺省 null、畸形剔除）。
+
+    plan_id 对不上现有方案时归为共享（null）；符号两侧若残留 ``$`` 定界一并剥掉，
+    前端按行内公式统一包一层。
+    """
+    if not isinstance(raw, list):
+        return None
+    entries: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().strip("$").strip()
+        definition = str(item.get("definition") or "").strip()
+        kind = item.get("kind")
+        if not symbol or not definition or kind not in _SYMBOL_KINDS:
+            continue
+        plan_id = item.get("plan_id")
+        plan_id = str(plan_id).strip() if isinstance(plan_id, str) and plan_id.strip() in plan_ids else None
+        entries.append(
+            {
+                "symbol": symbol,
+                "kind": kind,
+                "definition": definition,
+                "unit": _text_or_none(item.get("unit")),
+                "range": _text_or_none(item.get("range")),
+                "plan_id": plan_id,
+            }
+        )
+    return entries
 
 
 def _number_or_none(value: Any) -> Optional[float]:

@@ -413,6 +413,13 @@ def test_g1_gate_offers_every_reduced_plan_and_adopting_b_flows_downstream():
     planning = snapshot.outputs[TaskState.MODEL_PLANNING.value]
     assert [plan["role"] for plan in planning["plans"]] == ["primary", "baseline"]
     assert planning["quality_warnings"] == []
+    # 归约之后的规范化把假设表 / 符号表带到 G1 之前（§9.1）：已是契约形状
+    assert [(entry["id"], entry["scope"]) for entry in planning["assumptions"]] == [
+        ("G1", "global"), ("G2", "global"), ("A1", "A"), ("B1", "B"),
+    ]
+    assert [(entry["symbol"], entry["plan_id"]) for entry in planning["symbols"]] == [
+        ("t \\in \\mathcal{T}", None), ("y_t", None), ("n_k", "A"), ("\\hat{y}_{t+1}", "B"),
+    ]
 
     # 用户改选 B：决策进台账，实验任务卡 / 论文材料都按 B 走
     engine.resolve_review(snapshot, approved=True, reason="adopt:B")
@@ -458,9 +465,10 @@ def test_planning_quorum_one_failed_proposer_still_reaches_the_gate_with_a_warni
     assert gate["title"].endswith("；1 路视角提议未成功")
     assert gate["impact"]["proposers"]["failed"] == [failure]
     prompt_ids = [call.prompt_id for call in session.llm.calls]
-    # 失败那一路用掉一次修复重试：3 + 1 次提议调用，归约仍只一次
+    # 失败那一路用掉一次修复重试：3 + 1 次提议调用，归约与规范化仍各只一次
     assert prompt_ids.count("model_planning.proposer") == 4
     assert prompt_ids.count("model_planning.reduce") == 1
+    assert prompt_ids.count("model_planning.formalize") == 1
 
     engine.resolve_review(snapshot, approved=True, reason="approve")
     outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))

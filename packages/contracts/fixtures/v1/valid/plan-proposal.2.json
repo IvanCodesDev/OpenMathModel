@@ -1,0 +1,47 @@
+{
+  "run_id": "run_2b3c4d5e6f708192a3b4c5d6e7f8091a",
+  "plans": [
+    {
+      "id": "A",
+      "name": "混合整数规划",
+      "approach": "以调度成本最小化为目标的 MILP：决策各时段跨区调度车辆数，约束站点容量与车辆守恒",
+      "steps": ["定义决策变量与约束", "构造目标函数", "调用求解器求解", "回测比较满足率与成本"],
+      "risks": ["规模过大时求解慢"]
+    },
+    {
+      "id": "B",
+      "name": "需求预测 + 贪心调度",
+      "approach": "先用时间序列模型预测各区需求，再按缺口贪心调度",
+      "steps": ["滚动窗口预测需求", "按缺口排序贪心分配", "局部搜索改进"],
+      "risks": ["无最优性保证"]
+    },
+    {
+      "id": "C",
+      "name": "排队网络近似",
+      "approach": "把区域视为排队节点，用流平衡近似稳态调度量",
+      "steps": ["估计到达率与服务率", "求解流平衡方程", "与 A 对照"],
+      "risks": ["稳态假设在高峰期失效"]
+    }
+  ],
+  "recommended_plan_id": "A",
+  "rationale": "数据规模中等，精确解可行且利于评审；B 作基线，C 只在数据不足以支撑 A 时采用",
+  "assumptions": [
+    { "id": "G1", "text": "15 分钟内区域需求保持平稳", "scope": "global", "basis": "题面给定的时间粒度", "impact": "low", "status": "confirmed" },
+    { "id": "G2", "text": "站点容量在规划期内固定", "scope": "global", "basis": "运营规则", "impact": "medium", "status": "confirmed" },
+    { "id": "G3", "text": "调度车辆行驶速度近似恒定", "scope": "global", "basis": "历史均值，需数据检验", "impact": "medium", "status": "to_verify" },
+    { "id": "A1", "text": "调度成本与调度车辆数近似线性", "scope": "A", "basis": "简化需要", "impact": "high", "status": "critical" },
+    { "id": "B1", "text": "各区需求可独立预测", "scope": "B", "basis": "分区结果", "impact": "medium", "status": "to_verify" },
+    { "id": "C1", "text": "系统在每个时段内达到稳态", "scope": "C", "basis": "排队论近似", "impact": "high", "status": "critical" }
+  ],
+  "symbols": [
+    { "symbol": "i \\in \\mathcal{I}", "kind": "set", "definition": "运营区域索引", "unit": null, "range": "1…R", "plan_id": null },
+    { "symbol": "t \\in \\mathcal{T}", "kind": "set", "definition": "15 分钟时间段", "unit": null, "range": "1…96", "plan_id": null },
+    { "symbol": "d_{it}", "kind": "parameter", "definition": "区域 i 在时段 t 的需求", "unit": "单", "range": "≥ 0", "plan_id": null },
+    { "symbol": "K_i", "kind": "parameter", "definition": "区域 i 的容量上限", "unit": "辆", "range": "正整数", "plan_id": null },
+    { "symbol": "x_{ijt}", "kind": "variable", "definition": "时段 t 从 i 调往 j 的车辆数", "unit": "辆", "range": "非负整数", "plan_id": "A" },
+    { "symbol": "z", "kind": "objective", "definition": "总调度成本", "unit": "元", "range": "最小化", "plan_id": "A" },
+    { "symbol": "\\hat{d}_{it}", "kind": "variable", "definition": "区域 i 在时段 t 的预测需求", "unit": "单", "range": "≥ 0", "plan_id": "B" },
+    { "symbol": "\\lambda_i", "kind": "parameter", "definition": "区域 i 的到达率", "unit": "单/分钟", "range": "> 0", "plan_id": "C" }
+  ],
+  "updated_at": "2026-09-05T12:30:00.000000Z"
+}

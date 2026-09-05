@@ -308,8 +308,43 @@ PROPOSER_VIEWS: tuple[ProposerView, ...] = (
 
 PROPOSER_PROMPT_ID = "model_planning.proposer"
 REDUCE_PROMPT_ID = "model_planning.reduce"
+#: 归约后的规范化调用：假设表 + 符号表（§9.1「归约 → 假设表+符号表 → 决策卡」）。
+FORMALIZE_PROMPT_ID = "model_planning.formalize"
 #: 提议人 Envelope 的 output_schema_id（§8.3 协议字段；校验器在本模块）。
 PROPOSAL_SCHEMA_ID = "model-planning-proposal.v1"
+
+#: 假设表 / 符号表的枚举与上限（与 plan-proposal 契约 $defs 对齐；这里只按契约
+#: 口径归一化，不 import contracts —— agents 域不依赖 contracts 包）。
+GLOBAL_ASSUMPTION_SCOPE = "global"
+ASSUMPTION_IMPACTS = ("low", "medium", "high")
+ASSUMPTION_STATUSES = ("confirmed", "to_verify", "critical")
+SYMBOL_KINDS = ("set", "parameter", "variable", "objective", "other")
+MAX_ASSUMPTIONS = 12
+MAX_SYMBOLS = 24
+
+_IMPACT_ALIASES = {
+    "low": "low", "低": "low", "minor": "low",
+    "medium": "medium", "mid": "medium", "moderate": "medium", "中": "medium",
+    "high": "high", "高": "high", "major": "high", "critical": "high",
+}
+_STATUS_ALIASES = {
+    "confirmed": "confirmed", "已确认": "confirmed", "given": "confirmed",
+    "supported": "confirmed",
+    "to_verify": "to_verify", "to-verify": "to_verify", "verify": "to_verify",
+    "待检验": "to_verify", "pending": "to_verify",
+    "critical": "critical", "重点验证": "critical", "sensitivity": "critical",
+}
+_KIND_ALIASES = {
+    "set": "set", "index": "set", "集合": "set", "索引": "set",
+    "parameter": "parameter", "param": "parameter", "constant": "parameter",
+    "input": "parameter", "参数": "parameter", "常数": "parameter",
+    "variable": "variable", "decision": "variable", "decision_variable": "variable",
+    "state": "variable", "变量": "variable", "决策变量": "variable",
+    "objective": "objective", "目标": "objective", "目标函数": "objective",
+    "other": "other", "function": "other", "其他": "other", "其它": "other",
+}
+#: 模型偶尔把 $…$ / \(…\) 定界一起给回来；契约要求不带定界、前端自己包。
+_MATH_DELIMS = re.compile(r"^\s*(?:\$\$?|\\\(|\\\[)\s*|\s*(?:\$\$?|\\\)|\\\])\s*$")
 
 #: quorum（§8.4）：≥2 路成功走归约；只剩 1 路降级为单案（记警告、卡片点明）；
 #: 0 路成功节点失败（引擎重试一次）。
@@ -393,6 +428,108 @@ def _plan_blurb(plan: Mapping[str, Any]) -> str:
     if condition:
         return f"{role}：{lead}（触发条件：{condition}）"
     return f"{role}：{lead}"
+
+
+def _enum_or(value: Any, aliases: Mapping[str, str], default: str) -> str:
+    """枚举归一化：大小写 / 中英文别名收敛到契约取值，认不出的给默认值。"""
+    key = str(value or "").strip().lower().replace(" ", "_")
+    return aliases.get(key, default)
+
+
+def _optional_text(value: Any) -> str | None:
+    """可选文字字段：空白 / None / 字面 null 一律 None。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"null", "none", "n/a", "无", "—", "-"}:
+        return None
+    return text
+
+
+def _match_plan_id(value: Any, plan_ids: Sequence[str]) -> str | None:
+    """把模型写的方案标识对回方案 id（容忍大小写与「方案 A」这类写法）；对不上 → None。"""
+    text = _optional_text(value)
+    if text is None:
+        return None
+    candidate = re.sub(r"^(?:方案|plan)\s*", "", text, flags=re.IGNORECASE).strip()
+    for plan_id in plan_ids:
+        if candidate.lower() == plan_id.lower():
+            return plan_id
+    return None
+
+
+def normalize_assumptions(raw: Any, plan_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """规范化调用输出的假设表 → 契约 assumption[]（确定性）。
+
+    - scope 不是 "global" 也不是任一方案 id → 归为全局（内容保留，不因方案 id
+      写错丢掉一条假设）；
+    - id 一律重编号：全局 G1…、方案 X1…（模型给的 id 常重复 / 混用，重编号
+      比校验再修复省一次调用）；
+    - 顺序：全局在前，其后按 plan_ids 顺序分组；同组内保持模型给出的顺序；
+    - 空 text 剔除；超过 MAX_ASSUMPTIONS 截断（先保全局，再按方案顺序）。
+    """
+    if not isinstance(raw, list):
+        return []
+    known = [str(plan_id) for plan_id in plan_ids]
+    buckets: dict[str, list[dict[str, Any]]] = {GLOBAL_ASSUMPTION_SCOPE: []}
+    for plan_id in known:
+        buckets.setdefault(plan_id, [])
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        scope = _match_plan_id(item.get("scope"), known) or GLOBAL_ASSUMPTION_SCOPE
+        buckets[scope].append({
+            "text": text,
+            "scope": scope,
+            "basis": str(item.get("basis") or "").strip(),
+            "impact": _enum_or(item.get("impact"), _IMPACT_ALIASES, "medium"),
+            "status": _enum_or(item.get("status"), _STATUS_ALIASES, "to_verify"),
+        })
+    ordered: list[dict[str, Any]] = []
+    for scope in [GLOBAL_ASSUMPTION_SCOPE, *known]:
+        prefix = "G" if scope == GLOBAL_ASSUMPTION_SCOPE else scope
+        for index, entry in enumerate(buckets[scope], start=1):
+            ordered.append({"id": f"{prefix}{index}", **entry})
+    return ordered[:MAX_ASSUMPTIONS]
+
+
+def normalize_symbols(raw: Any, plan_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """规范化调用输出的符号表 → 契约 symbol[]（确定性）。
+
+    - symbol 去掉模型多给的 $ / \\( \\) 定界（契约要求不带，前端统一包）；
+    - kind 别名收敛，认不出 → other；plan_id 不是任一方案 → null（共享）；
+    - 顺序：共享在前，其后按 plan_ids 顺序分组；空 symbol / definition 剔除；
+      超过 MAX_SYMBOLS 截断。
+    """
+    if not isinstance(raw, list):
+        return []
+    known = [str(plan_id) for plan_id in plan_ids]
+    buckets: dict[str | None, list[dict[str, Any]]] = {None: []}
+    for plan_id in known:
+        buckets.setdefault(plan_id, [])
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        symbol = _MATH_DELIMS.sub("", str(item.get("symbol") or "")).strip()
+        definition = str(item.get("definition") or "").strip()
+        if not symbol or not definition:
+            continue
+        plan_id = _match_plan_id(item.get("plan_id"), known)
+        buckets[plan_id].append({
+            "symbol": symbol,
+            "kind": _enum_or(item.get("kind"), _KIND_ALIASES, "other"),
+            "definition": definition,
+            "unit": _optional_text(item.get("unit")),
+            "range": _optional_text(item.get("range")),
+            "plan_id": plan_id,
+        })
+    ordered: list[dict[str, Any]] = []
+    for scope in [None, *known]:
+        ordered.extend(buckets[scope])
+    return ordered[:MAX_SYMBOLS]
 
 
 class ModelPlanningNode(LlmSkillNode):
@@ -493,12 +630,21 @@ class ModelPlanningNode(LlmSkillNode):
                 metrics={"llm_attempts": llm_calls},
             )
 
+        # 归约 → 假设表 + 符号表 → 决策卡（§9.1）。两表是方案页与论文的材料，
+        # 不是闸门依据：生成失败只记警告、字段留 null，G1 照常挂出。
+        assumptions, symbols, attempts, error = self._formalize(services, variables, reduced)
+        llm_calls += attempts
+        if error:
+            warnings.append(f"模型假设表与符号表未生成（{error}）")
+
         outputs: dict[str, Any] = {
             "plans": [dict(plan) for plan in reduced["plans"]],
             "recommended_plan_id": reduced["recommended_plan_id"],
             "rationale": reduced.get("rationale"),
             "progress_note": reduced.get("progress_note"),
             "dropped": list(reduced.get("dropped") or []),
+            "assumptions": assumptions,
+            "symbols": symbols,
             # 三路提议的原样留档（去重前）：论文 / 复盘可回看被合并或舍弃的思路
             "proposals": [
                 {key: proposal[key] for key in _PROPOSAL_KEYS} for proposal in proposals
@@ -626,6 +772,39 @@ class ModelPlanningNode(LlmSkillNode):
                 "problem_analysis": variables["problem_analysis"],
                 "data_profile": variables["data_profile"],
             },
+        )
+
+    def _formalize(
+        self,
+        services: NodeServices,
+        variables: Mapping[str, str],
+        reduced: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]] | None, int, str | None]:
+        """一次规范化调用：为归约后的方案卡整理假设表与符号表。
+
+        返回 (assumptions, symbols, llm_calls, error)。调用 / 校验失败 → 两表 None
+        + error 文案（调用方记警告）；预算硬停（AgentError E3xx）原样上抛，与
+        ``_reduce`` 同一口径。
+        """
+        template = self._registry.get(FORMALIZE_PROMPT_ID)
+        plans = [dict(plan) for plan in reduced["plans"]]
+        parsed, attempts, error = complete_validated(
+            services,
+            template,
+            {
+                "plans": json.dumps(plans, ensure_ascii=False),
+                "problem_analysis": variables["problem_analysis"],
+                "data_profile": variables["data_profile"],
+            },
+        )
+        if parsed is None:
+            return None, None, attempts, str(error or "模型输出未通过校验")
+        plan_ids = [str(plan.get("id")) for plan in plans]
+        return (
+            normalize_assumptions(parsed.get("assumptions"), plan_ids),
+            normalize_symbols(parsed.get("symbols"), plan_ids),
+            attempts,
+            None,
         )
 
     @staticmethod

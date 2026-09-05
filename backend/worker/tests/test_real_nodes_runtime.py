@@ -135,6 +135,18 @@ REDUCE_OK = {
     "progress_note": "三路提议归约为两案，推荐整数规划。",
 }
 
+#: 归约之后的规范化（H3 切片 2）：假设表 + 符号表随方案卡进 G1。
+FORMALIZE_OK = {
+    "assumptions": [
+        {"id": "G1", "text": "需求服从泊松分布", "scope": "global", "basis": "题面", "impact": "medium", "status": "confirmed"},
+        {"id": "A1", "text": "预算约束为硬约束", "scope": "A", "basis": "题面", "impact": "high", "status": "critical"},
+    ],
+    "symbols": [
+        {"symbol": "i \\in \\mathcal{I}", "kind": "set", "definition": "调度点索引", "unit": None, "range": None, "plan_id": None},
+        {"symbol": "x_i", "kind": "variable", "definition": "调度点 i 是否设站", "unit": None, "range": "{0,1}", "plan_id": "A"},
+    ],
+}
+
 #: 沙箱真实执行的实验脚本：写产物文件并打印指标行。
 #: newline='' 禁止平台换行转换，产物字节在 Windows 与 POSIX 上一致。
 EXPERIMENT_CODE = (
@@ -188,10 +200,11 @@ def stage_responses(**overrides):
     responses = {
         "problem_analysis.default": stub_response(ANALYSIS_OK),
         "data_preparation.default": stub_response(PREPARATION_OK),
-        # 方案阶段走三路提议 + 归约；default 只在无监督者时才会被消费（worker 有）
+        # 方案阶段走三路提议 + 归约 + 规范化；default 只在无监督者时才会被消费（worker 有）
         "model_planning.default": stub_response(PLANNING_OK),
         "model_planning.proposer": proposer_reply,
         "model_planning.reduce": stub_response(REDUCE_OK),
+        "model_planning.formalize": stub_response(FORMALIZE_OK),
         "validating.default": stub_response(VALIDATION_OK),
         # 论文阶段是分章多轮管线：总编规划（paper_outline）在本桩给非法输出，
         # 节点走「总编失败回退整篇单次生成」路径消费 paper_writing 桩——worker
@@ -531,6 +544,7 @@ def test_crash_midway_fresh_runtime_resumes_to_completion(tmp_path):
         "model_planning.default": 0,
         "model_planning.proposer": 3,
         "model_planning.reduce": 1,
+        "model_planning.formalize": 1,
         "validating.default": 2,
         "paper_writing.default": 1,
     }.items():
@@ -571,9 +585,10 @@ def test_reject_redoes_planning_and_asks_again(tmp_path):
         (1, StepStatus.SUCCEEDED),
         (2, StepStatus.SUCCEEDED),
     ]
-    # 重做 = 三路提议与归约整个重来一遍
+    # 重做 = 三路提议、归约与规范化整个重来一遍
     assert len(prompt_calls(llm, "model_planning.proposer")) == 6
     assert len(prompt_calls(llm, "model_planning.reduce")) == 2
+    assert len(prompt_calls(llm, "model_planning.formalize")) == 2
     assert prompt_calls(llm, "model_planning.default") == []
 
     # 审批事件轨迹：请求 → 拒绝 → 重做 → 再请求；拒绝原因落在事件日志里

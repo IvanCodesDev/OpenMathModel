@@ -15,7 +15,9 @@ from conftest import (
     run_status_is,
     wait_until,
 )
+from sqlalchemy import select
 
+from omm_api.orm import LlmUsageRow
 from test_task_runs_llm_nodes import (
     EXPERIMENT_OUTPUT,
     _configure_llm,
@@ -48,25 +50,31 @@ def test_run_level_llm_call_cap_hard_stops_with_e310(client, monkeypatch):
 
 
 def test_node_level_token_cap_hard_stops_with_e320(client, monkeypatch):
-    """节点 token 上限只打节点自己：stub 每次调用 30 tokens，上限 100——方案阶段
-    三路提议 + 归约共 4 次调用（第 4 次调用前累计 90，未越线）与其余阶段都无碍；
-    论文分章管线（总编 + 三章 + 统稿）在第 5 次调用前累计 120 越线被拦。"""
+    """节点 token 上限只打节点自己：stub 每次调用 30 tokens，上限 100——题意、数据
+    两阶段各一次调用无碍；方案阶段三路提议 + 归约 + 规范化共 5 次调用，第 5 次
+    （规范化）调用前累计 120 越线被拦。若账本是跨节点累计的，方案阶段第 3 次调用
+    前就已累计 120（题意 30 + 数据 30 + 提议 60），用量行只会有 4 行而不是 6 行。"""
     monkeypatch.setenv("OMM_NODE_MAX_TOKENS", "100")
     _configure_llm(client, monkeypatch)
     run = create_run(client, create_project(client)["id"], goal="优化共享单车调度")
 
-    approve_when_asked(client, run["id"], option_id="approve")
     failed = wait_until(client, run["id"], run_status_is(client, run["id"], "FAILED"))
 
     message = failed["failure"]["message"]
     assert "[E320]" in message
-    assert "PAPER_WRITING" in message
+    assert "MODEL_PLANNING" in message
 
     steps = client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
     statuses = {step["node"]: step["status"] for step in steps}
-    for node in ("PROBLEM_ANALYSIS", "DATA_PREPARATION", "MODEL_PLANNING", "EXPERIMENTING", "VALIDATING"):
-        assert statuses[node] == "SUCCEEDED", f"{node} 不应被论文节点的预算殃及"
-    assert statuses["PAPER_WRITING"] == "FAILED"
+    for node in ("PROBLEM_ANALYSIS", "DATA_PREPARATION"):
+        assert statuses[node] == "SUCCEEDED", f"{node} 不应被方案节点的预算殃及"
+    assert statuses["MODEL_PLANNING"] == "FAILED"
+    # 花钱之前硬停：前 4 次方案阶段调用都记了账，第 5 次没有用量行
+    with client.app.state.db.session_factory() as session:
+        usage_rows = session.execute(
+            select(LlmUsageRow).where(LlmUsageRow.run_id == run["id"])
+        ).scalars().all()
+    assert len(usage_rows) == 6, "题意 1 + 数据 1 + 提议 3 + 归约 1；规范化在调用前被拦"
 
 
 def test_sandbox_run_cap_charges_upfront_with_e310(client, monkeypatch):

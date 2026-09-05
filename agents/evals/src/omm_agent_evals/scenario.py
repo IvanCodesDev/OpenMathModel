@@ -115,6 +115,23 @@ CANNED_REDUCE = {
     "progress_note": "三路提议归约为两案：推荐线性回归 + 整数规划，时间序列作对照基线。",
 }
 
+#: 归约之后的规范化（H3 切片 2）：假设表 + 符号表随方案卡进 G1，也是论文
+#: 「模型假设」「符号说明」两节的底稿。
+CANNED_FORMALIZE = {
+    "assumptions": [
+        {"id": "G1", "text": "运量趋势在规划期内近似线性", "scope": "global", "basis": "数据画像", "impact": "high", "status": "to_verify"},
+        {"id": "G2", "text": "单位运量成本为常数", "scope": "global", "basis": "简化需要", "impact": "medium", "status": "confirmed"},
+        {"id": "A1", "text": "车辆数与预算均为硬约束", "scope": "A", "basis": "题面", "impact": "high", "status": "critical"},
+        {"id": "B1", "text": "样本平稳可定阶", "scope": "B", "basis": "领域常识", "impact": "medium", "status": "to_verify"},
+    ],
+    "symbols": [
+        {"symbol": "t \\in \\mathcal{T}", "kind": "set", "definition": "季度索引", "unit": None, "range": "1…T", "plan_id": None},
+        {"symbol": "y_t", "kind": "parameter", "definition": "第 t 季度运量", "unit": "万吨", "range": "≥ 0", "plan_id": None},
+        {"symbol": "n_k", "kind": "variable", "definition": "k 型车辆配置数", "unit": "辆", "range": "非负整数", "plan_id": "A"},
+        {"symbol": "\\hat{y}_{t+1}", "kind": "variable", "definition": "下季度运量预测", "unit": "万吨", "range": "≥ 0", "plan_id": "B"},
+    ],
+}
+
 #: Real python executed in the sandbox: closed-form least squares on y≈2x+1.
 EXPERIMENT_CODE = """\
 import json
@@ -214,9 +231,10 @@ def build_llm() -> StubLlmPort:
     return StubLlmPort(
         {
             "problem_analysis.default": stub_response(CANNED_ANALYSIS, fenced=True),
-            # worker 运行时注入了子代理监督者：方案阶段走三路提议 + 归约
+            # worker 运行时注入了子代理监督者：方案阶段走三路提议 + 归约 + 规范化
             "model_planning.proposer": canned_proposer,
             "model_planning.reduce": stub_response(CANNED_REDUCE),
+            "model_planning.formalize": stub_response(CANNED_FORMALIZE),
         }
     )
 

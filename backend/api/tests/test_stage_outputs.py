@@ -8,6 +8,8 @@ test_task_runs_llm_nodes 的 MockTransport 六阶段桩（同一份 stub 输出�
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from conftest import (
     API,
     approve_when_asked,
@@ -19,7 +21,7 @@ from conftest import (
     wait_until,
 )
 
-from omm_api.stage_outputs import StageState, _robustness_report, _validation_report
+from omm_api.stage_outputs import StageState, _plan_proposal, _robustness_report, _validation_report
 from omm_contracts.v1.experiment_summary import ValidationReport
 from test_task_runs_llm_nodes import (
     ANALYSIS_OUTPUT,
@@ -71,6 +73,19 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert plan_proposal["recommended_plan_id"] == PLANNING_OUTPUT["recommended_plan_id"]
     assert len(plan_proposal["plans"]) == len(PLANNING_OUTPUT["plans"])
     assert "llm_attempts" not in plan_proposal, "过程杂项字段不得进入投影"
+    # H3 切片 2：归约后的规范化把假设表 / 符号表带进契约；模型的毛病（$ 定界、
+    # 枚举别名、「方案 A」/「Plan B」写法）在节点归一化后已成契约形状
+    assert [(entry["id"], entry["scope"]) for entry in plan_proposal["assumptions"]] == [
+        ("G1", "global"), ("G2", "global"), ("A1", "A"), ("B1", "B"),
+    ]
+    assert plan_proposal["assumptions"][2]["impact"] == "high"
+    assert [(entry["symbol"], entry["plan_id"]) for entry in plan_proposal["symbols"]] == [
+        ("i \\in \\mathcal{I}", None), ("d_i", None), ("x_i", "A"), ("z", "A"), ("\\mathcal{N}(s)", "B"),
+    ]
+    assert plan_proposal["symbols"][2] == {
+        "symbol": "x_i", "kind": "variable", "definition": "调度点 i 是否设站",
+        "unit": None, "range": "{0,1}", "plan_id": "A",
+    }
 
     experiment_summary = payload["experiment_summary"]
     validate_contract("experiment-summary.schema.json", experiment_summary)
@@ -303,6 +318,75 @@ def test_robustness_projection_unfinished_sandbox_and_absent_field():
     legacy.outputs = {"verdict": "pass", "checks": [], "risks": [], "validation_summary": "旧运行"}
     assert _validation_report(legacy)["robustness"] is None
     ValidationReport.model_validate(_validation_report(legacy))
+
+
+_RUN_ID = "run_" + "0" * 32
+
+
+def _planning_state(**extra) -> StageState:
+    state = StageState()
+    state.at = datetime(2026, 9, 5, 12, 30, tzinfo=timezone.utc)
+    state.outputs = {
+        "plans": [
+            {"id": "A", "name": "整数规划", "approach": "MILP", "steps": ["建模"], "risks": []},
+            {"id": "B", "name": "启发式", "approach": "贪心", "steps": ["迭代"], "risks": []},
+        ],
+        "recommended_plan_id": "A",
+        "rationale": "精确解可行",
+        **extra,
+    }
+    return state
+
+
+def test_plan_tables_projection_absent_and_null_stay_null():
+    """切片 2 之前的运行 / 无监督者的单次调用路径没有两表键；规范化失败节点写下
+    null——两种情况投影都保持 null，不编空表。"""
+    legacy = _plan_proposal(_RUN_ID, _planning_state())
+    assert legacy.assumptions is None and legacy.symbols is None
+    assert "assumptions" in legacy.model_dump() and legacy.model_dump()["assumptions"] is None
+
+    degraded = _plan_proposal(_RUN_ID, _planning_state(assumptions=None, symbols=None))
+    assert degraded.assumptions is None and degraded.symbols is None
+
+
+def test_plan_tables_projection_drops_malformed_rows_and_refolds_scope(validate_contract):
+    """契约 additionalProperties=false + 枚举硬约束：畸形行逐条剔除而不是打成 500；
+    归属对不上现有方案的假设归全局、符号归共享。"""
+    raw_assumptions = [
+        {"id": "G1", "text": "需求服从泊松分布", "scope": "global", "basis": "题面", "impact": "medium", "status": "confirmed"},
+        {"id": "A1", "text": "预算为硬约束", "scope": "A", "basis": "", "impact": "high", "status": "critical", "extra": "junk"},
+        {"id": "C1", "text": "方案 C 已被归约掉", "scope": "C", "basis": "", "impact": "low", "status": "to_verify"},
+        {"id": "", "text": "缺 id 剔除", "scope": "global", "basis": "", "impact": "low", "status": "confirmed"},
+        {"id": "X1", "text": "", "scope": "global", "basis": "", "impact": "low", "status": "confirmed"},
+        {"id": "X2", "text": "枚举越界剔除", "scope": "global", "basis": "", "impact": "severe", "status": "confirmed"},
+        {"id": "X3", "text": "状态越界剔除", "scope": "global", "basis": "", "impact": "low", "status": "pending"},
+        "not-a-dict",
+    ]
+    raw_symbols = [
+        {"symbol": "$x_i$", "kind": "variable", "definition": "是否设站", "unit": "", "range": "{0,1}", "plan_id": "A"},
+        {"symbol": "K", "kind": "parameter", "definition": "预算", "unit": "万元", "range": None, "plan_id": "C"},
+        {"symbol": "\\mathcal{I}", "kind": "set", "definition": "候选点集合", "plan_id": None},
+        {"symbol": "", "kind": "parameter", "definition": "空符号剔除"},
+        {"symbol": "y", "kind": "parameter", "definition": ""},
+        {"symbol": "w", "kind": "decision", "definition": "kind 越界剔除"},
+        {"symbol": "v", "kind": "variable", "definition": "unit 不是字符串", "unit": 3, "range": ["a"], "plan_id": 7},
+        42,
+    ]
+    proposal = _plan_proposal(_RUN_ID, _planning_state(assumptions=raw_assumptions, symbols=raw_symbols))
+    payload = proposal.model_dump(mode="json")
+    validate_contract("plan-proposal.schema.json", payload)
+
+    assert payload["assumptions"] == [
+        {"id": "G1", "text": "需求服从泊松分布", "scope": "global", "basis": "题面", "impact": "medium", "status": "confirmed"},
+        {"id": "A1", "text": "预算为硬约束", "scope": "A", "basis": "", "impact": "high", "status": "critical"},
+        {"id": "C1", "text": "方案 C 已被归约掉", "scope": "global", "basis": "", "impact": "low", "status": "to_verify"},
+    ]
+    assert payload["symbols"] == [
+        {"symbol": "x_i", "kind": "variable", "definition": "是否设站", "unit": None, "range": "{0,1}", "plan_id": "A"},
+        {"symbol": "K", "kind": "parameter", "definition": "预算", "unit": "万元", "range": None, "plan_id": None},
+        {"symbol": "\\mathcal{I}", "kind": "set", "definition": "候选点集合", "unit": None, "range": None, "plan_id": None},
+        {"symbol": "v", "kind": "variable", "definition": "unit 不是字符串", "unit": None, "range": None, "plan_id": None},
+    ]
 
 
 def test_stage_outputs_requires_ownership(client, second_client, make_run):

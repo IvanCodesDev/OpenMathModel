@@ -369,6 +369,38 @@ REDUCE_OK = {
     "progress_note": "三路提议各有侧重，推荐整数规划。",
 }
 
+#: 规范化调用的模型原样输出：故意带上模型常犯的毛病（乱序、$ 定界、别名枚举、
+#: 写错的方案 id、缺 id），由 normalize_* 收拾成契约形状。
+FORMALIZE_RAW = {
+    "assumptions": [
+        {"id": "M1", "text": "预算约束为硬约束", "scope": "方案 A", "basis": "题面", "impact": "High", "status": "重点验证"},
+        {"id": "A1", "text": "需求服从泊松分布", "scope": "global", "basis": "题面给定", "impact": "medium", "status": "confirmed"},
+        {"id": "A2", "text": "候选点之间需求独立", "scope": "GLOBAL", "basis": "简化需要", "impact": "low", "status": "to_verify"},
+        {"text": "到达过程近似泊松", "scope": "B", "basis": "排队论前提", "impact": "medium", "status": "to_verify"},
+        {"id": "X9", "text": "历史销量覆盖全部候选点", "scope": "D", "basis": "数据画像", "impact": "high", "status": "pending"},
+        {"id": "E0", "text": "   ", "scope": "global", "basis": "", "impact": "low", "status": "confirmed"},
+    ],
+    "symbols": [
+        {"symbol": "$x_i$", "kind": "decision variable", "definition": "候选点 i 是否开店", "unit": "无", "range": "{0,1}", "plan_id": "A"},
+        {"symbol": "i \\in \\mathcal{I}", "kind": "集合", "definition": "候选点索引", "unit": None, "range": "1…N", "plan_id": None},
+        {"symbol": "\\(c_i\\)", "kind": "parameter", "definition": "候选点 i 的开店成本", "unit": "万元", "range": "≥ 0", "plan_id": "null"},
+        {"symbol": "\\lambda", "kind": "rate", "definition": "顾客到达率", "unit": "人/小时", "range": "> 0", "plan_id": "Plan B"},
+        {"symbol": "z", "kind": "objective", "definition": "总利润", "unit": "万元", "range": "最大化", "plan_id": "A"},
+        {"symbol": "", "kind": "parameter", "definition": "空符号被剔除", "unit": None, "range": None, "plan_id": None},
+    ],
+}
+
+
+def fanout_stubs(**overrides):
+    """三路提议 + 归约 + 规范化的默认桩；按需覆盖某一环。"""
+    responses = {
+        "model_planning.proposer": proposer_stub(),
+        "model_planning.reduce": stub_response(REDUCE_OK),
+        "model_planning.formalize": stub_response(FORMALIZE_RAW),
+    }
+    responses.update(overrides)
+    return responses
+
 
 def proposer_stub(failing_views=(), barrier=None):
     """按 view_name 回提案；failing_views 里的视角回垃圾（两次都过不了校验）。"""
@@ -395,10 +427,7 @@ def test_model_planning_fans_out_three_proposers_in_parallel_then_reduces(regist
 
     # 三路必须同时在飞：屏障要等满 3 个线程才放行，串行执行会在 5 秒后炸掉
     barrier = threading.Barrier(3, timeout=5)
-    llm = StubLlmPort({
-        "model_planning.proposer": proposer_stub(barrier=barrier),
-        "model_planning.reduce": stub_response(REDUCE_OK),
-    })
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.proposer": proposer_stub(barrier=barrier)}))
     audits = []
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
@@ -433,12 +462,14 @@ def test_model_planning_fans_out_three_proposers_in_parallel_then_reduces(regist
         "mechanism", "data_driven", "operations_research",
     ]
     assert outputs["proposer_failures"] == [] and outputs["quality_warnings"] == []
-    assert outputs["llm_attempts"] == 4
+    # 3 路提议 + 归约 + 规范化（假设表 / 符号表）
+    assert outputs["llm_attempts"] == 5
 
-    # 调用形状：三次提议人调用都在归约之前；归约拿到三份提案与视角说明
+    # 调用形状：三次提议人调用都在归约之前；归约拿到三份提案与视角说明；
+    # 规范化在归约之后、G1 之前
     prompt_ids = [call.prompt_id for call in llm.calls]
     assert prompt_ids[:3] == ["model_planning.proposer"] * 3
-    assert prompt_ids[3:] == ["model_planning.reduce"]
+    assert prompt_ids[3:] == ["model_planning.reduce", "model_planning.formalize"]
     briefs = {call.variables["view_name"]: call.variables["view_brief"] for call in llm.calls[:3]}
     assert set(briefs) == {"机理建模", "数据驱动", "运筹优化"}
     assert all("泊松分布" in call.variables["problem_analysis"] for call in llm.calls[:3])
@@ -461,10 +492,9 @@ def test_model_planning_fans_out_three_proposers_in_parallel_then_reduces(regist
 
 
 def test_model_planning_quorum_two_of_three_reduces_and_records_the_failure(registry):
-    llm = StubLlmPort({
+    llm = StubLlmPort(fanout_stubs(**{
         "model_planning.proposer": proposer_stub(failing_views=("运筹优化",)),
-        "model_planning.reduce": stub_response(REDUCE_OK),
-    })
+    }))
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -479,17 +509,17 @@ def test_model_planning_quorum_two_of_three_reduces_and_records_the_failure(regi
     assert [proposal["view"] for proposal in result.outputs["proposals"]] == succeeded
     assert result.review_meta["impact"]["proposers"]["succeeded"] == succeeded
     # 归约照做（≥2 路成功），并被告知哪一路缺席
-    proposals_sent = json.loads(llm.calls[-1].variables["proposals"])
+    reduce_call = next(call for call in llm.calls if call.prompt_id == "model_planning.reduce")
+    proposals_sent = json.loads(reduce_call.variables["proposals"])
     assert proposals_sent[-1]["status"] == "failed" and "运筹优化" in proposals_sent[-1]["note"]
-    # 失败那一路用掉一次修复重试：2 + 1 + 1 + 归约 1
-    assert result.outputs["llm_attempts"] == 5
+    # 失败那一路用掉一次修复重试：2 + 1 + 1 + 归约 1 + 规范化 1
+    assert result.outputs["llm_attempts"] == 6
 
 
 def test_model_planning_single_success_degrades_to_one_plan_without_reduce(registry):
-    llm = StubLlmPort({
+    llm = StubLlmPort(fanout_stubs(**{
         "model_planning.proposer": proposer_stub(failing_views=("数据驱动", "运筹优化")),
-        "model_planning.reduce": stub_response(REDUCE_OK),
-    })
+    }))
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -508,14 +538,18 @@ def test_model_planning_single_success_degrades_to_one_plan_without_reduce(regis
     [*_, degraded] = result.outputs["quality_warnings"]
     assert degraded.startswith("仅「机理建模」一路视角成功，未做归约")
     assert len(result.outputs["proposer_failures"]) == 2
+    # 降级路径也做规范化：单案照样有假设表 / 符号表，方案 id 只认 A
+    formalize_call = next(call for call in llm.calls if call.prompt_id == "model_planning.formalize")
+    assert [plan["id"] for plan in json.loads(formalize_call.variables["plans"])] == ["A"]
+    assert {entry["scope"] for entry in result.outputs["assumptions"]} <= {"global", "A"}
+    assert {entry["plan_id"] for entry in result.outputs["symbols"]} <= {None, "A"}
 
 
 def test_model_planning_fails_when_every_proposer_fails(registry):
     every_view = ("机理建模", "数据驱动", "运筹优化")
-    llm = StubLlmPort({
+    llm = StubLlmPort(fanout_stubs(**{
         "model_planning.proposer": proposer_stub(failing_views=every_view),
-        "model_planning.reduce": stub_response(REDUCE_OK),
-    })
+    }))
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -536,10 +570,7 @@ def test_model_planning_budget_stop_propagates_instead_of_degrading(registry):
             raise AgentError(ErrorCode.BUDGET_RUN, "LLM 调用次数将超过上限 2")
         return stub_response(PROPOSALS_BY_VIEW[variables["view_name"]])
 
-    llm = StubLlmPort({
-        "model_planning.proposer": reply,
-        "model_planning.reduce": stub_response(REDUCE_OK),
-    })
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.proposer": reply}))
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -553,10 +584,7 @@ def test_model_planning_budget_stop_propagates_instead_of_degrading(registry):
 
 
 def test_model_planning_reduce_failure_falls_back_to_direct_candidates(registry):
-    llm = StubLlmPort({
-        "model_planning.proposer": proposer_stub(),
-        "model_planning.reduce": "归约人跑题了",
-    })
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.reduce": "归约人跑题了"}))
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -578,16 +606,13 @@ def test_model_planning_reduce_failure_falls_back_to_direct_candidates(registry)
     assert result.review_meta["options"][1]["description"].startswith("候选：")
     [warning] = result.outputs["quality_warnings"]
     assert warning.startswith("方案归约未成功（")
-    # 归约的一次修复也算进去：3 + 2
-    assert result.outputs["llm_attempts"] == 5
+    # 归约的一次修复也算进去：3 + 2 + 规范化 1
+    assert result.outputs["llm_attempts"] == 6
 
 
 def test_model_planning_rejects_an_inconsistent_reduction(registry):
     bad = dict(REDUCE_OK, plans=[dict(REDUCE_OK["plans"][0]), dict(REDUCE_OK["plans"][1], id="A")])
-    llm = StubLlmPort({
-        "model_planning.proposer": proposer_stub(),
-        "model_planning.reduce": stub_response(bad),
-    })
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.reduce": stub_response(bad)}))
     node = ModelPlanningNode(registry)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -595,13 +620,12 @@ def test_model_planning_rejects_an_inconsistent_reduction(registry):
 
     assert result.status == NodeResult.FAILED
     assert "方案 id 'A' 重复" in result.error
+    # 不合法的归约在规范化之前就止步，不再多烧一次调用
+    assert "model_planning.formalize" not in [call.prompt_id for call in llm.calls]
 
 
 def test_model_planning_fanout_can_run_unattended(registry):
-    llm = StubLlmPort({
-        "model_planning.proposer": proposer_stub(),
-        "model_planning.reduce": stub_response(REDUCE_OK),
-    })
+    llm = StubLlmPort(fanout_stubs())
     node = ModelPlanningNode(registry, require_confirmation=False)
     ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
 
@@ -609,7 +633,101 @@ def test_model_planning_fanout_can_run_unattended(registry):
 
     assert result.status == NodeResult.SUCCEEDED
     assert [plan["id"] for plan in result.outputs["plans"]] == ["A", "B", "C"]
-    assert result.metrics == {"llm_attempts": 4}
+    assert result.metrics == {"llm_attempts": 5}
+    assert result.outputs["assumptions"] and result.outputs["symbols"]
+
+
+def test_model_planning_formalizes_assumptions_and_symbols_after_reduce(registry):
+    """归约 → 假设表 + 符号表 → G1（§9.1）：模型输出的毛病由确定性归一化收拾干净。"""
+    llm = StubLlmPort(fanout_stubs())
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    formalize_call = llm.calls[-1]
+    assert formalize_call.prompt_id == "model_planning.formalize"
+    # 规范化拿到归约后的全部方案卡（A/B/C）与问题分析、数据画像
+    assert [plan["id"] for plan in json.loads(formalize_call.variables["plans"])] == ["A", "B", "C"]
+    assert "泊松分布" in formalize_call.variables["problem_analysis"]
+    assert formalize_call.variables["data_profile"]
+
+    assumptions = result.outputs["assumptions"]
+    # 全局在前（G1、G2），其后按方案 A、B 顺序重编号；scope 写成「方案 A」认得出，
+    # 写成不存在的 D 归为全局；空 text 剔除；枚举别名（High / 重点验证 / pending）收敛
+    assert [(entry["id"], entry["scope"]) for entry in assumptions] == [
+        ("G1", "global"), ("G2", "global"), ("G3", "global"), ("A1", "A"), ("B1", "B"),
+    ]
+    assert [entry["text"] for entry in assumptions] == [
+        "需求服从泊松分布", "候选点之间需求独立", "历史销量覆盖全部候选点",
+        "预算约束为硬约束", "到达过程近似泊松",
+    ]
+    assert assumptions[3]["impact"] == "high" and assumptions[3]["status"] == "critical"
+    assert assumptions[2]["status"] == "to_verify"
+    assert set(assumptions[0]) == {"id", "text", "scope", "basis", "impact", "status"}
+
+    symbols = result.outputs["symbols"]
+    # 共享在前（plan_id None），其后按方案顺序；$ / \( \) 定界剥掉；kind 别名收敛、
+    # 认不出的 rate → other；plan_id 写成「Plan B」认得出、字面 "null" 当共享；空符号剔除
+    assert [(entry["symbol"], entry["plan_id"]) for entry in symbols] == [
+        ("i \\in \\mathcal{I}", None), ("c_i", None), ("x_i", "A"), ("z", "A"), ("\\lambda", "B"),
+    ]
+    assert [entry["kind"] for entry in symbols] == ["set", "parameter", "variable", "objective", "other"]
+    assert symbols[2]["unit"] is None and symbols[2]["range"] == "{0,1}"
+    assert set(symbols[0]) == {"symbol", "kind", "definition", "unit", "range", "plan_id"}
+    assert result.outputs["quality_warnings"] == []
+
+
+def test_model_planning_formalize_failure_keeps_the_gate_and_records_a_warning(registry):
+    """两表是材料不是闸门依据：规范化失败只留 null + 警告，G1 照常挂出。"""
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.formalize": "规范化员跑题了"}))
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_meta["gate"] == "G1"
+    assert result.outputs["assumptions"] is None and result.outputs["symbols"] is None
+    [warning] = result.outputs["quality_warnings"]
+    assert warning.startswith("模型假设表与符号表未生成（")
+    # 规范化的一次修复也算进去：3 + 1 + 2
+    assert result.outputs["llm_attempts"] == 6
+
+
+def test_normalize_assumptions_and_symbols_clip_and_stay_deterministic():
+    from omm_agent_skills import normalize_assumptions, normalize_symbols
+
+    many = [
+        {"text": f"全局假设 {index}", "scope": "global", "impact": "low", "status": "confirmed"}
+        for index in range(10)
+    ] + [
+        {"text": f"方案假设 {index}", "scope": "A", "impact": "low", "status": "confirmed"}
+        for index in range(5)
+    ]
+    clipped = normalize_assumptions(many, ["A"])
+    # 上限 12：先保全局 10 条，方案 A 只剩 2 条；id 按组重编号
+    assert len(clipped) == 12
+    assert [entry["id"] for entry in clipped][-3:] == ["G10", "A1", "A2"]
+    assert normalize_assumptions(many, ["A"]) == clipped
+    assert normalize_assumptions("不是列表", ["A"]) == []
+    assert normalize_assumptions([{"scope": "global"}], ["A"]) == []
+
+    symbols = [
+        {"symbol": f"p_{index}", "kind": "parameter", "definition": f"参数 {index}"}
+        for index in range(30)
+    ]
+    assert len(normalize_symbols(symbols, ["A"])) == 24
+    [only] = normalize_symbols(
+        [{"symbol": "$$y$$", "kind": "Variable", "definition": "产量", "unit": "N/A", "range": "-", "plan_id": "a"}],
+        ["A"],
+    )
+    assert only == {
+        "symbol": "y", "kind": "variable", "definition": "产量",
+        "unit": None, "range": None, "plan_id": "A",
+    }
+    assert normalize_symbols(None, ["A"]) == []
 
 
 def test_model_planning_without_views_keeps_the_single_call_path(registry):

@@ -418,7 +418,8 @@ def _sandbox_hardware() -> str:
 #: 数据准备的清洗派发用 data_cleaning.sandbox，验证阶段的稳健性复跑用
 #: validating.sandbox——三者缺一同样回落模拟。
 #: H3 方案阶段是三视角 Proposer 并行提议（model_planning.proposer）+ 一次归约
-#: （model_planning.reduce）；model_planning.default 保留给无监督者的单次调用路径。
+#: （model_planning.reduce）+ 一次规范化（model_planning.formalize：假设表 / 符号表）；
+#: model_planning.default 保留给无监督者的单次调用路径。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
@@ -427,6 +428,7 @@ _REQUIRED_PROMPTS = frozenset(
         "model_planning.default",
         "model_planning.proposer",
         "model_planning.reduce",
+        "model_planning.formalize",
         "experiment_code.sandbox",
         "validating.default",
         "validating.sandbox",
@@ -469,6 +471,7 @@ _PROMPT_NODE_IDS = {
     "model_planning.default": TaskState.MODEL_PLANNING.value,
     "model_planning.proposer": TaskState.MODEL_PLANNING.value,
     "model_planning.reduce": TaskState.MODEL_PLANNING.value,
+    "model_planning.formalize": TaskState.MODEL_PLANNING.value,
     "experiment_code.default": TaskState.EXPERIMENTING.value,
     "experiment_code.sandbox": TaskState.EXPERIMENTING.value,
     "validating.default": TaskState.VALIDATING.value,

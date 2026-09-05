@@ -36,8 +36,9 @@ from .runtime import WorkerConfig, WorkerRuntime
 #: 论文分章三件套 API 侧另有强制，worker 装配只查节点直接引用的模板）。
 #: H3 前置刀后实验与清洗都走沙盒会话模板（experiment_code.sandbox /
 #: data_cleaning.sandbox），experiment_code.default 退役；验证阶段的稳健性
-#: 复跑用 validating.sandbox。方案阶段（H3）三视角并行提议 + 归约用
-#: model_planning.proposer / model_planning.reduce，default 是无监督者时的回落。
+#: 复跑用 validating.sandbox。方案阶段（H3）三视角并行提议 + 归约 + 规范化用
+#: model_planning.proposer / model_planning.reduce / model_planning.formalize，
+#: default 是无监督者时的回落。
 REQUIRED_PROMPT_IDS = frozenset(
     {
         "problem_analysis.default",
@@ -46,6 +47,7 @@ REQUIRED_PROMPT_IDS = frozenset(
         "model_planning.default",
         "model_planning.proposer",
         "model_planning.reduce",
+        "model_planning.formalize",
         "experiment_code.sandbox",
         "validating.default",
         "validating.sandbox",
