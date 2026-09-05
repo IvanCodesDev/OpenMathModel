@@ -125,7 +125,11 @@ CANNED_VALIDATION = {
 VALIDATION_CODE_MARKER = "# omm-eval: robustness checks"
 
 #: Robustness checks the validation sandbox agent prints on its marker line
-#: (three checks, all passing — the happy path stays gate-free).
+#: (three checks, all passing — the happy path stays gate-free). The slope
+#: perturbation targets the global "linear trend" assumption G1 of
+#: CANNED_FORMALIZE via ``assumption_id`` — the validation node insists on at
+#: least one check pointing at an assumption marked critical / to_verify, and
+#: a *global* one keeps the same script valid for both plan A and adopt:B.
 FULL_CHAIN_ROBUSTNESS_CHECKS = [
     {
         "id": "sensitivity_slope",
@@ -134,6 +138,7 @@ FULL_CHAIN_ROBUSTNESS_CHECKS = [
         "value": 0.06,
         "threshold": 0.2,
         "detail": "RMSE 相对退化 6%",
+        "assumption_id": "G1",
     },
     {
         "id": "bootstrap_stability",

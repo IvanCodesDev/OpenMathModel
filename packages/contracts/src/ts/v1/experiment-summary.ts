@@ -129,4 +129,8 @@ export interface RobustnessCheck {
    * 依据，一句话；无则空串。
    */
   detail: string;
+  /**
+   * 该检查针对的模型假设编号（plan-proposal.assumptions[].id，如 A1 / G2）；通用检查或方案阶段未生成假设表时为 null。可选字段：旧消费者可忽略。
+   */
+  assumption_id?: string | null;
 }

@@ -19,8 +19,8 @@ function executedWithFailure() {
     status: "passed",
     summary_text: "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：需求率扰动（sensitivity：value 0.25，阈值 0.2）。",
     checks: [
-      { id: "sensitivity", name: "需求率扰动", passed: false, value: 0.25, threshold: 0.2, detail: "超出阈值" },
-      { id: "bootstrap", name: "重采样稳定性", passed: true, value: 0.08, threshold: 0.15, detail: "在阈值内" },
+      { id: "sensitivity", name: "需求率扰动", passed: false, value: 0.25, threshold: 0.2, detail: "超出阈值", assumption_id: "A1" },
+      { id: "bootstrap", name: "重采样稳定性", passed: true, value: 0.08, threshold: 0.15, detail: "在阈值内", assumption_id: null },
       { id: "baseline", name: "", passed: true, value: null, threshold: "≥ 0.1", detail: "" },
     ],
     checks_total: 3,
@@ -36,11 +36,25 @@ test("executed rerun: one row per check, numbers formatted, name falls back to i
   assert.equal(section.failed, 1);
   assert.match(section.summary, /通过 2 项/);
   assert.deepEqual(section.rows, [
-    { tone: "fail", name: "需求率扰动", value: "0.25", threshold: "0.2", detail: "超出阈值" },
+    // 检查回指了假设 A1（方案页假设表的编号）→ 编号前置；null / 缺席都不加前缀
+    { tone: "fail", name: "A1 · 需求率扰动", value: "0.25", threshold: "0.2", detail: "超出阈值" },
     { tone: "pass", name: "重采样稳定性", value: "0.08", threshold: "0.15", detail: "在阈值内" },
     // 标记行没给数值 → value null；阈值的文字口径原样；没给 name 退回 id
     { tone: "pass", name: "baseline", value: null, threshold: "≥ 0.1", detail: "" },
   ]);
+});
+
+test("assumption tag: blank ids are ignored, id-fallback names still get the tag", () => {
+  const section = describeRobustness({
+    ...executedWithFailure(),
+    checks: [
+      { id: "slack", name: "预算松紧扰动", passed: true, value: 0.03, threshold: 0.2, detail: "", assumption_id: "   " },
+      { id: "corr", name: "", passed: false, value: 0.31, threshold: 0.15, detail: "", assumption_id: "G2" },
+    ],
+    checks_total: 2,
+    checks_failed: 1,
+  });
+  assert.deepEqual(section.rows.map((row) => row.name), ["预算松紧扰动", "G2 · corr"]);
 });
 
 test("skipped rerun surfaces the node's reason instead of looking like a pass", () => {

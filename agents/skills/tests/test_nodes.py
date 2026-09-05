@@ -31,11 +31,14 @@ from omm_agent_skills import (
     StubLlmPort,
     ValidationNode,
     allowed_number_tokens,
+    assumption_material,
+    assumptions_to_verify,
     build_frozen_numbers,
     chosen_plan,
     extract_json,
     gpu_hardware_note,
     load_default_registry,
+    plan_assumptions,
     render_frozen_numbers,
     render_paper_markdown,
     stub_response,
@@ -1871,6 +1874,203 @@ def test_paper_material_carries_robustness_and_g3_decision(registry):
     assert (
         PaperWritingNode(registry).build_variables(plain)["validation_summary"]
         == VALIDATION_OK["validation_summary"]
+    )
+
+
+# -- 假设表的下游消费：实验任务卡 / 判读 / 稳健性检验 / 论文材料 ----------------------
+
+
+PLANNING_ASSUMPTIONS = [
+    {"id": "G1", "text": "需求服从泊松分布", "scope": "global", "basis": "题面给定", "impact": "medium", "status": "confirmed"},
+    {"id": "G2", "text": "候选点之间需求独立", "scope": "global", "basis": "简化需要", "impact": "low", "status": "to_verify"},
+    {"id": "A1", "text": "预算约束为硬约束", "scope": "A", "basis": "题面", "impact": "high", "status": "critical"},
+    {"id": "A2", "text": "开店成本与规模线性", "scope": "A", "basis": "数据画像", "impact": "medium", "status": "to_verify"},
+    {"id": "B1", "text": "到达过程近似泊松", "scope": "B", "basis": "排队论前提", "impact": "medium", "status": "critical"},
+    {"text": "缺 id 的行被忽略", "scope": "global", "impact": "low", "status": "critical"},
+]
+
+
+def planning_with_assumptions():
+    return dict(PLANNING_OK, assumptions=[dict(row) for row in PLANNING_ASSUMPTIONS])
+
+
+def assumption_prior(**experiment_extra):
+    prior = validation_prior()
+    prior[TaskState.MODEL_PLANNING.value] = planning_with_assumptions()
+    if experiment_extra:
+        prior[TaskState.EXPERIMENTING.value].update(experiment_extra)
+    return prior
+
+
+def test_assumption_helpers_scope_order_and_material():
+    planning = planning_with_assumptions()
+    rows_a = plan_assumptions(planning, "A")
+    assert [row["id"] for row in rows_a] == ["G1", "G2", "A1", "A2"], "全局 + 本方案，原顺序；缺 id 行忽略"
+    assert [row["id"] for row in plan_assumptions(planning, "B")] == ["G1", "G2", "B1"]
+    assert plan_assumptions(PLANNING_OK, "A") == [], "旧运行没有假设表"
+
+    focus = assumptions_to_verify(rows_a)
+    assert [row["id"] for row in focus] == ["A1", "G2", "A2"], "重点验证在前，其后待检验按原顺序"
+
+    material = assumption_material(focus)
+    assert material.splitlines() == [
+        "- A1【重点验证｜影响高｜方案 A】预算约束为硬约束（依据：题面）",
+        "- G2【待检验｜影响低｜全局】候选点之间需求独立（依据：简化需要）",
+        "- A2【待检验｜影响中｜方案 A】开店成本与规模线性（依据：数据画像）",
+    ]
+    assert assumption_material([]) == "无（方案阶段未生成假设表）"
+
+
+def test_experiment_task_card_carries_the_chosen_plans_assumptions(registry):
+    """实验任务卡带全部适用假设（全局 + 选定方案），其它方案的假设不进卡。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    prior = prior_through_planning()
+    prior[TaskState.MODEL_PLANNING.value] = planning_with_assumptions()
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior)
+
+    result = ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "## 模型假设" in card
+    assert "- G1【已确认｜影响中｜全局】需求服从泊松分布" in card
+    assert "- A1【重点验证｜影响高｜方案 A】预算约束为硬约束" in card
+    assert "B1" not in card, "落选方案的假设不进实验任务卡"
+    assert "不得在代码里悄悄替换" in card
+
+    # 旧运行 / 单次调用路径没有假设表：卡上如实写「无」，不报错
+    plain_llm = experiment_llm()
+    plain_ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+    ExperimentExecutionNode(registry).run(plain_ctx, make_full_services(plain_llm, SandboxToolInvoker(runs=[tool_success()])))
+    assert "无（方案阶段未生成假设表）" in system_prompt_of(plain_llm.chat_calls[0])
+
+
+def test_experiment_task_card_follows_the_adopted_plan_assumptions(registry):
+    """G1 选了 adopt:B：任务卡换成 B 的假设（与 chosen_plan 同一套选择规则）。"""
+    llm = experiment_llm()
+    prior = prior_through_planning()
+    prior[TaskState.MODEL_PLANNING.value] = planning_with_assumptions()
+    ctx = NodeContext(
+        run_id="run_1", project_id="proj_1", state=TaskState.EXPERIMENTING, step_id="step_1",
+        attempt=1, inputs={}, prior_outputs=prior,
+        review_decisions={TaskState.MODEL_PLANNING.value: "adopt:B"},
+    )
+
+    ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, SandboxToolInvoker(runs=[tool_success()])))
+
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "- B1【重点验证｜影响中｜方案 B】到达过程近似泊松" in card
+    assert "A1" not in card and "A2" not in card
+
+
+def robustness_checks_for_assumptions():
+    """三项检查：两项回指假设（A1 过、G2 不过），一项通用（无 assumption_id）。"""
+    return [
+        {"id": "budget_slack", "name": "预算松紧 ±20% 扰动", "passed": True, "value": 0.03, "threshold": 0.2, "detail": "最优值相对变化 3%", "assumption_id": "A1"},
+        {"id": "demand_corr", "name": "引入需求相关性", "passed": False, "value": 0.31, "threshold": 0.15, "detail": "相关系数 0.3 时 rmse 退化 31%", "assumption_id": "G2"},
+        {"id": "baseline_margin", "name": "对基线优势幅度", "passed": True, "value": 0.6, "threshold": 0.1, "detail": "优势幅度 60%"},
+    ]
+
+
+def test_validation_routes_focus_assumptions_into_judgement_and_robustness(registry):
+    """判读与检验卡都只带须检验的假设（重点验证在前）；检查回指假设后产出覆盖表。"""
+    llm = validation_llm()
+    tools = validation_tools(runs=[tool_success(stdout=robustness_stdout(checks=robustness_checks_for_assumptions()))])
+    ctx = make_ctx(TaskState.VALIDATING, prior=assumption_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    # 判读模板：只带 focus（A1 / G2 / A2），已确认的 G1 不进
+    judgement_vars = llm.calls[0].variables
+    assert judgement_vars["model_assumptions"].splitlines()[0].startswith("- A1【重点验证")
+    assert "G2【待检验" in judgement_vars["model_assumptions"] and "A2【待检验" in judgement_vars["model_assumptions"]
+    assert "G1" not in judgement_vars["model_assumptions"]
+    # 检验任务卡：同一份 focus + assumption_id 口径
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "## 须检验的模型假设" in card and "- A1【重点验证｜影响高｜方案 A】预算约束为硬约束" in card
+    assert '"assumption_id": "A1"' in card
+
+    assert result.status == NodeResult.NEEDS_REVIEW, "G2 的检查未通过 → G3 照常"
+    robustness = result.outputs["robustness"]
+    assert robustness["attempts"] == 1, "首波即满足假设覆盖断言"
+    assert [check["assumption_id"] for check in robustness["checks"]] == ["A1", "G2", None]
+    assert robustness["assumption_coverage"] == [
+        {"id": "A1", "text": "预算约束为硬约束", "status": "critical", "impact": "high", "plan_id": "A", "check_ids": ["budget_slack"], "passed": True},
+        {"id": "G2", "text": "候选点之间需求独立", "status": "to_verify", "impact": "low", "plan_id": None, "check_ids": ["demand_corr"], "passed": False},
+        {"id": "A2", "text": "开店成本与规模线性", "status": "to_verify", "impact": "medium", "plan_id": "A", "check_ids": [], "passed": None},
+    ]
+    assert robustness["uncovered_focus"] == ["A2"]
+    assert result.review_meta["impact"]["assumption_coverage"] == robustness["assumption_coverage"]
+
+
+def test_robustness_requires_at_least_one_check_to_target_an_assumption(registry):
+    """有须检验的假设却没有检查回指：断言不过，反馈点名假设，下一波补上即过。"""
+    llm = validation_llm()
+    generic = robustness_checks(True, True, True)
+    stray = [dict(check, assumption_id="Z9") for check in generic]
+    tools = validation_tools(
+        runs=[
+            tool_success(stdout=robustness_stdout(checks=generic)),
+            tool_success(stdout=robustness_stdout(checks=stray)),
+            tool_success(stdout=robustness_stdout(checks=robustness_checks_for_assumptions())),
+        ]
+    )
+    ctx = make_ctx(TaskState.VALIDATING, prior=assumption_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    robustness = result.outputs["robustness"]
+    assert robustness["status"] == "passed"
+    assert robustness["attempts"] == 3
+    second_wave = user_prompt_of(llm.chat_calls[2])
+    assert "没有任何检查针对须检验的模型假设" in second_wave
+    assert "A1（重点验证）预算约束为硬约束" in second_wave
+    assert "A1、A2、G2" in second_wave, "可选 id 列表按字母序"
+    third_wave = user_prompt_of(llm.chat_calls[4])
+    assert "没有任何检查针对须检验的模型假设" in third_wave, "写错的 assumption_id 不算覆盖"
+    assert [check["assumption_id"] for check in robustness["checks"]] == ["A1", "G2", None]
+
+
+def test_robustness_assumption_rules_stay_inert_without_an_assumption_table(registry):
+    """旧运行 / 单次调用路径：没有假设表 → 零要求、覆盖表为空、检查项 assumption_id 为 None。"""
+    llm = validation_llm()
+    tools = validation_tools(runs=[tool_success(stdout=robustness_stdout(checks=[dict(check, assumption_id="A1") for check in robustness_checks(True, True, True)]))])
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    robustness = result.outputs["robustness"]
+    assert robustness["attempts"] == 1
+    assert [check["assumption_id"] for check in robustness["checks"]] == [None, None, None], "没有假设表时任何 id 都不算已知"
+    assert robustness["assumption_coverage"] == [] and robustness["uncovered_focus"] == []
+    assert llm.calls[0].variables["model_assumptions"] == "无（方案阶段未生成假设表）"
+
+
+def test_paper_material_reports_assumption_coverage(registry):
+    """论文材料多一行「模型假设检验」：通过 / 未通过 / 未覆盖各一句，未覆盖点明进局限性。"""
+    prior = paper_prior()
+    prior[TaskState.VALIDATING.value] = {
+        **VALIDATION_OK,
+        "robustness": {
+            "executed": True,
+            "status": "passed",
+            "summary_text": "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：引入需求相关性（demand_corr：value 0.31，阈值 0.15）。",
+            "assumption_coverage": [
+                {"id": "A1", "text": "预算约束为硬约束", "status": "critical", "impact": "high", "plan_id": "A", "check_ids": ["budget_slack"], "passed": True},
+                {"id": "G2", "text": "候选点之间需求独立", "status": "to_verify", "impact": "low", "plan_id": None, "check_ids": ["demand_corr"], "passed": False},
+                {"id": "A2", "text": "开店成本与规模线性", "status": "to_verify", "impact": "medium", "plan_id": "A", "check_ids": [], "passed": None},
+            ],
+        },
+    }
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=prior)
+
+    material = PaperWritingNode(registry).build_variables(ctx)["validation_summary"]
+
+    assert material.endswith(
+        "模型假设检验：A1「预算约束为硬约束」通过（budget_slack）；"
+        "G2「候选点之间需求独立」未通过（demand_corr）；"
+        "A2「开店成本与规模线性」未被检验覆盖，须在局限性中说明。"
     )
 
 

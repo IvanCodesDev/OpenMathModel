@@ -168,6 +168,41 @@ def test_happy_path_all_six_stages_succeed(completed_session):
         check["id"] for check in FULL_CHAIN_ROBUSTNESS_CHECKS
     ]
     assert TaskState.VALIDATING.value not in snapshot.review_decisions, "全过不上 G3"
+    # 假设表下游消费（切片 3）：方案 A 须检验 A1（重点验证）与 G1（待检验）；
+    # 斜率扰动检查回指 G1，A1 没有检查覆盖 → 如实列为未覆盖
+    assert [check["assumption_id"] for check in robustness["checks"]] == ["G1", None, None]
+    assert [(row["id"], row["status"], row["check_ids"], row["passed"]) for row in robustness["assumption_coverage"]] == [
+        ("A1", "critical", [], None),
+        ("G1", "to_verify", ["sensitivity_slope"], True),
+    ]
+    assert robustness["uncovered_focus"] == ["A1"]
+    # 实验任务卡带全部适用假设（全局 + A），判读 / 检验卡只带须检验的两条
+    experiment_system = next(
+        call.messages[0]["content"]
+        for call in completed_session.llm.chat_calls
+        if call.label == "experiment_code.sandbox"
+    )
+    assert "- G2【已确认｜影响中｜全局】单位运量成本为常数" in experiment_system
+    assert "- A1【重点验证｜影响高｜方案 A】车辆数与预算均为硬约束" in experiment_system
+    assert "B1【" not in experiment_system
+    judgement = next(call for call in completed_session.llm.calls if call.prompt_id == "validating.default")
+    assert judgement.variables["model_assumptions"].splitlines() == [
+        "- A1【重点验证｜影响高｜方案 A】车辆数与预算均为硬约束（依据：题面）",
+        "- G1【待检验｜影响高｜全局】运量趋势在规划期内近似线性（依据：数据画像）",
+    ]
+    robustness_system = next(
+        call.messages[0]["content"]
+        for call in completed_session.llm.chat_calls
+        if call.label == "validating.sandbox"
+    )
+    assert "## 须检验的模型假设" in robustness_system and "- A1【重点验证" in robustness_system
+    assert "G2【" not in robustness_system
+    # 论文材料逐条报告假设检验覆盖：未覆盖的重点验证假设点明进局限性
+    outline = next(call for call in completed_session.llm.calls if call.prompt_id == "paper_outline.default")
+    assert (
+        "模型假设检验：A1「车辆数与预算均为硬约束」未被检验覆盖，须在局限性中说明；"
+        "G1「运量趋势在规划期内近似线性」通过（sensitivity_slope）。"
+    ) in outline.variables["validation_summary"]
     assert snapshot.outputs[TaskState.PAPER_WRITING.value]["title"] == CANNED_PAPER["title"]
 
     # 模型出口分两条：模板单发（complete）与沙盒会话（chat_text）。
@@ -433,8 +468,17 @@ def test_g1_gate_offers_every_reduced_plan_and_adopting_b_flows_downstream():
     )
     assert '"id": "B"' in experiment_system and "时间序列 + 启发式" in experiment_system
     assert '"id": "A"' not in experiment_system
+    # 假设表随选案切换：B 的假设进卡、A 的不进；检验覆盖表按 B 的 focus（G1 / B1）算
+    assert "- B1【待检验｜影响中｜方案 B】样本平稳可定阶" in experiment_system
+    assert "A1【" not in experiment_system
+    robustness = snapshot.outputs[TaskState.VALIDATING.value]["robustness"]
+    assert [(row["id"], row["check_ids"]) for row in robustness["assumption_coverage"]] == [
+        ("G1", ["sensitivity_slope"]),
+        ("B1", []),
+    ]
     paper_calls = [call for call in session.llm.calls if call.prompt_id == "paper_outline.default"]
     assert "时间序列 + 启发式" in paper_calls[0].variables["chosen_plan"]
+    assert "B1「样本平稳可定阶」未被检验覆盖" in paper_calls[0].variables["validation_summary"]
 
     assert_replay_matches(session)
 
@@ -602,6 +646,11 @@ def test_g3_gate_stops_on_failed_check_and_accept_carries_limitation_into_paper(
     material = outline_call.variables["validation_summary"]
     assert "bootstrap_stability" in material and "value 0.42" in material
     assert "接受并记录局限" in material and "不得淡化" in material
+    # G3 卡片的 impact 带假设覆盖表：接受局限时用户看得到局限落在哪条假设上
+    assert [(row["id"], row["check_ids"]) for row in gate["impact"]["assumption_coverage"]] == [
+        ("A1", []),
+        ("G1", ["sensitivity_slope"]),
+    ]
     # 未通过项的实测值 / 阈值进了数字冻结清单：论文只能原样引用，不能改写
     frozen = {
         e["id"]: e["value"]

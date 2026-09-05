@@ -67,6 +67,10 @@ class RobustnessCheck(BaseModel):
         description="判定阈值：数值，或脚本给出的文字口径（如「≤ 0.05」）；未给时为 null。",
     )
     detail: str = Field(..., description="依据，一句话；无则空串。")
+    assumption_id: str | None = Field(
+        None,
+        description="该检查针对的模型假设编号（plan-proposal.assumptions[].id，如 A1 / G2）；通用检查或方案阶段未生成假设表时为 null。可选字段：旧消费者可忽略。",
+    )
 
 
 class RobustnessReport(BaseModel):

@@ -193,9 +193,14 @@ VALIDATION_OUTPUT = {
 
 def robustness_code(*passed_flags: bool) -> str:
     """稳健性复跑沙盒会话里 stub 模型发出的检验脚本——由 python 沙箱真实执行，
-    按传入的通过标志打印逐项判定（标记行数字就是 G3 的判定依据）。"""
+    按传入的通过标志打印逐项判定（标记行数字就是 G3 的判定依据）。
+
+    第一项回指全局假设 G2（FORMALIZE_OUTPUT 里的「待检验」项）：方案阶段有须
+    检验的假设时，验证节点要求至少一项检查带 assumption_id；选全局假设是为了
+    approve（方案 A）与 adopt:B 两条链共用同一份脚本。
+    """
     checks = [
-        {"id": "sensitivity", "name": "需求率扰动", "value": 0.05, "threshold": 0.2},
+        {"id": "sensitivity", "name": "需求率扰动", "value": 0.05, "threshold": 0.2, "assumption_id": "G2"},
         {"id": "bootstrap", "name": "重采样稳定性", "value": 0.08, "threshold": 0.15},
         {"id": "baseline", "name": "对基线优势幅度", "value": 0.6, "threshold": 0.1},
     ]
@@ -731,9 +736,13 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
         if "实验工程师" in system:
             seen["experiment_system"] = system
             return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
+        if "稳健性检验工程师" in system:
+            seen["robustness_system"] = system
         prompt = messages[-1]["content"]
         if "论文的总编" in prompt:
             seen["outline_prompt"] = prompt
+        if "评审专家" in prompt:
+            seen["judgement_prompt"] = prompt
         return _stage_router(request)
 
     project = create_project(client)
@@ -748,9 +757,27 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
     assert gate["title"].startswith("论文草稿已生成"), "选 B 后照常走到 G4"
     assert '"id": "B"' in seen["experiment_system"] and "启发式" in seen["experiment_system"]
     assert '"id": "A"' not in seen["experiment_system"], "实验任务卡只带用户选定的方案"
+    # 假设表随选案进实验任务卡（切片 3）：全局 + B 的假设，A 的不进
+    assert "## 模型假设" in seen["experiment_system"]
+    assert "- G1【已确认｜影响中｜全局】需求服从泊松分布" in seen["experiment_system"]
+    assert "- B1【待检验｜影响中｜方案 B】局部搜索邻域可覆盖可行域" in seen["experiment_system"]
+    assert "A1【" not in seen["experiment_system"]
+    # 判读与稳健性任务卡只带须检验的假设（G2 / B1 都是待检验；已确认的 G1 不进）
+    assert "- G2【待检验｜影响低｜全局】调度点之间需求独立" in seen["judgement_prompt"]
+    assert "- B1【待检验｜影响中｜方案 B】" in seen["judgement_prompt"]
+    assert "G1【" not in seen["judgement_prompt"] and "A1【" not in seen["judgement_prompt"]
+    assert "## 须检验的模型假设" in seen["robustness_system"]
+    assert "- G2【待检验｜影响低｜全局】调度点之间需求独立" in seen["robustness_system"]
+    assert "- B1【待检验｜影响中｜方案 B】" in seen["robustness_system"]
+    assert "A1【" not in seen["robustness_system"]
     # 总编材料里的选中方案是 B（材料以 JSON 给出，id 与方法名一起核对）
     assert '"id": "B"' in seen["outline_prompt"] and "启发式" in seen["outline_prompt"]
     assert '"id": "A"' not in seen["outline_prompt"]
+    # 检验脚本回指全局假设 G2 → 论文材料按覆盖表逐条说：G2 通过、B1 未被覆盖进局限性
+    assert (
+        "模型假设检验：G2「调度点之间需求独立」通过（sensitivity）；"
+        "B1「局部搜索邻域可覆盖可行域」未被检验覆盖，须在局限性中说明。"
+    ) in seen["outline_prompt"]
     resolved = client.get(f"/api/v1/task-runs/{run['id']}/approvals").json()["items"]
     g1 = next(item for item in resolved if item["id"] == approval["id"])
     assert g1["status"] == "RESOLVED" and g1["resolution"]["option_id"] == "adopt:B"
@@ -1372,6 +1399,20 @@ def test_g3_result_gate_accept_with_limitations_reaches_paper(client, monkeypatc
     assert "接受并记录局限" in material and "不得淡化" in material
     # 未通过项的实测值进数字冻结清单（总编 prompt 的「数字冻结清单」段）：论文只能原样引用
     assert "robustness.bootstrap" in material and "稳健性检查「" in material
+    # 假设检验覆盖（切片 3）：方案 A 的重点验证假设 A1 没有检查覆盖 → 点明进局限性；
+    # 全局待检验假设 G2 由 sensitivity 检查覆盖且通过。重点验证排前
+    assert (
+        "模型假设检验：A1「预算约束为硬约束」未被检验覆盖，须在局限性中说明；"
+        "G2「调度点之间需求独立」通过（sensitivity）。"
+    ) in material
+    with client.app.state.db.session_factory() as session:
+        row = session.get(ApprovalRequestRow, gate["id"])
+        assert row.evidence["gate"] == "G3"
+        coverage = row.evidence["impact"]["assumption_coverage"]
+        assert [(entry["id"], entry["check_ids"], entry["passed"]) for entry in coverage] == [
+            ("A1", [], None),
+            ("G2", ["sensitivity"], True),
+        ]
 
     artifacts = client.get(f"/api/v1/projects/{project['id']}/artifacts").json()["items"]
     by_file = {a["uri"].rstrip("/").rsplit("/", 1)[-1]: a for a in artifacts}

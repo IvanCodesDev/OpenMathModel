@@ -173,11 +173,13 @@ VALIDATION_OK = {
     "validation_summary": "结果整体可信，但对需求率参数敏感",
 }
 
-#: 稳健性复跑的检验脚本（沙箱真实执行）：三项检查全过，只打印标记行。
+#: 稳健性复跑的检验脚本（沙箱真实执行）：两项检查全过，只打印标记行。第一项回指
+#: FORMALIZE_OK 里方案 A 的重点验证假设 A1（方案阶段有须检验的假设时，验证节点
+#: 要求至少一项检查带 assumption_id）。
 ROBUSTNESS_CODE = (
     "import json\n"
     "checks = [\n"
-    "    {'id': 'sensitivity', 'name': '参数扰动', 'passed': True, 'value': 0.05, 'threshold': 0.2},\n"
+    "    {'id': 'sensitivity', 'name': '参数扰动', 'passed': True, 'value': 0.05, 'threshold': 0.2, 'assumption_id': 'A1'},\n"
     "    {'id': 'bootstrap', 'name': '重采样稳定性', 'passed': True, 'value': 0.08, 'threshold': 0.15},\n"
     "]\n"
     "print('OMM_METRICS_JSON: ' + json.dumps({'checks': checks}))\n"
@@ -361,6 +363,13 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     assert robustness["executed"] is True and robustness["status"] == "passed"
     assert [check["id"] for check in robustness["checks"]] == ["sensitivity", "bootstrap"]
     assert "VALIDATING" not in snapshot.review_decisions
+    # 假设表下游消费（切片 3）：检查回指方案 A 的重点验证假设 A1，覆盖表随产出落库；
+    # 已确认的 G1 不在须检验之列
+    assert [check["assumption_id"] for check in robustness["checks"]] == ["A1", None]
+    assert [(row["id"], row["check_ids"], row["passed"]) for row in robustness["assumption_coverage"]] == [
+        ("A1", ["sensitivity"], True),
+    ]
+    assert robustness["uncovered_focus"] == []
     # 实验最终脚本落在 run 工作区固定路径，复跑读的就是它
     workspace_script = tmp_path / "rt" / "workspaces" / run_id / EXPERIMENT_SCRIPT_PATH
     assert workspace_script.read_text(encoding="utf-8") == EXPERIMENT_CODE

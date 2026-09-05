@@ -2,8 +2,8 @@
 id: validating.default
 stage: VALIDATING
 variant: default
-version: 3
-input_schema: {"type": "object", "required": ["chosen_plan", "experiment_summary", "metrics"], "properties": {"chosen_plan": {"type": "string"}, "experiment_summary": {"type": "string"}, "metrics": {"type": "string"}}}
+version: 4
+input_schema: {"type": "object", "required": ["chosen_plan", "experiment_summary", "metrics", "model_assumptions"], "properties": {"chosen_plan": {"type": "string"}, "experiment_summary": {"type": "string"}, "metrics": {"type": "string"}, "model_assumptions": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "checks", "validation_summary"], "properties": {"verdict": {"type": "string", "enum": ["pass", "concerns", "fail"]}, "checks": {"type": "array", "items": {"type": "object", "required": ["name", "result", "note"], "properties": {"name": {"type": "string"}, "result": {"type": "string", "enum": ["pass", "warn", "fail"]}, "note": {"type": "string"}}}}, "risks": {"type": "array", "items": {"type": "string"}}, "validation_summary": {"type": "string"}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的评审专家。对下面的实验结果做稳健性与可信度检验，逐项给出结论。
@@ -20,9 +20,15 @@ output_schema: {"type": "object", "required": ["verdict", "checks", "validation_
 
 {{metrics}}
 
+## 须检验的模型假设（方案阶段标为「重点验证」或「待检验」；每行：编号【状态｜影响｜适用范围】内容）
+
+{{model_assumptions}}
+
 ## 检验维度
 
 至少覆盖：结果合理性（量纲与数量级是否符合常识）、与方案的一致性（实验是否真的实现了方案）、指标可信度（评估口径是否成立、与基线的差距是否显著）、敏感性与稳健性（结论对参数扰动是否脆弱）、局限性（合成数据或简化假设带来的外推风险）。
+
+「须检验的模型假设」里的每一条都要单独给一项检查：`name` 以「假设 <编号>：」开头（如「假设 A1：预算约束为硬约束」），`result` 按实验证据判定——实验实现与结果支持它写 pass，实验偏离了它或结果显示它脆弱写 fail，实验结果不足以判断写 warn 并在 note 里说明还缺什么证据。该段为「无」时跳过这一要求。
 
 ## 输出要求
 

@@ -399,6 +399,9 @@ def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
                     "value": _number_or_none(entry.get("value")),
                     "threshold": _threshold(entry.get("threshold")),
                     "detail": str(entry.get("detail") or ""),
+                    # 该检查针对的模型假设（验证节点已按已知假设 id 归一化，
+                    # 这里只挡住非字符串）；通用检查 / 旧运行 → null
+                    "assumption_id": _text_or_none(entry.get("assumption_id")),
                 }
             )
     status = raw.get("status") if executed else None

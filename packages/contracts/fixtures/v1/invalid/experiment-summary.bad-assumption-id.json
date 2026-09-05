@@ -1,0 +1,26 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "构造合成需求数据",
+  "metrics": {},
+  "stdout_tail": "",
+  "experiment_summary": "构造合成需求数据",
+  "validation": {
+    "verdict": "pass",
+    "checks": [],
+    "risks": [],
+    "validation_summary": "稳健性检查项的 assumption_id 只能是字符串或 null，数字编号不得进入投影",
+    "robustness": {
+      "executed": true,
+      "status": "passed",
+      "summary_text": "沙盒复跑稳健性检查 2 项，通过 2 项，全部达标。",
+      "checks": [
+        { "id": "sensitivity", "name": "需求率扰动", "passed": true, "value": 0.05, "threshold": 0.2, "detail": "在阈值内", "assumption_id": 1 },
+        { "id": "bootstrap", "name": "重采样稳定性", "passed": true, "value": 0.08, "threshold": 0.15, "detail": "在阈值内" }
+      ],
+      "checks_total": 2,
+      "checks_failed": 0,
+      "reason": ""
+    }
+  },
+  "updated_at": "2026-09-03T00:52:00.000000Z"
+}

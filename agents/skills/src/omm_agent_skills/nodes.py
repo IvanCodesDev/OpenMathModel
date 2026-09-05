@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
@@ -928,6 +928,76 @@ def chosen_plan(
     raise KeyError("'MODEL_PLANNING outputs.plans'")
 
 
+# ── 假设表的下游消费（实验 / 验证 / 论文材料共用） ──────────────────────────────
+
+#: 假设状态里需要在实验 / 验证阶段专门照顾的两档（§9.1「假设表 → 敏感性与稳健性
+#: 检验」）：critical 排前，to_verify 其后；confirmed 只需实现时遵守。
+ASSUMPTION_FOCUS_STATUSES = ("critical", "to_verify")
+_ASSUMPTION_STATUS_LABELS = {
+    "confirmed": "已确认",
+    "to_verify": "待检验",
+    "critical": "重点验证",
+}
+_ASSUMPTION_IMPACT_LABELS = {"low": "低", "medium": "中", "high": "高"}
+NO_ASSUMPTIONS_NOTE = "无（方案阶段未生成假设表）"
+
+
+def plan_assumptions(
+    planning: Mapping[str, Any], plan_id: Any
+) -> list[dict[str, Any]]:
+    """选定方案适用的假设：全局 + 该方案专有，保持方案阶段给出的顺序。
+
+    只收结构完整的行（id / text 非空）；旧运行与单次调用路径没有 ``assumptions``
+    键 → 空表，下游一律按「未生成假设表」处理，不报错。
+    """
+    rows: list[dict[str, Any]] = []
+    for item in planning.get("assumptions") or []:
+        if not isinstance(item, Mapping):
+            continue
+        row_id = str(item.get("id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        scope = str(item.get("scope") or GLOBAL_ASSUMPTION_SCOPE)
+        if not row_id or not text:
+            continue
+        if scope != GLOBAL_ASSUMPTION_SCOPE and scope != str(plan_id):
+            continue
+        rows.append(
+            {
+                "id": row_id,
+                "text": text,
+                "scope": scope,
+                "basis": str(item.get("basis") or "").strip(),
+                "impact": str(item.get("impact") or "medium"),
+                "status": str(item.get("status") or "to_verify"),
+            }
+        )
+    return rows
+
+
+def assumptions_to_verify(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """需要专门检验的假设：重点验证在前、待检验其后，组内保持原顺序。"""
+    ordered: list[dict[str, Any]] = []
+    for status in ASSUMPTION_FOCUS_STATUSES:
+        ordered.extend(dict(row) for row in rows if row.get("status") == status)
+    return ordered
+
+
+def assumption_material(rows: Sequence[Mapping[str, Any]]) -> str:
+    """假设表 → 提示词材料段（每行一条，带状态 / 影响 / 适用范围与依据）。"""
+    lines: list[str] = []
+    for row in rows:
+        status = _ASSUMPTION_STATUS_LABELS.get(str(row.get("status")), str(row.get("status")))
+        impact = _ASSUMPTION_IMPACT_LABELS.get(str(row.get("impact")), str(row.get("impact")))
+        scope = row.get("scope")
+        scope_label = "全局" if scope in (None, GLOBAL_ASSUMPTION_SCOPE) else f"方案 {scope}"
+        line = f"- {row['id']}【{status}｜影响{impact}｜{scope_label}】{row['text']}"
+        basis = str(row.get("basis") or "").strip()
+        if basis:
+            line += f"（依据：{basis}）"
+        lines.append(line)
+    return "\n".join(lines) or NO_ASSUMPTIONS_NOTE
+
+
 #: 数据阶段工具名（装配期契约，与 omm_agent_tools 的注册名对齐，不 import）。
 TABLE_PROFILE_TOOL = "table_profile"
 WS_LIST_TOOL = "ws_list"
@@ -1518,13 +1588,17 @@ class ExperimentExecutionNode(LlmSkillNode):
                     "use_raw": "用户已选择改用原始数据（data/），忽略清洗产物",
                 }.get(decision, decision),
             }
+        plan = chosen_plan(planning, ctx.review_decisions)
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
-            "chosen_plan": json.dumps(
-                chosen_plan(planning, ctx.review_decisions), ensure_ascii=False
-            ),
+            "chosen_plan": json.dumps(plan, ensure_ascii=False),
             "data_preparation": (
                 json.dumps(preparation, ensure_ascii=False) if preparation else "无"
+            ),
+            # 假设表进实验任务卡：实现须遵守全部适用假设，重点验证 / 待检验项的
+            # 参数要做成可调常量，检验阶段才有扰动的把手（§9.1）。
+            "model_assumptions": assumption_material(
+                plan_assumptions(planning, plan.get("id"))
             ),
             "available_packages": self._available_packages,
             "hardware_note": self._hardware_note,
@@ -1763,7 +1837,18 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _normalize_checks(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _check_assumption_id(entry: Mapping[str, Any], known_ids: Collection[str]) -> str | None:
+    """标记行里某项检查针对的假设 id；不是已知假设（含没填 / 写错）→ None。"""
+    raw = entry.get("assumption_id")
+    if not isinstance(raw, str):
+        return None
+    candidate = raw.strip()
+    return candidate if candidate in known_ids else None
+
+
+def _normalize_checks(
+    metrics: Mapping[str, Any], known_assumption_ids: Collection[str] = ()
+) -> list[dict[str, Any]]:
     """标记行里的 checks → 节点产出形状（只收合法项；校验在断言里做）。"""
     checks: list[dict[str, Any]] = []
     for entry in metrics.get("checks") or []:
@@ -1780,9 +1865,34 @@ def _normalize_checks(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "value": entry.get("value"),
                 "threshold": entry.get("threshold"),
                 "detail": str(entry.get("detail") or ""),
+                # 针对哪条模型假设（§9.1 假设表 → 稳健性检验）；通用检查为 None
+                "assumption_id": _check_assumption_id(entry, known_assumption_ids),
             }
         )
     return checks
+
+
+def _assumption_coverage(
+    focus: Sequence[Mapping[str, Any]], checks: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """每条须检验的假设被哪些检查覆盖、结论如何（全部通过才算通过；没覆盖 None）。"""
+    coverage: list[dict[str, Any]] = []
+    for row in focus:
+        matched = [check for check in checks if check.get("assumption_id") == row["id"]]
+        coverage.append(
+            {
+                "id": row["id"],
+                "text": row["text"],
+                "status": row.get("status"),
+                "impact": row.get("impact"),
+                "plan_id": (
+                    None if row.get("scope") in (None, GLOBAL_ASSUMPTION_SCOPE) else row.get("scope")
+                ),
+                "check_ids": [str(check["id"]) for check in matched],
+                "passed": all(check.get("passed") for check in matched) if matched else None,
+            }
+        )
+    return coverage
 
 
 def _robustness_checks_check(evidence) -> tuple[bool, str]:
@@ -1792,7 +1902,8 @@ def _robustness_checks_check(evidence) -> tuple[bool, str]:
         return False, (
             "未捕获检验结果：脚本必须原样打印一行 "
             'OMM_METRICS_JSON: {"checks": [{"id": ..., "name": ..., "passed": true/false, '
-            '"value": 数值, "threshold": 数值, "detail": ...}, ...]}（独占一行）'
+            '"value": 数值, "threshold": 数值, "detail": ..., "assumption_id": 假设 id 或省略}, ...]}'
+            "（独占一行）"
         )
     problems: list[str] = []
     for index, entry in enumerate(raw, start=1):
@@ -1815,6 +1926,46 @@ def _robustness_checks_check(evidence) -> tuple[bool, str]:
         return False, "检验结果不合格：" + "；".join(problems)
     passed = sum(1 for entry in raw if entry.get("passed") is True)
     return True, f"检查 {len(raw)} 项，通过 {passed} 项"
+
+
+def _assumption_coverage_check(focus: Sequence[Mapping[str, Any]]):
+    """断言工厂：有须检验的假设时，至少一项检查要通过 assumption_id 指向其中一条。
+
+    只要求「至少一项」而不是「每条都覆盖」——题面给定的分布假设之类未必能用代码
+    检验，逼着每条都覆盖只会催生凑数的检查；没覆盖到的在产出里如实列为
+    uncovered_focus，论文局限性据此说明。focus 为空（旧运行 / 单次调用路径没有
+    假设表）时断言恒过。
+    """
+    focus_ids = {row["id"] for row in focus}
+
+    def check(evidence) -> tuple[bool, str]:
+        if not focus_ids:
+            return True, "方案阶段未标注须检验的假设"
+        raw = evidence.metrics.get("checks") if evidence.metrics else None
+        entries = [entry for entry in (raw or []) if isinstance(entry, Mapping)]
+        hit = [
+            _check_assumption_id(entry, focus_ids)
+            for entry in entries
+            if _check_assumption_id(entry, focus_ids)
+        ]
+        if not hit:
+            listing = "；".join(
+                f"{row['id']}（{_ASSUMPTION_STATUS_LABELS.get(str(row.get('status')), row.get('status'))}）"
+                f"{row['text']}"
+                for row in focus
+            )
+            return False, (
+                "没有任何检查针对须检验的模型假设：请至少为其中一条设计检查，并在标记行"
+                f'该项里填 "assumption_id"（可选值：{"、".join(sorted(focus_ids))}）。'
+                f"须检验的假设：{listing}"
+            )
+        missing = [row["id"] for row in focus if row["id"] not in set(hit)]
+        note = f"检查覆盖假设 {'、'.join(dict.fromkeys(hit))}"
+        if missing:
+            note += f"；未覆盖：{'、'.join(missing)}（将记入局限性）"
+        return True, note
+
+    return check
 
 
 def _robustness_summary_text(status: str, checks: Sequence[Mapping[str, Any]]) -> str:
@@ -1859,17 +2010,25 @@ class ValidationNode(LlmSkillNode):
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
         experiment = _require_outputs(ctx, TaskState.EXPERIMENTING)
+        plan = chosen_plan(planning, ctx.review_decisions)
         return {
-            "chosen_plan": json.dumps(
-                chosen_plan(planning, ctx.review_decisions), ensure_ascii=False
-            ),
+            "chosen_plan": json.dumps(plan, ensure_ascii=False),
             "experiment_summary": str(
                 experiment.get("experiment_summary")
                 or experiment.get("stdout_tail")
                 or "无"
             ),
             "metrics": json.dumps(dict(experiment.get("metrics") or {}), ensure_ascii=False),
+            # 判读要对每条须检验的假设给结论（结果页 validation.checks 直接展示）
+            "model_assumptions": assumption_material(self._focus_assumptions(ctx)),
         }
+
+    @staticmethod
+    def _focus_assumptions(ctx: NodeContext) -> list[dict[str, Any]]:
+        """选定方案下须专门检验的假设（重点验证在前）；没有假设表 → 空表。"""
+        planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
+        plan = chosen_plan(planning, ctx.review_decisions)
+        return assumptions_to_verify(plan_assumptions(planning, plan.get("id")))
 
     def run(self, ctx: NodeContext, services: NodeServices) -> NodeResult:
         base = super().run(ctx, services)
@@ -1938,6 +2097,10 @@ class ValidationNode(LlmSkillNode):
         experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
         metrics = dict(experiment.get("metrics") or {})
         risk_points = _risk_points(plan, judgement)
+        # 须检验的假设进任务卡：检查优先围绕重点验证 / 待检验假设设计，标记行用
+        # assumption_id 回指；已知 id 集合用于归一化与覆盖统计。
+        focus = self._focus_assumptions(ctx)
+        focus_ids = [row["id"] for row in focus]
         data_files = [
             path
             for path in files
@@ -1952,6 +2115,7 @@ class ValidationNode(LlmSkillNode):
             "metrics": json.dumps(metrics, ensure_ascii=False),
             "experiment_code": _clip_code(code),
             "risk_points": risk_points,
+            "model_assumptions": assumption_material(focus),
             "data_files": "\n".join(f"- {path}" for path in data_files) or "无",
             "available_packages": self._available_packages,
         })
@@ -1975,6 +2139,14 @@ class ValidationNode(LlmSkillNode):
                         "每项含 id/name/passed/value/threshold）"
                     ),
                     check=_robustness_checks_check,
+                ),
+                SandboxAssertion(
+                    id="assumptions_covered",
+                    description=(
+                        "至少一项检查通过 assumption_id 指向须检验的模型假设"
+                        + (f"（{'、'.join(focus_ids)}）" if focus_ids else "（本方案无须检验的假设）")
+                    ),
+                    check=_assumption_coverage_check(focus),
                 ),
             ),
             seeds=dict(SANDBOX_SEEDS),
@@ -2017,6 +2189,7 @@ class ValidationNode(LlmSkillNode):
                     "chosen_plan": plan,
                     "metrics": metrics,
                     "risk_points": risk_points,
+                    "assumptions_to_verify": focus,
                 },
                 toolset=tuple(SANDBOX_TOOL_NAMES),
                 tool_tier="execute",
@@ -2038,8 +2211,9 @@ class ValidationNode(LlmSkillNode):
 
         report = envelope.output
         status = str(report.get("status") or "failed")
-        checks = _normalize_checks(capture.metrics) if status == "passed" else []
+        checks = _normalize_checks(capture.metrics, focus_ids) if status == "passed" else []
         failed = [check for check in checks if not check["passed"]]
+        coverage = _assumption_coverage(focus, checks) if status == "passed" else []
         return {
             "executed": True,
             "status": status,
@@ -2051,6 +2225,10 @@ class ValidationNode(LlmSkillNode):
             "checks_failed": len(failed),
             "failed_checks": failed,
             "summary_text": _robustness_summary_text(status, checks),
+            # 假设表的检验覆盖（§9.1）：每条须检验的假设被哪些检查覆盖、结论如何；
+            # 未覆盖的进论文局限性。复跑没成时两表为空，不假装覆盖过。
+            "assumption_coverage": coverage,
+            "uncovered_focus": [row["id"] for row in coverage if not row["check_ids"]],
             "final_code_artifact": str(report.get("final_code_artifact") or ""),
             "produced_artifacts": list(report.get("produced_artifacts") or []),
         }
@@ -2093,6 +2271,9 @@ class ValidationNode(LlmSkillNode):
                 "checks_failed": len(failed),
                 "failed": failed,
                 "recommended": recommended,
+                # 哪些须检验的假设被覆盖 / 未通过 / 没覆盖：拍板「接受并记录局限」
+                # 时用户看得到局限落在哪条假设上
+                "assumption_coverage": list(robustness.get("assumption_coverage") or []),
             },
         }
         return reason, meta
@@ -2213,12 +2394,40 @@ def _validation_material(
         text = str(robustness.get("summary_text") or "").strip()
         if text:
             summary = f"{summary}\n{text}"
+        coverage_text = _assumption_coverage_text(robustness.get("assumption_coverage"))
+        if coverage_text:
+            summary = f"{summary}\n{coverage_text}"
     if review_decisions.get(TaskState.VALIDATING.value) == G3_ACCEPT_OPTION_ID:
         summary += (
             "\n用户已在结果采用闸门确认「接受并记录局限」：未通过的检查项必须在"
             "模型检验与局限性部分如实说明，不得淡化。"
         )
     return summary
+
+
+def _assumption_coverage_text(coverage: Any) -> str:
+    """假设检验覆盖 → 论文材料的一句话：逐条假设「通过 / 未通过 / 未被检验覆盖」。
+
+    结论只按检验脚本标记行的 passed 汇总（不是模型转述）；未覆盖的假设点明须进
+    局限性——方案阶段标了「重点验证」却没人验，论文不能当它成立。
+    """
+    if not isinstance(coverage, list) or not coverage:
+        return ""
+    parts: list[str] = []
+    for row in coverage:
+        if not isinstance(row, Mapping) or not row.get("id"):
+            continue
+        label = f"{row['id']}「{str(row.get('text') or '').strip()}」"
+        check_ids = [str(check_id) for check_id in row.get("check_ids") or []]
+        if not check_ids:
+            parts.append(f"{label}未被检验覆盖，须在局限性中说明")
+        elif row.get("passed"):
+            parts.append(f"{label}通过（{'、'.join(check_ids)}）")
+        else:
+            parts.append(f"{label}未通过（{'、'.join(check_ids)}）")
+    if not parts:
+        return ""
+    return "模型假设检验：" + "；".join(parts) + "。"
 
 
 def _inputs_hash(variables: Mapping[str, str]) -> str:

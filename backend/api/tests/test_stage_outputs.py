@@ -109,10 +109,16 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
         "value": 0.05,
         "threshold": 0.2,
         "detail": "在阈值内",
+        # H3 切片 3：检查回指方案阶段标为「待检验」的全局假设 G2（假设表下游消费）
+        "assumption_id": "G2",
     }
+    assert [check["assumption_id"] for check in robustness["checks"]] == ["G2", None, None]
     assert robustness["summary_text"] == "沙盒复跑稳健性检查 3 项，通过 3 项，全部达标。"
     assert robustness["reason"] == ""
-    for key in ("attempts", "llm_calls", "summary", "failed_checks", "final_code_artifact", "produced_artifacts"):
+    for key in (
+        "attempts", "llm_calls", "summary", "failed_checks", "final_code_artifact",
+        "produced_artifacts", "assumption_coverage", "uncovered_focus",
+    ):
         assert key not in robustness, f"过程字段 {key} 不得进入投影"
 
     document_draft = payload["document_draft"]
@@ -248,15 +254,21 @@ def test_robustness_projection_strips_process_fields_and_recounts():
                 "value": 0.25,
                 "threshold": 0.2,
                 "detail": "超出阈值",
+                "assumption_id": "A1",
             },
-            # name 缺省回落 id；value 是 bool 不算数字；threshold 允许文字口径
-            {"id": "baseline", "name": "", "passed": True, "value": True, "threshold": "≥ 0.1"},
+            # name 缺省回落 id；value 是 bool 不算数字；threshold 允许文字口径；
+            # assumption_id 非字符串（旧节点没有该键 / 模型给了数字）→ null
+            {"id": "baseline", "name": "", "passed": True, "value": True, "threshold": "≥ 0.1", "assumption_id": 7},
             {"id": "", "passed": True, "value": 1},  # 缺 id → 剔除
             {"id": "bogus", "passed": "yes"},  # passed 非布尔 → 剔除
             "not-a-dict",
         ],
         "checks_total": 5,
         "checks_failed": 1,
+        # 假设覆盖表是节点侧的派生数据（可由 plan-proposal.assumptions × checks.assumption_id
+        # 推出），不进契约
+        "assumption_coverage": [{"id": "A1", "check_ids": ["sensitivity"], "passed": False}],
+        "uncovered_focus": ["A2"],
     }
     report = _robustness_report(raw)
     assert set(report) == {
@@ -276,6 +288,7 @@ def test_robustness_projection_strips_process_fields_and_recounts():
             "value": 0.25,
             "threshold": 0.2,
             "detail": "超出阈值",
+            "assumption_id": "A1",
         },
         {
             "id": "baseline",
@@ -284,6 +297,7 @@ def test_robustness_projection_strips_process_fields_and_recounts():
             "value": None,
             "threshold": "≥ 0.1",
             "detail": "",
+            "assumption_id": None,
         },
     ]
     assert report["checks_total"] == 2 and report["checks_failed"] == 1

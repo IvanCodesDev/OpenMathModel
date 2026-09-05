@@ -17,8 +17,8 @@
       "status": "passed",
       "summary_text": "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：需求率扰动（sensitivity：value 0.25，阈值 0.2）。",
       "checks": [
-        { "id": "sensitivity", "name": "需求率扰动", "passed": false, "value": 0.25, "threshold": 0.2, "detail": "超出阈值" },
-        { "id": "bootstrap", "name": "重采样稳定性", "passed": true, "value": 0.08, "threshold": 0.15, "detail": "在阈值内" },
+        { "id": "sensitivity", "name": "需求率扰动", "passed": false, "value": 0.25, "threshold": 0.2, "detail": "超出阈值", "assumption_id": "A1" },
+        { "id": "bootstrap", "name": "重采样稳定性", "passed": true, "value": 0.08, "threshold": 0.15, "detail": "在阈值内", "assumption_id": null },
         { "id": "baseline", "name": "对基线优势幅度", "passed": true, "value": 0.6, "threshold": "≥ 0.1", "detail": "" }
       ],
       "checks_total": 3,

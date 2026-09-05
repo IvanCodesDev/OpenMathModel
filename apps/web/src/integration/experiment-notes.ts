@@ -25,7 +25,11 @@ export function formatMetricValue(value: unknown): string {
 
 export interface RobustnessCheckRow {
   tone: "pass" | "fail";
-  /** 检查名；脚本没给 name 时退回 id。 */
+  /**
+   * 检查名；脚本没给 name 时退回 id。检查回指了某条模型假设（assumption_id，
+   * 与方案页假设表的编号同一套）时前置编号：「A1 · 需求率扰动」——编号是
+   * 语言中立的，不在这里掺 UI 文案，en-US 下无需翻译。
+   */
   name: string;
   /** 实测值（已格式化）；标记行没给数值时为 null。 */
   value: string | null;
@@ -46,9 +50,11 @@ export type RobustnessSection =
 
 function checkRow(check: RobustnessCheck): RobustnessCheckRow {
   const threshold = check.threshold;
+  const name = check.name || check.id;
+  const assumption = typeof check.assumption_id === "string" ? check.assumption_id.trim() : "";
   return {
     tone: check.passed ? "pass" : "fail",
-    name: check.name || check.id,
+    name: assumption ? `${assumption} · ${name}` : name,
     value: check.value === null ? null : formatMetricValue(check.value),
     threshold:
       threshold === null || threshold === ""
