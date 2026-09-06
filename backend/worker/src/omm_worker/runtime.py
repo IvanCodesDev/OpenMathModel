@@ -38,11 +38,15 @@ from omm_agent_core import (
 )
 from omm_agent_harness import SubagentSupervisor
 from omm_agent_tools import (
+    KNOWLEDGE_READ_TOOL,
+    KNOWLEDGE_SEARCH_TOOL,
     PythonSandbox,
     RecordingInvoker,
     TaskWorkspace,
     ToolRegistry,
     WorkspaceArtifactStore,
+    knowledge_tool_specs,
+    load_knowledge_library,
     sandbox_workspace_specs,
     table_profile_spec,
 )
@@ -94,6 +98,7 @@ class WorkerRuntime:
         worker_id: str | None = None,
         clock: Clock | None = None,
         ids: IdGenerator | None = None,
+        knowledge: Any = None,
     ) -> None:
         self.config = config
         self.events = JsonlEventStore(config.events_dir)
@@ -108,6 +113,14 @@ class WorkerRuntime:
         self._llm = llm
         self._clock = clock or SystemClock()
         self._ids = ids or UuidIdGenerator()
+        # 卡片知识库端口：方案阶段提议人经 ToolBus 自主检索（knowledge_search /
+        # knowledge_read）。缺省与 assembly.build_real_nodes 同一份进程缓存实例，
+        # 节点预检索与工具检索读的是同一个库。
+        self._knowledge = knowledge if knowledge is not None else load_knowledge_library()
+
+    @property
+    def knowledge(self) -> Any:
+        return self._knowledge
 
     # -- run lifecycle --------------------------------------------------------
 
@@ -241,10 +254,15 @@ class WorkerRuntime:
         registry.register(table_profile_spec(workspace))
         for spec in sandbox_workspace_specs(workspace):
             registry.register(spec)
+        # 方案阶段工具（§10.3 切片二，与 API 侧 _build_tool_invoker 同构）：卡片知识库
+        # 两个只读工具，三路提议人子代理在会话里自主检索、顺链读卡。
+        for spec in knowledge_tool_specs(self._knowledge):
+            registry.register(spec)
         # 最小授权：允许列表与调用方层级封顶 execute；工具事件
         # 经引擎 record_external 落日志（序列分配必须留在引擎单路径上）。
-        # 方案阶段的三路 Proposer 子代理并行（H3 fan-out），审计会从多个线程到达：
-        # 引擎的 emit→apply 单路径不是线程安全的，外部记录一律经同一把锁串行。
+        # 方案阶段的三路 Proposer 子代理并行（H3 fan-out），审计与知识库工具调用
+        # 会从多个线程到达：引擎的 emit→apply 单路径不是线程安全的，外部记录
+        # 一律经同一把锁串行。
         record_lock = threading.Lock()
 
         def record(event_type: EventType, payload: dict[str, Any]) -> None:
@@ -260,6 +278,8 @@ class WorkerRuntime:
                     "ws_read",
                     "ws_write",
                     "env_probe",
+                    KNOWLEDGE_SEARCH_TOOL,
+                    KNOWLEDGE_READ_TOOL,
                 }
             ),
             recorder=record,

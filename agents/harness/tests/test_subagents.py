@@ -51,6 +51,9 @@ def test_spawn_returns_envelope_and_audits_both_phases() -> None:
     assert envelope.ok and envelope.output == {"ok": True}
     assert [e["phase"] for e in events] == ["spawn", "result"]
     assert events[0]["tool"] == "subagent:sandbox"
+    # spawn 审计带上子代理拿到的工具集与档位：能对账「它被允许做什么」
+    assert events[0]["toolset"] == ["ws_list", "python_run"]
+    assert events[0]["tool_tier"] == "execute"
     assert events[1]["envelope_status"] == "done"
     assert events[1]["prompt_tokens"] == 10
 

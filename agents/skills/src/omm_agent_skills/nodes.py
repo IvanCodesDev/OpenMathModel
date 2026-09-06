@@ -313,6 +313,80 @@ FORMALIZE_PROMPT_ID = "model_planning.formalize"
 #: 提议人 Envelope 的 output_schema_id（§8.3 协议字段；校验器在本模块）。
 PROPOSAL_SCHEMA_ID = "model-planning-proposal.v1"
 
+# ── 提议人自主检索（§10.3 切片二）：知识库两个只读工具 + 多轮文本协议会话 ────────
+#: 提议人子代理可用的工具名（装配期契约：与 omm_agent_tools 的 knowledge_search /
+#: knowledge_read 注册名一致；skills 与 tools 无依赖边，按名字对齐）。
+PROPOSER_TOOL_NAMES: tuple[str, ...] = ("knowledge_search", "knowledge_read")
+#: 每路提议人至多几轮工具信封（文本协议一轮一个信封）：三轮够「专名精确查 →
+#: 概念词兜底 → 顺链读全卡」；超出后执行器回失败观察请模型直接终答。
+PROPOSER_MAX_TOOL_ROUNDS = 3
+#: 提议人内环预算：工具轮上限 + 一轮「已用完」观察 + 终答轮；一次结构修复；
+#: 同一信封连发两次 / 同一工具连败两次即判无进展（检索是配菜，不许在这里耗预算）。
+PROPOSER_LOOP_BUDGET = LoopBudget(
+    max_turns=PROPOSER_MAX_TOOL_ROUNDS + 2, repairs=1, no_progress_k=2, tool_fail_m=2
+)
+
+
+def proposer_tool_brief() -> str:
+    """提议人会话的开场消息：工具协议（单一出处 chat_adapter）+ 检索策略。
+
+    模板 ``model_planning.proposer`` 保持不变——先例材料段仍由节点预检索渲染；
+    这里只告诉模型「还可以自己查」以及怎么查才不浪费轮次。
+    """
+    return (
+        tool_protocol_note(PROPOSER_TOOL_NAMES, final_hint="按「输出要求」输出终答 JSON（终答不含 tool 键）")
+        + "\n\n检索策略：预检索的先例材料已在角色卡里；只有它不够用时才检索，"
+        f"每次一个信封、全程至多 {PROPOSER_MAX_TOOL_ROUNDS} 次。先用题面里的专名 / 题号 / "
+        "竞赛名精确查，未命中再退到建模方向、方法名等概念词；命中后用 knowledge_read "
+        "顺链读全卡再决定借鉴什么。借鉴到的卡片按「输出要求」用卡片 id 标出处，"
+        "没读到的卡片不得标；不需要检索就直接输出终答。"
+    )
+
+
+def _bounded_tool_executor(
+    ctx: NodeContext,
+    services: NodeServices,
+    allowed: Sequence[str],
+    max_rounds: int,
+):
+    """ToolExecutor：允许清单 + 轮数限额；每次调用经 services.tools 留 TOOL_CALLED。
+
+    超出限额不抛异常——回一条 failed 观察让模型转入终答；内环的 tool_fail_m
+    闸门保证它最多再赖一轮。越出允许清单同样只回观察（与沙盒执行器同款）。
+    """
+    allowed_set = set(allowed)
+    rounds = {"used": 0}
+
+    def execute(calls):
+        rounds["used"] += 1
+        results: list[ToolResult] = []
+        for call in calls:
+            if rounds["used"] > max_rounds:
+                results.append(
+                    ToolResult(
+                        status="failed",
+                        error=f"检索次数已用完（至多 {max_rounds} 次），请直接输出终答 JSON",
+                    )
+                )
+                continue
+            if call.name not in allowed_set:
+                results.append(
+                    ToolResult(
+                        status="failed",
+                        error=(
+                            f"工具 {call.name} 不在本任务允许清单"
+                            f"（可用：{', '.join(sorted(allowed_set))}）"
+                        ),
+                    )
+                )
+                continue
+            results.append(
+                services.tools.invoke(ctx.run_id, ctx.step_id, call.name, dict(call.arguments))
+            )
+        return results
+
+    return execute
+
 # ── 知识库预检索材料（§10.3 薄版一）：fan-out 前节点用题面确定性检索一次 ────────
 #: 「相似赛题与获奖论文方法」材料的三种「无」：端口未接 / 没命中 / 检索抛错，
 #: 提示词按「无」忽略本节；节点永不因知识库而失败。
@@ -879,19 +953,28 @@ class ModelPlanningNode(LlmSkillNode):
         template = self._registry.get(PROPOSER_PROMPT_ID)
         analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value) or {}
         knowledge_hits = knowledge_hit_ids(str(variables.get("knowledge") or ""))
+        # 提议人自主检索（§10.3 切片二）三件齐才开：知识库端口在、模型端口支持
+        # 会话、ToolBus 在（两边装配都注册了 knowledge_search / knowledge_read）；
+        # 缺一件回到单次调用路径，行为与载荷逐字节不变（evals / 旧装配 / 无知识库）。
+        tool_use = self._proposer_tool_use(services)
+        toolset: tuple[str, ...] = PROPOSER_TOOL_NAMES if tool_use else ()
 
         def spawn_one(
             view: ProposerView,
         ) -> tuple[ProposerView, ResultEnvelope | None, int, str, AgentError | None]:
             trace: dict[str, Any] = {"attempts": 0, "error": "", "agent_error": None}
+            view_variables = {**variables, "view_name": view.name, "view_brief": view.brief}
 
             def runner(_spec: SpawnSpec) -> ResultEnvelope:
                 try:
-                    parsed, attempts, error = complete_validated(
-                        services,
-                        template,
-                        {**variables, "view_name": view.name, "view_brief": view.brief},
-                    )
+                    if tool_use:
+                        parsed, attempts, error = self._propose_with_tools(
+                            ctx, services, template, view, view_variables
+                        )
+                    else:
+                        parsed, attempts, error = complete_validated(
+                            services, template, view_variables
+                        )
                 except AgentError as exc:
                     # 预算硬停（E31x/E32x）是运行级事实，不是这一路的软失败：
                     # 留住异常对象，fan-out 收束后按原样抛给节点外层（与单次调用
@@ -916,7 +999,7 @@ class ModelPlanningNode(LlmSkillNode):
                             # 预检索命中的卡片 id：审计「提议人看过哪些先例」
                             "knowledge_hits": knowledge_hits,
                         },
-                        toolset=(),
+                        toolset=toolset,
                         tool_tier="readonly",
                         budgets=budgets,
                         output_schema_id=PROPOSAL_SCHEMA_ID,
@@ -960,6 +1043,48 @@ class ModelPlanningNode(LlmSkillNode):
                 detail += f"，{error}"
             failures.append(f"视角「{view.name}」未成功（{detail}）")
         return proposals, failures, llm_calls
+
+    def _proposer_tool_use(self, services: NodeServices) -> bool:
+        return (
+            self._knowledge is not None
+            and services.tools is not None
+            and supports_chat(services.llm)
+        )
+
+    def _propose_with_tools(
+        self,
+        ctx: NodeContext,
+        services: NodeServices,
+        template: PromptTemplate,
+        view: ProposerView,
+        variables: Mapping[str, Any],
+    ) -> tuple[dict[str, Any] | None, int, str | None]:
+        """一路提议人的多轮会话：可自主调用知识库两个只读工具，再交终答。
+
+        与 ``complete_validated`` 同一份 (parsed, attempts, error) 契约与同一道
+        结构校验（模板 output_schema + extract_json）；差别只在传输：system =
+        模板渲染全文（与沙盒任务卡同构，用户备注由端口拼进 system），user =
+        工具协议 + 检索策略。attempts = 会话里的模型调用次数（含工具轮）。
+        """
+        outcome = run_inner_loop(
+            LoopTask(
+                task_id=f"{ctx.step_id}:proposer:{view.id}",
+                messages=(
+                    Message(role="system", content=template.render(dict(variables))),
+                    Message(role="user", content=proposer_tool_brief()),
+                ),
+                validator=lambda value: validate(value, template.output_schema),
+                parser=extract_json,
+                budget=PROPOSER_LOOP_BUDGET,
+            ),
+            chat=text_protocol_chat(services.llm, label=PROPOSER_PROMPT_ID),
+            execute_tools=_bounded_tool_executor(
+                ctx, services, PROPOSER_TOOL_NAMES, PROPOSER_MAX_TOOL_ROUNDS
+            ),
+        )
+        if outcome.ok:
+            return outcome.value, outcome.llm_calls, None
+        return None, outcome.llm_calls, outcome.last_error or outcome.exit_reason
 
     def _reduce(
         self,

@@ -982,6 +982,219 @@ def test_model_planning_knowledge_failure_does_not_block_the_stage(registry):
     assert result.outputs["quality_warnings"] == [], "知识库是材料不是闸门：不产生质量警告"
 
 
+# -- 提议人自主检索（§10.3 切片二）：知识库两个只读工具经 ToolBus 进提议人会话 -------
+
+
+class KnowledgeToolBus:
+    """假 ToolBus：只挂知识库两个只读工具，其余按允许清单拒绝；记录每次调用。"""
+
+    def __init__(self, port, cards=None):
+        self.port = port
+        self.cards = dict(cards or {})
+        self.calls = []
+
+    def invoke(self, run_id, step_id, tool_name, arguments):
+        self.calls.append((run_id, step_id, tool_name, dict(arguments)))
+        if tool_name == "knowledge_search":
+            hits = self.port.search(
+                arguments["query"],
+                kind=arguments.get("kind"),
+                task_type=arguments.get("task_type"),
+                limit=int(arguments.get("limit", 8)),
+            )
+            return ToolResult(
+                status="succeeded",
+                output={"query": arguments["query"], "hits": hits, "total": len(hits)},
+            )
+        if tool_name == "knowledge_read":
+            card = self.cards.get(arguments.get("card_id"))
+            if card is None:
+                return ToolResult(status="failed", error=f"未找到卡片：{arguments.get('card_id')}")
+            return ToolResult(status="succeeded", output=card)
+        return ToolResult(status="failed", error=f"tool {tool_name!r} is not on the allowlist")
+
+
+def _view_of(messages):
+    import re
+
+    match = re.search(r"「(.+?)」方案提议人", messages[0]["content"])
+    assert match, "提议人会话的 system 消息应是渲染后的角色卡"
+    return match.group(1)
+
+
+def _observations(messages):
+    return [m["content"] for m in messages if m["content"].startswith("[工具执行结果]")]
+
+
+def _envelope(tool, **arguments):
+    return json.dumps({"tool": tool, "arguments": arguments}, ensure_ascii=False)
+
+
+CARD_2021_C = {
+    "id": "problem:cumcm-2021-c",
+    "kind": "problem",
+    "title": "生产企业原材料的订购与运输",
+    "content": "某建筑和装饰板材的生产企业所用原材料主要是木质纤维……",
+    "papers": [{"id": "paper:paper-2021-c-1", "models": ["整数规划", "TOPSIS"]}],
+}
+
+
+def searching_proposer(messages):
+    """一路提议人的会话脚本：先检索，命中后顺链读全卡，再交终答。"""
+    seen = _observations(messages)
+    if not seen:
+        return _envelope("knowledge_search", query="原材料订购 运输 整数规划", kind="problem")
+    if len(seen) == 1:
+        assert '"id": "problem:cumcm-2021-c"' in seen[0], "检索观察应带命中卡片 id"
+        return _envelope("knowledge_read", card_id="problem:cumcm-2021-c")
+    assert "木质纤维" in seen[1], "读卡观察应是全卡正文"
+    return stub_response(PROPOSALS_BY_VIEW[_view_of(messages)])
+
+
+def make_tool_use_llm(script=searching_proposer):
+    return StubLlmPort(
+        fanout_stubs(**{"model_planning.proposer": "不应走单次调用路径"}),
+        chat_scripts={"model_planning.proposer": [script]},
+    )
+
+
+def test_model_planning_proposers_search_the_knowledge_library_through_the_tool_bus(registry):
+    port = FakeKnowledge()
+    bus = KnowledgeToolBus(port, cards={"problem:cumcm-2021-c": CARD_2021_C})
+    llm = make_tool_use_llm()
+    audits = []
+    node = ModelPlanningNode(registry, knowledge=port)
+    services = make_services(llm, tools=bus)
+    services.extras["subagents"] = SubagentSupervisor(audit=audits.append)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert [plan["id"] for plan in result.outputs["plans"]] == ["A", "B", "C"]
+    # 提议人全部走会话（label = 提示词 id），归约 / 规范化仍是模板单发
+    assert [call.prompt_id for call in llm.calls] == ["model_planning.reduce", "model_planning.formalize"]
+    proposer_chats = [call for call in llm.chat_calls if call.label == "model_planning.proposer"]
+    assert len(proposer_chats) == 9, "每路：检索信封 + 读卡信封 + 终答 = 3 次调用"
+    # 3 路 × 3 次会话调用 + 归约 + 规范化
+    assert result.outputs["llm_attempts"] == 11
+
+    # 会话形状：system = 模板渲染全文（视角 + 预检索材料仍在），user = 协议 + 策略
+    opening = next(call for call in proposer_chats if not _observations(call.messages))
+    assert [m["role"] for m in opening.messages] == ["system", "user"]
+    assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）\n\n- [problem:cumcm-2021-c]" in opening.messages[0]["content"]
+    brief = opening.messages[1]["content"]
+    assert "- knowledge_search：" in brief and "- knowledge_read：" in brief
+    assert "python_run" not in brief, "提议人拿不到沙盒工具"
+    assert "按「输出要求」输出终答 JSON" in brief and "至多 3 次" in brief
+    views_opened = {_view_of(call.messages) for call in proposer_chats}
+    assert views_opened == {"机理建模", "数据驱动", "运筹优化"}
+
+    # 工具调用经 services.tools（ToolBus 留痕 TOOL_CALLED 的那条路），带 run / step 标识
+    assert len(bus.calls) == 6
+    assert {(run_id, step_id) for run_id, step_id, _, _ in bus.calls} == {("run_1", "step_1")}
+    assert sorted(name for _, _, name, _ in bus.calls) == ["knowledge_read"] * 3 + ["knowledge_search"] * 3
+    searches = [args for _, _, name, args in bus.calls if name == "knowledge_search"]
+    assert searches == [{"query": "原材料订购 运输 整数规划", "kind": "problem"}] * 3
+    # 节点预检索（fan-out 前两次）之外，三路各自检索一次，都打在同一个端口上
+    assert [entry["kind"] for entry in port.queries] == ["problem", "paper"] + ["problem"] * 3
+    # 观察以 user 消息回给模型（文本协议），终答那次会话带两条观察
+    final_call = next(
+        call for call in proposer_chats if len(_observations(call.messages)) == 2
+    )
+    assert [m["role"] for m in final_call.messages] == ["system", "user", "assistant", "user", "assistant", "user"]
+
+    # Supervisor spawn 审计能看见子代理拿到的工具集与档位
+    spawns = [payload for payload in audits if payload["phase"] == "spawn"]
+    assert len(spawns) == 3
+    assert all(payload["toolset"] == ["knowledge_search", "knowledge_read"] for payload in spawns)
+    assert all(payload["tool_tier"] == "readonly" for payload in spawns)
+    assert [payload["envelope_status"] for payload in audits if payload["phase"] == "result"] == ["done"] * 3
+
+
+def test_proposer_tool_rounds_are_capped_and_off_list_tools_are_refused(registry):
+    def script(messages):
+        view = _view_of(messages)
+        seen = _observations(messages)
+        if view == "数据驱动":
+            # 越界工具：拿到拒绝观察后直接终答
+            if not seen:
+                return _envelope("ws_list", prefix="data/")
+            assert "不在本任务允许清单" in seen[0] and "knowledge_read, knowledge_search" in seen[0]
+            return stub_response(PROPOSALS_BY_VIEW[view])
+        if view == "机理建模":
+            # 检索上限：三轮之后收到「已用完」观察就终答
+            if any("检索次数已用完" in item for item in seen):
+                return stub_response(PROPOSALS_BY_VIEW[view])
+            return _envelope("knowledge_search", query=f"第 {len(seen) + 1} 次检索")
+        # 运筹优化：无视「已用完」继续检索 → 同一工具连败两次判无进展，这一路失败
+        return _envelope("knowledge_search", query=f"第 {len(seen) + 1} 次检索")
+
+    port = FakeKnowledge()
+    bus = KnowledgeToolBus(port)
+    llm = make_tool_use_llm(script)
+    node = ModelPlanningNode(registry, knowledge=port)
+    services = make_services(llm, tools=bus)
+    services.extras["subagents"] = SubagentSupervisor()
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.outputs["proposer_failures"] == [
+        "视角「运筹优化」未成功（failed，knowledge_search: 检索次数已用完（至多 3 次），请直接输出终答 JSON）"
+    ]
+    assert [proposal["view"] for proposal in result.outputs["proposals"]] == ["mechanism", "data_driven"]
+    # 端口只被工具路径打了 3 + 3 次（两路各三轮真检索；越界工具与超限信封都不到端口）
+    search_calls = [args for _, _, name, args in bus.calls if name == "knowledge_search"]
+    assert len(search_calls) == 6
+    assert not any(name == "ws_list" for _, _, name, _ in bus.calls), "越界工具名在执行器就被挡下"
+    assert [entry["kind"] for entry in port.queries] == ["problem", "paper"] + [None] * 6
+    # 每路的会话调用次数：机理 3 检索 + 1 超限观察 + 终答 = 5；数据驱动 1 拒绝 + 终答 = 2；
+    # 运筹 3 检索 + 2 超限（同名连败两次即止）= 5
+    per_view = {}
+    for call in llm.chat_calls:
+        per_view[_view_of(call.messages)] = per_view.get(_view_of(call.messages), 0) + 1
+    assert per_view == {"机理建模": 5, "数据驱动": 2, "运筹优化": 5}
+    assert result.outputs["llm_attempts"] == 12 + 2
+
+
+def test_proposer_tool_use_needs_knowledge_port_tool_bus_and_chat_support(registry):
+    class CompleteOnlyPort:
+        """只有 complete 的端口（不支持会话）：提议人回到单次调用路径。"""
+
+        def __init__(self, inner):
+            self._inner = inner
+            self.calls = inner.calls
+
+        def complete(self, prompt_id, variables):
+            return self._inner.complete(prompt_id, variables)
+
+    port = FakeKnowledge()
+    cases = {
+        "无知识库端口": (None, KnowledgeToolBus(port), StubLlmPort(fanout_stubs())),
+        "无 ToolBus": (port, None, StubLlmPort(fanout_stubs())),
+        "端口不支持会话": (port, KnowledgeToolBus(port), CompleteOnlyPort(StubLlmPort(fanout_stubs()))),
+    }
+    for label, (knowledge, tools, llm) in cases.items():
+        audits = []
+        node = ModelPlanningNode(registry, knowledge=knowledge)
+        services = make_services(llm, tools=tools)
+        services.extras["subagents"] = SubagentSupervisor(audit=audits.append)
+        ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+        result = node.run(ctx, services)
+
+        assert result.status == NodeResult.NEEDS_REVIEW, label
+        assert [call.prompt_id for call in llm.calls[:3]] == ["model_planning.proposer"] * 3, label
+        assert getattr(llm, "chat_calls", []) == [], label
+        assert result.outputs["llm_attempts"] == 5, label
+        spawns = [payload for payload in audits if payload["phase"] == "spawn"]
+        assert [payload["toolset"] for payload in spawns] == [[], [], []], label
+        if tools is not None:
+            assert tools.calls == [], label
+
+
 # -- 方案卡「实现语言」（§7.4：语言随 G1 确认）------------------------------------
 
 

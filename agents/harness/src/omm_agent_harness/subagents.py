@@ -176,6 +176,8 @@ class SubagentSupervisor:
             "phase": "spawn",
             "goal": spec.goal[:200],
             "tool_tier": spec.tool_tier,
+            # 子代理拿到了哪些工具（空 = 纯推理）：审计「提议人能不能自己检索」
+            "toolset": list(spec.toolset),
             "output_schema_id": spec.output_schema_id,
             "budget_tokens": spec.budgets.max_total_tokens,
         })

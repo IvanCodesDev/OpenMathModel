@@ -383,3 +383,32 @@ def test_search_tool_on_empty_library_reports_reason() -> None:
     invoker = RecordingInvoker(registry, lambda *_: None, caller_max_tier="readonly")
     result = invoker.invoke("r", "s", KNOWLEDGE_SEARCH_TOOL, {"query": "订购"})
     assert result.ok and result.output["hits"] == [] and "不存在" in result.output["note"]
+
+
+def test_specs_accept_any_knowledge_port_duck_typed() -> None:
+    """装配方注入的可以是任何 KnowledgePort（测试替身 / 其它实现）：没有
+    ``available`` 属性就按可用处理，search / read 原样透传。"""
+
+    class DuckPort:
+        def __init__(self) -> None:
+            self.queries: list[dict] = []
+
+        def search(self, query, *, kind=None, task_type=None, limit=8):
+            self.queries.append({"query": query, "kind": kind, "task_type": task_type, "limit": limit})
+            return [{"id": "problem:duck", "kind": "problem", "title": "鸭子题"}]
+
+        def read(self, card_id):
+            return {"id": card_id, "kind": "problem", "title": "鸭子题", "content": "全卡"} if card_id == "problem:duck" else None
+
+    port = DuckPort()
+    registry = ToolRegistry()
+    for spec in knowledge_tool_specs(port):
+        registry.register(spec)
+    invoker = RecordingInvoker(registry, lambda *_: None, caller_max_tier="readonly")
+
+    result = invoker.invoke("r", "s", KNOWLEDGE_SEARCH_TOOL, {"query": "鸭子", "task_type": "优化", "limit": 3})
+    assert result.ok and result.output["hits"][0]["id"] == "problem:duck" and result.output["task_type"] == "优化"
+    assert port.queries == [{"query": "鸭子", "kind": None, "task_type": "优化", "limit": 3}]
+    card = invoker.invoke("r", "s", KNOWLEDGE_READ_TOOL, {"card_id": "problem:duck"})
+    assert card.ok and card.output["content"] == "全卡"
+    assert not invoker.invoke("r", "s", KNOWLEDGE_READ_TOOL, {"card_id": "problem:none"}).ok

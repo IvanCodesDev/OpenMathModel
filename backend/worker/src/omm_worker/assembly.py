@@ -10,8 +10,10 @@ agents/skills 节点 + 默认提示词注册表 + 规划阶段审批门），但
   inputs，worker 只消费标准化后的输入。
 
 沙箱工具、产物存储与事件汇的每-run 绑定在 ``runtime.WorkerRuntime._open_run``
-（与 engine_glue 的 ``_build_tool_invoker`` 同构：allowlist 只放 python_run、
-caller_max_tier="execute"、recorder 绑定引擎 record_external）。
+（与 engine_glue 的 ``_build_tool_invoker`` 同构：allowlist 放沙盒五件套 +
+table_profile + 知识库两个只读工具、caller_max_tier="execute"、recorder 绑定
+引擎 record_external）。知识库端口同时喂给方案节点（预检索材料）与运行时
+（ToolBus 上的 knowledge_search / knowledge_read），两处必须是同一份库。
 """
 
 from __future__ import annotations
@@ -122,18 +124,24 @@ def create_real_runtime(
     clock: Any = None,
     ids: Any = None,
     prompts: PromptRegistry | None = None,
+    knowledge: KnowledgePort | None = None,
 ) -> WorkerRuntime:
     """装配跑真实六阶段链的 WorkerRuntime。
 
     这是 Phase 2「API→Worker 移交」的执行面入口：控制面进程只需提供 LLM 端口
     与文件系统布局（WorkerConfig），随后通过队列投递 advance 任务、通过
     ``apply_action`` 转发审批/重试等控制动作。
+
+    ``knowledge`` 缺省为进程缓存的卡片知识库；显式注入时节点与运行时拿到的是
+    同一个对象（提议人预检索与工具检索同库）。
     """
+    library = knowledge if knowledge is not None else load_knowledge_library()
     return WorkerRuntime(
         config,
-        nodes=build_real_nodes(unattended=unattended, prompts=prompts),
+        nodes=build_real_nodes(unattended=unattended, prompts=prompts, knowledge=library),
         llm=llm,
         worker_id=worker_id,
         clock=clock,
         ids=ids,
+        knowledge=library,
     )

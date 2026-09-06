@@ -44,25 +44,43 @@ def supports_chat(llm: Any) -> bool:
     return callable(getattr(llm, "chat_text", None))
 
 
-#: 沙盒工具目录的协议说明（与 omm_agent_tools 的注册名对齐，装配期契约）。
+#: 工具目录的协议说明（与 omm_agent_tools 的注册名对齐，装配期契约）：沙盒
+#: 五件套 + 卡片知识库两个只读工具（方案阶段提议人自主检索，§10.3 切片二）。
 _TOOL_USAGE_LINES = {
     "python_run": '- python_run：执行完整 Python 脚本。arguments = {"code": "<脚本源码>"}',
     "ws_write": '- ws_write：写工作区 UTF-8 文本文件。arguments = {"path": "相对路径", "text": "内容"}',
     "ws_read": '- ws_read：读工作区文本文件。arguments = {"path": "相对路径"}',
     "ws_list": '- ws_list：列出工作区文件。arguments = {"prefix": "可选路径前缀"}',
     "env_probe": "- env_probe：探测运行环境（可用包清单）。arguments = {}",
+    "knowledge_search": (
+        "- knowledge_search：检索赛题与获奖论文卡片库，返回带出处的命中列表。"
+        'arguments = {"query": "关键词", "kind": "可选 problem / paper", '
+        '"task_type": "可选题型或建模方向子串", "limit": 可选整数}'
+    ),
+    "knowledge_read": (
+        "- knowledge_read：按卡片 id 读全卡（赛题含正文与挂接论文，论文含奖项 / 模型）。"
+        'arguments = {"card_id": "如 problem:cumcm-2021-c"}'
+    ),
 }
 
+#: 沙盒任务卡的终答落点（模板里的章节名）；其它消费者按各自模板传 final_hint。
+_DEFAULT_FINAL_HINT = "按「工作方式与终答要求」输出终答 JSON（终答不含 tool 键）"
 
-def tool_protocol_note(tools: Sequence[str]) -> str:
-    """给模型看的工具调用协议说明；tools 是本任务允许的工具名清单。"""
+
+def tool_protocol_note(tools: Sequence[str], final_hint: str | None = None) -> str:
+    """给模型看的工具调用协议说明；tools 是本任务允许的工具名清单。
+
+    ``final_hint`` 指向终答要求所在的章节（缺省是沙盒任务卡的「工作方式与终答
+    要求」），让协议说明与调用方模板的章节名对得上。
+    """
     lines = [_TOOL_USAGE_LINES[name] for name in tools if name in _TOOL_USAGE_LINES]
     return (
         "工具调用协议：需要执行动作时，只输出一个 JSON 对象（不要任何其它文字）："
         '{"tool": "<工具名>", "arguments": {...}}。可用工具：\n'
         + "\n".join(lines)
         + "\n工具结果会以下一条消息回给你。全部动作完成并自查达标后，"
-        "按「工作方式与终答要求」输出终答 JSON（终答不含 tool 键）。"
+        + (final_hint or _DEFAULT_FINAL_HINT)
+        + "。"
     )
 
 

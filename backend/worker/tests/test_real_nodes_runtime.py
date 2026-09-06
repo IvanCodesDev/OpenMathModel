@@ -9,10 +9,12 @@ backend/api/tests/test_task_runs_llm_nodes.py 的六阶段常量），python 沙
 - 实验代码运行时失败一轮后，第二轮生成携带错误反馈与上一版代码并成功收尾；
 - 崩溃续跑：跑一半的事件日志换一个全新 runtime 实例，重放 + heal 后按
   attempt+1 续跑到完成，已完成阶段不重复执行；
-- 审批语义：批准续跑下一阶段；拒绝退回重做规划并再次请求确认。
+- 审批语义：批准续跑下一阶段；拒绝退回重做规划并再次请求确认；
+- 方案阶段三路提议人在会话里经 ToolBus 自主检索知识库（knowledge_search 留痕）。
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,7 @@ from omm_agent_core import (
 from omm_agent_skills import (
     CLEANING_PROMPT_ID,
     EXPERIMENT_SCRIPT_PATH,
+    PROPOSER_PROMPT_ID,
     PYTHON_TOOL_NAME,
     ExperimentExecutionNode,
     PromptRegistry,
@@ -117,6 +120,26 @@ def proposer_reply(variables):
     return stub_response(PROPOSAL_BY_VIEW[variables["view_name"]])
 
 
+def _proposer_view(messages):
+    """提议人会话的 system 消息是渲染后的角色卡：视角名在开头那句里。"""
+    match = re.search(r"「(.+?)」方案提议人", messages[0]["content"])
+    assert match, "提议人会话应以模板渲染的角色卡开场"
+    return match.group(1)
+
+
+PROPOSER_SEARCH_QUERY = "共享单车 调度 整数规划"
+
+
+def proposer_chat(messages):
+    """一路提议人会话（§10.3 切片二）：先经 ToolBus 查一次知识库，观察回来再交终答。
+
+    按会话内容判断（看到过工具观察就终答），三路并行共用这一份脚本。
+    """
+    if _saw_observation(messages):
+        return stub_response(PROPOSAL_BY_VIEW[_proposer_view(messages)])
+    return tool_envelope("knowledge_search", query=PROPOSER_SEARCH_QUERY, kind="problem")
+
+
 REDUCE_OK = {
     **PLANNING_OK,
     "plans": [
@@ -204,7 +227,9 @@ def stage_responses(**overrides):
         "data_preparation.default": stub_response(PREPARATION_OK),
         # 方案阶段走三路提议 + 归约 + 规范化；default 只在无监督者时才会被消费（worker 有）
         "model_planning.default": stub_response(PLANNING_OK),
-        "model_planning.proposer": proposer_reply,
+        # 提议人在 worker 装配里走会话（知识库 + ToolBus + 会话端口三件齐，见
+        # stage_chat_scripts）；这里的单发桩只是哨兵：被消费就说明装配退回了单次路径
+        "model_planning.proposer": "不应走单次调用路径",
         "model_planning.reduce": stub_response(REDUCE_OK),
         "model_planning.formalize": stub_response(FORMALIZE_OK),
         "validating.default": stub_response(VALIDATION_OK),
@@ -246,6 +271,8 @@ def stage_chat_scripts(**overrides):
     清洗如实跳过，清洗脚本仅作兜底不应被消费；实验与稳健性复跑真的走到。"""
     scripts = {
         CLEANING_PROMPT_ID: sandbox_script({"summary": "无数据文件，不应走到这里"}),
+        # 方案阶段三路提议人：每路一次 knowledge_search（经 ToolBus 留痕）+ 终答
+        PROPOSER_PROMPT_ID: [proposer_chat],
         ExperimentExecutionNode.prompt_id: sandbox_script(EXPERIMENT_OK),
         ValidationNode.sandbox_prompt_id: sandbox_script(ROBUSTNESS_OK, code=ROBUSTNESS_CODE),
     }
@@ -283,6 +310,10 @@ def prompt_calls(llm, prompt_id):
     return [call for call in llm.calls if call.prompt_id == prompt_id]
 
 
+def chat_calls(llm, label):
+    return [call for call in llm.chat_calls if call.label == label]
+
+
 # -- 装配 ---------------------------------------------------------------------
 
 
@@ -308,6 +339,38 @@ def test_build_real_nodes_wires_the_knowledge_library_into_planning():
 
     injected = KnowledgeLibrary.empty("test")
     assert build_real_nodes(knowledge=injected)[TaskState.MODEL_PLANNING].knowledge is injected
+
+
+def test_real_runtime_puts_the_same_knowledge_library_on_the_tool_bus(tmp_path):
+    """节点预检索与提议人会话里的工具检索必须读同一个库：create_real_runtime 把
+    同一个知识库对象同时喂给方案节点与运行时，_open_run 把两个只读工具注册进
+    ToolBus 的允许清单（execute 封顶下 readonly 工具可调）。"""
+    from omm_agent_tools import KnowledgeLibrary
+
+    injected = KnowledgeLibrary.empty("知识库快照不存在：测试注入")
+    runtime = create_real_runtime(
+        WorkerConfig(root=tmp_path / "rt"), stage_llm(), worker_id="worker_kb", knowledge=injected
+    )
+    assert runtime.knowledge is injected
+    assert runtime._nodes[TaskState.MODEL_PLANNING].knowledge is injected
+
+    # 缺省装配：运行时与节点拿到同一份进程缓存实例
+    default_runtime = make_runtime(tmp_path / "default", stage_llm())
+    assert default_runtime.knowledge is default_runtime._nodes[TaskState.MODEL_PLANNING].knowledge
+
+    run_id = runtime.create_run("proj_1", inputs={"goal": "优化共享单车调度"})
+    engine, snapshot = runtime._open_run(run_id)
+    tools = engine._services.tools
+    searched = tools.invoke(run_id, "step_probe", "knowledge_search", {"query": "共享单车"})
+    assert searched.ok and searched.output["hits"] == []
+    assert "测试注入" in searched.output["note"], "空库如实报原因，不算失败"
+    missing = tools.invoke(run_id, "step_probe", "knowledge_read", {"card_id": "problem:none"})
+    assert not missing.ok and "未找到卡片" in missing.error
+    # 两次调用都经 record_external 留 TOOL_CALLED 痕
+    tool_names = [
+        e.payload["tool"] for e in runtime.events.load(run_id) if e.event_type is EventType.TOOL_CALLED
+    ]
+    assert tool_names == ["knowledge_search", "knowledge_read"]
 
 
 # -- 全链 + 审批批准 ------------------------------------------------------------
@@ -419,8 +482,26 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     ]
     assert [e.payload["envelope_status"] for e in results] == ["done", "done", "done"]
     assert {e.payload["tool_tier"] for e in spawns} == {"readonly"}
+    # 提议人子代理拿到知识库两个只读工具（spawn 审计可对账），并且真的用了：
+    # 三路各一次 knowledge_search 经 ToolBus 留痕，挂在方案步骤上、成功返回
+    # （仓内快照在则有命中，没快照就是「知识库不可用」的空命中——都是 succeeded）
+    assert {tuple(e.payload["toolset"]) for e in spawns} == {("knowledge_search", "knowledge_read")}
+    (planning_step,) = steps_for(snapshot, TaskState.MODEL_PLANNING)
+    knowledge_events = [e for e in tool_events if e.payload["tool"] == "knowledge_search"]
+    assert len(knowledge_events) == 3
+    assert {e.payload["status"] for e in knowledge_events} == {"succeeded"}
+    assert {e.payload["step_id"] for e in knowledge_events} == {planning_step.step_id}
+    assert all(PROPOSER_SEARCH_QUERY in e.payload["input_summary"] for e in knowledge_events)
+    # 提议人的会话形状：system = 渲染后的角色卡（预检索材料段仍在），user = 工具协议
+    proposer_chats = chat_calls(llm, PROPOSER_PROMPT_ID)
+    assert len(proposer_chats) == 6, "每路：检索信封 + 终答"
+    opening = next(call for call in proposer_chats if not _saw_observation(call.messages))
+    assert [m["role"] for m in opening.messages] == ["system", "user"]
+    assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in opening.messages[0]["content"]
+    assert "- knowledge_search：" in opening.messages[1]["content"]
+    assert prompt_calls(llm, PROPOSER_PROMPT_ID) == [], "提议人不再走单次调用路径"
     assert snapshot.outputs["MODEL_PLANNING"]["plans"][1]["role"] == "baseline"
-    tool_events = [e for e in tool_events if e not in proposer_events]
+    tool_events = [e for e in tool_events if e not in proposer_events and e not in knowledge_events]
     # 数据阶段画像前置一条 ws_list（无数据文件，清洗如实跳过）；实验阶段依次：
     # 任务卡数据清单 ws_list → 节点侧 env_probe（复现指纹）→ 沙盒 python_run
     # → 断言取证 ws_list（验收基于工作区证据而非模型自述）→ ws_write 落最终脚本；
@@ -577,14 +658,15 @@ def test_crash_midway_fresh_runtime_resumes_to_completion(tmp_path):
         "problem_analysis.default": 1,
         "data_preparation.default": 1,
         "model_planning.default": 0,
-        "model_planning.proposer": 3,
+        "model_planning.proposer": 0,
         "model_planning.reduce": 1,
         "model_planning.formalize": 1,
         "validating.default": 2,
         "paper_writing.default": 1,
     }.items():
         assert len(prompt_calls(llm, prompt_id)) == expected, prompt_id
-    # 实验沙盒会话同样不重跑：一波两次调用（信封 + 终答），续跑后无新增
+    # 提议人会话（三路 × 信封 + 终答）与实验沙盒会话同样不重跑：续跑后无新增
+    assert len(chat_calls(llm, PROPOSER_PROMPT_ID)) == 6
     experiment_chats = [
         call
         for call in llm.chat_calls
@@ -620,8 +702,9 @@ def test_reject_redoes_planning_and_asks_again(tmp_path):
         (1, StepStatus.SUCCEEDED),
         (2, StepStatus.SUCCEEDED),
     ]
-    # 重做 = 三路提议、归约与规范化整个重来一遍
-    assert len(prompt_calls(llm, "model_planning.proposer")) == 6
+    # 重做 = 三路提议（会话：信封 + 终答）、归约与规范化整个重来一遍
+    assert len(chat_calls(llm, PROPOSER_PROMPT_ID)) == 12
+    assert prompt_calls(llm, PROPOSER_PROMPT_ID) == []
     assert len(prompt_calls(llm, "model_planning.reduce")) == 2
     assert len(prompt_calls(llm, "model_planning.formalize")) == 2
     assert prompt_calls(llm, "model_planning.default") == []

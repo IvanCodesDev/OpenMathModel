@@ -50,11 +50,16 @@ def test_run_level_llm_call_cap_hard_stops_with_e310(client, monkeypatch):
 
 
 def test_node_level_token_cap_hard_stops_with_e320(client, monkeypatch):
-    """节点 token 上限只打节点自己：stub 每次调用 30 tokens，上限 100——题意、数据
-    两阶段各一次调用无碍；方案阶段三路提议 + 归约 + 规范化共 5 次调用，第 5 次
-    （规范化）调用前累计 120 越线被拦。若账本是跨节点累计的，方案阶段第 3 次调用
-    前就已累计 120（题意 30 + 数据 30 + 提议 60），用量行只会有 4 行而不是 6 行。"""
-    monkeypatch.setenv("OMM_NODE_MAX_TOKENS", "100")
+    """节点 token 上限只打节点自己：stub 每次调用 30 tokens，上限 200——题意、数据
+    两阶段各一次调用无碍；方案阶段三路提议（会话：检索信封 + 终答，每路 2 次）+
+    归约 + 规范化共 8 次调用，第 8 次（规范化）调用前累计 210 越线被拦。若账本是
+    跨节点累计的，提议人第 6 次调用前就已累计 210（题意 30 + 数据 30 + 提议 150），
+    用量行只会有 7 行而不是 9 行。
+
+    上限刻意放在并行 fan-out 之外的串行段（归约 / 规范化）：预检读的是已记账的
+    账本、记账在调用返回之后，三路提议人并行时若边界落在 fan-out 里，两路可能都在
+    同一刻度过检（越界窗口 ≤ 并行度 − 1 次，§4.7 已知取舍），行数就不确定。"""
+    monkeypatch.setenv("OMM_NODE_MAX_TOKENS", "200")
     _configure_llm(client, monkeypatch)
     run = create_run(client, create_project(client)["id"], goal="优化共享单车调度")
 
@@ -69,12 +74,12 @@ def test_node_level_token_cap_hard_stops_with_e320(client, monkeypatch):
     for node in ("PROBLEM_ANALYSIS", "DATA_PREPARATION"):
         assert statuses[node] == "SUCCEEDED", f"{node} 不应被方案节点的预算殃及"
     assert statuses["MODEL_PLANNING"] == "FAILED"
-    # 花钱之前硬停：前 4 次方案阶段调用都记了账，第 5 次没有用量行
+    # 花钱之前硬停：前 7 次方案阶段调用都记了账，第 8 次没有用量行
     with client.app.state.db.session_factory() as session:
         usage_rows = session.execute(
             select(LlmUsageRow).where(LlmUsageRow.run_id == run["id"])
         ).scalars().all()
-    assert len(usage_rows) == 6, "题意 1 + 数据 1 + 提议 3 + 归约 1；规范化在调用前被拦"
+    assert len(usage_rows) == 9, "题意 1 + 数据 1 + 提议 3×2 + 归约 1；规范化在调用前被拦"
 
 
 def test_sandbox_run_cap_charges_upfront_with_e310(client, monkeypatch):

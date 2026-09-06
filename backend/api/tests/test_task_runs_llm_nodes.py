@@ -330,11 +330,28 @@ def _sandbox_reply(messages: list[dict], code: str, final: dict) -> httpx.Respon
     return _python_envelope(code)
 
 
+#: 提议人会话里发出的知识库检索（§10.3 切片二）：经 API 侧 ToolBus 留 TOOL_CALLED 痕
+PROPOSER_SEARCH_QUERY = "门店选址 整数规划 排队论"
+
+
+def _proposer_reply(messages: list[dict], view: str) -> httpx.Response:
+    """提议人会话脚本：先经 ToolBus 查一次知识库，看到观察后再交这一视角的终答。"""
+    if _saw_observation(messages):
+        observation = next(
+            str(m.get("content") or "") for m in messages if "[工具执行结果]" in str(m.get("content") or "")
+        )
+        # 有快照 → 命中列表；无快照 → 空命中 + 「知识库不可用」原因；都不是失败
+        assert '"hits"' in observation and "工具执行失败" not in observation, observation
+        return _llm_reply(PROPOSAL_OUTPUT_BY_VIEW[view])
+    return _llm_reply({"tool": "knowledge_search", "arguments": {"query": PROPOSER_SEARCH_QUERY, "kind": "problem"}})
+
+
 def _stage_router(request: httpx.Request) -> httpx.Response:
     """按各阶段提示词的角色锚点路由 stub 输出（锚点来自 agents/prompts 模板正文）。
 
-    单发模板阶段的锚点在最后一条消息（complete 的整段渲染文本）；沙盒会话
-    阶段（清洗/实验）的锚点在 system 角色卡，按会话脚本应答。
+    单发模板阶段的锚点在最后一条消息（complete 的整段渲染文本）；会话阶段
+    （清洗/实验/复跑的沙盒任务卡、方案阶段的提议人）的锚点在 system 角色卡，
+    按会话脚本应答。
     """
     messages = _wire_messages(request)
     system = _system_of(messages)
@@ -349,23 +366,27 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         assert '"rmse": 0.5' in system, "复跑任务卡应携带实验真实指标"
         assert "评审保留（warn）：稳健性" in system, "评审判读的保留意见应进风险点"
         return _sandbox_reply(messages, ROBUSTNESS_CODE, ROBUSTNESS_OUTPUT)
+    proposer = re.search(r"「(.+?)」方案提议人", system)
+    if proposer:
+        # 方案阶段三路 Proposer 子代理（并行，各带自己的视角）：会话式，system =
+        # 渲染后的角色卡，user 开场 = 工具协议 + 检索策略（知识库两个只读工具）
+        assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in system, "提议人应携带分析产出"
+        assert PREPARATION_OUTPUT["profile_summary"] in system, "提议人应携带数据画像摘要"
+        # 知识库预检索材料（§10.3 薄版一）：API 装配注入进程内快照库；有快照时
+        # 材料是带出处的卡片行，没快照时是「无（知识库不可用）」——两者都不阻断
+        assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in system, "提议人应带先例材料段"
+        knowledge_section = system.split("## 相似赛题与获奖论文方法（知识库检索，按相关度）", 1)[1]
+        assert knowledge_section.lstrip().startswith(("- [problem:", "- [paper:", "无（")), "先例材料要么是卡片行要么如实为「无」"
+        opening = messages[1]["content"]
+        assert messages[1]["role"] == "user" and "- knowledge_search：" in opening and "- knowledge_read：" in opening
+        assert "python_run" not in opening, "提议人拿不到沙盒工具"
+        return _proposer_reply(messages, proposer.group(1))
     prompt = messages[-1]["content"]
     if "赛题原文" in prompt:
         return _llm_reply(ANALYSIS_OUTPUT)
     if "数据工程师" in prompt:
         assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "数据准备应携带分析产出"
         return _llm_reply(PREPARATION_OUTPUT)
-    proposer = re.search(r"「(.+?)」方案提议人", prompt)
-    if proposer:
-        # 方案阶段三路 Proposer 子代理（并行，各带自己的视角）
-        assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "提议人应携带分析产出"
-        assert PREPARATION_OUTPUT["profile_summary"] in prompt, "提议人应携带数据画像摘要"
-        # 知识库预检索材料（§10.3 薄版一）：API 装配注入进程内快照库；有快照时
-        # 材料是带出处的卡片行，没快照时是「无（知识库不可用）」——两者都不阻断
-        assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in prompt, "提议人应带先例材料段"
-        knowledge_section = prompt.split("## 相似赛题与获奖论文方法（知识库检索，按相关度）", 1)[1]
-        assert knowledge_section.lstrip().startswith(("- [problem:", "- [paper:", "无（")), "先例材料要么是卡片行要么如实为「无」"
-        return _llm_reply(PROPOSAL_OUTPUT_BY_VIEW[proposer.group(1)])
     if "建模规范员" in prompt:
         # 归约之后的规范化（假设表 / 符号表）：拿到的是归约后的 A/B 两案与分析产出。
         # 规范化模板正文也提到「方案组长」，必须先于归约锚点判断。
@@ -627,13 +648,39 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert [entry["symbol"] for entry in proposal["symbols"]] == [
         "i \\in \\mathcal{I}", "d_i", "x_i", "z", "\\mathcal{N}(s)",
     ]
-    # 三路提议 + 归约 + 规范化 = 方案阶段 5 次模型调用，全部记入用量监控并归属方案节点
+    # 三路提议（会话：检索信封 + 终答，每路 2 次）+ 归约 + 规范化 = 方案阶段 8 次
+    # 模型调用，全部记入用量监控并归属方案节点
     with client.app.state.db.session_factory() as session:
         usage_rows = session.execute(
             select(LlmUsageRow).where(LlmUsageRow.run_id == run["id"])
         ).scalars().all()
-    assert len(usage_rows) == 7, "题意 1 + 数据 1 + 提议 3 + 归约 1 + 规范化 1（尚未审批）"
-    assert sum(1 for row in usage_rows if row.run_id == run["id"]) == 7
+    assert len(usage_rows) == 10, "题意 1 + 数据 1 + 提议 3×2 + 归约 1 + 规范化 1（尚未审批）"
+    assert sum(1 for row in usage_rows if row.run_id == run["id"]) == 10
+    # 提议人自主检索（§10.3 切片二）：三路各一次 knowledge_search 经 API 侧 ToolBus
+    # 留 TOOL_CALLED 痕并投影到 run.log，挂在方案步骤上、成功返回（有快照 = 命中
+    # 列表，无快照 = 空命中 + 原因，都不是失败）
+    events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
+    logs = [event["payload"] for event in events if event["type"] == "run.log"]
+    knowledge_calls = [entry for entry in logs if entry.get("tool") == "knowledge_search"]
+    assert len(knowledge_calls) == 3
+    assert {entry["status"] for entry in knowledge_calls} == {"succeeded"}
+    assert all(PROPOSER_SEARCH_QUERY in entry["input_summary"] for entry in knowledge_calls)
+    planning_steps = [
+        s for s in client.get(f"/api/v1/task-runs/{run['id']}/steps").json()["items"]
+        if s["node"] == "MODEL_PLANNING"
+    ]
+    assert {entry["step_id"] for entry in knowledge_calls} == {planning_steps[0]["id"]}
+    proposer_spawns = [
+        entry for entry in logs
+        if str(entry.get("tool") or "").startswith("subagent:proposer:") and entry.get("phase") == "spawn"
+    ]
+    assert [entry["toolset"] for entry in proposer_spawns] == [["knowledge_search", "knowledge_read"]] * 3
+    # 会话调用同样进过程事件（llm_call 归属提议人提示词 id）：每路两次
+    proposer_llm_calls = [
+        entry for entry in logs
+        if entry.get("kind") == "llm_call" and entry.get("prompt_id") == "model_planning.proposer"
+    ]
+    assert len(proposer_llm_calls) == 6
 
     approve_when_asked(client, run["id"], option_id="approve")
     # 论文发布后停在 G4 定稿闸门（必停）：草稿与审计已落库，卡片给「确认交付 / 退回修改」

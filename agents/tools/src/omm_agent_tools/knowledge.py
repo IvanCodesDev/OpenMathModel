@@ -695,11 +695,16 @@ def load_knowledge_library(path: str | os.PathLike[str] | None = None) -> Knowle
         return library
 
 
-# ── ToolBus 规格（只读，H3 薄版一：先实现与单测，注册随智能体检索路径落地）─────
+# ── ToolBus 规格（只读；worker `_open_run` 与 API `_build_tool_invoker` 两个装配点注册）─────
 
 
-def knowledge_tool_specs(library: KnowledgeLibrary) -> list[ToolSpec]:
-    """两个只读工具：``knowledge_search`` / ``knowledge_read``（tier=readonly）。"""
+def knowledge_tool_specs(library: Any) -> list[ToolSpec]:
+    """两个只读工具：``knowledge_search`` / ``knowledge_read``（tier=readonly）。
+
+    ``library`` 按鸭子 KnowledgePort 使用（``search`` / ``read``）：装配方注入的
+    通常是 :class:`KnowledgeLibrary`，但测试替身与其它端口实现也能直接注册——
+    ``available`` / ``unavailable_reason`` 缺席时按「可用」处理。
+    """
 
     def search_handler(arguments: dict[str, Any], _ctx: ToolCallContext) -> ToolResult:
         query = str(arguments.get("query") or "").strip()
@@ -716,14 +721,14 @@ def knowledge_tool_specs(library: KnowledgeLibrary) -> list[ToolSpec]:
             limit = int(raw_limit)
         except (TypeError, ValueError):
             return ToolResult(status="failed", error=f"limit 必须是整数，收到 {raw_limit!r}")
-        if not library.available:
+        if not getattr(library, "available", True):
             return ToolResult(
                 status="succeeded",
                 output={
                     "query": query,
                     "hits": [],
                     "total": 0,
-                    "note": library.unavailable_reason or "知识库不可用",
+                    "note": getattr(library, "unavailable_reason", None) or "知识库不可用",
                 },
             )
         hits = library.search(query, kind=kind, task_type=task_type, limit=limit)

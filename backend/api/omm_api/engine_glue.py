@@ -59,10 +59,13 @@ from omm_agent_skills import (
     load_default_registry,
 )
 from omm_agent_tools import (
+    KNOWLEDGE_READ_TOOL,
+    KNOWLEDGE_SEARCH_TOOL,
     PythonSandbox,
     RecordingInvoker,
     TaskWorkspace,
     ToolRegistry,
+    knowledge_tool_specs,
     load_knowledge_library,
     probe_sandbox_gpu,
     sandbox_workspace_specs,
@@ -896,6 +899,10 @@ def _llm_wiring_impl(
         # 清洗沙盒执行（H3 前置刀）：数据准备节点经监督者派发沙盒执行体；
         # spawn/结果审计与模型过程事件同路落 run.log（工作台执行轨迹可见）。
         "subagents": SubagentSupervisor(audit=_process_event),
+        # 工具事件的记录（open_engine → _build_tool_invoker）也要进这把锁：三路
+        # 提议人子代理在会话里并行调用知识库工具，record_external 经 _ProjectingSink
+        # 写的是同一个 Session，不串行就会和过程事件 / 记账互相踩。
+        "control_lock": control_lock,
     }
     return port, overrides, extras
 
@@ -1555,14 +1562,22 @@ def _stage_attachment_tables(
 
 
 def _build_tool_invoker(
-    session: Session, engine: TaskRunEngine, snapshot: TaskRunSnapshot, run: TaskRunRow
+    session: Session,
+    engine: TaskRunEngine,
+    snapshot: TaskRunSnapshot,
+    run: TaskRunRow,
+    lock: Any = None,
 ) -> RecordingInvoker:
-    """真实节点的工具端口：沙箱 + 工作区五件套 + table_profile，execute 最小授权。
+    """真实节点的工具端口：沙箱 + 工作区五件套 + table_profile + 知识库两个只读
+    工具，execute 最小授权。
 
     产物存储注入 ApiArtifactStore：实验代码创建的文件直接进内容寻址存储，
     与其他产物同一条下载链路；工作区目录只是执行暂存。
     工具事件走引擎 record_external（序列分配必须留在引擎单路径上），
     随 _ProjectingSink 投影成 v1 run.log，工作台执行轨迹可见每次调用。
+    ``lock`` 是控制面写入锁（_llm_wiring_impl 的 control_lock）：方案阶段三路
+    提议人从各自线程调用 knowledge_search / knowledge_read，记录必须与过程
+    事件、记账串行在同一把锁下（与 worker 侧 record_lock 同构）。
     """
     settings = runtime_settings()
     workspace = TaskWorkspace(settings.workspaces_dir, run.id)
@@ -1577,9 +1592,16 @@ def _build_tool_invoker(
     registry.register(table_profile_spec(workspace))
     for spec in sandbox_workspace_specs(workspace):
         registry.register(spec)
+    # 与方案节点同一份进程缓存的知识库（_llm_wiring_impl 里 ModelPlanningNode 的
+    # knowledge）：提议人预检索与会话里的工具检索读同一个库
+    for spec in knowledge_tool_specs(load_knowledge_library()):
+        registry.register(spec)
 
     def record(event_type: EventType, payload: dict[str, Any]) -> CoreEvent:
-        return engine.record_external(snapshot, event_type, payload)
+        if lock is None:
+            return engine.record_external(snapshot, event_type, payload)
+        with lock:
+            return engine.record_external(snapshot, event_type, payload)
 
     return RecordingInvoker(
         registry.with_allowlist(
@@ -1590,6 +1612,8 @@ def _build_tool_invoker(
                 "ws_read",
                 "ws_write",
                 "env_probe",
+                KNOWLEDGE_SEARCH_TOOL,
+                KNOWLEDGE_READ_TOOL,
             }
         ),
         record,
@@ -1605,7 +1629,9 @@ def open_engine(
     snapshot = replay_events(run.id, run.project_id, events)
     if services.llm is not None:
         # 工具事件要挂在当前快照的事件序列上，因此在快照重放之后绑定。
-        invoker = _build_tool_invoker(session, engine, snapshot, run)
+        invoker = _build_tool_invoker(
+            session, engine, snapshot, run, lock=services.extras.get("control_lock")
+        )
         governor = services.extras.get("budget_governor")
         # 沙箱运行按次预付计费：越线的那次运行根本不会启动（§4.7）
         services.tools = _BudgetedInvoker(invoker, governor) if governor else invoker
