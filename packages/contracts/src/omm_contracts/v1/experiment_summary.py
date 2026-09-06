@@ -130,11 +130,11 @@ class ReviewReport(BaseModel):
     summary: str = Field(..., description="审稿人的一句话总结；未执行时为空串。")
     stalemate: bool = Field(
         ...,
-        description="僵持：驳回后修复预算已尽 / 修复波未过验收 / 修复后复审未完成 / 达到轮次上限仍有 blocker。true 时保留最后一波通过验收的结果，由结果采用闸门裁定。",
+        description="僵持：驳回后修复预算已尽 / 修复波未过验收 / 修复后复审未完成 / 达到轮次上限仍有 blocker。true 时保留最后一波通过验收的结果，交由该阶段的人工闸门（结果采用 / 数据确认）裁定。",
     )
     rerun_consistent: bool | None = Field(
         ...,
-        description="节点用同一份最终脚本确定性复跑一次并逐键比对核心指标：true 一致 / false 不一致（可复现性存疑）/ null 未复跑（预算不足或脚本正文缺失）。",
+        description="节点用同一份最终脚本确定性复跑一次并逐键比对该阶段的关键数字（实验 / 检验：核心指标；清洗：影响面标记行）：true 一致 / false 不一致（可复现性存疑）/ null 未复跑（预算不足或脚本正文缺失）。",
     )
     reason: str = Field(..., description="未执行或僵持的原因；正常通过时为空串。")
 

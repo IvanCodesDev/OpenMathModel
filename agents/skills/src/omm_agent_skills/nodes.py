@@ -3512,6 +3512,7 @@ _MAX_LENGTH_REVISIONS = 2
 #: source_keys 的合法取值与材料标题（总编给每章指定材料，缺失时给全量）。
 _MATERIAL_LABELS = {
     "problem_analysis": "问题分析结果（JSON）",
+    "data_preparation": "数据准备与清洗结论（数据画像、清洗策略、清洗脚本执行与独立审稿结论、数据确认闸门的用户决策）",
     "chosen_plan": "已确认的建模方案（JSON）",
     "model_assumptions": "模型假设表（方案阶段确认；编号【状态｜影响｜适用范围】内容）",
     "model_symbols": "模型符号表（方案阶段确认；记号（类型｜范围）＝定义［单位；取值］）",
@@ -3525,6 +3526,7 @@ _ALWAYS_MATERIAL_KEYS = ("frozen_numbers",)
 #: 假设文本与符号取值里的数字（「删行 ≤ 5%」「{0,1}」）是有出处的。
 _NARRATIVE_MATERIAL_KEYS = (
     "problem_analysis",
+    "data_preparation",
     "chosen_plan",
     "model_assumptions",
     "model_symbols",
@@ -3569,6 +3571,88 @@ def _emit_progress(services: NodeServices, payload: dict[str, Any]) -> None:
         callback(payload)
     except Exception:  # noqa: BLE001 - 过程展示绝不允许拖垮任务本身
         pass
+
+
+_G2_MATERIAL_BY_DECISION = {
+    "adopt_cleaned": (
+        "用户已在数据确认闸门选择「采用清洗结果」：正文的样本口径与规模按清洗后数据描述。"
+    ),
+    "use_raw": (
+        "用户已在数据确认闸门选择「改用原始数据」：正文的样本口径按原始数据描述，"
+        "清洗过程只作为数据处理探索如实说明，不得以清洗后数据作为结论依据。"
+    ),
+}
+
+
+def _data_preparation_material(
+    preparation: Mapping[str, Any], review_decisions: Mapping[str, str]
+) -> str:
+    """论文的数据材料：画像摘要 + 清洗策略 + 清洗执行结论 + 清洗脚本审稿结论 + G2 决策纪律。
+
+    数据阶段此前不进论文材料（只有清洗前后行数经冻结清单进正文），数据预处理小节
+    只能凭方案与题面想象样本口径。这里按句给出节点的确定性结论：影响面数字来自
+    脚本标记行（节点只做除法，不是模型转述）；清洗脚本的独立审稿（§8.4）通过与僵持
+    都写——僵持时未解决的意见逐条进局限性；用户在 G2 的选择决定正文按清洗后还是
+    原始数据描述样本，AI 不得替用户改口径。
+    """
+    if not preparation:
+        return "无"
+    lines = [f"数据画像：{str(preparation.get('profile_summary') or '').strip() or '无'}"]
+    for key, label in (
+        ("missing_value_strategy", "缺失值策略"),
+        ("outlier_strategy", "异常值策略"),
+    ):
+        value = str(preparation.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}：{value}")
+    cleaning = preparation.get("cleaning")
+    if not isinstance(cleaning, Mapping):
+        lines.append("清洗执行：无执行记录，建模按原始数据进行，正文不得虚构清洗过程。")
+    elif not cleaning.get("executed"):
+        reason = str(cleaning.get("reason") or "").strip() or "原因未记录"
+        lines.append(f"清洗执行：未执行（{reason}），建模按原始数据进行，正文不得虚构清洗过程。")
+    else:
+        def count(key: str) -> int:
+            try:
+                return max(0, int(cleaning.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        def names(key: str) -> list[str]:
+            values = cleaning.get(key)
+            if not isinstance(values, (list, tuple)):
+                return []
+            return [str(v).strip() for v in values if str(v).strip()]
+
+        rows_before, rows_after = count("rows_before"), count("rows_after")
+        ratio = cleaning.get("rows_deleted_ratio")
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+            ratio = (1.0 - rows_after / rows_before) if rows_before > 0 else 0.0
+        passed = cleaning.get("status") == "passed"
+        text = (
+            f"清洗执行：清洗脚本执行 {count('attempts')} 波后"
+            f"{'通过验收' if passed else '未通过验收'}，"
+            f"保留 {rows_after} / {rows_before} 行（删行 {max(0.0, float(ratio)):.1%}）"
+        )
+        imputed, targets = names("imputed_columns"), names("imputed_target_columns")
+        if imputed:
+            text += f"，插补列 {'、'.join(imputed)}"
+            if targets:
+                text += f"（含目标列 {'、'.join(targets)}）"
+        text += "。" if passed else "；清洗产物未通过验收，正文不得以清洗后数据作为样本口径。"
+        summary = str(cleaning.get("summary") or "").strip()
+        if summary:
+            text += f"清洗摘要：{summary}"
+        lines.append(text)
+        review_text = review_material(cleaning.get("review"), "清洗脚本")
+        if review_text:
+            lines.append(review_text)
+    decision_text = _G2_MATERIAL_BY_DECISION.get(
+        str(review_decisions.get(TaskState.DATA_PREPARATION.value) or "")
+    )
+    if decision_text:
+        lines.append(decision_text)
+    return "\n".join(lines)
 
 
 def _experiment_material(experiment: Mapping[str, Any]) -> str:
@@ -3669,11 +3753,15 @@ class PaperWritingNode(LlmSkillNode):
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
         planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
+        preparation = ctx.prior_outputs.get(TaskState.DATA_PREPARATION.value) or {}
         experiment = ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {}
         validation = ctx.prior_outputs.get(TaskState.VALIDATING.value) or {}
         plan = chosen_plan(planning, ctx.review_decisions)
         return {
             "problem_analysis": json.dumps(dict(analysis), ensure_ascii=False),
+            # 数据阶段的结论进论文材料：画像 / 清洗策略 / 清洗执行与审稿结论 / G2 决策
+            # ——数据预处理小节的样本口径以此为准，不凭方案想象（§9.1）。
+            "data_preparation": _data_preparation_material(preparation, ctx.review_decisions),
             "chosen_plan": json.dumps(plan, ensure_ascii=False),
             # 方案阶段的两张表进论文材料：「模型假设」章按表逐条列、「符号说明」与
             # 全文记号以符号表为底稿（§9.1「同一符号贯穿」）；缺表如实写「无」。
@@ -4043,7 +4131,7 @@ class PaperWritingNode(LlmSkillNode):
         frozen: list[dict[str, Any]],
         allowed: set[str],
     ) -> NodeResult:
-        """回退路径：总编规划失败时整篇单次生成（paper_writing.default v5）。"""
+        """回退路径：总编规划失败时整篇单次生成（paper_writing.default，与总编同一套材料）。"""
         template = self._registry.get(self.prompt_id)
         parsed, attempts, error = complete_validated(services, template, variables)
         if parsed is None:

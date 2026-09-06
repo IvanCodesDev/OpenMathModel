@@ -222,6 +222,70 @@ def _problem_frame(run_id: str, state: Optional[StageState]) -> Optional[Problem
     )
 
 
+_CLEANING_STATUSES = frozenset({"passed", "failed"})
+
+
+def _non_negative_int(value: Any) -> int:
+    """标记行数字 → 契约的非负整数；bool / 负数 / 非数值一律归 0（不编数字）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))
+
+
+def _cleaning_report(raw: Any) -> Optional[dict[str, Any]]:
+    """数据节点的 ``cleaning`` 输出 → 契约 ``cleaning_report``（dataset-profile.v1）。
+
+    节点写的是过程全貌（llm_calls / target_columns / 产物引用 / 波次…），契约只要
+    结论：执行与否及原因、最终采用波的验收结论、影响面四个数字两张列表、清洗工程师
+    自述、独立审稿结论。白名单投影——契约 ``additionalProperties=false``，任何未
+    清洗的键都会把接口打成 500。
+
+    - 未执行（工具 / 监督者 / 会话端口缺席、无数据文件、预算不足、子代理未完成）：
+      status null、数字 0、列表空、summary 空、review null，reason 原样保留；
+    - 执行：数字按标记行取非负整数，删行比例缺失时按前后行数重算并夹到 [0, 1]；
+      status 越界归 failed；review 走 ``_review_report``；
+    - 该字段出现之前的运行 / 模拟节点没有该键 → None（契约 null）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    executed = raw.get("executed") is True
+    if not executed:
+        return {
+            "executed": False,
+            "status": None,
+            "reason": str(raw.get("reason") or ""),
+            "attempts": 0,
+            "rows_before": 0,
+            "rows_after": 0,
+            "rows_deleted_ratio": 0.0,
+            "imputed_columns": [],
+            "imputed_target_columns": [],
+            "summary": "",
+            "review": None,
+        }
+    rows_before = _non_negative_int(raw.get("rows_before"))
+    rows_after = _non_negative_int(raw.get("rows_after"))
+    ratio = raw.get("rows_deleted_ratio")
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+        ratio = (1.0 - rows_after / rows_before) if rows_before > 0 else 0.0
+    status = str(raw.get("status") or "").strip().lower()
+    return {
+        "executed": True,
+        "status": status if status in _CLEANING_STATUSES else "failed",
+        "reason": "",
+        "attempts": _non_negative_int(raw.get("attempts")),
+        "rows_before": rows_before,
+        "rows_after": rows_after,
+        "rows_deleted_ratio": round(min(1.0, max(0.0, float(ratio))), 4),
+        "imputed_columns": [c for c in _strs(raw.get("imputed_columns")) if c.strip()],
+        "imputed_target_columns": [
+            c for c in _strs(raw.get("imputed_target_columns")) if c.strip()
+        ],
+        "summary": str(raw.get("summary") or ""),
+        "review": _review_report(raw.get("review")),
+    }
+
+
 def _dataset_profile(run_id: str, state: Optional[StageState]) -> Optional[DatasetProfile]:
     if state is None:
         return None
@@ -249,6 +313,8 @@ def _dataset_profile(run_id: str, state: Optional[StageState]) -> Optional[Datas
         missing_value_strategy=outputs.get("missing_value_strategy"),
         outlier_strategy=outputs.get("outlier_strategy"),
         derived_features=_strs(outputs.get("derived_features")),
+        # 清洗执行结论 + 独立审稿（§8.4 第三个沙盒消费方）；该字段出现之前的运行 → null
+        cleaning=_cleaning_report(outputs.get("cleaning")),
         updated_at=iso_z(state.at),
     )
 

@@ -1,22 +1,25 @@
 /**
- * 实验与验证页的纯数据整形（不碰 DOM，node --test 直接断言）：
+ * 实验与验证页、数据准备页的纯数据整形（不碰 DOM，node --test 直接断言）：
  * - 指标值格式化；
  * - experiment-summary 契约 validation.robustness（沙盒复跑的稳健性检查，G3 结果
  *   采用闸门的判定依据）→「稳健性与风险结论」小节的条目；
  * - 契约 review / validation.robustness.review（实验代码 / 检验脚本的独立审稿结论，
- *   §8.4 生成者-评审者环）→ 同一小节的审稿条目。
+ *   §8.4 生成者-评审者环）→ 同一小节的审稿条目；
+ * - dataset-profile 契约 cleaning（清洗脚本的执行结论 + 独立审稿，§8.4 第三个沙盒
+ *   消费方；影响面数字是 G2 数据确认闸门的判定依据）→ 数据页「清洗执行与独立审稿」条目。
  *
  * 文案只产出中文源串；调用方按片段 t() 翻译后再拼接——词典按整段文本节点匹配，
  * 拼好的「通过｜实测 0.25｜阈值 0.2」译不到。
  */
 
-import type { ExperimentSummary } from "@openmathmodel/contracts";
+import type { DatasetProfile, ExperimentSummary } from "@openmathmodel/contracts";
 
 export type ValidationReport = NonNullable<ExperimentSummary["validation"]>;
 export type RobustnessReport = NonNullable<ValidationReport["robustness"]>;
 export type RobustnessCheck = RobustnessReport["checks"][number];
 export type ReviewReport = NonNullable<ExperimentSummary["review"]>;
 export type ReviewFinding = ReviewReport["findings"][number];
+export type CleaningReport = NonNullable<DatasetProfile["cleaning"]>;
 
 /** 指标值展示：千分位 + 有限小数；非数值原样。大数不带小数尾巴，小数保留 4 位。 */
 export function formatMetricValue(value: unknown): string {
@@ -155,5 +158,45 @@ export function describeReview(review: ReviewReport | null | undefined): ReviewS
     findings,
     summary: review.summary,
     rerun: rerunState(review),
+  };
+}
+
+export type CleaningSection =
+  /** 契约字段缺席（该字段出现之前的运行 / 模拟节点）：数据页不提清洗执行。 */
+  | { kind: "absent" }
+  /** 清洗没跑（无工具 / 监督者 / 数据文件 / 预算、子代理未完成）：把原因摆出来，不让「没跑」看起来像「跑过」。 */
+  | { kind: "skipped"; reason: string }
+  /** 清洗跑了：验收结论 + 影响面（数字来自脚本标记行，已格式化）+ 工程师自述 + 审稿结论。 */
+  | {
+      kind: "executed";
+      tone: "pass" | "fail";
+      passed: boolean;
+      attempts: number;
+      rowsBefore: string;
+      rowsAfter: string;
+      /** 删行比例，「8.0%」；比例来自节点按标记行的换算（G2 阈值 5%）。 */
+      deletedRatio: string;
+      imputed: string[];
+      imputedTargets: string[];
+      summary: string;
+      review: ReviewSection;
+    };
+
+export function describeCleaning(cleaning: CleaningReport | null | undefined): CleaningSection {
+  if (!cleaning) return { kind: "absent" };
+  if (!cleaning.executed) return { kind: "skipped", reason: cleaning.reason };
+  const passed = cleaning.status === "passed";
+  return {
+    kind: "executed",
+    tone: passed ? "pass" : "fail",
+    passed,
+    attempts: cleaning.attempts,
+    rowsBefore: formatMetricValue(cleaning.rows_before),
+    rowsAfter: formatMetricValue(cleaning.rows_after),
+    deletedRatio: `${(cleaning.rows_deleted_ratio * 100).toFixed(1)}%`,
+    imputed: cleaning.imputed_columns,
+    imputedTargets: cleaning.imputed_target_columns,
+    summary: cleaning.summary,
+    review: describeReview(cleaning.review),
   };
 }

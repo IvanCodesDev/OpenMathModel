@@ -606,6 +606,20 @@ const DATA_STAGE: Record<string, string> = {
   "质量风险": "Quality risks",
   "准备步骤与清洗策略": "Preparation steps and cleaning strategy",
   "衍生变量": "Derived features",
+  // 清洗执行与独立审稿（dataset-profile.cleaning，§8.4 第三个沙盒消费方）
+  "清洗执行与独立审稿": "Cleaning run and independent review",
+  "清洗结果": "Cleaning result",
+  "清洗未执行": "Cleaning not executed",
+  "通过验收": "accepted",
+  "未通过验收": "failed acceptance",
+  "波": "wave(s)",
+  "保留": "kept",
+  "行": "rows",
+  "删行": "dropped",
+  "插补列": "imputed columns",
+  "含目标列": "incl. target columns",
+  "清洗脚本独立审稿": "Independent review of cleaning script",
+  "清洗脚本独立审稿未执行": "Cleaning script review not executed",
 };
 
 /** 建模方案页。 */

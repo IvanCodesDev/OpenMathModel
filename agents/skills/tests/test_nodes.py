@@ -3275,6 +3275,161 @@ def test_paper_material_carries_review_verdicts_of_both_sandbox_consumers(regist
     assert accepted["experiment_summary"] == prior[TaskState.EXPERIMENTING.value]["experiment_summary"]
 
 
+CLEANING_STALEMATE_REVIEW = {
+    "executed": True, "rounds": 2, "verdict": "reject", "blockers": 1,
+    "findings": [
+        {"id": "R1", "severity": "blocker", "location": "cleaning.py:impute()", "issue": "目标列 sales 被插补", "fix_hint": "改为删行或标记"},
+        {"id": "R2", "severity": "minor", "location": "", "issue": "删行数写死", "fix_hint": "用 len(df) 计算"},
+    ],
+    "summary": "目标列被越权插补", "rerun": {"executed": True, "consistent": True},
+    "stalemate": True, "reason": "审稿 2 轮后仍有阻断性意见未解决",
+}
+
+
+def test_paper_material_carries_data_preparation_cleaning_and_g2_decision(registry):
+    """论文材料新增「数据准备与清洗结论」：画像 + 清洗策略 + 清洗执行结论（数字来自
+    标记行）+ 清洗脚本审稿结论（通过 / 僵持都写）+ G2 决策纪律；数据预处理小节的
+    样本口径以此为准。"""
+    prior = paper_prior()
+    prior[TaskState.DATA_PREPARATION.value] = {
+        **PREPARATION_OK,
+        "cleaning": {
+            "executed": True, "status": "passed", "attempts": 2, "llm_calls": 5,
+            "summary": "按区域中位数插补 sales，删除 96 行负值记录",
+            "target_columns": ["sales"], "final_code_artifact": "art_1", "produced_artifacts": ["art_2"],
+            "rows_before": 1200, "rows_after": 1104, "rows_deleted_ratio": 0.08,
+            "imputed_columns": ["sales"], "imputed_target_columns": ["sales"],
+            "review": CLEANING_STALEMATE_REVIEW,
+        },
+    }
+    ctx = NodeContext(
+        run_id="run_1", project_id="proj_1", state=TaskState.PAPER_WRITING, step_id="step_1",
+        attempt=1, inputs={}, prior_outputs=prior,
+        review_decisions={TaskState.DATA_PREPARATION.value: "adopt_cleaned"},
+    )
+
+    material = PaperWritingNode(registry).build_variables(ctx)["data_preparation"]
+
+    lines = material.splitlines()
+    assert lines[0] == f"数据画像：{PREPARATION_OK['profile_summary']}"
+    assert lines[1] == "缺失值策略：线性插值" and lines[2] == "异常值策略：3σ 截断"
+    assert lines[3] == (
+        "清洗执行：清洗脚本执行 2 波后通过验收，保留 1104 / 1200 行（删行 8.0%），"
+        "插补列 sales（含目标列 sales）。清洗摘要：按区域中位数插补 sales，删除 96 行负值记录"
+    )
+    assert lines[4].startswith("清洗脚本经独立审稿 2 轮后仍有 1 条阻断性意见未解决（审稿 2 轮后仍有阻断性意见未解决；确定性复跑核对一致）")
+    assert lines[5] == "[R1｜blocker] cleaning.py:impute()：目标列 sales 被插补（修法：改为删行或标记）"
+    assert "[R2｜minor]" not in material, "非阻断意见不进论文的局限性清单"
+    assert lines[6] == "用户已在数据确认闸门选择「采用清洗结果」：正文的样本口径与规模按清洗后数据描述。"
+    assert "art_1" not in material and "llm_calls" not in material, "过程字段 / 产物引用不进论文材料"
+
+    # 审稿通过 + 用户改用原始数据：通过句一行、口径句改为原始数据
+    prior[TaskState.DATA_PREPARATION.value]["cleaning"]["review"] = {
+        "executed": True, "rounds": 1, "verdict": "accept", "blockers": 0, "findings": [],
+        "summary": "忠实于方案", "rerun": {"executed": True, "consistent": True}, "stalemate": False, "reason": "",
+    }
+    ctx_raw = NodeContext(
+        run_id="run_1", project_id="proj_1", state=TaskState.PAPER_WRITING, step_id="step_1",
+        attempt=1, inputs={}, prior_outputs=prior,
+        review_decisions={TaskState.DATA_PREPARATION.value: "use_raw"},
+    )
+    raw_material = PaperWritingNode(registry).build_variables(ctx_raw)["data_preparation"]
+    assert "清洗脚本经独立审稿通过（1 轮，0 条意见；确定性复跑核对一致）。" in raw_material
+    assert raw_material.endswith("清洗过程只作为数据处理探索如实说明，不得以清洗后数据作为结论依据。")
+    assert "采用清洗结果" not in raw_material
+
+    # 首波没过验收：没有审稿；口径句点明不得以清洗后数据为样本；未经 G2 → 没有决策句
+    prior[TaskState.DATA_PREPARATION.value]["cleaning"] = {
+        "executed": True, "status": "failed", "attempts": 3, "summary": "",
+        "rows_before": 100, "rows_after": 80, "imputed_columns": [], "imputed_target_columns": [],
+    }
+    failed_material = PaperWritingNode(registry).build_variables(make_ctx(TaskState.PAPER_WRITING, prior=prior))["data_preparation"]
+    assert failed_material.splitlines()[3] == (
+        "清洗执行：清洗脚本执行 3 波后未通过验收，保留 80 / 100 行（删行 20.0%）；"
+        "清洗产物未通过验收，正文不得以清洗后数据作为样本口径。"
+    )
+    assert "独立审稿" not in failed_material and "数据确认闸门" not in failed_material
+
+
+def test_paper_material_data_preparation_degrades_honestly(registry):
+    """清洗没跑 → 写明未执行与原因、按原始数据建模；审稿环之前的运行没有 cleaning 键
+    → 「无执行记录」；数据阶段整体缺席 → 「无」。绝不虚构清洗过程。"""
+    prior = paper_prior()
+    prior[TaskState.DATA_PREPARATION.value] = {
+        **PREPARATION_OK,
+        "cleaning": {"executed": False, "reason": "工作区没有已下发的数据文件，无需清洗"},
+    }
+    skipped = PaperWritingNode(registry).build_variables(make_ctx(TaskState.PAPER_WRITING, prior=prior))["data_preparation"]
+    assert skipped.splitlines()[3] == (
+        "清洗执行：未执行（工作区没有已下发的数据文件，无需清洗），建模按原始数据进行，正文不得虚构清洗过程。"
+    )
+    assert len(skipped.splitlines()) == 4
+
+    legacy = PaperWritingNode(registry).build_variables(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()))["data_preparation"]
+    assert legacy.splitlines()[3] == "清洗执行：无执行记录，建模按原始数据进行，正文不得虚构清洗过程。"
+
+    prior = paper_prior()
+    del prior[TaskState.DATA_PREPARATION.value]
+    assert PaperWritingNode(registry).build_variables(make_ctx(TaskState.PAPER_WRITING, prior=prior))["data_preparation"] == "无"
+
+
+def test_paper_pipeline_routes_data_material_and_admits_its_numbers(registry):
+    """总编与回退单次调用都拿到「数据准备与清洗结论」；source_keys 能把它单独路由给
+    数据预处理章；材料里的清洗数字（1104 / 1200）进审计允许集，正文引用不算无出处。"""
+    prior = paper_prior_with_tables()
+    prior[TaskState.DATA_PREPARATION.value] = {
+        **prior[TaskState.DATA_PREPARATION.value],
+        "cleaning": {
+            "executed": True, "status": "passed", "attempts": 1, "summary": "",
+            "rows_before": 1200, "rows_after": 1104, "rows_deleted_ratio": 0.08,
+            "imputed_columns": [], "imputed_target_columns": [],
+        },
+    }
+    outline = dict(PAPER_OUTLINE_OK, chapters=[
+        {"heading": "1 数据预处理", "brief": "按清洗结论写样本口径", "target_chars": 600, "source_keys": ["data_preparation"]},
+        {"heading": "2 模型建立与求解", "brief": "全量材料", "target_chars": 800},
+        {"heading": "3 结果分析", "brief": "全量材料", "target_chars": 600},
+    ])
+
+    def section_reply(variables):
+        lead = f"清洗后保留 1104 行（原 1200 行），rmse=0.12。（{variables['chapter_heading']}）"
+        target = int(variables["target_chars"])
+        return stub_response({
+            "content": lead + "析" * max(target - len(lead), 0),
+            "digest": f"{variables['chapter_heading']}摘要",
+        })
+
+    llm = StubLlmPort({
+        "paper_outline.default": stub_response(outline),
+        "paper_section.default": section_reply,
+        "paper_finalize.default": stub_response(PAPER_FINALIZE_OK),
+    })
+    node = PaperWritingNode(registry)
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=prior), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    rendered = registry.get("paper_outline.default").render(outline_call.variables)
+    assert "## 数据准备与清洗结论" in rendered
+    assert "保留 1104 / 1200 行（删行 8.0%）" in rendered
+    assert "`data_preparation`" in rendered, "总编的 source_keys 枚举要认这份材料"
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    assert "### 数据准备与清洗结论" in section_calls[0].variables["materials"]
+    assert "### 已确认的建模方案" not in section_calls[0].variables["materials"]
+    assert "### 数据准备与清洗结论" in section_calls[1].variables["materials"], "未指定 source_keys → 全量材料含数据结论"
+    assert result.outputs["audit_findings"] == [], "清洗数字有出处（材料 + 冻结清单）"
+
+    fallback = ScriptedLlmPort({
+        "paper_outline.default": ["不是 JSON", "还是不是 JSON"],
+        "paper_writing.default": [stub_response(PAPER_OK)],
+    })
+    fallback_result = PaperWritingNode(registry).run(make_ctx(TaskState.PAPER_WRITING, prior=prior), make_services(fallback))
+    assert fallback_result.metrics["fallback"] == "single_call"
+    fallback_call = next(c for c in fallback.calls if c.prompt_id == "paper_writing.default")
+    rendered_fallback = registry.get("paper_writing.default").render(fallback_call.variables)
+    assert "## 数据准备与清洗结论" in rendered_fallback and "保留 1104 / 1200 行" in rendered_fallback
+
+
 # -- 假设表的下游消费：实验任务卡 / 判读 / 稳健性检验 / 论文材料 ----------------------
 
 

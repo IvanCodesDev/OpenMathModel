@@ -20,7 +20,7 @@ import type {
 import { currentLocale, t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
-import { describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
+import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 import { describePaperAudit, paperAuditStamp } from "./paper-audit";
@@ -221,6 +221,43 @@ export function prepareStageTabs(root: HTMLElement): void {
   }
 }
 
+// ── 结论条目（结果页「稳健性与风险结论」/ 数据页「清洗执行与独立审稿」共用） ──────
+
+/** 三态条目：图标按 is-* 着色，「标签：正文」，正文可能成段（R3：默认三行截断、点击展开）。 */
+function noteItem(tone: string, iconName: string, label: string, detail: string): HTMLElement {
+  const item = el("li", `is-${tone}`);
+  const body = richInline(detail);
+  body.prepend(el("strong", "", `${label}：`));
+  clampExpandable(body, 3);
+  item.append(icon(iconName), body);
+  return item;
+}
+
+/**
+ * 独立审稿条目（§8.4 生成者-评审者环，三个沙盒消费方同一套）：通过一条绿勾带轮数 /
+ * 意见数 / 复跑三态；僵持红叉并把未解决的阻断性意见摆出来；没派出去的审稿写明原因；
+ * 审稿环之前的运行没有该键 → null（不出现）。
+ */
+function reviewNoteItem(subject: string, skipped: string, section: ReviewSection): HTMLElement | null {
+  if (section.kind === "absent") return null;
+  if (section.kind === "skipped") {
+    return noteItem("warn", "warning-circle", t(skipped), section.reason);
+  }
+  const rerunCopy = section.rerun === "consistent" ? "复跑一致" : section.rerun === "inconsistent" ? "复跑不一致" : "未复跑";
+  const findings = section.findings
+    .map(row => `[${t(row.severityLabel)}] ${row.text}`)
+    .join("；");
+  if (section.kind === "stalemate") {
+    const facts = [t("未通过"), `${section.rounds} ${t("轮")}`, `${section.blockers} ${t("条阻断性意见未解决")}`, t(rerunCopy)];
+    const tail = findings ? `。${t("未解决意见")}：${findings}` : "";
+    return noteItem("fail", "x-circle", t(subject), `${facts.join("｜")} — ${section.reason}${tail}`);
+  }
+  const facts = [t("通过"), `${section.rounds} ${t("轮")}`, `${section.findings.length} ${t("条意见")}`, t(rerunCopy)];
+  const lead = section.summary ? `${facts.join("｜")} — ${section.summary}` : facts.join("｜");
+  const tail = findings ? `。${t("意见")}：${findings}` : "";
+  return noteItem("pass", "check-circle", t(subject), `${lead}${tail}`);
+}
+
 // ── 数据准备页（DatasetProfile → data-report 面板） ─────────────────────────
 
 function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
@@ -318,6 +355,36 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
       strategies.append(strategyItem(t("衍生变量"), profile.derived_features.join("、")));
     }
     if (strategies.childElementCount) preview.append(strategies);
+
+    // 清洗执行与独立审稿（§8.4 第三个沙盒消费方）：影响面数字来自清洗脚本的标记行
+    // （G2 数据确认闸门的判定依据），审稿条目与结果页同一套；没跑 / 没跑成把原因
+    // 摆出来，不让「未执行」看起来像「已清洗」；该字段出现之前的运行没有该键，不出现。
+    const cleaning = describeCleaning(profile.cleaning);
+    if (cleaning.kind !== "absent") {
+      preview.append(el("h2", "stage-note-heading", t("清洗执行与独立审稿")));
+      const list = el("ul", "stage-note-list");
+      if (cleaning.kind === "skipped") {
+        list.append(noteItem("warn", "warning-circle", t("清洗未执行"), cleaning.reason));
+      } else {
+        const facts = [
+          t(cleaning.passed ? "通过验收" : "未通过验收"),
+          `${cleaning.attempts} ${t("波")}`,
+          `${t("保留")} ${cleaning.rowsAfter} / ${cleaning.rowsBefore} ${t("行")}`,
+          `${t("删行")} ${cleaning.deletedRatio}`,
+        ];
+        if (cleaning.imputed.length) {
+          const targets = cleaning.imputedTargets.length
+            ? `（${t("含目标列")} ${cleaning.imputedTargets.join("、")}）`
+            : "";
+          facts.push(`${t("插补列")} ${cleaning.imputed.join("、")}${targets}`);
+        }
+        const detail = cleaning.summary ? `${facts.join("｜")} — ${cleaning.summary}` : facts.join("｜");
+        list.append(noteItem(cleaning.tone, cleaning.passed ? "check-circle" : "x-circle", t("清洗结果"), detail));
+        const review = reviewNoteItem("清洗脚本独立审稿", "清洗脚本独立审稿未执行", cleaning.review);
+        if (review) list.append(review);
+      }
+      preview.append(list);
+    }
     preview.hidden = false;
   }
 
@@ -806,15 +873,6 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   if (robustness) {
     const heading: HTMLElement[] = [el("h2", "", t("稳健性与风险结论"))];
     const list = el("ul");
-    const noteItem = (tone: string, iconName: string, label: string, detail: string): HTMLElement => {
-      const item = el("li", `is-${tone}`);
-      const body = richInline(detail);
-      body.prepend(el("strong", "", `${label}：`));
-      // R3：检查备注可能成段，默认三行截断、点击展开
-      clampExpandable(body, 3);
-      item.append(icon(iconName), body);
-      return item;
-    };
     // 沙盒复跑的稳健性检查放最前：数字来自检验脚本的标记行（G3 结果采用闸门的
     // 判定依据），一句话结论与论文引用的是同一句；没跑成 / 没跑时把原因摆出来，
     // 不让「未执行」看起来像「全过」。评审判读（模型给出）与风险列在其后。
@@ -843,30 +901,10 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
       list.append(noteItem("warn", "warning-circle", t("稳健性复跑未执行"), rerun.reason));
     }
     // 独立审稿（§8.4 生成者-评审者环）紧随复跑逐项：同为代码侧的独立证据，G3 的
-    // 另一半依据。实验代码一条、检验脚本一条；僵持时把未解决的阻断性意见摆出来，
-    // 没派出去的审稿写明原因；审稿环之前的运行没有该键，不出现。
-    const reviewItem = (subject: string, skipped: string, section: ReviewSection): HTMLElement | null => {
-      if (section.kind === "absent") return null;
-      if (section.kind === "skipped") {
-        return noteItem("warn", "warning-circle", t(skipped), section.reason);
-      }
-      const rerunCopy = section.rerun === "consistent" ? "复跑一致" : section.rerun === "inconsistent" ? "复跑不一致" : "未复跑";
-      const findings = section.findings
-        .map(row => `[${t(row.severityLabel)}] ${row.text}`)
-        .join("；");
-      if (section.kind === "stalemate") {
-        const facts = [t("未通过"), `${section.rounds} ${t("轮")}`, `${section.blockers} ${t("条阻断性意见未解决")}`, t(rerunCopy)];
-        const tail = findings ? `。${t("未解决意见")}：${findings}` : "";
-        return noteItem("fail", "x-circle", t(subject), `${facts.join("｜")} — ${section.reason}${tail}`);
-      }
-      const facts = [t("通过"), `${section.rounds} ${t("轮")}`, `${section.findings.length} ${t("条意见")}`, t(rerunCopy)];
-      const lead = section.summary ? `${facts.join("｜")} — ${section.summary}` : facts.join("｜");
-      const tail = findings ? `。${t("意见")}：${findings}` : "";
-      return noteItem("pass", "check-circle", t(subject), `${lead}${tail}`);
-    };
+    // 另一半依据。实验代码一条、检验脚本一条（条目构造与数据页的清洗审稿共用）。
     for (const item of [
-      reviewItem("实验代码独立审稿", "实验代码独立审稿未执行", describeReview(summary.review)),
-      reviewItem("检验脚本独立审稿", "检验脚本独立审稿未执行", describeReview(validation?.robustness?.review)),
+      reviewNoteItem("实验代码独立审稿", "实验代码独立审稿未执行", describeReview(summary.review)),
+      reviewNoteItem("检验脚本独立审稿", "检验脚本独立审稿未执行", describeReview(validation?.robustness?.review)),
     ]) {
       if (item) list.append(item);
     }

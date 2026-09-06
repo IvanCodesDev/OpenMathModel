@@ -16,6 +16,7 @@ from conftest import (
     confirm_delivery,
     create_project,
     create_run,
+    pending_approval,
     register_user,
     run_status_is,
     wait_until,
@@ -24,14 +25,18 @@ from conftest import (
 from omm_api.orm import ApprovalRequestRow
 from omm_api.stage_outputs import (
     StageState,
+    _cleaning_report,
+    _dataset_profile,
     _plan_proposal,
     _review_report,
     _robustness_report,
     _validation_report,
 )
+from omm_contracts.v1.dataset_profile import CleaningReport
 from omm_contracts.v1.experiment_summary import ReviewReport, ValidationReport
 from test_task_runs_llm_nodes import (
     ANALYSIS_OUTPUT,
+    CLEANING_OUTPUT,
     EXPERIMENT_OUTPUT,
     PAPER_OUTPUT,
     PLANNING_OUTPUT,
@@ -39,6 +44,7 @@ from test_task_runs_llm_nodes import (
     REVIEW_OUTPUT,
     VALIDATION_OUTPUT,
     _configure_llm,
+    _stage_csv_attachment,
 )
 
 
@@ -75,6 +81,12 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert dataset_profile["profile_summary"] == PREPARATION_OUTPUT["profile_summary"]
     assert dataset_profile["missing_value_strategy"] == PREPARATION_OUTPUT["missing_value_strategy"]
     assert dataset_profile["datasets"][0]["name"] == PREPARATION_OUTPUT["datasets"][0]["name"]
+    # 本链没有下发数据文件：清洗如实「未执行」并给原因（不是 null——null 留给该字段
+    # 出现之前的运行），数字 0、审稿 null
+    cleaning = dataset_profile["cleaning"]
+    assert cleaning["executed"] is False and cleaning["status"] is None and cleaning["review"] is None
+    assert cleaning["reason"] == "工作区没有已下发的数据文件，无需清洗"
+    assert (cleaning["rows_before"], cleaning["rows_after"], cleaning["attempts"]) == (0, 0, 0)
 
     plan_proposal = payload["plan_proposal"]
     validate_contract("plan-proposal.schema.json", plan_proposal)
@@ -493,6 +505,165 @@ def test_review_projection_strips_process_fields_cleans_findings_and_recounts():
     )
     assert robustness["review"] == report
     ValidationReport.model_validate(_validation_with(robustness))
+
+
+def test_cleaning_projection_fills_unexecuted_shape_and_keeps_legacy_null():
+    """清洗没跑（无工具 / 监督者 / 数据文件 / 预算、子代理未完成）：节点只给
+    {executed:false, reason} → 投影补齐契约十一键（数字 0、列表空、status / review
+    null，reason 原样）；该字段出现之前的运行没有 cleaning 键 → null。"""
+    skipped = _cleaning_report({"executed": False, "reason": "工作区没有已下发的数据文件，无需清洗"})
+    assert skipped == {
+        "executed": False,
+        "status": None,
+        "reason": "工作区没有已下发的数据文件，无需清洗",
+        "attempts": 0,
+        "rows_before": 0,
+        "rows_after": 0,
+        "rows_deleted_ratio": 0.0,
+        "imputed_columns": [],
+        "imputed_target_columns": [],
+        "summary": "",
+        "review": None,
+    }
+    CleaningReport.model_validate(skipped)
+
+    # 子代理未完成也是未执行：节点不会写影响面，即便有半成品键也不得捞出来
+    aborted = _cleaning_report(
+        {
+            "executed": False,
+            "reason": "清洗子代理未完成（failed，E301）；后续阶段按原始数据继续",
+            "rows_before": 1200,
+            "status": "failed",
+            "review": {"executed": True, "verdict": "reject"},
+        }
+    )
+    assert aborted["executed"] is False and aborted["status"] is None and aborted["review"] is None
+    assert aborted["rows_before"] == 0 and aborted["reason"].startswith("清洗子代理未完成")
+    CleaningReport.model_validate(aborted)
+
+    assert _cleaning_report(None) is None
+    assert _cleaning_report("garbage") is None
+
+
+def test_cleaning_projection_strips_process_fields_and_normalizes(validate_contract):
+    """已执行形状带过程字段（llm_calls / target_columns / 产物引用）：契约
+    additionalProperties=false → 白名单剔除；数字按标记行取非负整数、删行比例缺失时
+    按前后行数重算、status 越界归 failed、审稿走同一份 _review_report 清洗。"""
+    raw = {
+        "executed": True,
+        "status": "passed",
+        "attempts": 2,
+        "llm_calls": 5,
+        "summary": "合并两表后按区域中位数插补 demand，删除 96 行负值记录",
+        "target_columns": ["demand"],
+        "final_code_artifact": "art_123",
+        "produced_artifacts": ["art_124", "art_125"],
+        "rows_before": 1200,
+        "rows_after": 1104,
+        "rows_deleted_ratio": 0.08,
+        "imputed_columns": ["demand", "", "  "],
+        "imputed_target_columns": ["demand"],
+        "review": {
+            "executed": True,
+            "rounds": 2,
+            "verdict": "reject",
+            "findings": [
+                {"id": "R1", "severity": "blocker", "location": "cleaning.py:impute()", "issue": "目标列 demand 被插补", "fix_hint": "改为删行或标记"},
+                {"id": "R2", "severity": "minor", "location": "", "issue": "删行数写死在打印语句里", "fix_hint": "用 len(df) 计算"},
+            ],
+            "blockers": 1,
+            "summary": "目标列被越权插补，清洗产物不能作为建模样本",
+            "rerun": {"executed": True, "consistent": True, "metrics": {"rows_after": 1104}, "diff": [], "reason": ""},
+            "stalemate": True,
+            "reason": "审稿 2 轮后仍有阻断性意见未解决",
+            "llm_calls": 3,
+        },
+    }
+    report = _cleaning_report(raw)
+    assert set(report) == {
+        "executed", "status", "reason", "attempts", "rows_before", "rows_after", "rows_deleted_ratio",
+        "imputed_columns", "imputed_target_columns", "summary", "review",
+    }
+    assert report["status"] == "passed" and report["reason"] == "" and report["attempts"] == 2
+    assert (report["rows_before"], report["rows_after"], report["rows_deleted_ratio"]) == (1200, 1104, 0.08)
+    assert report["imputed_columns"] == ["demand"] and report["imputed_target_columns"] == ["demand"]
+    assert report["summary"] == raw["summary"]
+    assert report["review"] == _review_report(raw["review"])
+    assert report["review"]["stalemate"] is True and report["review"]["blockers"] == 1
+    assert "llm_calls" not in report["review"] and "rerun" not in report["review"]
+    CleaningReport.model_validate(report)
+
+    # 首波没过验收：没有审稿；比例缺失按行数重算；status 越界 → failed；坏数字归 0
+    failed = _cleaning_report(
+        {
+            "executed": True,
+            "status": "aborted",
+            "attempts": True,
+            "rows_before": 100,
+            "rows_after": 80,
+            "imputed_columns": "demand",
+            "summary": "",
+        }
+    )
+    assert failed["status"] == "failed" and failed["attempts"] == 0
+    assert failed["rows_deleted_ratio"] == 0.2 and failed["imputed_columns"] == []
+    assert failed["review"] is None
+    CleaningReport.model_validate(failed)
+
+    # 整份 DatasetProfile 带 cleaning 过契约（JSON Schema 权威校验）
+    state = StageState()
+    state.at = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    state.outputs = {**PREPARATION_OUTPUT, "cleaning": raw}
+    profile = _dataset_profile(_RUN_ID, state)
+    payload = profile.model_dump(mode="json")
+    validate_contract("dataset-profile.schema.json", payload)
+    assert payload["cleaning"] == report
+    # 该字段出现之前的运行：没有 cleaning 键 → null（不是编一个「未执行」）
+    state.outputs = dict(PREPARATION_OUTPUT)
+    legacy = _dataset_profile(_RUN_ID, state).model_dump(mode="json")
+    validate_contract("dataset-profile.schema.json", legacy)
+    assert legacy["cleaning"] is None
+
+
+def test_stage_outputs_carry_cleaning_and_its_review_after_real_cleaning(client, monkeypatch, validate_contract):
+    """有数据文件下发时清洗沙盒真跑（stub 模型发脚本、python 沙箱执行、审稿人接受）：
+    数据阶段一结束（挂在 G1 时）dataset_profile.cleaning 就应带影响面数字与审稿结论，
+    过程字段不进契约。"""
+    project = create_project(client)
+    artifact_id = _stage_csv_attachment(
+        client, project["id"], "orders.csv", "quarter,volume\n1,120.5\n2,130.0\n".encode("utf-8")
+    )
+    _configure_llm(client, monkeypatch)
+    run = create_run(
+        client,
+        project["id"],
+        goal="优化共享单车调度",
+        params={"attachment_metadata": [{"name": "orders.csv", "artifact_id": artifact_id}]},
+    )
+    wait_until(client, run["id"], pending_approval(client, run["id"]))
+
+    dataset_profile = _stage_outputs(client, run["id"])["dataset_profile"]
+    validate_contract("dataset-profile.schema.json", dataset_profile)
+    cleaning = dataset_profile["cleaning"]
+    assert cleaning is not None, "有数据文件在场时清洗真实执行，结论应进投影"
+    assert cleaning["executed"] is True and cleaning["status"] == "passed" and cleaning["reason"] == ""
+    assert cleaning["attempts"] == 1
+    assert (cleaning["rows_before"], cleaning["rows_after"], cleaning["rows_deleted_ratio"]) == (2, 2, 0.0)
+    assert cleaning["imputed_columns"] == [] and cleaning["imputed_target_columns"] == []
+    assert cleaning["summary"] == CLEANING_OUTPUT["summary"]
+    assert cleaning["review"] == {
+        "executed": True,
+        "verdict": "accept",
+        "rounds": 1,
+        "findings": REVIEW_OUTPUT["findings"],
+        "blockers": 0,
+        "summary": REVIEW_OUTPUT["summary"],
+        "stalemate": False,
+        "rerun_consistent": True,
+        "reason": "",
+    }
+    for key in ("llm_calls", "target_columns", "final_code_artifact", "produced_artifacts"):
+        assert key not in cleaning, "过程字段 / 产物引用不进正文契约"
 
 
 _RUN_ID = "run_" + "0" * 32

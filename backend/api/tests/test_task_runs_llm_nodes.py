@@ -458,6 +458,11 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
     # 论文分章多轮管线的三个角色锚点（总编 → 章节写手 → 统稿人）
     if "论文的总编" in prompt:
         assert VALIDATION_OUTPUT["validation_summary"] in prompt, "总编规划应携带检验结论"
+        # 数据准备结论进论文材料：画像一句 + 清洗执行结论（本链无数据文件 → 如实「未执行」；
+        # 有数据文件的链 → 通过验收 + 影响面）
+        assert f"数据画像：{PREPARATION_OUTPUT['profile_summary']}" in prompt, "总编规划应携带数据画像结论"
+        assert "清洗执行：" in prompt, "总编规划应携带清洗执行结论"
+        assert ("不得虚构清洗过程" in prompt) or ("通过验收" in prompt), "清洗结论要么如实未执行、要么带验收结论"
         return _llm_reply(PAPER_OUTLINE_OUTPUT)
     if "章节写手" in prompt:
         assert PAPER_OUTLINE_OUTPUT["notation"] in prompt, "章节写作应携带全文符号约定"

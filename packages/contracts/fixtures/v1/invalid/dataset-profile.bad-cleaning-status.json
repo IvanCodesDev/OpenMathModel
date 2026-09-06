@@ -1,0 +1,23 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "profile_summary": "合成订单数据规模适中，质量良好，可直接建模",
+  "datasets": [],
+  "preparation_steps": [],
+  "missing_value_strategy": null,
+  "outlier_strategy": null,
+  "derived_features": [],
+  "cleaning": {
+    "executed": false,
+    "status": "skipped",
+    "reason": "工作区没有已下发的数据文件，无需清洗",
+    "attempts": 0,
+    "rows_before": 0,
+    "rows_after": 0,
+    "rows_deleted_ratio": 0,
+    "imputed_columns": [],
+    "imputed_target_columns": [],
+    "summary": "",
+    "review": null
+  },
+  "updated_at": "2026-09-06T12:00:00.000000Z"
+}

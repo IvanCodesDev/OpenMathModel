@@ -6209,6 +6209,22 @@ html[data-theme="dark"] .stage-field-chip { border-color: #3a3a37; background: #
 .stage-strategy-list .stage-strategy-body.stage-clamp { display: -webkit-box; }
 .stage-strategy-list .stage-strategy-body.stage-clamp.is-open { display: block; }
 
+/* 数据页「清洗执行与独立审稿」条目：与结果页「稳健性与风险结论」同一套三态条目
+   （结果页的外观挂在 .focused-experiment-notes 下，这里独立成类复用，图标按 is-* 着色）。
+   小节标题跟在策略列表之后，需要自己的上间距（.focused-section h2 的 margin 被面板样式归零） */
+.focused-stage-pane .raw-preview-section .stage-note-heading,
+.raw-preview-section .stage-note-heading { margin-top: 22px; }
+.stage-note-list { margin: 10px 0 0; padding: 0; list-style: none; }
+.stage-note-list li { position: relative; margin: 7px 0; padding-left: 24px; color: #4c4c48; font-size: 13px; line-height: 1.5; }
+.stage-note-list li > i { position: absolute; top: 1px; left: 0; font-size: 17px; color: #2e7d4f; }
+.stage-note-list li.is-warn > i { color: #a16207; }
+.stage-note-list li.is-fail > i { color: #b3382c; }
+.focused-stage-pane .stage-note-list li { color: var(--ax-text-primary); font-size: 14px; line-height: 1.7; }
+.focused-stage-pane .stage-note-list li > i { color: var(--ax-success); }
+.focused-stage-pane .stage-note-list li.is-warn > i { color: var(--ax-warning); }
+.focused-stage-pane .stage-note-list li.is-fail > i { color: var(--ax-danger); }
+html[data-theme="dark"] .stage-note-list li { color: #b3b3ae; }
+
 /* 字段说明页的真实字段表：名称列不折行，说明列吃掉剩余宽度 */
 .focused-workspace .stage-field-table th { white-space: nowrap; }
 .focused-workspace .stage-field-table td { vertical-align: top; line-height: 1.6; white-space: normal; height: auto; padding: 9px 14px; }

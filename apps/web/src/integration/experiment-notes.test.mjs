@@ -8,7 +8,7 @@ const source = await readFile(new URL("./experiment-notes.ts", import.meta.url),
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { describeReview, describeRobustness, formatMetricValue } = await import(
+const { describeCleaning, describeReview, describeRobustness, formatMetricValue } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
@@ -174,6 +174,67 @@ test("skipped review surfaces the node's reason; absent field renders nothing", 
   );
   assert.deepEqual(describeReview(null), { kind: "absent" });
   assert.deepEqual(describeReview(undefined), { kind: "absent" });
+});
+
+/** 契约 fixture dataset-profile.2 的 cleaning：跑通、目标列被插补、审稿僵持（G2 会触发）。 */
+function executedCleaning() {
+  return {
+    executed: true,
+    status: "passed",
+    reason: "",
+    attempts: 2,
+    rows_before: 1200,
+    rows_after: 1104,
+    rows_deleted_ratio: 0.08,
+    imputed_columns: ["demand"],
+    imputed_target_columns: ["demand"],
+    summary: "合并两表后按区域中位数插补 demand，删除 96 行负值记录",
+    review: { ...stalemateReview(), findings: [
+      { id: "R1", severity: "blocker", location: "cleaning.py:impute()", issue: "目标列 demand 被插补，方案只允许对特征列插补", fix_hint: "" },
+      { id: "R2", severity: "minor", location: "", issue: "删行数写死在打印语句里", fix_hint: "" },
+    ] },
+  };
+}
+
+test("executed cleaning: acceptance tone, formatted impact numbers, review folded through describeReview", () => {
+  const section = describeCleaning(executedCleaning());
+  assert.equal(section.kind, "executed");
+  assert.equal(section.tone, "pass");
+  assert.equal(section.passed, true);
+  assert.equal(section.attempts, 2);
+  // 行数走指标格式化（千分位），删行比例按百分数一位小数——与 G2 卡片同一口径
+  assert.equal(section.rowsBefore, "1,200");
+  assert.equal(section.rowsAfter, "1,104");
+  assert.equal(section.deletedRatio, "8.0%");
+  assert.deepEqual(section.imputed, ["demand"]);
+  assert.deepEqual(section.imputedTargets, ["demand"]);
+  assert.equal(section.summary, "合并两表后按区域中位数插补 demand，删除 96 行负值记录");
+  assert.equal(section.review.kind, "stalemate");
+  assert.deepEqual(section.review.findings.map((row) => row.text), [
+    "cleaning.py:impute()：目标列 demand 被插补，方案只允许对特征列插补",
+  ]);
+});
+
+test("failed cleaning wave: fail tone, review absent (first wave never passed acceptance)", () => {
+  const section = describeCleaning({
+    ...executedCleaning(), status: "failed", attempts: 3, rows_before: 100, rows_after: 80,
+    rows_deleted_ratio: 0.2, imputed_columns: [], imputed_target_columns: [], summary: "", review: null,
+  });
+  assert.equal(section.kind, "executed");
+  assert.equal(section.tone, "fail");
+  assert.equal(section.passed, false);
+  assert.equal(section.deletedRatio, "20.0%");
+  assert.deepEqual(section.imputed, []);
+  assert.deepEqual(section.review, { kind: "absent" });
+});
+
+test("skipped cleaning surfaces the node's reason; absent field renders nothing", () => {
+  assert.deepEqual(
+    describeCleaning({ executed: false, status: null, reason: "工作区没有已下发的数据文件，无需清洗", attempts: 0, rows_before: 0, rows_after: 0, rows_deleted_ratio: 0, imputed_columns: [], imputed_target_columns: [], summary: "", review: null }),
+    { kind: "skipped", reason: "工作区没有已下发的数据文件，无需清洗" },
+  );
+  assert.deepEqual(describeCleaning(null), { kind: "absent" });
+  assert.deepEqual(describeCleaning(undefined), { kind: "absent" });
 });
 
 test("formatMetricValue: thousands separators, bounded decimals, non-numbers untouched", () => {

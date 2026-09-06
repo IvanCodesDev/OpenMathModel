@@ -1,0 +1,61 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "profile_summary": "两张附件表共 1,200 行，缺失集中在 demand 列（8%），存在少量负值异常，清洗后可建模。",
+  "datasets": [
+    {
+      "name": "历史订单",
+      "source": "题目附件",
+      "fields": ["hour 时段", "region 区域", "demand 需求量（次）"],
+      "quality_risks": ["demand 缺失 8%", "个别 demand 为负值"]
+    },
+    {
+      "name": "站点信息",
+      "source": "题目附件",
+      "fields": ["region 区域", "docks 投放点数（个）"],
+      "quality_risks": []
+    }
+  ],
+  "preparation_steps": ["按 region 合并两表", "demand 缺失按区域中位数插补", "删除 demand 为负的行"],
+  "missing_value_strategy": "demand 缺失按同区域同时段中位数插补，其余列不插补",
+  "outlier_strategy": "demand 为负视为录入错误直接删行",
+  "derived_features": ["是否高峰时段"],
+  "cleaning": {
+    "executed": true,
+    "status": "passed",
+    "reason": "",
+    "attempts": 2,
+    "rows_before": 1200,
+    "rows_after": 1104,
+    "rows_deleted_ratio": 0.08,
+    "imputed_columns": ["demand"],
+    "imputed_target_columns": ["demand"],
+    "summary": "合并两表后按区域中位数插补 demand，删除 96 行负值记录",
+    "review": {
+      "executed": true,
+      "verdict": "reject",
+      "rounds": 2,
+      "findings": [
+        {
+          "id": "R1",
+          "severity": "blocker",
+          "location": "cleaning.py:impute()",
+          "issue": "目标列 demand 被插补，方案只允许对特征列插补",
+          "fix_hint": "demand 缺失行改为删除或标记，不得插补目标列"
+        },
+        {
+          "id": "R2",
+          "severity": "minor",
+          "location": "",
+          "issue": "删行数写死在打印语句里而非由 DataFrame 长度算出",
+          "fix_hint": "rows_after 用 len(df) 计算"
+        }
+      ],
+      "blockers": 1,
+      "summary": "目标列被越权插补，清洗产物不能作为建模样本",
+      "stalemate": true,
+      "rerun_consistent": true,
+      "reason": "审稿 2 轮后仍有阻断性意见未解决"
+    }
+  },
+  "updated_at": "2026-09-06T12:00:00.000000Z"
+}
