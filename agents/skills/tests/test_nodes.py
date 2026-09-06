@@ -46,6 +46,8 @@ from omm_agent_skills import (
     knowledge_query,
     load_default_registry,
     missing_symbols,
+    normalize_language,
+    normalize_plan_languages,
     plan_assumptions,
     plan_symbols,
     render_frozen_numbers,
@@ -978,6 +980,98 @@ def test_model_planning_knowledge_failure_does_not_block_the_stage(registry):
     proposer_calls = [call for call in llm.calls if call.prompt_id == "model_planning.proposer"]
     assert all(call.variables["knowledge"].startswith("无（知识库检索失败：boom") for call in proposer_calls)
     assert result.outputs["quality_warnings"] == [], "知识库是材料不是闸门：不产生质量警告"
+
+
+# -- 方案卡「实现语言」（§7.4：语言随 G1 确认）------------------------------------
+
+
+def test_normalize_plan_languages_fills_defaults_and_folds_aliases():
+    assert normalize_language(" Python3 ") == "python"
+    assert normalize_language("Rscript") == "r" and normalize_language("北太天元") == "baltamatica"
+    assert normalize_language(None) == "" and normalize_language("Fortran") == "fortran"
+
+    plans = [
+        {"id": "A"},                        # 缺省 → 可用列表首项
+        {"id": "B", "language": "PY"},      # 别名 → python
+        {"id": "C", "language": "matlab"},  # 不在可用列表 → 首项 + 留痕
+    ]
+    warnings = normalize_plan_languages(plans, ("python",))
+    assert [plan["language"] for plan in plans] == ["python", "python", "python"]
+    assert warnings == ["方案 C 提出的实现语言 matlab 当前执行器不支持，按 python 记"]
+
+    # 多语言执行器：在列表内的原样认；列表本身也做别名归一与去重
+    plans = [{"id": "A", "language": "R"}, {"id": "B", "language": "Julia"}]
+    assert normalize_plan_languages(plans, ("Python", "r language", "python")) == [
+        "方案 B 提出的实现语言 julia 当前执行器不支持，按 python 记",
+    ]
+    assert [plan["language"] for plan in plans] == ["r", "python"]
+    # 空可用列表退回缺省 python，卡片不会没有语言
+    plans = [{"id": "A"}]
+    assert normalize_plan_languages(plans, ()) == [] and plans[0]["language"] == "python"
+
+
+def test_model_planning_reduce_gets_the_language_menu_and_cards_carry_it(registry):
+    reduce_with_languages = {
+        **REDUCE_OK,
+        "plans": [
+            {**REDUCE_OK["plans"][0], "language": "Python"},
+            {**REDUCE_OK["plans"][1], "language": "matlab"},
+            dict(REDUCE_OK["plans"][2]),  # 归约人漏写 → 缺省
+        ],
+    }
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.reduce": stub_response(reduce_with_languages)}))
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert node.implementation_languages == ("python",)
+    assert [plan["language"] for plan in result.outputs["plans"]] == ["python", "python", "python"]
+    assert result.outputs["quality_warnings"] == [
+        "方案 B 提出的实现语言 matlab 当前执行器不支持，按 python 记",
+    ]
+    # 归约 prompt 拿到可用语言菜单；提议人不选语言（变量里有但模板不渲染）
+    reduce_call = next(call for call in llm.calls if call.prompt_id == "model_planning.reduce")
+    assert reduce_call.variables["implementation_languages"] == "python"
+    rendered = registry.get("model_planning.reduce").render(reduce_call.variables)
+    assert "## 当前可用的实现语言\n\npython" in rendered
+    assert "`language`" in rendered
+    proposer_rendered = registry.get("model_planning.proposer").render(llm.calls[0].variables)
+    assert "可用的实现语言" not in proposer_rendered
+    # 语言随 G1 确认：出现在用户点选的那一行上
+    descriptions = [option["description"] for option in result.review_meta["options"][:3]]
+    assert all(description.endswith("；实现语言 python") for description in descriptions)
+    assert result.review_meta["options"][2]["description"].startswith("条件回退：")
+    # 规范化调用拿到的是带语言的方案卡（同一份卡片进假设表 / 符号表整理）
+    formalize_call = next(call for call in llm.calls if call.prompt_id == "model_planning.formalize")
+    assert all(plan["language"] == "python" for plan in json.loads(formalize_call.variables["plans"]))
+
+
+def test_model_planning_single_call_path_also_carries_languages(registry):
+    llm = StubLlmPort({"model_planning.default": stub_response(PLANNING_OK)})
+    node = ModelPlanningNode(registry, proposer_views=(), implementation_languages=("Python", "R"))
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert node.implementation_languages == ("python", "r")
+    assert llm.calls[0].variables["implementation_languages"] == "python、r"
+    assert "## 当前可用的实现语言\n\npython、r" in registry.get("model_planning.default").render(
+        llm.calls[0].variables
+    )
+    # 桩输出没写 language：缺省补首项，不记警告
+    assert [plan["language"] for plan in result.outputs["plans"]] == ["python", "python"]
+    assert "quality_warnings" not in result.outputs
+
+    with_r = {**PLANNING_OK, "plans": [dict(PLANNING_OK["plans"][0], language="R"), dict(PLANNING_OK["plans"][1], language="octave")]}
+    llm = StubLlmPort({"model_planning.default": stub_response(with_r)})
+    result = node.run(ctx, make_services(llm))
+    assert [plan["language"] for plan in result.outputs["plans"]] == ["r", "python"]
+    assert result.outputs["quality_warnings"] == [
+        "方案 B 提出的实现语言 octave 当前执行器不支持，按 python 记",
+    ]
 
 
 def test_chosen_plan_honours_the_g1_ledger():

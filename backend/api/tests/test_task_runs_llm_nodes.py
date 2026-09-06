@@ -614,11 +614,14 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert by_node["PROBLEM_ANALYSIS"]["status"] == "SUCCEEDED"
     assert by_node["DATA_PREPARATION"]["status"] == "SUCCEEDED", "数据准备走真实节点"
     assert by_node["MODEL_PLANNING"]["status"] == "SUCCEEDED", "方案产出成功后停在审批"
-    # 方案页契约投影：三路提议归约后的两案，多出的归约字段不进契约五键
+    # 方案页契约投影：三路提议归约后的两案，多出的归约字段不进契约方案卡键
+    # （五键 + 切片 6 的实现语言：归约桩没写 → 节点按唯一可用语言 python 补齐）
     proposal = client.get(f"/api/v1/task-runs/{run['id']}/stage-outputs").json()["plan_proposal"]
     assert [plan["id"] for plan in proposal["plans"]] == ["A", "B"]
-    assert set(proposal["plans"][0]) == {"id", "name", "approach", "steps", "risks"}
+    assert set(proposal["plans"][0]) == {"id", "name", "approach", "steps", "risks", "language"}
+    assert proposal["plans"][0]["language"] == "python"
     assert proposal["recommended_plan_id"] == "A"
+    assert proposal["decision"] is None, "等待审批时台账为 null"
     # 假设表 / 符号表随方案卡一起在 G1 之前就位（切片 2）
     assert [entry["id"] for entry in proposal["assumptions"]] == ["G1", "G2", "A1", "B1"]
     assert [entry["symbol"] for entry in proposal["symbols"]] == [
@@ -805,6 +808,15 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
     resolved = client.get(f"/api/v1/task-runs/{run['id']}/approvals").json()["items"]
     g1 = next(item for item in resolved if item["id"] == approval["id"])
     assert g1["status"] == "RESOLVED" and g1["resolution"]["option_id"] == "adopt:B"
+    # 决策台账进方案投影（切片 6）：方案页据此把「已采用」落在 B 上，与实验一致
+    proposal = client.get(f"/api/v1/task-runs/{run['id']}/stage-outputs").json()["plan_proposal"]
+    assert proposal["decision"]["approval_id"] == approval["id"]
+    assert proposal["decision"]["option_id"] == "adopt:B"
+    assert proposal["decision"]["chosen_plan_id"] == "B"
+    assert proposal["decision"]["resolved_at"] == g1["resolution"]["resolved_at"]
+    assert proposal["recommended_plan_id"] == "A", "推荐案不因用户改选而改写"
+    # G1 选项 description 带实现语言（语言随 G1 确认）
+    assert all(option["description"].endswith("；实现语言 python") for option in approval["options"][:2])
 
     confirm_delivery(client, run["id"])
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))

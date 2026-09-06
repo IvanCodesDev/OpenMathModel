@@ -6,21 +6,24 @@
       "name": "混合整数规划",
       "approach": "以调度成本最小化为目标的 MILP：决策各时段跨区调度车辆数，约束站点容量与车辆守恒",
       "steps": ["定义决策变量与约束", "构造目标函数", "调用求解器求解", "回测比较满足率与成本"],
-      "risks": ["规模过大时求解慢"]
+      "risks": ["规模过大时求解慢"],
+      "language": "python"
     },
     {
       "id": "B",
       "name": "需求预测 + 贪心调度",
       "approach": "先用时间序列模型预测各区需求，再按缺口贪心调度",
       "steps": ["滚动窗口预测需求", "按缺口排序贪心分配", "局部搜索改进"],
-      "risks": ["无最优性保证"]
+      "risks": ["无最优性保证"],
+      "language": "python"
     },
     {
       "id": "C",
       "name": "排队网络近似",
       "approach": "把区域视为排队节点，用流平衡近似稳态调度量",
       "steps": ["估计到达率与服务率", "求解流平衡方程", "与 A 对照"],
-      "risks": ["稳态假设在高峰期失效"]
+      "risks": ["稳态假设在高峰期失效"],
+      "language": "python"
     }
   ],
   "recommended_plan_id": "A",
@@ -43,5 +46,13 @@
     { "symbol": "\\hat{d}_{it}", "kind": "variable", "definition": "区域 i 在时段 t 的预测需求", "unit": "单", "range": "≥ 0", "plan_id": "B" },
     { "symbol": "\\lambda_i", "kind": "parameter", "definition": "区域 i 的到达率", "unit": "单/分钟", "range": "> 0", "plan_id": "C" }
   ],
+  "decision": {
+    "approval_id": "appr_7f3c2b1a9d8e4f60b5c4d3e2f1a0b9c8",
+    "option_id": "adopt:B",
+    "chosen_plan_id": "B",
+    "actor": "user",
+    "comment": "先跑基线，A 的求解时间等数据补齐再说",
+    "resolved_at": "2026-09-05T12:45:10.000000Z"
+  },
   "updated_at": "2026-09-05T12:30:00.000000Z"
 }

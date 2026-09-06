@@ -485,6 +485,47 @@ PLAN_ROLE_LABELS = {
     "candidate": "候选",
 }
 
+#: 方案卡「实现语言」（§7.4：实现语言随 G1 确认并决定执行器路由）。当前唯一执行器是
+#: Python 沙箱；装配方按 ExecutorProfile（H7）传入更多语言时，归约人才有得选。
+IMPLEMENTATION_LANGUAGES: tuple[str, ...] = ("python",)
+
+#: 模型常见写法 → 契约小写标识。认不出的原样小写后交给可用列表判定。
+_LANGUAGE_ALIASES = {
+    "python": "python", "python3": "python", "py": "python", "cpython": "python",
+    "r": "r", "rscript": "r", "r language": "r", "r 语言": "r",
+    "matlab": "matlab", "octave": "octave", "gnu octave": "octave",
+    "julia": "julia", "baltamatica": "baltamatica", "北太天元": "baltamatica",
+}
+
+
+def normalize_language(value: Any) -> str:
+    """单个语言值 → 小写标识（空值 → 空串）。"""
+    text = str(value or "").strip().lower()
+    return _LANGUAGE_ALIASES.get(text, text)
+
+
+def normalize_plan_languages(
+    plans: Sequence[dict[str, Any]], allowed: Sequence[str] = IMPLEMENTATION_LANGUAGES
+) -> list[str]:
+    """就地把每张方案卡的 ``language`` 收敛到可用语言，返回警告文案。
+
+    缺省 → 可用列表首项（只有一种语言时模型没得选，缺字段不算错）；写了但不在
+    可用列表 → 也按首项记，并留一条警告（方案阶段可换、要留痕；实验阶段的
+    「无匹配执行器显式失败、不静默换语言」约束的是执行器路由，那是 H7 的事）。
+    """
+    allowed_ids = [normalize_language(item) for item in allowed if normalize_language(item)]
+    default = allowed_ids[0] if allowed_ids else IMPLEMENTATION_LANGUAGES[0]
+    warnings: list[str] = []
+    for plan in plans:
+        wanted = normalize_language(plan.get("language"))
+        if wanted and wanted not in allowed_ids:
+            warnings.append(
+                f"方案 {plan.get('id')} 提出的实现语言 {wanted} 当前执行器不支持，按 {default} 记"
+            )
+            wanted = default
+        plan["language"] = wanted or default
+    return warnings
+
 _PROPOSAL_KEYS = ("view", "view_name", "name", "approach", "steps", "risks", "fit")
 
 
@@ -540,16 +581,21 @@ def _plan_set_problems(reduced: Mapping[str, Any]) -> list[str]:
 
 
 def _plan_blurb(plan: Mapping[str, Any]) -> str:
-    """G1 选项 description：角色 + 思路首句（卡片版面有限）。"""
+    """G1 选项 description：角色 + 思路首句 + 实现语言（卡片版面有限）。
+
+    语言随 G1 一并确认（§7.4），所以要出现在用户点选的那一行上。
+    """
     role = PLAN_ROLE_LABELS.get(str(plan.get("role") or ""), PLAN_ROLE_LABELS["candidate"])
     approach = str(plan.get("approach") or "").strip()
     lead = re.split(r"(?<=[。；;.!?！？])", approach, maxsplit=1)[0].strip() or approach
     if len(lead) > 80:
         lead = lead[:79] + "…"
     condition = str(plan.get("fallback_condition") or "").strip()
-    if condition:
-        return f"{role}：{lead}（触发条件：{condition}）"
-    return f"{role}：{lead}"
+    blurb = f"{role}：{lead}（触发条件：{condition}）" if condition else f"{role}：{lead}"
+    language = normalize_language(plan.get("language"))
+    if language:
+        blurb += f"；实现语言 {language}"
+    return blurb
 
 
 def _enum_or(value: Any, aliases: Mapping[str, str], default: str) -> str:
@@ -673,6 +719,7 @@ class ModelPlanningNode(LlmSkillNode):
         require_confirmation: bool = True,
         proposer_views: Sequence[ProposerView] = PROPOSER_VIEWS,
         knowledge: KnowledgePort | None = None,
+        implementation_languages: Sequence[str] = IMPLEMENTATION_LANGUAGES,
     ) -> None:
         super().__init__(registry)
         # Plan confirmation is the product's human gate (roadmap: 方案 A/B 生成、
@@ -682,10 +729,22 @@ class ModelPlanningNode(LlmSkillNode):
         # 卡片知识库端口（§10.3）：装配方注入 omm_agent_tools.KnowledgeLibrary；
         # 缺席时材料落「无（知识库不可用）」，方案阶段照常。
         self._knowledge = knowledge
+        # 当前执行器能跑的实现语言（§7.4）：归约人只能在这里面给每张卡定语言；
+        # 空列表退回缺省，方案卡不会没有语言。
+        languages = tuple(
+            dict.fromkeys(
+                normalize_language(item) for item in implementation_languages if normalize_language(item)
+            )
+        )
+        self._languages: tuple[str, ...] = languages or IMPLEMENTATION_LANGUAGES
 
     @property
     def knowledge(self) -> KnowledgePort | None:
         return self._knowledge
+
+    @property
+    def implementation_languages(self) -> tuple[str, ...]:
+        return self._languages
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value)
@@ -705,21 +764,32 @@ class ModelPlanningNode(LlmSkillNode):
             "data_profile": data_profile,
             # 相似赛题与获奖论文方法：进提议人 prompt 与单次回落；归约 / 规范化不带
             "knowledge": knowledge_material(self._knowledge, analysis),
+            # 可用实现语言：归约人 / 单次回落为每张卡定 language（提议人不选）
+            "implementation_languages": "、".join(self._languages),
         }
 
     def to_result(self, parsed: dict[str, Any], attempts: int) -> NodeResult:
-        plan_ids = [plan.get("id") for plan in parsed.get("plans", [])]
+        plans = [dict(plan) for plan in parsed.get("plans", []) if isinstance(plan, Mapping)]
+        plan_ids = [plan.get("id") for plan in plans]
         if parsed.get("recommended_plan_id") not in plan_ids:
             return NodeResult.failed(
                 "recommended_plan_id does not reference a returned plan"
             )
+        # 单次调用路径同样带实现语言：缺省补 python，越出可用列表归一并留痕
+        language_warnings = normalize_plan_languages(plans, self._languages)
+        outputs: dict[str, Any] = {**parsed, "plans": plans}
+        if language_warnings:
+            outputs["quality_warnings"] = [
+                *[str(item) for item in parsed.get("quality_warnings") or []],
+                *language_warnings,
+            ]
         if self._require_confirmation:
             return NodeResult.needs_review(
                 reason="请确认建模方案（A/B）后继续实验",
-                outputs={**parsed, "llm_attempts": attempts},
+                outputs={**outputs, "llm_attempts": attempts},
             )
         return NodeResult.succeeded(
-            outputs=parsed, metrics={"llm_attempts": attempts}
+            outputs=outputs, metrics={"llm_attempts": attempts}
         )
 
     # -- fan-out path ------------------------------------------------------------
@@ -761,6 +831,10 @@ class ModelPlanningNode(LlmSkillNode):
                 "方案归约结果不合法：" + "；".join(problems),
                 metrics={"llm_attempts": llm_calls},
             )
+        # 每张卡的实现语言收敛到当前执行器可用的语言（§7.4：语言随 G1 确认）
+        plans = [dict(plan) for plan in reduced["plans"]]
+        warnings.extend(normalize_plan_languages(plans, self._languages))
+        reduced = {**reduced, "plans": plans}
 
         # 归约 → 假设表 + 符号表 → 决策卡（§9.1）。两表是方案页与论文的材料，
         # 不是闸门依据：生成失败只记警告、字段留 null，G1 照常挂出。
@@ -906,6 +980,7 @@ class ModelPlanningNode(LlmSkillNode):
                 "proposals": json.dumps(payload, ensure_ascii=False),
                 "problem_analysis": variables["problem_analysis"],
                 "data_profile": variables["data_profile"],
+                "implementation_languages": variables["implementation_languages"],
             },
         )
 

@@ -6071,6 +6071,14 @@ html[data-theme="dark"] .stage-strategy-list { color: #b3b3ae; }
 .stage-rich-text li + li { margin-top: 5px; }
 
 /* 面板槽位有自己的标题层级：正文内的 markdown 标题一律降为加粗小节名 */
+/* 建模方案页：G1 决策台账落地后，用户确认采用的那一行把角色标改成「（已采用）」
+   （仍是标题里那一枚 <small>，方案行的六个网格子项与行高都不动），用主色点亮 */
+.focused-plan-row strong small.stage-plan-adopted {
+  color: var(--ax-accent, #11110f);
+  font-weight: 600;
+}
+html[data-theme="dark"] .focused-plan-row strong small.stage-plan-adopted { color: var(--ax-accent, #e8e8e4); }
+
 .stage-rich-text h1,
 .stage-rich-text h2,
 .stage-rich-text h3,

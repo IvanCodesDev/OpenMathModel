@@ -753,6 +753,15 @@ const MODEL_STAGE: Record<string, string> = {
   "项全局假设": "global assumptions",
   "项方案特定假设": "plan-specific assumptions",
   "全部假设均由题面或数据直接支持。": "Every assumption is directly supported by the problem statement or the data.",
+  // G1 决策台账进方案页（stage-content：PlanProposal.decision / plans[].language，H3 切片 6）
+  "已确认采用方案": "Confirmed plan",
+  "即推荐方案": "the recommended plan",
+  "改选自推荐方案": "chosen over recommended plan",
+  "确认于": "confirmed at",
+  "已采用": "Adopted",
+  "实现语言": "Implementation language",
+  "确认备注": "Confirmation note",
+  "来自已确认的方案": "From the confirmed plan",
   "项假设待检验或需重点验证，实验阶段将据此安排敏感性与稳健性检验。":
     "assumptions still need checking or close verification; sensitivity and robustness checks in the experiment stage follow from them.",
   "建议围绕以下假设做敏感性与稳健性检验：": "Run sensitivity and robustness checks around these assumptions: ",

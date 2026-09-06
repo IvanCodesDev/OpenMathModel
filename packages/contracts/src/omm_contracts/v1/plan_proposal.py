@@ -97,6 +97,32 @@ class Symbol(BaseModel):
     )
 
 
+class PlanDecision(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    approval_id: constr(min_length=1) = Field(
+        ...,
+        description="对应的审批请求 id（GET /task-runs/{run_id}/approvals 可回看全部选项与证据）。",
+    )
+    option_id: constr(min_length=1) = Field(
+        ...,
+        description='用户所选审批项："approve"（采用推荐案）或 "adopt:<方案 id>"（改用某备选案）。',
+    )
+    chosen_plan_id: constr(min_length=1) = Field(
+        ...,
+        description="据此进入实验的方案 id（与下游节点选案规则一致：adopt 目标 → 推荐案 → 首案），前端不必再复现规则。",
+    )
+    actor: constr(min_length=1) = Field(
+        ...,
+        description="决策者标识：服务端审批解决记录里的原值（与 approvals 的 resolution.actor 同一份，通常是账户标识），投影不改写。",
+    )
+    comment: str | None = Field(
+        ..., description="用户随审批填写的备注原文；未填为 null。AI 不得改写。"
+    )
+    resolved_at: Timestamp
+
+
 class PlanOption(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -108,6 +134,10 @@ class PlanOption(BaseModel):
         ..., description="可执行的实验步骤（能直接转成 Python 实验）。"
     )
     risks: list[str] = Field(..., description="该方案的主要风险与失效条件。")
+    language: constr(min_length=1) | None = Field(
+        None,
+        description="实现语言（小写标识：python / r / matlab / octave / julia …），随 G1 一并确认并决定实验阶段的执行器路由（设计 §7.4）；节点只在当前执行器可用的语言里选。可选字段：2026-09-06 之前的运行没有该键或为 null，消费者按 python 理解。",
+    )
 
 
 class PlanProposal(BaseModel):
@@ -138,5 +168,9 @@ class PlanProposal(BaseModel):
     symbols: list[Symbol] | None = Field(
         None,
         description="符号表（H3）：题面共有的集合 / 参数（plan_id=null）与各方案自己的决策变量 / 目标（plan_id=方案 id），共享符号在前。未产出时为 null。可选字段：旧消费者可忽略。",
+    )
+    decision: PlanDecision | None = Field(
+        None,
+        description="G1 决策台账（H3）：用户对**这一版**方案的正向确认（采用推荐案 / 改用某备选案），按提出审批的那一趟节点对上；等待审批、无人值守、旧运行、退回重做中均为 null。拒绝不落台账：它导致方案阶段重做，新版本对应新的审批。可选字段：旧消费者可忽略。",
     )
     updated_at: Timestamp

@@ -22,6 +22,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from omm_contracts import (
+    ApprovalDecisionType,
+    ApprovalStatus,
     DatasetProfile,
     DeliveryManifest,
     DocumentDraft,
@@ -32,7 +34,14 @@ from omm_contracts import (
 
 from .api_models import StageOutputs
 from .blobstore import ArtifactBlobStore, has_readable_local_content
-from .orm import ArtifactRow, DomainEventRow, StageOutputRow, StepRunRow, TaskRunRow
+from .orm import (
+    ApprovalRequestRow,
+    ArtifactRow,
+    DomainEventRow,
+    StageOutputRow,
+    StepRunRow,
+    TaskRunRow,
+)
 from .serialize import as_utc, iso_z
 
 
@@ -94,15 +103,20 @@ STAGE_OUTPUT_SCHEMA_IDS: dict[str, str] = {
 class StageState:
     """一个节点的「最新成功输出」：outputs 随后续 STEP_SUCCEEDED 覆盖，count 计成功次数。
 
+    step_id 是产出这一版的那一趟 step：审批请求的 ``evidence.requested_by_step``
+    指向同一个 id，决策台账据此只认「对这一版方案」的确认（退回重做后是新趟、
+    新审批，旧决策自然不再套用）。
+
     公开给 workspace_view 复用（执行计划的本题化文案同样以阶段最新输出为数据源）。
     """
 
-    __slots__ = ("outputs", "at", "count")
+    __slots__ = ("outputs", "at", "count", "step_id")
 
     def __init__(self) -> None:
         self.outputs: dict[str, Any] = {}
         self.at: Optional[datetime] = None
         self.count = 0
+        self.step_id: Optional[str] = None
 
 
 def _dt(value: str) -> datetime:
@@ -131,13 +145,15 @@ def replay_stage_outputs(
                 step_nodes[str(step_id)] = str(node)
             continue
         if row.event_type == "STEP_SUCCEEDED":
-            node = step_nodes.get(str(payload.get("step_id")))
+            step_id = str(payload.get("step_id"))
+            node = step_nodes.get(step_id)
             if node is None:
                 continue
             state = stages.setdefault(node, StageState())
             state.outputs = dict(payload.get("outputs") or {})
             state.at = _dt(row.created_at)
             state.count += 1
+            state.step_id = step_id
     return stages, step_nodes
 
 
@@ -160,6 +176,8 @@ def overlay_stage_output_rows(
         state.outputs = dict(row.content or {})
         state.at = as_utc(row.created_at)
         state.count = max(state.count, int(row.version))
+        if row.producer_step_id:
+            state.step_id = str(row.producer_step_id)
 
 
 def _strs(values: Any) -> list[str]:
@@ -235,7 +253,11 @@ def _dataset_profile(run_id: str, state: Optional[StageState]) -> Optional[Datas
     )
 
 
-def _plan_proposal(run_id: str, state: Optional[StageState]) -> Optional[PlanProposal]:
+def _plan_proposal(
+    run_id: str,
+    state: Optional[StageState],
+    approvals: Iterable[ApprovalRequestRow] = (),
+) -> Optional[PlanProposal]:
     if state is None:
         return None
     outputs = state.outputs
@@ -250,21 +272,86 @@ def _plan_proposal(run_id: str, state: Optional[StageState]) -> Optional[PlanPro
                 "approach": str(entry.get("approach") or ""),
                 "steps": _strs(entry.get("steps")),
                 "risks": _strs(entry.get("risks")),
+                "language": _language_or_none(entry.get("language")),
             }
         )
     if not plans:
         # sim 节点或退化输出：契约要求 plans 至少一项（minItems=1），空表投影为 null
         return None
     plan_ids = {plan["id"] for plan in plans if plan["id"]}
+    recommended_plan_id = str(outputs.get("recommended_plan_id") or "")
     return PlanProposal(
         run_id=run_id,
         plans=plans,
-        recommended_plan_id=str(outputs.get("recommended_plan_id") or ""),
+        recommended_plan_id=recommended_plan_id,
         rationale=outputs.get("rationale"),
         assumptions=_assumptions(outputs.get("assumptions"), plan_ids),
         symbols=_symbols(outputs.get("symbols"), plan_ids),
+        decision=_plan_decision(
+            state, approvals, [plan["id"] for plan in plans], recommended_plan_id
+        ),
         updated_at=iso_z(state.at),
     )
+
+
+def _language_or_none(value: Any) -> Optional[str]:
+    """方案卡实现语言：节点已归一到小写标识；旧运行没有该键 → null（消费者按 python 理解）。"""
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return None
+
+
+#: G1 决策台账里算「正向确认」的选项：采用推荐案 / 改用某备选案。拒绝导致重做，
+#: 不是对这一版方案的决策（与 omm_agent_skills.nodes 的 G1 选项 id 同一口径）。
+_G1_DECISION_TYPE = ApprovalDecisionType.confirm_plan.value
+_G1_RESOLVED = ApprovalStatus.RESOLVED.value
+_G1_APPROVE_OPTION_ID = "approve"
+_G1_ADOPT_OPTION_PREFIX = "adopt:"
+
+
+def _plan_decision(
+    state: StageState,
+    approvals: Iterable[ApprovalRequestRow],
+    plan_ids: list[str],
+    recommended_plan_id: str,
+) -> Optional[dict[str, Any]]:
+    """这一版方案的 G1 决策（plan-proposal.v1 ``decision``）。
+
+    只认 ``confirm_plan`` 且已解决、``evidence.requested_by_step`` 指向产出这一版
+    的那一趟 step 的审批——同一趟不会挂两次审批，多条（理论上）取最晚解决的。
+    ``chosen_plan_id`` 复现 ``chosen_plan`` 的选案规则（adopt 目标在表内 → 它；
+    否则推荐案；否则首案），前端与下游节点因此看到同一个方案。
+    """
+    if not state.step_id or not plan_ids:
+        return None
+    candidates: list[tuple[str, ApprovalRequestRow, dict[str, Any]]] = []
+    for approval in approvals:
+        if approval.decision_type != _G1_DECISION_TYPE or approval.status != _G1_RESOLVED:
+            continue
+        evidence = approval.evidence if isinstance(approval.evidence, dict) else {}
+        if str(evidence.get("requested_by_step") or "") != state.step_id:
+            continue
+        resolution = approval.resolution if isinstance(approval.resolution, dict) else {}
+        option_id = str(resolution.get("option_id") or "")
+        if option_id != _G1_APPROVE_OPTION_ID and not option_id.startswith(_G1_ADOPT_OPTION_PREFIX):
+            continue
+        candidates.append((str(resolution.get("resolved_at") or ""), approval, resolution))
+    if not candidates:
+        return None
+    resolved_at, approval, resolution = max(candidates, key=lambda item: item[0])
+    option_id = str(resolution["option_id"])
+    chosen = option_id[len(_G1_ADOPT_OPTION_PREFIX):] if option_id.startswith(_G1_ADOPT_OPTION_PREFIX) else ""
+    if chosen not in plan_ids:
+        chosen = recommended_plan_id if recommended_plan_id in plan_ids else plan_ids[0]
+    comment = resolution.get("comment")
+    return {
+        "approval_id": approval.id,
+        "option_id": option_id,
+        "chosen_plan_id": chosen,
+        "actor": str(resolution.get("actor") or "user"),
+        "comment": comment.strip() if isinstance(comment, str) and comment.strip() else None,
+        "resolved_at": resolved_at or iso_z(as_utc(approval.requested_at)),
+    }
 
 
 #: 假设表 / 符号表的契约枚举（plan-proposal.v1 $defs.assumption / $defs.symbol）。
@@ -664,11 +751,18 @@ def build_stage_outputs(
         steps,
     )
 
+    # G1 决策台账进方案投影：审批行是决策的持久事实（resolution 由动作层落库）
+    approvals = list(
+        session.execute(
+            select(ApprovalRequestRow).where(ApprovalRequestRow.run_id == run.id)
+        ).scalars()
+    )
+
     return StageOutputs(
         run_id=run.id,
         problem_frame=_problem_frame(run.id, stages.get(_PROBLEM_ANALYSIS)),
         dataset_profile=_dataset_profile(run.id, stages.get(_DATA_PREPARATION)),
-        plan_proposal=_plan_proposal(run.id, stages.get(_MODEL_PLANNING)),
+        plan_proposal=_plan_proposal(run.id, stages.get(_MODEL_PLANNING), approvals),
         experiment_summary=_experiment_summary(
             run.id, stages.get(_EXPERIMENTING), stages.get(_VALIDATING)
         ),

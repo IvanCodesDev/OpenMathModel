@@ -1,0 +1,24 @@
+{
+  "run_id": "run_2b3c4d5e6f708192a3b4c5d6e7f8091a",
+  "plans": [
+    {
+      "id": "A",
+      "name": "整数规划",
+      "approach": "MILP 建模，精确求解调度问题",
+      "steps": ["定义决策变量与约束", "构造目标函数", "调用求解器求解"],
+      "risks": ["规模过大时求解慢"],
+      "language": ""
+    }
+  ],
+  "recommended_plan_id": "A",
+  "rationale": null,
+  "decision": {
+    "approval_id": "appr_7f3c2b1a9d8e4f60b5c4d3e2f1a0b9c8",
+    "chosen_plan_id": "A",
+    "actor": "user",
+    "comment": null,
+    "resolved_at": "2026-09-05T12:45:10.000000Z",
+    "reason": "决策台账不接受契约之外的键"
+  },
+  "updated_at": "2026-09-05T12:30:00.000000Z"
+}

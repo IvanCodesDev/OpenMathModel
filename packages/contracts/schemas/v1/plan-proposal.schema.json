@@ -34,6 +34,13 @@
       ],
       "description": "符号表（H3）：题面共有的集合 / 参数（plan_id=null）与各方案自己的决策变量 / 目标（plan_id=方案 id），共享符号在前。未产出时为 null。可选字段：旧消费者可忽略。"
     },
+    "decision": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/plan_decision" }
+      ],
+      "description": "G1 决策台账（H3）：用户对**这一版**方案的正向确认（采用推荐案 / 改用某备选案），按提出审批的那一趟节点对上；等待审批、无人值守、旧运行、退回重做中均为 null。拒绝不落台账：它导致方案阶段重做，新版本对应新的审批。可选字段：旧消费者可忽略。"
+    },
     "updated_at": { "$ref": "#/$defs/timestamp" }
   },
   "required": ["run_id", "plans", "recommended_plan_id", "rationale", "updated_at"],
@@ -83,6 +90,19 @@
       "required": ["symbol", "kind", "definition", "unit", "range", "plan_id"],
       "additionalProperties": false
     },
+    "plan_decision": {
+      "type": "object",
+      "properties": {
+        "approval_id": { "type": "string", "minLength": 1, "description": "对应的审批请求 id（GET /task-runs/{run_id}/approvals 可回看全部选项与证据）。" },
+        "option_id": { "type": "string", "minLength": 1, "description": "用户所选审批项：\"approve\"（采用推荐案）或 \"adopt:<方案 id>\"（改用某备选案）。" },
+        "chosen_plan_id": { "type": "string", "minLength": 1, "description": "据此进入实验的方案 id（与下游节点选案规则一致：adopt 目标 → 推荐案 → 首案），前端不必再复现规则。" },
+        "actor": { "type": "string", "minLength": 1, "description": "决策者标识：服务端审批解决记录里的原值（与 approvals 的 resolution.actor 同一份，通常是账户标识），投影不改写。" },
+        "comment": { "type": ["string", "null"], "description": "用户随审批填写的备注原文；未填为 null。AI 不得改写。" },
+        "resolved_at": { "$ref": "#/$defs/timestamp" }
+      },
+      "required": ["approval_id", "option_id", "chosen_plan_id", "actor", "comment", "resolved_at"],
+      "additionalProperties": false
+    },
     "plan_option": {
       "type": "object",
       "properties": {
@@ -98,6 +118,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "该方案的主要风险与失效条件。"
+        },
+        "language": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "实现语言（小写标识：python / r / matlab / octave / julia …），随 G1 一并确认并决定实验阶段的执行器路由（设计 §7.4）；节点只在当前执行器可用的语言里选。可选字段：2026-09-06 之前的运行没有该键或为 null，消费者按 python 理解。"
         }
       },
       "required": ["id", "name", "approach", "steps", "risks"],

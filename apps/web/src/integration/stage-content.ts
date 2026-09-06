@@ -17,12 +17,19 @@ import type {
   ExperimentSummary,
   PlanProposal,
 } from "@openmathmodel/contracts";
-import { t } from "../i18n/locale";
+import { currentLocale, t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
 import { describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 import { describePaperAudit, paperAuditStamp } from "./paper-audit";
+import type { PlanDecisionView } from "./plan-decision";
+import {
+  describePlanDecision,
+  languageLabel,
+  planProposalStamp,
+  recommendedPlan as pickRecommendedPlan,
+} from "./plan-decision";
 import {
   IMPACT_LABELS,
   KIND_LABELS,
@@ -367,7 +374,19 @@ function renderFieldGuidePanel(root: HTMLElement, profile: DatasetProfile): void
 
 // ── 建模方案页（PlanProposal → model-plan 面板） ────────────────────────────
 
-function planDetail(plan: PlanProposal["plans"][number], rationale: string | null, recommended: boolean): HTMLElement {
+/** 结论条 / 实现计划里的时间戳：随界面语言走，与运行元信息行同一种格式。 */
+function localizedMoment(iso: string): string {
+  const moment = new Date(iso);
+  if (Number.isNaN(moment.getTime())) return iso;
+  return moment.toLocaleString(currentLocale() === "en-US" ? "en-US" : "zh-CN");
+}
+
+function planDetail(
+  plan: PlanProposal["plans"][number],
+  rationale: string | null,
+  recommended: boolean,
+  decision: PlanDecisionView | null = null,
+): HTMLElement {
   const detail = el("section", "focused-plan-detail selected-plan-overview");
   const listBlock = (label: string, items: string[], clampLines?: number): HTMLElement => {
     const block = el("div");
@@ -392,6 +411,14 @@ function planDetail(plan: PlanProposal["plans"][number], rationale: string | nul
 
   if (plan.steps.length) detail.append(listBlock(t("实验步骤"), plan.steps, 3));
   if (plan.risks.length) detail.append(listBlock(t("主要风险"), plan.risks, 3));
+  // 实现语言随 G1 一并确认（设计 §7.4）：有就亮出来；旧运行没有该键则不猜
+  const language = languageLabel(plan.language);
+  if (language) {
+    const block = el("div");
+    block.append(el("h2", "", t("实现语言")), el("p", "", language));
+    detail.append(block);
+  }
+
   if (recommended && rationale) {
     const why = el("div");
     why.append(el("h2", "", t("推荐理由")), richBlock(rationale));
@@ -399,31 +426,53 @@ function planDetail(plan: PlanProposal["plans"][number], rationale: string | nul
   }
   return detail;
 }
+  // 用户确认时写的备注是决策的一部分，原文示人（不做 markdown 渲染，不改写）
+  if (decision && decision.chosenPlanId === plan.id && decision.comment) {
+    const note = el("div");
+    note.append(el("h2", "", t("确认备注")), el("p", "", decision.comment));
+    detail.append(note);
+  }
 
 function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="model-plan"]');
-  if (!panel || !shouldRender(panel, "model", proposal.updated_at)) return;
+/** 结论条一句话：有台账写「已确认采用」+ 确认时间；没有沿用「建议采用」口径。 */
+function planConclusion(
+  proposal: PlanProposal,
+  plan: PlanProposal["plans"][number],
+  decision: PlanDecisionView | null,
+): string {
+  if (!decision) {
+    return `${t("建议采用方案")} ${plan.id}（${plan.name}），${t("推荐理由与风险见下方方案详情")}`;
+  }
+  const origin = decision.asRecommended
+    ? `（${t("即推荐方案")}）`
+    : `（${t("改选自推荐方案")} ${proposal.recommended_plan_id}）`;
+  return `${t("已确认采用方案")} ${plan.id}（${plan.name}）${origin}，${t("确认于")} ${localizedMoment(decision.resolvedAt)}`;
+}
 
-  const recommendedPlan = proposal.plans.find(plan => plan.id === proposal.recommended_plan_id)
-    ?? proposal.plans[0];
+  // 台账落地不改 updated_at（那是方案产出时间），签名要连 resolved_at 一起看
+  if (!panel || !shouldRender(panel, "model", planProposalStamp(proposal))) return;
 
-  // 结论条只放一句可扫读的推荐结论；完整推荐理由在下方详情的「推荐理由」栏，
+  const decision = describePlanDecision(proposal);
+  const recommendedPlan = pickRecommendedPlan(proposal);
+  // 页面聚焦的方案：用户确认了哪一案就是哪一案；还没确认时是推荐案
+  const focusedPlan = (decision ? proposal.plans.find(plan => plan.id === decision.chosenPlanId) : undefined)
+    ?? recommendedPlan;
+
+  // 结论条只放一句可扫读的结论；完整推荐理由在下方详情的「推荐理由」栏，
   // 长理由塞进横条会把整块顶成一面文字墙。
   const strip = panel.querySelector<HTMLElement>(".focused-conclusion-strip");
-  if (strip && recommendedPlan) {
-    strip.replaceChildren(
-      icon("check-circle"),
-      el("span", "", `${t("建议采用方案")} ${recommendedPlan.id}（${recommendedPlan.name}），${t("推荐理由与风险见下方方案详情")}`),
-    );
+  if (strip && focusedPlan) {
+    strip.replaceChildren(icon("check-circle"), el("span", "", planConclusion(proposal, focusedPlan, decision)));
   }
 
   const list = panel.querySelector<HTMLElement>(".focused-plan-list");
   const detailHost = panel.querySelector<HTMLElement>(".focused-plan-detail");
-  if (!list || !detailHost || !recommendedPlan) return;
+  if (!list || !detailHost || !focusedPlan) return;
 
   const renderDetail = (plan: PlanProposal["plans"][number]): void => {
     detailHost.replaceChildren(
-      ...planDetail(plan, proposal.rationale, plan.id === proposal.recommended_plan_id).children,
+      ...planDetail(plan, proposal.rationale, plan.id === proposal.recommended_plan_id, decision).children,
     );
     settleClamps(detailHost);
     typesetMath(detailHost);
@@ -436,10 +485,18 @@ function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
       const row = el("button", "focused-plan-row");
       row.type = "button";
       row.dataset.stagePlanId = plan.id;
-      const selected = plan.id === recommendedPlan.id;
+      const selected = plan.id === focusedPlan.id;
       if (selected) row.classList.add("selected");
       const title = el("strong", "", `${t("方案")} ${plan.id} `);
-      const small = el("small", "", plan.id === proposal.recommended_plan_id ? `（${t("推荐主方案")}）` : `（${t("备选方案")}）`);
+      // 标题旁的角色标：用户确认采用的那一案改标「已采用」（推荐 / 备选的来龙去脉
+      // 在结论条里），其余行照旧标推荐主方案 / 备选方案。标题列是定宽网格列，
+      // 徽标做成同一枚 <small> 而不是再加一个元素，避免换行把这一行撑高。
+      const adopted = decision !== null && plan.id === decision.chosenPlanId;
+      const role = adopted
+        ? `（${t("已采用")}）`
+        : plan.id === proposal.recommended_plan_id ? `（${t("推荐主方案")}）` : `（${t("备选方案")}）`;
+      const small = el("small", adopted ? "stage-plan-adopted" : "", role);
+      if (adopted) small.dataset.stagePlanAdopted = decision.optionId;
       title.append(small);
       // R1：行内摘要只放第一句，全文在下方方案详情（三行截断兜底仍在 CSS）
       const [riskLead] = leadSentence(plan.risks[0] ?? "—", 48);
@@ -465,13 +522,13 @@ function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
       return row;
     }),
   );
-  renderDetail(recommendedPlan);
+  renderDetail(focusedPlan);
 
   // 三个子分页都由方案契约填充：假设表 / 符号表来自归约后的规范化（缺席时
-  // 分页保持藏起），实现计划用推荐方案的真实步骤
+  // 分页保持藏起），实现计划用聚焦方案（已确认的那一案，或推荐案）的真实步骤
   renderAssumptionsPanel(root, proposal);
   renderSymbolsPanel(root, proposal);
-  renderImplementationPanel(root, proposal, recommendedPlan);
+  renderImplementationPanel(root, proposal, focusedPlan, decision);
 }
 
 /** 可填充分页的真实内容这次没有到（规范化失败 / 旧运行）：清空并收回入口。 */
@@ -633,22 +690,24 @@ function renderSymbolsPanel(root: HTMLElement, proposal: PlanProposal): void {
   typesetMath(panel);
 }
 
-/** 「实现计划」分页：推荐方案的实验步骤 + 主要风险 + 推荐理由（真实产出）。 */
+/** 「实现计划」分页：聚焦方案（已确认的那一案 / 推荐案）的实验步骤 + 主要风险 + 推荐理由（真实产出）。 */
 function renderImplementationPanel(
   root: HTMLElement,
   proposal: PlanProposal,
   plan: PlanProposal["plans"][number],
 ): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="implementation"]');
+  decision: PlanDecisionView | null = null,
   if (!panel || plan.steps.length === 0) return;
   panel.dataset.stageContentSource = "api";
 
   const header = el("header", "focused-template-heading");
   const heading = el("div");
-  heading.append(
-    el("h1", "", t("实现计划")),
-    el("p", "", `${t("来自方案")} ${plan.id}（${plan.name}）`),
-  );
+  const confirmed = decision !== null && decision.chosenPlanId === plan.id;
+  const subtitle = [`${t(confirmed ? "来自已确认的方案" : "来自方案")} ${plan.id}（${plan.name}）`];
+  const language = languageLabel(plan.language);
+  if (language) subtitle.push(`${t("实现语言")} ${language}`);
+  heading.append(el("h1", "", t("实现计划")), el("p", "", subtitle.join(" · ")));
   header.append(heading, el("span", "focused-template-status neutral", `${plan.steps.length} ${t("步")}`));
 
   const stepsSection = el("section", "focused-template-section");

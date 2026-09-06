@@ -21,6 +21,7 @@ from conftest import (
     wait_until,
 )
 
+from omm_api.orm import ApprovalRequestRow
 from omm_api.stage_outputs import StageState, _plan_proposal, _robustness_report, _validation_report
 from omm_contracts.v1.experiment_summary import ValidationReport
 from test_task_runs_llm_nodes import (
@@ -86,6 +87,24 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
         "symbol": "x_i", "kind": "variable", "definition": "调度点 i 是否设站",
         "unit": None, "range": "{0,1}", "plan_id": "A",
     }
+    # H3 切片 6：方案卡带实现语言（归约桩没写 → 节点按唯一可用语言 python 补齐）；
+    # G1 决策台账进投影：approve = 采用推荐案 A，与实验阶段实际所用方案一致
+    assert [plan["language"] for plan in plan_proposal["plans"]] == ["python", "python"]
+    decision = plan_proposal["decision"]
+    g1 = next(
+        item for item in client.get(f"{API}/task-runs/{run['id']}/approvals").json()["items"]
+        if item["decision_type"] == "confirm_plan"
+    )
+    assert decision == {
+        "approval_id": g1["id"],
+        "option_id": "approve",
+        "chosen_plan_id": "A",
+        # 动作层记的是账户标识原值（与 /approvals 的 resolution.actor 同一份）
+        "actor": g1["resolution"]["actor"],
+        "comment": None,
+        "resolved_at": g1["resolution"]["resolved_at"],
+    }
+    assert decision["actor"] and decision["actor"] != "user"
 
     experiment_summary = payload["experiment_summary"]
     validate_contract("experiment-summary.schema.json", experiment_summary)
@@ -401,6 +420,90 @@ def test_plan_tables_projection_drops_malformed_rows_and_refolds_scope(validate_
         {"symbol": "\\mathcal{I}", "kind": "set", "definition": "候选点集合", "unit": None, "range": None, "plan_id": None},
         {"symbol": "v", "kind": "variable", "definition": "unit 不是字符串", "unit": None, "range": None, "plan_id": None},
     ]
+
+
+def _g1_approval(
+    *,
+    step_id: str = "step_g1",
+    option_id: str = "approve",
+    comment: str | None = None,
+    resolved_at: str = "2026-09-05T12:45:10.000000Z",
+    status: str = "RESOLVED",
+    decision_type: str = "confirm_plan",
+    approval_id: str = "appr_1",
+) -> ApprovalRequestRow:
+    """一条（未落库的）G1 审批行：evidence.requested_by_step 指向产出方案的那一趟。"""
+    return ApprovalRequestRow(
+        id=approval_id,
+        run_id=_RUN_ID,
+        decision_type=decision_type,
+        title="请确认建模方案",
+        options=[{"id": "approve", "label": "采用推荐方案 A"}, {"id": "adopt:B", "label": "改用方案 B"}, {"id": "reject", "label": "退回重做方案"}],
+        evidence={"note": "请确认建模方案", "requested_by_step": step_id, "gate": "G1"},
+        status=status,
+        requested_at=datetime(2026, 9, 5, 12, 30, 1, tzinfo=timezone.utc),
+        resolution=None if status != "RESOLVED" else {
+            "option_id": option_id, "actor": "user", "comment": comment, "resolved_at": resolved_at,
+        },
+    )
+
+
+def test_plan_decision_projection_matches_the_approval_to_this_plan_version(validate_contract):
+    """决策台账进 PlanProposal.decision（H3）：只认「对这一版方案」的正向确认，
+    chosen_plan_id 复现下游选案规则，前端与实验阶段看到同一个方案。"""
+    state = _planning_state()
+    state.step_id = "step_g1"
+
+    # 还没确认（审批 PENDING）/ 没有任何审批 / 旧运行没有 step id → null
+    assert _plan_proposal(_RUN_ID, state).decision is None
+    assert _plan_proposal(_RUN_ID, state, [_g1_approval(status="PENDING")]).decision is None
+    legacy = _planning_state()
+    assert _plan_proposal(_RUN_ID, legacy, [_g1_approval()]).decision is None
+
+    # 采用推荐案：chosen = recommended；备注留空 → null
+    approved = _plan_proposal(_RUN_ID, state, [_g1_approval(comment="  ")])
+    payload = approved.model_dump(mode="json")
+    validate_contract("plan-proposal.schema.json", payload)
+    assert payload["decision"] == {
+        "approval_id": "appr_1",
+        "option_id": "approve",
+        "chosen_plan_id": "A",
+        "actor": "user",
+        "comment": None,
+        "resolved_at": "2026-09-05T12:45:10.000000Z",
+    }
+    # 旧运行的方案卡没有 language → null（消费者按 python 理解）
+    assert [plan["language"] for plan in payload["plans"]] == [None, None]
+
+    # 改用备选案 B，带备注原文
+    adopted = _plan_proposal(_RUN_ID, state, [_g1_approval(option_id="adopt:B", comment="先跑基线")])
+    assert adopted.decision.chosen_plan_id == "B" and adopted.decision.option_id == "adopt:B"
+    assert adopted.decision.comment == "先跑基线"
+    # adopt 指向已不存在的方案 id → 回到推荐案（与 chosen_plan 同规则）
+    dangling = _plan_proposal(_RUN_ID, state, [_g1_approval(option_id="adopt:Z")])
+    assert dangling.decision.chosen_plan_id == "A"
+
+
+def test_plan_decision_projection_ignores_other_gates_and_stale_rounds():
+    """退回重做后是新趟、新审批：旧趟的确认、拒绝、G2 / 修订门都不算这一版的决策。"""
+    state = _planning_state(plans=[
+        {"id": "A", "name": "整数规划", "approach": "MILP", "steps": ["建模"], "risks": [], "language": "Python"},
+    ])
+    state.step_id = "step_round2"
+    rows = [
+        _g1_approval(step_id="step_round1", option_id="adopt:B", approval_id="appr_old"),   # 上一趟的确认
+        _g1_approval(step_id="step_round1", option_id="reject", approval_id="appr_rejected"),
+        _g1_approval(step_id="step_round2", option_id="reject", approval_id="appr_reject2"),  # 拒绝不落台账
+        _g1_approval(step_id="step_round2", decision_type="generic", approval_id="appr_revision"),
+        _g1_approval(step_id="step_round2", decision_type="data_gate", option_id="adopt_cleaned", approval_id="appr_g2"),
+    ]
+    assert _plan_proposal(_RUN_ID, state, rows).decision is None
+
+    rows.append(_g1_approval(step_id="step_round2", approval_id="appr_new", resolved_at="2026-09-05T13:00:00.000000Z"))
+    proposal = _plan_proposal(_RUN_ID, state, rows)
+    assert proposal.decision.approval_id == "appr_new" and proposal.decision.chosen_plan_id == "A"
+    # 方案卡语言透传为小写标识
+    assert proposal.plans[0].language == "python"
 
 
 def test_stage_outputs_requires_ownership(client, second_client, make_run):
