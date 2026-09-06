@@ -2,8 +2,8 @@
 id: model_planning.proposer
 stage: MODEL_PLANNING
 variant: proposer
-version: 1
-input_schema: {"type": "object", "required": ["view_name", "view_brief", "problem_analysis", "data_profile"], "properties": {"view_name": {"type": "string"}, "view_brief": {"type": "string"}, "problem_analysis": {"type": "string"}, "data_profile": {"type": "string"}}}
+version: 2
+input_schema: {"type": "object", "required": ["view_name", "view_brief", "problem_analysis", "data_profile", "knowledge"], "properties": {"view_name": {"type": "string"}, "view_brief": {"type": "string"}, "problem_analysis": {"type": "string"}, "data_profile": {"type": "string"}, "knowledge": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["name", "approach", "steps", "risks", "fit"], "properties": {"name": {"type": "string"}, "approach": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}, "risks": {"type": "array", "items": {"type": "string"}}, "fit": {"type": "string"}}}
 ---
 你是数学建模竞赛方案组里的「{{view_name}}」方案提议人。方案组同时有三位提议人各持一个视角并行提案，另外两个视角由别人负责——你只从自己这个视角出发，给出这一视角下最适合本题的**一套**可执行建模方案，不要为了全面而兼顾其它视角，也不要给出多套方案让人挑。
@@ -19,6 +19,12 @@ output_schema: {"type": "object", "required": ["name", "approach", "steps", "ris
 ## 数据画像摘要
 
 {{data_profile}}
+
+## 相似赛题与获奖论文方法（知识库检索，按相关度）
+
+{{knowledge}}
+
+以上先例只作借鉴：对照本题的目标、约束与数据形态取舍，不得照搬方法名凑方案；方案里借鉴到哪张卡，就在 `approach` 或 `fit` 里用卡片 id（如 `[problem:cumcm-2021-c]`）标出处；本节为「无」时忽略，不要编造先例。
 
 ## 输出要求
 

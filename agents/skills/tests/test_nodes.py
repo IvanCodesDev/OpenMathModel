@@ -19,6 +19,9 @@ from omm_agent_skills import (
     DEFAULT_HARDWARE_NOTE,
     EXPERIMENT_SCRIPT_PATH,
     G3_ACCEPT_OPTION_ID,
+    KNOWLEDGE_MATERIAL_CHARS,
+    NO_KNOWLEDGE_HITS_NOTE,
+    NO_KNOWLEDGE_NOTE,
     PYTHON_TOOL_NAME,
     ROBUSTNESS_PROMPT_ID,
     DataPreparationNode,
@@ -38,6 +41,9 @@ from omm_agent_skills import (
     complete_notation,
     extract_json,
     gpu_hardware_note,
+    knowledge_hit_ids,
+    knowledge_material,
+    knowledge_query,
     load_default_registry,
     missing_symbols,
     plan_assumptions,
@@ -747,6 +753,231 @@ def test_model_planning_without_views_keeps_the_single_call_path(registry):
     assert result.status == NodeResult.NEEDS_REVIEW
     assert result.review_meta is None
     assert [call.prompt_id for call in llm.calls] == ["model_planning.default"]
+
+
+# -- ModelPlanningNode：知识库预检索材料（§10.3 薄版一） ---------------------------
+
+KNOWLEDGE_PROBLEM_HITS_FAKE = [
+    {
+        "id": "problem:cumcm-2021-c",
+        "kind": "problem",
+        "title": "生产企业原材料的订购与运输",
+        "year": 2021,
+        "competition": "全国大学生数学建模竞赛",
+        "code": "2021 CUMCM C",
+        "problem_type": "规划优化",
+        "modeling_directions": ["优化模型", "决策分析"],
+        "keywords": ["订购", "运输"],
+        "source_id": "cumcm_official",
+        "source_url": "https://example.test/cumcm-2021-c",
+        "linked_paper_count": 2,
+        "linked_paper_models": [{"model": "TOPSIS", "count": 2}, {"model": "整数规划", "count": 1}],
+    },
+    {
+        "id": "problem:cumcm-2020-b",
+        "kind": "problem",
+        "title": "穿越沙漠",
+        "year": 2020,
+        "competition": "全国大学生数学建模竞赛",
+        "code": "2020 CUMCM B",
+        "problem_type": "规划优化",
+        "modeling_directions": ["优化模型"],
+        "keywords": [],
+        "source_id": "cumcm_official",
+        "source_url": "https://example.test/cumcm-2020-b",
+        "linked_paper_count": 0,
+        "linked_paper_models": [],
+    },
+]
+
+KNOWLEDGE_PAPER_HITS_FAKE = [
+    {
+        "id": "paper:paper-2021-c-1",
+        "kind": "paper",
+        "title": "基于混合整数规划的订购方案",
+        "year": 2021,
+        "competition": "全国大学生数学建模竞赛",
+        "award": "国家一等奖",
+        "models": ["整数规划", "TOPSIS"],
+        "problem_id": "problem:cumcm-2021-c",
+        "source_id": "cumcm_papers",
+        "source_url": "https://example.test/paper-2021-c-1",
+    },
+    {
+        "id": "paper:no-models",
+        "kind": "paper",
+        "title": "只有封面的论文",
+        "year": 2019,
+        "competition": "COMAP MCM/ICM",
+        "award": "Outstanding Winner",
+        "models": [],
+        "problem_id": None,
+        "source_id": "comap_mcm_icm",
+        "source_url": "https://example.test/no-models",
+    },
+    {
+        "id": "paper:orphan",
+        "kind": "paper",
+        "title": "机场出租车排队仿真",
+        "year": 2018,
+        "competition": "中国研究生数学建模竞赛",
+        "award": "优秀论文",
+        "models": ["排队论", "离散事件仿真"],
+        "problem_id": None,
+        "source_id": "cpmcm_papers",
+        "source_url": "https://example.test/orphan",
+    },
+]
+
+
+class FakeKnowledge:
+    """KnowledgePort 假端口：记录每次查询，按 kind 回固定命中。"""
+
+    def __init__(self, problems=None, papers=None, error=None):
+        self.problems = KNOWLEDGE_PROBLEM_HITS_FAKE if problems is None else problems
+        self.papers = KNOWLEDGE_PAPER_HITS_FAKE if papers is None else papers
+        self.error = error
+        self.queries = []
+
+    def search(self, query, *, kind=None, task_type=None, limit=8):
+        self.queries.append({"query": query, "kind": kind, "task_type": task_type, "limit": limit})
+        if self.error is not None:
+            raise self.error
+        hits = self.problems if kind == "problem" else self.papers
+        return [dict(hit) for hit in hits[:limit]]
+
+    def read(self, card_id):
+        return None
+
+
+def test_knowledge_material_lists_problem_cards_with_linked_models_then_papers():
+    port = FakeKnowledge()
+    material = knowledge_material(port, ANALYSIS_OK)
+
+    lines = material.splitlines()
+    assert lines[0] == (
+        "- [problem:cumcm-2021-c] 2021 全国大学生数学建模竞赛 2021 CUMCM C「生产企业原材料的订购与运输」"
+        "（规划优化｜优化模型、决策分析｜订购、运输）——获奖论文用过：TOPSIS ×2、整数规划"
+    )
+    assert lines[1].startswith("- [problem:cumcm-2020-b] 2020 全国大学生数学建模竞赛 2020 CUMCM B「穿越沙漠」")
+    assert lines[1].endswith("——暂无挂接的获奖论文模型记录")
+    # 论文行：没有 models 的不列；挂在已展示赛题上的不再单列（模型已在赛题行聚合）
+    assert lines[2:] == [
+        "- [paper:orphan] 2018 中国研究生数学建模竞赛「机场出租车排队仿真」（优秀论文）：模型 = 排队论、离散事件仿真"
+    ]
+    assert knowledge_hit_ids(material) == ["problem:cumcm-2021-c", "problem:cumcm-2020-b", "paper:orphan"]
+
+    # query 由题名 / 题型 / 目标 / 子问题拼成；两次检索分别限定 kind
+    assert [entry["kind"] for entry in port.queries] == ["problem", "paper"]
+    assert port.queries[0]["query"] == "门店选址优化 优化 确定最优布局 确定最优布局"
+    assert knowledge_query(ANALYSIS_OK) == port.queries[0]["query"]
+    assert knowledge_material(port, ANALYSIS_OK) == material, "确定性：同分析同材料"
+
+
+def test_knowledge_material_falls_back_to_the_three_kinds_of_none():
+    assert knowledge_material(None, ANALYSIS_OK) == NO_KNOWLEDGE_NOTE
+    assert knowledge_material(FakeKnowledge(problems=[], papers=[]), ANALYSIS_OK) == NO_KNOWLEDGE_HITS_NOTE
+    # 只有没模型记录的论文 → 等于没命中
+    assert knowledge_material(FakeKnowledge(problems=[], papers=[KNOWLEDGE_PAPER_HITS_FAKE[1]]), ANALYSIS_OK) == NO_KNOWLEDGE_HITS_NOTE
+    # 分析里没有可检索的文本 → 不调端口
+    port = FakeKnowledge()
+    assert knowledge_material(port, {"viability": "ok"}) == NO_KNOWLEDGE_HITS_NOTE and port.queries == []
+    # 检索抛错：材料落「无（…失败…）」，不上抛
+    failing = knowledge_material(FakeKnowledge(error=RuntimeError("index corrupt")), ANALYSIS_OK)
+    assert failing.startswith("无（知识库检索失败：") and "index corrupt" in failing
+    assert knowledge_hit_ids(NO_KNOWLEDGE_NOTE) == []
+
+
+def test_knowledge_material_is_bounded_by_whole_lines():
+    many = [
+        {**KNOWLEDGE_PROBLEM_HITS_FAKE[0], "id": f"problem:p{index}", "title": "长标题" * 60}
+        for index in range(4)
+    ]
+    material = knowledge_material(FakeKnowledge(problems=many, papers=[]), ANALYSIS_OK)
+    assert len(material) <= KNOWLEDGE_MATERIAL_CHARS
+    assert all(line.startswith("- [problem:p") for line in material.splitlines())
+    assert material.splitlines()[0].startswith("- [problem:p0]")
+
+
+def test_model_planning_feeds_knowledge_material_to_every_proposer_and_the_audit_slice(registry):
+    port = FakeKnowledge()
+    captured = []
+
+    class RecordingSupervisor(SubagentSupervisor):
+        def spawn(self, spec, runner, **kwargs):
+            captured.append(dict(spec.context_slice))
+            return super().spawn(spec, runner, **kwargs)
+
+    llm = StubLlmPort(fanout_stubs())
+    node = ModelPlanningNode(registry, knowledge=port)
+    assert node.knowledge is port
+    services = make_services(llm)
+    services.extras["subagents"] = RecordingSupervisor()
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    proposer_calls = [call for call in llm.calls if call.prompt_id == "model_planning.proposer"]
+    assert len(proposer_calls) == 3
+    for call in proposer_calls:
+        assert call.variables["knowledge"].startswith("- [problem:cumcm-2021-c]")
+        rendered = registry.get("model_planning.proposer").render(call.variables)
+        assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in rendered
+        assert "获奖论文用过：TOPSIS ×2、整数规划" in rendered
+        assert "不得照搬" in rendered
+    # 归约与规范化不带先例材料
+    for call in llm.calls:
+        if call.prompt_id in ("model_planning.reduce", "model_planning.formalize"):
+            assert "knowledge" not in call.variables
+    # 检索只做一次（fan-out 前），不是每路一次
+    assert [entry["kind"] for entry in port.queries] == ["problem", "paper"]
+    assert len(captured) == 3
+    assert all(
+        slice_["knowledge_hits"] == ["problem:cumcm-2021-c", "problem:cumcm-2020-b", "paper:orphan"]
+        for slice_ in captured
+    )
+
+
+def test_model_planning_without_knowledge_port_renders_the_none_note(registry):
+    llm = StubLlmPort(fanout_stubs())
+    node = ModelPlanningNode(registry)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    proposer_calls = [call for call in llm.calls if call.prompt_id == "model_planning.proposer"]
+    assert all(call.variables["knowledge"] == NO_KNOWLEDGE_NOTE for call in proposer_calls)
+    rendered = registry.get("model_planning.proposer").render(proposer_calls[0].variables)
+    assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）\n\n无（知识库不可用）" in rendered
+
+
+def test_model_planning_single_call_path_also_gets_knowledge(registry):
+    port = FakeKnowledge()
+    llm = StubLlmPort({"model_planning.default": stub_response(PLANNING_OK)})
+    node = ModelPlanningNode(registry, proposer_views=(), knowledge=port)
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert llm.calls[0].variables["knowledge"].startswith("- [problem:cumcm-2021-c]")
+    rendered = registry.get("model_planning.default").render(llm.calls[0].variables)
+    assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in rendered
+
+
+def test_model_planning_knowledge_failure_does_not_block_the_stage(registry):
+    llm = StubLlmPort(fanout_stubs())
+    node = ModelPlanningNode(registry, knowledge=FakeKnowledge(error=RuntimeError("boom")))
+    ctx = make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis())
+
+    result = node.run(ctx, make_fanout_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    proposer_calls = [call for call in llm.calls if call.prompt_id == "model_planning.proposer"]
+    assert all(call.variables["knowledge"].startswith("无（知识库检索失败：boom") for call in proposer_calls)
+    assert result.outputs["quality_warnings"] == [], "知识库是材料不是闸门：不产生质量警告"
 
 
 def test_chosen_plan_honours_the_g1_ledger():

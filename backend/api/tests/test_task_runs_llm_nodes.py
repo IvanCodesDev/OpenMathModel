@@ -360,6 +360,11 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         # 方案阶段三路 Proposer 子代理（并行，各带自己的视角）
         assert json.dumps(ANALYSIS_OUTPUT, ensure_ascii=False) in prompt, "提议人应携带分析产出"
         assert PREPARATION_OUTPUT["profile_summary"] in prompt, "提议人应携带数据画像摘要"
+        # 知识库预检索材料（§10.3 薄版一）：API 装配注入进程内快照库；有快照时
+        # 材料是带出处的卡片行，没快照时是「无（知识库不可用）」——两者都不阻断
+        assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in prompt, "提议人应带先例材料段"
+        knowledge_section = prompt.split("## 相似赛题与获奖论文方法（知识库检索，按相关度）", 1)[1]
+        assert knowledge_section.lstrip().startswith(("- [problem:", "- [paper:", "无（")), "先例材料要么是卡片行要么如实为「无」"
         return _llm_reply(PROPOSAL_OUTPUT_BY_VIEW[proposer.group(1)])
     if "建模规范员" in prompt:
         # 归约之后的规范化（假设表 / 符号表）：拿到的是归约后的 A/B 两案与分析产出。

@@ -296,6 +296,20 @@ def test_build_real_nodes_covers_all_work_states():
     assert set(nodes) == set(WORK_SEQUENCE)
 
 
+def test_build_real_nodes_wires_the_knowledge_library_into_planning():
+    from omm_agent_core import KnowledgePort
+    from omm_agent_tools import KnowledgeLibrary, load_knowledge_library
+
+    planning = build_real_nodes()[TaskState.MODEL_PLANNING]
+    # 缺省 = 进程内缓存的快照库（仓内快照存在时可用；部署包没带快照就是空库，
+    # 装配照常——知识库是材料不是闸门）
+    assert isinstance(planning.knowledge, KnowledgePort)
+    assert planning.knowledge is load_knowledge_library()
+
+    injected = KnowledgeLibrary.empty("test")
+    assert build_real_nodes(knowledge=injected)[TaskState.MODEL_PLANNING].knowledge is injected
+
+
 # -- 全链 + 审批批准 ------------------------------------------------------------
 
 

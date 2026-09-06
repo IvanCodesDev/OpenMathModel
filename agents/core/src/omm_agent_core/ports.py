@@ -73,6 +73,29 @@ class ToolInvoker(Protocol):
     ) -> ToolResult: ...
 
 
+@runtime_checkable
+class KnowledgePort(Protocol):
+    """Read-only access to the OMM card knowledge base (design §10.3).
+
+    Results are plain dicts so the core stays free of the card schema; every
+    hit carries provenance (``id`` / ``kind`` / ``title`` / ``source_id`` /
+    ``source_url``) because a card without a source is not knowledge (§10.3.5).
+    ``kind`` narrows to one card kind (``problem`` / ``paper``); ``task_type``
+    narrows to cards whose problem type / modeling directions mention it.
+    """
+
+    def search(
+        self,
+        query: str,
+        *,
+        kind: str | None = None,
+        task_type: str | None = None,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]: ...
+
+    def read(self, card_id: str) -> dict[str, Any] | None: ...
+
+
 # --------------------------------------------------------------------------
 # Zero-infrastructure defaults (tests, local drivers)
 # --------------------------------------------------------------------------

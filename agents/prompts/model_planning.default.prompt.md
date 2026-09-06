@@ -2,8 +2,8 @@
 id: model_planning.default
 stage: MODEL_PLANNING
 variant: default
-version: 3
-input_schema: {"type": "object", "required": ["problem_analysis"], "properties": {"problem_analysis": {"type": "string"}, "data_profile": {"type": "string"}}}
+version: 4
+input_schema: {"type": "object", "required": ["problem_analysis"], "properties": {"problem_analysis": {"type": "string"}, "data_profile": {"type": "string"}, "knowledge": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["plans", "recommended_plan_id"], "properties": {"plans": {"type": "array", "items": {"type": "object", "required": ["id", "name", "approach", "steps", "risks"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "approach": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}, "risks": {"type": "array", "items": {"type": "string"}}}}}, "recommended_plan_id": {"type": "string"}, "rationale": {"type": "string"}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的资深教练。基于以下问题分析结果与数据画像，给出两套可执行的建模方案供用户确认。
@@ -15,6 +15,12 @@ output_schema: {"type": "object", "required": ["plans", "recommended_plan_id"], 
 ## 数据画像摘要
 
 {{data_profile}}
+
+## 相似赛题与获奖论文方法（知识库检索，按相关度）
+
+{{knowledge}}
+
+以上先例只作借鉴：对照本题的目标、约束与数据形态取舍，不得照搬方法名凑方案；方案里借鉴到哪张卡，就在 `approach` 或 `rationale` 里用卡片 id（如 `[problem:cumcm-2021-c]`）标出处；本节为「无」时忽略，不要编造先例。
 
 ## 输出要求
 

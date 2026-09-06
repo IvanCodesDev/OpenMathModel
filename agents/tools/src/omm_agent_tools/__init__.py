@@ -14,6 +14,16 @@ from .invoker import (
     failure_detail,
     summarize,
 )
+from .knowledge import (
+    KNOWLEDGE_LIBRARY_ENV,
+    KNOWLEDGE_READ_TOOL,
+    KNOWLEDGE_SEARCH_TOOL,
+    KnowledgeCard,
+    KnowledgeLibrary,
+    knowledge_tool_specs,
+    load_knowledge_library,
+    resolve_library_path,
+)
 from .python_runner import PythonSandbox, probe_sandbox_gpu
 from .registry import (
     TIERS,
@@ -38,6 +48,11 @@ __all__ = [
     "EventRecorder",
     "PROFILE_MAX_ROWS",
     "IdempotencyCache",
+    "KNOWLEDGE_LIBRARY_ENV",
+    "KNOWLEDGE_READ_TOOL",
+    "KNOWLEDGE_SEARCH_TOOL",
+    "KnowledgeCard",
+    "KnowledgeLibrary",
     "MAX_TURN_PARALLELISM",
     "PythonSandbox",
     "RecordingInvoker",
@@ -55,8 +70,11 @@ __all__ = [
     "env_fingerprint",
     "execute_parallel",
     "failure_detail",
+    "knowledge_tool_specs",
+    "load_knowledge_library",
     "probe_sandbox_gpu",
     "profile_csv_text",
+    "resolve_library_path",
     "sandbox_workspace_specs",
     "summarize",
     "table_profile_spec",

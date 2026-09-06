@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
 
-from omm_agent_core import NodeContext, NodeResult, NodeServices, TaskState
+from omm_agent_core import KnowledgePort, NodeContext, NodeResult, NodeServices, TaskState
 from omm_agent_core.errors import AgentError
 from omm_agent_core.models import ToolResult
 from omm_agent_harness import (
@@ -313,6 +313,128 @@ FORMALIZE_PROMPT_ID = "model_planning.formalize"
 #: 提议人 Envelope 的 output_schema_id（§8.3 协议字段；校验器在本模块）。
 PROPOSAL_SCHEMA_ID = "model-planning-proposal.v1"
 
+# ── 知识库预检索材料（§10.3 薄版一）：fan-out 前节点用题面确定性检索一次 ────────
+#: 「相似赛题与获奖论文方法」材料的三种「无」：端口未接 / 没命中 / 检索抛错，
+#: 提示词按「无」忽略本节；节点永不因知识库而失败。
+NO_KNOWLEDGE_NOTE = "无（知识库不可用）"
+NO_KNOWLEDGE_HITS_NOTE = "无（知识库未命中相似赛题或获奖论文）"
+KNOWLEDGE_PROBLEM_HITS = 4
+KNOWLEDGE_PAPER_HITS = 3
+#: 检索 query 的字数上限：题名 + 题型 + 目标 + 子问题已足够定位相似赛题，
+#: 再长只会把 BM25 稀释到通用词上。
+KNOWLEDGE_QUERY_CHARS = 600
+#: 材料整段上限（进 Proposer prompt，三路各一份，必须有界）。
+KNOWLEDGE_MATERIAL_CHARS = 1500
+_KNOWLEDGE_CARD_REF = re.compile(r"\[((?:problem|paper):[^\]\s]+)\]")
+
+
+def knowledge_query(analysis: Mapping[str, Any]) -> str:
+    """问题分析产出 → 检索 query（题名 / 题型 / 目标 / 子问题文本；截断到上限）。"""
+    parts: list[str] = [
+        str(analysis.get("title") or "").strip(),
+        str(analysis.get("problem_type") or "").strip(),
+    ]
+    parts.extend(_clean_strs(analysis.get("objectives")))
+    for item in analysis.get("subquestions") or []:
+        if isinstance(item, Mapping):
+            parts.append(str(item.get("text") or "").strip())
+    query = " ".join(part for part in parts if part)
+    return query[:KNOWLEDGE_QUERY_CHARS]
+
+
+def _knowledge_problem_line(hit: Mapping[str, Any]) -> str:
+    facets = [
+        str(hit.get("problem_type") or "").strip(),
+        "、".join(_clean_strs(hit.get("modeling_directions"))),
+        "、".join(_clean_strs(hit.get("keywords"))),
+    ]
+    facet_text = "｜".join(facet for facet in facets if facet)
+    head = " ".join(
+        str(part).strip()
+        for part in (hit.get("year"), hit.get("competition"), hit.get("code"))
+        if part not in (None, "")
+    )
+    line = f"- [{hit['id']}] {head}「{hit.get('title', '')}」"
+    if facet_text:
+        line += f"（{facet_text}）"
+    models = [
+        f"{item['model']} ×{item['count']}" if int(item.get("count") or 0) > 1 else str(item["model"])
+        for item in hit.get("linked_paper_models") or []
+        if isinstance(item, Mapping) and item.get("model")
+    ]
+    if models:
+        line += "——获奖论文用过：" + "、".join(models)
+    else:
+        line += "——暂无挂接的获奖论文模型记录"
+    return line
+
+
+def _knowledge_paper_line(hit: Mapping[str, Any]) -> str:
+    head = " ".join(
+        str(part).strip() for part in (hit.get("year"), hit.get("competition")) if part not in (None, "")
+    )
+    award = str(hit.get("award") or "").strip()
+    line = f"- [{hit['id']}] {head}「{hit.get('title', '')}」"
+    if award:
+        line += f"（{award}）"
+    return line + "：模型 = " + "、".join(_clean_strs(hit.get("models")))
+
+
+def knowledge_material(port: KnowledgePort | None, analysis: Mapping[str, Any]) -> str:
+    """「相似赛题与获奖论文方法」材料：top-N 赛题卡（附挂接论文的模型）+ 有模型记录的论文卡。
+
+    确定性、无 LLM 调用；端口缺席 / 无命中 / 检索抛错分别落三种「无」文案，
+    节点照常推进。整段有界（``KNOWLEDGE_MATERIAL_CHARS``，按整行裁）。
+    """
+    if port is None:
+        return NO_KNOWLEDGE_NOTE
+    query = knowledge_query(analysis)
+    if not query:
+        return NO_KNOWLEDGE_HITS_NOTE
+    try:
+        problems = port.search(query, kind="problem", limit=KNOWLEDGE_PROBLEM_HITS)
+        papers = port.search(query, kind="paper", limit=KNOWLEDGE_PAPER_HITS * 4)
+    except Exception as exc:  # noqa: BLE001 — 知识库是材料不是闸门：检索失败只记「无」
+        return f"无（知识库检索失败：{exc}）"
+
+    lines: list[str] = []
+    shown_problems: set[str] = set()
+    for hit in problems:
+        if not isinstance(hit, Mapping) or not hit.get("id"):
+            continue
+        shown_problems.add(str(hit["id"]))
+        lines.append(_knowledge_problem_line(hit))
+    paper_lines = 0
+    for hit in papers:
+        if paper_lines >= KNOWLEDGE_PAPER_HITS:
+            break
+        if not isinstance(hit, Mapping) or not hit.get("id") or not _clean_strs(hit.get("models")):
+            continue
+        # 已展示赛题的挂接论文：模型已在赛题行聚合过，不再单列
+        if str(hit.get("problem_id") or "") in shown_problems:
+            continue
+        lines.append(_knowledge_paper_line(hit))
+        paper_lines += 1
+    if not lines:
+        return NO_KNOWLEDGE_HITS_NOTE
+
+    kept: list[str] = []
+    total = 0
+    for line in lines:
+        if kept and total + len(line) + 1 > KNOWLEDGE_MATERIAL_CHARS:
+            break
+        kept.append(line[:KNOWLEDGE_MATERIAL_CHARS])
+        total += len(kept[-1]) + 1
+    return "\n".join(kept)
+
+
+def knowledge_hit_ids(material: str) -> list[str]:
+    """材料文本里引用的卡片 id（去重、保序）：进 spawn 的 context_slice 供审计。"""
+    seen: dict[str, None] = {}
+    for match in _KNOWLEDGE_CARD_REF.finditer(material):
+        seen.setdefault(match.group(1), None)
+    return list(seen)
+
 #: 假设表 / 符号表的枚举与上限（与 plan-proposal 契约 $defs 对齐；这里只按契约
 #: 口径归一化，不 import contracts —— agents 域不依赖 contracts 包）。
 GLOBAL_ASSUMPTION_SCOPE = "global"
@@ -550,12 +672,20 @@ class ModelPlanningNode(LlmSkillNode):
         registry: PromptRegistry,
         require_confirmation: bool = True,
         proposer_views: Sequence[ProposerView] = PROPOSER_VIEWS,
+        knowledge: KnowledgePort | None = None,
     ) -> None:
         super().__init__(registry)
         # Plan confirmation is the product's human gate (roadmap: 方案 A/B 生成、
         # 用户确认). Evals/automation may disable it explicitly.
         self._require_confirmation = require_confirmation
         self._views = tuple(proposer_views)
+        # 卡片知识库端口（§10.3）：装配方注入 omm_agent_tools.KnowledgeLibrary；
+        # 缺席时材料落「无（知识库不可用）」，方案阶段照常。
+        self._knowledge = knowledge
+
+    @property
+    def knowledge(self) -> KnowledgePort | None:
+        return self._knowledge
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value)
@@ -573,6 +703,8 @@ class ModelPlanningNode(LlmSkillNode):
         return {
             "problem_analysis": json.dumps(analysis, ensure_ascii=False),
             "data_profile": data_profile,
+            # 相似赛题与获奖论文方法：进提议人 prompt 与单次回落；归约 / 规范化不带
+            "knowledge": knowledge_material(self._knowledge, analysis),
         }
 
     def to_result(self, parsed: dict[str, Any], attempts: int) -> NodeResult:
@@ -672,6 +804,7 @@ class ModelPlanningNode(LlmSkillNode):
         )
         template = self._registry.get(PROPOSER_PROMPT_ID)
         analysis = ctx.prior_outputs.get(TaskState.PROBLEM_ANALYSIS.value) or {}
+        knowledge_hits = knowledge_hit_ids(str(variables.get("knowledge") or ""))
 
         def spawn_one(
             view: ProposerView,
@@ -706,6 +839,8 @@ class ModelPlanningNode(LlmSkillNode):
                             "view": view.id,
                             "problem_analysis": analysis,
                             "data_profile": variables["data_profile"],
+                            # 预检索命中的卡片 id：审计「提议人看过哪些先例」
+                            "knowledge_hits": knowledge_hits,
                         },
                         toolset=(),
                         tool_tier="readonly",

@@ -63,6 +63,7 @@ from omm_agent_tools import (
     RecordingInvoker,
     TaskWorkspace,
     ToolRegistry,
+    load_knowledge_library,
     probe_sandbox_gpu,
     sandbox_workspace_specs,
     table_profile_spec,
@@ -868,7 +869,11 @@ def _llm_wiring_impl(
         for state, node in {
             TaskState.PROBLEM_ANALYSIS: _GoalProblemAnalysisNode(registry),
             TaskState.DATA_PREPARATION: _ParamsDataPreparationNode(registry),
-            TaskState.MODEL_PLANNING: ModelPlanningNode(registry),
+            # 方案阶段的先例材料：进程内缓存的卡片知识库（找不到快照就是空库，
+            # 材料落「无」，不影响推进）
+            TaskState.MODEL_PLANNING: ModelPlanningNode(
+                registry, knowledge=load_knowledge_library()
+            ),
             TaskState.EXPERIMENTING: ExperimentExecutionNode(
                 registry,
                 available_packages=_sandbox_packages(),

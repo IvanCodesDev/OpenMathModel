@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from omm_agent_core import LlmPort, NodeContext, StepNode, TaskState
+from omm_agent_core import KnowledgePort, LlmPort, NodeContext, StepNode, TaskState
 from omm_agent_skills import (
     DataPreparationNode,
     ExperimentExecutionNode,
@@ -29,6 +29,7 @@ from omm_agent_skills import (
     ValidationNode,
     load_default_registry,
 )
+from omm_agent_tools import load_knowledge_library
 
 from .runtime import WorkerConfig, WorkerRuntime
 
@@ -77,12 +78,17 @@ def build_real_nodes(
     *,
     unattended: bool = False,
     prompts: PromptRegistry | None = None,
+    knowledge: KnowledgePort | None = None,
 ) -> dict[TaskState, StepNode]:
     """六阶段真实节点注册表。
 
     ``unattended=True`` 关闭两个必停的人工审批门（方案确认 G1、定稿交付 G4，
     require_confirmation=False），供无人值守评测整链直跑；默认保持产品语义：
     方案产出后停在 REVIEW_REQUESTED 等待确认，论文发布后再停一次等确认交付。
+
+    ``knowledge`` 缺省时装配进程内缓存的卡片知识库（``omm_agent_tools.
+    load_knowledge_library``：环境变量 / 仓内快照；找不到就是空库，方案阶段的
+    先例材料落「无」，不是装配缺陷）。
     """
     registry = prompts or load_default_registry()
     missing = REQUIRED_PROMPT_IDS - set(registry.ids())
@@ -95,7 +101,9 @@ def build_real_nodes(
         TaskState.PROBLEM_ANALYSIS: GoalProblemAnalysisNode(registry),
         TaskState.DATA_PREPARATION: DataPreparationNode(registry),
         TaskState.MODEL_PLANNING: ModelPlanningNode(
-            registry, require_confirmation=not unattended
+            registry,
+            require_confirmation=not unattended,
+            knowledge=knowledge if knowledge is not None else load_knowledge_library(),
         ),
         TaskState.EXPERIMENTING: ExperimentExecutionNode(registry),
         TaskState.VALIDATING: ValidationNode(registry),
