@@ -30,6 +30,7 @@ from omm_agent_skills import (
     EXPERIMENT_SCRIPT_PATH,
     PROPOSER_PROMPT_ID,
     PYTHON_TOOL_NAME,
+    DataPreparationNode,
     ExperimentExecutionNode,
     PromptRegistry,
     StubLlmPort,
@@ -283,15 +284,19 @@ def sandbox_script(final, code=EXPERIMENT_CODE):
 
 def stage_chat_scripts(**overrides):
     """沙盒三节点的会话脚本。worker 运行不下发附件数据（data/ 为空），
-    清洗如实跳过，清洗脚本仅作兜底不应被消费；实验、实验审稿与稳健性复跑真的走到。"""
+    清洗如实跳过（清洗脚本与清洗审稿人仅作兜底，不应被消费）；实验、实验审稿、
+    稳健性复跑与检验审稿真的走到。"""
     scripts = {
         CLEANING_PROMPT_ID: sandbox_script({"summary": "无数据文件，不应走到这里"}),
+        DataPreparationNode.review_prompt_id: [stub_response(REVIEW_OK)],
         # 方案阶段三路提议人：每路一次 knowledge_search（经 ToolBus 留痕）+ 终答
         PROPOSER_PROMPT_ID: [proposer_chat],
         ExperimentExecutionNode.prompt_id: sandbox_script(EXPERIMENT_OK),
         # 实验审稿人（独立上下文的 reviewer 子代理）：不查工具，直接给接受结论
         ExperimentExecutionNode.review_prompt_id: [stub_response(REVIEW_OK)],
         ValidationNode.sandbox_prompt_id: sandbox_script(ROBUSTNESS_OK, code=ROBUSTNESS_CODE),
+        # 检验脚本的审稿人：同样一轮接受
+        ValidationNode.review_prompt_id: [stub_response(REVIEW_OK)],
     }
     scripts.update(overrides)
     return scripts
@@ -525,7 +530,9 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     # （§8.4 生成者-评审者：同一份脚本再跑一次给审稿人核对）→ 审稿任务卡的工作区
     # 清单 ws_list → reviewer 子代理 spawn / result 审计 → ws_write 落最终脚本；
     # 验证阶段：ws_list（脚本在场）→ ws_read（脚本正文进任务卡）→ env_probe →
-    # 监督者 spawn 审计 → 沙盒 python_run → 断言取证 ws_list → 监督者 result 审计。
+    # 监督者 spawn 审计 → 沙盒 python_run → 断言取证 ws_list → 监督者 result 审计
+    # → 检验脚本自己的审稿环：确定性复跑 python_run → 审稿任务卡 ws_list →
+    # reviewer 子代理 spawn / result 审计。
     assert [e.payload["tool"] for e in tool_events] == [
         "ws_list",
         "ws_list",
@@ -544,8 +551,12 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
         "python_run",
         "ws_list",
         "subagent:sandbox",
+        "python_run",
+        "ws_list",
+        "subagent:reviewer",
+        "subagent:reviewer",
     ]
-    experiment_event, rerun_event, robustness_event = [
+    experiment_event, rerun_event, robustness_event, robustness_rerun_event = [
         e for e in tool_events if e.payload["tool"] == "python_run"
     ]
     assert experiment_event.payload["status"] == "succeeded"
@@ -556,6 +567,8 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     assert robustness_event.payload["status"] == "succeeded"
     (validation_step,) = steps_for(snapshot, TaskState.VALIDATING)
     assert robustness_event.payload["step_id"] == validation_step.step_id
+    assert robustness_rerun_event.payload["status"] == "succeeded"
+    assert robustness_rerun_event.payload["step_id"] == validation_step.step_id
     spawn_event, result_event = [
         e for e in tool_events if e.payload["tool"] == "subagent:sandbox"
     ]
@@ -563,14 +576,20 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     assert result_event.payload["phase"] == "result"
     assert result_event.payload["envelope_status"] == "done"
     # 实验审稿人：只读 tier、只拿工作区两个只读工具 + 知识库两个只读工具（worker
-    # 装配把方案提议人共用的知识库端口也接给了实验节点），一轮接受、复跑一致
-    review_spawn, review_result = [
+    # 装配把方案提议人共用的知识库端口也接给了实验节点），一轮接受、复跑一致；
+    # 检验审稿人：同样只读 tier，只有工作区两个只读工具（不接知识工具）
+    review_spawn, review_result, checks_review_spawn, checks_review_result = [
         e for e in tool_events if e.payload["tool"] == "subagent:reviewer"
     ]
     assert review_spawn.payload["phase"] == "spawn"
     assert review_spawn.payload["tool_tier"] == "readonly"
     assert review_spawn.payload["toolset"] == ["ws_read", "ws_list", "knowledge_search", "knowledge_read"]
     assert review_result.payload["envelope_status"] == "done"
+    assert checks_review_spawn.payload["phase"] == "spawn"
+    assert checks_review_spawn.payload["tool_tier"] == "readonly"
+    assert checks_review_spawn.payload["toolset"] == ["ws_read", "ws_list"]
+    assert checks_review_spawn.payload["output_schema_id"] == "robustness-review.v1"
+    assert checks_review_result.payload["envelope_status"] == "done"
     review = snapshot.outputs["EXPERIMENTING"]["review"]
     assert review["executed"] is True and review["verdict"] == "accept"
     assert review["rounds"] == 1 and review["stalemate"] is False
@@ -581,6 +600,13 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     assert "实验审稿人" in review_card and EXPERIMENT_CODE in review_card
     assert "核心指标与首跑逐键一致" in review_card
     assert "- knowledge_search：" in next(m["content"] for m in review_chat.messages if m["role"] == "user")
+    checks_review = snapshot.outputs["VALIDATING"]["robustness"]["review"]
+    assert checks_review["executed"] is True and checks_review["verdict"] == "accept"
+    assert checks_review["rounds"] == 1 and checks_review["rerun"]["consistent"] is True
+    (checks_review_chat,) = chat_calls(llm, ValidationNode.review_prompt_id)
+    checks_card = next(m["content"] for m in checks_review_chat.messages if m["role"] == "system")
+    assert "稳健性检验审稿人" in checks_card and ROBUSTNESS_CODE in checks_card
+    assert chat_calls(llm, DataPreparationNode.review_prompt_id) == [], "没清洗就没有清洗审稿"
 
 
 def test_unattended_mode_completes_without_review(tmp_path):

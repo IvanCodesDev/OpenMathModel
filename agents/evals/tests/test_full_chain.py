@@ -276,15 +276,17 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
             "env_probe",
             PYTHON_TOOL_NAME,
             "ws_list",
+            PYTHON_TOOL_NAME,  # 检验脚本的复跑核对（§8.4 三个沙盒消费方同一套机件）
+            "ws_list",  # 检验审稿任务卡的工作区清单
         ],
     }
     assert all(event.payload["status"] == "succeeded" for event in all_tool_events)
 
     # The invoker saw the experiment script twice (the model's run through the
     # tool envelope, then the node's deterministic re-run for the reviewer)
-    # and the validation script once; the validation stage read back exactly
-    # the script the experiment stage staged.
-    experiment_call, rerun_call, validation_call = [
+    # and the validation script twice for the same reason; the validation
+    # stage read back exactly the script the experiment stage staged.
+    experiment_call, rerun_call, validation_call, validation_rerun = [
         entry for entry in completed_session.tools.calls if entry[2] == PYTHON_TOOL_NAME
     ]
     assert experiment_call[:3] == (
@@ -297,6 +299,21 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
     assert rerun_call[3]["code"] == CANNED_EXPERIMENT_CODE
     assert validation_call[1] == validation_step.step_id
     assert validation_call[3]["code"] == CANNED_VALIDATION_CODE
+    assert validation_rerun[:3] == validation_call[:3]
+    assert validation_rerun[3]["code"] == CANNED_VALIDATION_CODE
+    # 检验脚本的审稿结论落在 robustness 里：一轮接受、复跑一致；投影不带它（契约不变）
+    checks_review = completed_session.snapshot.outputs[TaskState.VALIDATING.value]["robustness"]["review"]
+    assert checks_review["executed"] is True and checks_review["verdict"] == "accept"
+    assert checks_review["rounds"] == 1 and checks_review["rerun"]["consistent"] is True
+    checks_reviewer_card = next(
+        m["content"]
+        for call in completed_session.llm.chat_calls
+        if call.label == "validating_review.default"
+        for m in call.messages
+        if m["role"] == "system"
+    )
+    assert "稳健性检验审稿人" in checks_reviewer_card
+    assert CANNED_VALIDATION_CODE in checks_reviewer_card and CANNED_EXPERIMENT_CODE in checks_reviewer_card
     # 审稿结论随实验产出落库：一轮接受、复跑一致、一条 minor 意见；G3 不因审稿而开
     review = completed_session.snapshot.outputs[TaskState.EXPERIMENTING.value]["review"]
     assert review["executed"] is True and review["verdict"] == "accept"

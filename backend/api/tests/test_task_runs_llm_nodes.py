@@ -371,6 +371,27 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
     """
     messages = _wire_messages(request)
     system = _system_of(messages)
+    # 三位审稿人的角色卡正文都提到自己所审的那位工程师（清洗 / 实验 / 检验），
+    # 所以审稿人锚点必须先于对应工程师锚点判断
+    if "数据清洗审稿人" in system:
+        assert CLEANING_CODE in system, "清洗审稿任务卡应携带清洗脚本正文"
+        assert '"rows_deleted_ratio": 0.0' in system, "清洗审稿任务卡应携带系统换算的影响面"
+        assert "核心指标与首跑逐键一致" in system, "节点应先确定性复跑清洗脚本再派审稿人"
+        assert CLEANING_OUTPUT["summary"] in system, "审稿人拿清洗工程师的自述"
+        assert "- cleaned/orders.csv" in system, "工作区清单里应看到清洗产物"
+        opening = messages[1]["content"]
+        assert messages[1]["role"] == "user" and "- ws_read：" in opening
+        assert "python_run" not in opening and "knowledge_search" not in opening, "清洗审稿人只读、不接知识工具"
+        return _llm_reply(REVIEW_OUTPUT)
+    if "稳健性检验审稿人" in system:
+        assert ROBUSTNESS_CODE in system and EXPERIMENT_CODE in system, "检验审稿任务卡应携带检验脚本与实验脚本"
+        assert '"id": "bootstrap"' in system and '"threshold": 0.15' in system, "检验审稿任务卡应携带归一化后的 checks"
+        assert "核心指标与首跑逐键一致" in system, "节点应先确定性复跑检验脚本再派审稿人"
+        assert ROBUSTNESS_OUTPUT["summary"] in system, "审稿人拿检验工程师的自述"
+        opening = messages[1]["content"]
+        assert messages[1]["role"] == "user" and "- ws_read：" in opening
+        assert "python_run" not in opening and "knowledge_search" not in opening, "检验审稿人只读、不接知识工具"
+        return _llm_reply(REVIEW_OUTPUT)
     if "数据清洗执行工程师" in system:
         assert "- data/orders.csv" in system, "清洗任务卡应携带待清洗数据文件清单"
         return _sandbox_reply(messages, CLEANING_CODE, CLEANING_OUTPUT)
@@ -539,13 +560,21 @@ def test_attachment_csv_is_profiled_into_data_stage_prompt(client, monkeypatch):
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
     logs = [event["payload"] for event in events if event["type"] == "run.log"]
     cleaning_runs = [entry for entry in logs if entry.get("tool") == "python_run"]
-    assert cleaning_runs and cleaning_runs[0]["status"] == "succeeded"
+    assert [entry["status"] for entry in cleaning_runs] == ["succeeded", "succeeded"], (
+        "清洗脚本首跑 + 审稿前的确定性复跑各留一条痕"
+    )
     cleaning_calls = [
         entry
         for entry in logs
         if entry.get("kind") == "llm_call" and entry.get("prompt_id") == "data_cleaning.sandbox"
     ]
     assert len(cleaning_calls) == 2, "清洗会话恰两次模型调用（发码 + 终答）"
+    review_calls = [
+        entry
+        for entry in logs
+        if entry.get("kind") == "llm_call" and entry.get("prompt_id") == "data_cleaning_review.default"
+    ]
+    assert len(review_calls) == 1, "清洗审稿人（§8.4 清洗消费方）恰一次模型调用并按自己的 prompt_id 记账"
 
 
 def test_provider_billing_error_fails_cleanly_without_traceback(client, monkeypatch):
@@ -821,7 +850,9 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
         elif "实验工程师" in system:
             seen["experiment_system"] = system
             return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
-        if "稳健性检验工程师" in system:
+        if "稳健性检验审稿人" in system:
+            seen["checks_review_system"] = system
+        elif "稳健性检验工程师" in system:
             seen["robustness_system"] = system
         prompt = messages[-1]["content"]
         if "论文的总编" in prompt:
@@ -863,6 +894,10 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
     assert "- G2【待检验｜影响低｜全局】调度点之间需求独立" in seen["robustness_system"]
     assert "- B1【待检验｜影响中｜方案 B】" in seen["robustness_system"]
     assert "A1【" not in seen["robustness_system"]
+    # 检验审稿人拿的也是选案 B 的切片：须检验假设同一份，方案 JSON 是 B
+    assert '"id": "B"' in seen["checks_review_system"] and '"id": "A"' not in seen["checks_review_system"]
+    assert "- B1【待检验｜影响中｜方案 B】" in seen["checks_review_system"]
+    assert "A1【" not in seen["checks_review_system"]
     # 符号表随选案进实验任务卡（切片 4）：共享 + B 的记号（模型写的「Plan B」已归一到 B），A 的 x_i / z 不进
     assert "## 模型符号" in seen["experiment_system"]
     assert "- d_i（参数｜共享）＝调度点 i 的需求量［单位：辆；取值：≥ 0］" in seen["experiment_system"]
@@ -1358,7 +1393,9 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
     for entry in runs:
         by_node.setdefault(node_of_step[entry["step_id"]], []).append(entry["status"])
     assert by_node["EXPERIMENTING"] == ["failed", "succeeded", "succeeded"]
-    assert by_node["VALIDATING"] == ["succeeded"], "修好的脚本进工作区后检验阶段照常复跑"
+    assert by_node["VALIDATING"] == ["succeeded", "succeeded"], (
+        "修好的脚本进工作区后检验阶段照常复跑，检验脚本再被确定性复跑一次给审稿人"
+    )
 
 
 def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
@@ -1388,10 +1425,16 @@ def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
     )
 
     experiment_cards: list[str] = []
+    cleaning_review_cards: list[str] = []
 
     def router(request: httpx.Request) -> httpx.Response:
         messages = _wire_messages(request)
         system = _system_of(messages)
+        if "数据清洗审稿人" in system:
+            # 审稿人拿的是这条链自己的重清洗脚本与系统换算的 25% 影响面，
+            # 不能落到 _stage_router 里按默认脚本断言的分支
+            cleaning_review_cards.append(system)
+            return _llm_reply(REVIEW_OUTPUT)
         if "数据清洗执行工程师" in system:
             return _sandbox_reply(
                 messages, heavy_cleaning_code, {"summary": "剔除异常行 25% 后落 cleaned/"}
@@ -1439,11 +1482,21 @@ def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
     final = wait_until(client, run["id"], run_status_is(client, run["id"], "COMPLETED"))
     assert final["status"] == "COMPLETED"
 
+    # 清洗脚本验收通过后先复跑核对、再派独立审稿人（§8.4 清洗消费方，切片 11）：
+    # 审稿人看到的是这条链自己的脚本与系统按标记行换算出的影响面
+    assert len(cleaning_review_cards) == 1, "清洗审稿人只派一轮（接受即止）"
+    review_card = cleaning_review_cards[0]
+    assert heavy_cleaning_code in review_card, "清洗审稿任务卡应携带本链的清洗脚本正文"
+    assert '"rows_deleted_ratio": 0.25' in review_card and '"rows_after": 30' in review_card
+    assert "核心指标与首跑逐键一致" in review_card, "先确定性复跑再派审稿人"
+    assert "剔除异常行 25% 后落 cleaned/" in review_card, "审稿人拿清洗工程师的自述"
+
     assert experiment_cards, "实验阶段应已执行"
     card = experiment_cards[0]
     assert "adopt_cleaned" in card, "G2 决策的选项 id 应进实验任务卡"
     assert "用户已确认采用清洗后的数据" in card
     assert "- cleaned/orders.csv" in card, "清洗产物目录应进入工作区数据文件清单"
+    assert '"verdict": "accept"' in card, "清洗审稿结论随数据准备产出进实验任务卡"
 
 
 def _g3_router(passed_flags: tuple[bool, ...], outline_prompts: list[str]):
@@ -1452,6 +1505,12 @@ def _g3_router(passed_flags: tuple[bool, ...], outline_prompts: list[str]):
     def router(request: httpx.Request) -> httpx.Response:
         messages = _wire_messages(request)
         system = _system_of(messages)
+        if "稳健性检验审稿人" in system:
+            # 检验审稿人拿的是这条链按给定标志生成的脚本（含未通过项），接受：
+            # 检查项未通过不是驳回理由，那是 G3 闸门的事
+            assert robustness_code(*passed_flags) in system, "检验审稿任务卡应携带本链的检验脚本"
+            assert '"passed": false' in system or all(passed_flags), "归一化 checks 里应如实带未通过项"
+            return _llm_reply(REVIEW_OUTPUT)
         if "稳健性检验工程师" in system:
             return _sandbox_reply(
                 messages,

@@ -528,6 +528,9 @@ def build_full_chain_llm(
             ValidationNode.sandbox_prompt_id: [
                 canned_sandbox_agent(CANNED_ROBUSTNESS, CANNED_VALIDATION_CODE)
             ],
+            # 检验脚本的独立审稿人：同一份接受结论（意见照录）。清洗审稿人不在本
+            # 会话里：评测不下发数据文件，清洗如实跳过，也就没有清洗审稿。
+            ValidationNode.review_prompt_id: [stub_response(CANNED_REVIEW)],
         },
     )
 
@@ -657,15 +660,16 @@ FULL_CHAIN_PROMPT_SEQUENCE = [
 ]
 
 #: Conversational (``chat_text``) labels in order: one wave of a sandbox agent
-#: = one tool turn + one final answer; the experiment agent first, then the
+#: = one tool turn + one final answer; the experiment agent first, then its
 #: independent reviewer (one verdict call, no tool turn), then the validation
-#: stage's robustness re-run.
+#: stage's robustness re-run followed by the checks' own reviewer.
 FULL_CHAIN_CHAT_SEQUENCE = [
     "experiment_code.sandbox",
     "experiment_code.sandbox",
     "experiment_review.default",
     "validating.sandbox",
     "validating.sandbox",
+    "validating_review.default",
 ]
 
 #: Exact event-type trajectory of the full-chain happy path (review gate,
@@ -711,6 +715,9 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.TOOL_CALLED,  # env_probe（报告的环境指纹）
     EventType.TOOL_CALLED,  # python_run（稳健性检查脚本，scripted validation run）
     EventType.TOOL_CALLED,  # ws_list（断言证据）
+    # 检验脚本自己的生成者-评审者环：复跑核对 + 独立审稿（一轮接受）
+    EventType.TOOL_CALLED,  # python_run（复跑核对）
+    EventType.TOOL_CALLED,  # ws_list（审稿任务卡的工作区文件）
     EventType.ARTIFACT_PRODUCED,  # validation_checks.py (generated code, reproducible)
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> PAPER_WRITING

@@ -13,7 +13,7 @@ from omm_agent_core import (
     TaskState,
     ToolResult,
 )
-from omm_agent_harness import SubagentSupervisor
+from omm_agent_harness import BudgetGovernor, RunBudget, SubagentSupervisor
 from omm_agent_skills import (
     CLEANING_PROMPT_ID,
     DEFAULT_HARDWARE_NOTE,
@@ -1680,25 +1680,37 @@ def cleaning_stdout(**kwargs):
     return f"OMM_METRICS_JSON: {cleaning_metrics(**kwargs)}\n"
 
 
-def cleaning_llm(plan=None, summary="按方案清洗完成"):
-    """数据阶段的双通道端口：模板调用出方案，会话调用跑清洗。"""
+def cleaning_llm(plan=None, summary="按方案清洗完成", sandbox=None, review=None):
+    """数据阶段的三通道端口：模板调用出方案，会话调用跑清洗，再一路会话给审稿人。
+
+    审稿人缺省直接接受（意见照录）；要演驳回 / 僵持的用例自带 ``review`` 脚本。
+    """
     return StubLlmPort(
         {"data_preparation.default": stub_response(plan or PREPARATION_OK)},
         chat_scripts={
-            CLEANING_PROMPT_ID: sandbox_script({"summary": summary}, code=CLEANING_CODE)
+            CLEANING_PROMPT_ID: sandbox
+            if sandbox is not None
+            else sandbox_script({"summary": summary}, code=CLEANING_CODE),
+            DataPreparationNode.review_prompt_id: (
+                review if review is not None else [stub_response(REVIEW_ACCEPT)]
+            ),
         },
     )
 
 
-def cleaning_services(llm, tools):
+def cleaning_services(llm, tools, audits=None, governor=None):
     services = make_services(llm, tools)
-    services.extras["subagents"] = SubagentSupervisor()
+    services.extras["subagents"] = SubagentSupervisor(
+        audit=audits.append if audits is not None else None
+    )
+    if governor is not None:
+        services.extras["budget_governor"] = governor
     return services
 
 
-def cleaning_tools(stdout=None, **kwargs):
+def cleaning_tools(stdout=None, runs=None, **kwargs):
     return SandboxToolInvoker(
-        runs=[tool_success(stdout=stdout or cleaning_stdout(**kwargs))],
+        runs=list(runs) if runs is not None else [tool_success(stdout=stdout or cleaning_stdout(**kwargs))],
         files=["data/orders.csv"],
         files_after_run=["cleaned/orders.csv"],
     )
@@ -1834,6 +1846,199 @@ def test_cleaning_failure_does_not_block_the_stage_and_skips_g2():
     assert cleaning["executed"] is True
     assert cleaning["status"] == "failed"
     assert cleaning["rows_before"] == 0
+    assert "review" not in cleaning, "没过验收的清洗不进审稿环"
+    assert len(tools.python_calls) == 3, "三波修复各一次运行，没有额外的复跑"
+
+
+# -- 清洗的生成者-评审者（§8.4）：复跑核对 → reviewer 子代理 → 驳回退 R2 → 僵持进 G2 ----
+
+CLEANING_CODE_V2 = CLEANING_CODE.replace("995", "996")
+
+CLEANING_REVIEW_REJECT = {
+    "verdict": "reject",
+    "findings": [
+        {
+            "id": "R1",
+            "severity": "blocker",
+            "location": "impact stats",
+            "issue": "rows_after 是写死的常量，不是清洗后的计数",
+            "fix_hint": "用清洗后 DataFrame 的长度计数",
+        },
+        {"id": "R2", "severity": "minor", "issue": "列名未规范化"},
+    ],
+    "summary": "影响面统计不可信。",
+}
+
+
+def test_cleaning_review_reruns_deterministically_then_spawns_an_accepting_reviewer():
+    registry = load_default_registry()
+    audits = []
+    llm = cleaning_llm()
+    tools = cleaning_tools()
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools, audits))
+
+    assert result.status == NodeResult.SUCCEEDED, "审稿通过且影响面小：不惊动用户"
+    # 复跑核对是节点自己做的：同一份清洗脚本再 python_run 一次
+    assert [call[3]["code"] for call in tools.python_calls] == [CLEANING_CODE, CLEANING_CODE]
+    cleaning = result.outputs["cleaning"]
+    review = cleaning["review"]
+    assert review["executed"] is True
+    assert review["verdict"] == "accept" and review["rounds"] == 1 and review["stalemate"] is False
+    assert review["rerun"] == {
+        "executed": True,
+        "consistent": True,
+        "metrics": {"rows_before": 1000, "rows_after": 995, "imputed_columns": ["volume"]},
+        "diff": [],
+        "reason": "",
+    }
+    assert cleaning["llm_calls"] == 3, "两次生成者 + 一次审稿"
+    assert cleaning["attempts"] == 1
+    assert [ref.uri.rsplit("/", 1)[-1] for ref in result.artifacts] == ["cleaning.py"]
+    # reviewer 子代理：独立上下文、只读工具、不接知识工具
+    spawns = [entry for entry in audits if entry["phase"] == "spawn"]
+    assert [entry["tool"] for entry in spawns] == ["subagent:sandbox", "subagent:reviewer"]
+    reviewer = spawns[1]
+    assert reviewer["tool_tier"] == "readonly"
+    assert reviewer["toolset"] == ["ws_read", "ws_list"]
+    assert reviewer["output_schema_id"] == "cleaning-review.v1"
+    review_call = next(c for c in llm.chat_calls if c.label == DataPreparationNode.review_prompt_id)
+    card = system_prompt_of(review_call)
+    assert "数据清洗审稿人" in card and CLEANING_CODE in card
+    assert "线性插值" in card and "- data/orders.csv" in card, "审稿人拿准备方案与数据文件表"
+    assert '"rows_deleted_ratio": 0.005' in card
+    assert "核心指标与首跑逐键一致" in card
+    assert "按方案清洗完成" in card
+    assert "- cleaned/orders.csv" in card, "工作区清单里看得到清洗产物"
+    opening = user_prompt_of(review_call)
+    assert "- ws_read：" in opening and "- ws_list：" in opening
+    assert "python_run" not in opening and "knowledge_search" not in opening
+    assert "缺失值 / 异常值处理是否按方案" in opening
+
+
+def test_cleaning_reviewer_rejection_sends_the_generator_back_to_r2_then_re_reviews():
+    registry = load_default_registry()
+    llm = cleaning_llm(
+        sandbox=repairing_sandbox_script(
+            {"summary": "按审稿意见改为真实计数"},
+            first_code=CLEANING_CODE,
+            repaired_code=CLEANING_CODE_V2,
+        ),
+        review=reviewer_script((CLEANING_CODE_V2, REVIEW_ACCEPT), (CLEANING_CODE, CLEANING_REVIEW_REJECT)),
+    )
+    # 首跑 / 复跑报 995；修复波起报 996（队列尾项复用）
+    tools = cleaning_tools(runs=[
+        tool_success(stdout=cleaning_stdout()),
+        tool_success(stdout=cleaning_stdout()),
+        tool_success(stdout=cleaning_stdout(rows_after=996)),
+    ])
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert [call[3]["code"] for call in tools.python_calls] == [
+        CLEANING_CODE, CLEANING_CODE, CLEANING_CODE_V2, CLEANING_CODE_V2,
+    ]
+    cleaning = result.outputs["cleaning"]
+    assert cleaning["review"]["verdict"] == "accept" and cleaning["review"]["rounds"] == 2
+    # 最终采用修复波的结果：影响面按修复后的标记行重算
+    assert cleaning["rows_after"] == 996 and cleaning["rows_deleted_ratio"] == 0.004
+    assert cleaning["summary"] == "按审稿意见改为真实计数"
+    assert cleaning["attempts"] == 2 and cleaning["llm_calls"] == 6
+    repair_wave = next(
+        user_prompt_of(c)
+        for c in llm.chat_calls
+        if c.label == CLEANING_PROMPT_ID and "审稿驳回意见" in user_prompt_of(c)
+    )
+    assert "[R1｜blocker] impact stats：rows_after 是写死的常量" in repair_wave
+    assert "（修法：用清洗后 DataFrame 的长度计数）" in repair_wave
+    # 修复波发布的脚本取代首波的（旧版在各波报告里可追溯，不重复列产物）
+    assert [ref.uri.rsplit("/", 1)[-1] for ref in result.artifacts] == ["cleaning.py"]
+    assert result.outputs["cleaning"]["final_code_artifact"] == result.artifacts[0].artifact_id
+
+
+def test_cleaning_review_stalemate_opens_g2_and_recommends_raw_data():
+    """审稿两轮仍有 blocker：不信清洗产物 → G2 挂门，推荐改用原始数据。"""
+    registry = load_default_registry()
+    llm = cleaning_llm(
+        sandbox=repairing_sandbox_script(
+            {"summary": "按方案清洗完成"}, first_code=CLEANING_CODE, repaired_code=CLEANING_CODE_V2
+        ),
+        review=[stub_response(CLEANING_REVIEW_REJECT)],
+    )
+    tools = cleaning_tools()
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    review = result.outputs["cleaning"]["review"]
+    assert review["stalemate"] is True and review["rounds"] == 2
+    assert review["reason"] == "审稿 2 轮后仍有阻断性意见未解决"
+    assert result.review_reason == (
+        "清洗脚本的独立审稿 2 轮后仍有 1 条阻断性意见未解决（审稿 2 轮后仍有阻断性意见未解决）。"
+        "请确认数据处理方式"
+    )
+    meta = result.review_meta
+    assert meta["gate"] == "G2"
+    assert [option["id"] for option in meta["options"]] == ["adopt_cleaned", "use_raw", "reject"]
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["use_raw"]
+    assert meta["impact"]["review_stalemate"] is True
+    assert [entry["id"] for entry in meta["impact"]["reviewer_findings"]] == ["R1"]
+    assert meta["impact"]["rows_deleted_ratio"] == 0.005, "影响面本身没超阈值"
+    assert len(tools.python_calls) == 4, "两轮各一次生成者运行 + 一次复跑"
+
+
+def test_g2_combines_heavy_impact_with_a_review_stalemate():
+    registry = load_default_registry()
+    llm = cleaning_llm(review=[stub_response(CLEANING_REVIEW_REJECT)])
+    # 单波脚本不会因驳回改代码：修复波复用同一脚本 → 复审仍驳回 → 僵持
+    tools = cleaning_tools(rows_before=1000, rows_after=900, imputed=())
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason.startswith(
+        "数据清洗影响面较大：删除了 10.0% 的数据行（阈值 5%）；清洗脚本的独立审稿 2 轮后"
+    )
+    assert [o["id"] for o in result.review_meta["options"] if o.get("recommended")] == ["use_raw"]
+
+
+def test_cleaning_review_skips_the_rerun_when_the_budget_slice_cannot_afford_it():
+    """预算切片给到 ≥1 次运行才派清洗；复跑需要再一次，切片不够就如实「未复跑」。
+
+    生产 ToolBus 包装层每次 python_run 预先计费（engine_glue），这里的假工具面照做，
+    切片才会像真实运行那样随首跑缩水（4 → 剩 3 → 25% = 0）。
+    """
+    registry = load_default_registry()
+    governor = BudgetGovernor(RunBudget(max_sandbox_runs=4, max_llm_calls=40))
+
+    class ChargingInvoker(SandboxToolInvoker):
+        def invoke(self, run_id, step_id, tool_name, arguments):
+            if tool_name == PYTHON_TOOL_NAME:
+                governor.charge_sandbox_run()
+            return super().invoke(run_id, step_id, tool_name, arguments)
+
+    llm = cleaning_llm()
+    tools = ChargingInvoker(
+        runs=[tool_success(stdout=cleaning_stdout())],
+        files=["data/orders.csv"],
+        files_after_run=["cleaned/orders.csv"],
+    )
+    ctx = make_ctx(TaskState.DATA_PREPARATION, prior=prior_with_analysis())
+
+    result = DataPreparationNode(registry).run(ctx, cleaning_services(llm, tools, governor=governor))
+
+    assert result.status == NodeResult.SUCCEEDED
+    review = result.outputs["cleaning"]["review"]
+    assert review["executed"] is True and review["verdict"] == "accept"
+    assert review["rerun"] == {"executed": False, "reason": "剩余预算不足以复跑核对"}
+    assert [call[3]["code"] for call in tools.python_calls] == [CLEANING_CODE]
+    card = system_prompt_of(next(c for c in llm.chat_calls if c.label == DataPreparationNode.review_prompt_id))
+    assert "未复跑：剩余预算不足以复跑核对" in card
 
 
 # -- ExperimentExecutionNode（沙盒执行体） ---------------------------------------
@@ -2473,12 +2678,20 @@ ROBUSTNESS_CODE = "print('robustness checks')"
 ROBUSTNESS_FINAL = {"summary": "三项稳健性检查按阈值判定完毕"}
 
 
-def validation_llm(judgement=None, final=None):
-    """验证阶段的双通道端口：模板调用出判读，会话调用跑检验脚本。"""
+def validation_llm(judgement=None, final=None, sandbox=None, review=None):
+    """验证阶段的三通道端口：模板调用出判读，会话调用跑检验脚本，再一路会话给审稿人。
+
+    审稿人缺省直接接受（意见照录）；要演驳回 / 僵持的用例自带 ``review`` 脚本。
+    """
     return StubLlmPort(
         {"validating.default": stub_response(judgement or VALIDATION_OK)},
         chat_scripts={
-            ROBUSTNESS_PROMPT_ID: sandbox_script(final or ROBUSTNESS_FINAL, code=ROBUSTNESS_CODE)
+            ROBUSTNESS_PROMPT_ID: sandbox
+            if sandbox is not None
+            else sandbox_script(final or ROBUSTNESS_FINAL, code=ROBUSTNESS_CODE),
+            ValidationNode.review_prompt_id: (
+                review if review is not None else [stub_response(REVIEW_ACCEPT)]
+            ),
         },
     )
 
@@ -2491,9 +2704,11 @@ def validation_tools(*passed_flags, runs=None, files=None, texts=None):
     )
 
 
-def validation_services(llm, tools):
+def validation_services(llm, tools, audits=None):
     services = make_services(llm, tools)
-    services.extras["subagents"] = SubagentSupervisor()
+    services.extras["subagents"] = SubagentSupervisor(
+        audit=audits.append if audits is not None else None
+    )
     return services
 
 
@@ -2685,6 +2900,189 @@ def test_g3_stays_closed_when_the_review_accepted_and_only_records_its_remarks(r
     assert result.status == NodeResult.SUCCEEDED
     card = system_prompt_of(llm.chat_calls[0])
     assert "- 审稿意见（minor｜已记录）：metrics——只报了 rmse 一个口径" in card
+
+
+# -- 检验脚本的生成者-评审者（§8.4）：复跑核对 → reviewer 子代理 → 驳回退 R2 → 僵持进 G3 ----
+
+ROBUSTNESS_CODE_V2 = "print('robustness checks v2')"
+
+ROBUSTNESS_REVIEW_REJECT = {
+    "verdict": "reject",
+    "findings": [
+        {
+            "id": "R1",
+            "severity": "blocker",
+            "location": "baseline_margin",
+            "issue": "passed 写死为 True，value 与 threshold 的比较方向相反",
+            "fix_hint": "passed = value >= threshold 并据此判定",
+        },
+    ],
+    "summary": "有一项检查是假的，判定不可信。",
+}
+
+
+def test_robustness_review_reruns_deterministically_then_spawns_an_accepting_reviewer(registry):
+    audits = []
+    llm = validation_llm()
+    tools = validation_tools(True, True, True)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools, audits))
+
+    assert result.status == NodeResult.SUCCEEDED, "审稿通过、检查全过：不上 G3"
+    # 复跑核对：同一份检验脚本再 python_run 一次；checks 列表递归比对（含浮点容差）
+    assert [call[3]["code"] for call in tools.python_calls] == [ROBUSTNESS_CODE, ROBUSTNESS_CODE]
+    robustness = result.outputs["robustness"]
+    review = robustness["review"]
+    assert review["executed"] is True and review["verdict"] == "accept" and review["rounds"] == 1
+    assert review["rerun"]["executed"] is True and review["rerun"]["consistent"] is True
+    assert review["rerun"]["metrics"] == {"checks": robustness_checks(True, True, True)}
+    assert robustness["llm_calls"] == 3 and robustness["attempts"] == 1
+    assert robustness["checks_total"] == 3, "检查结论照旧"
+    assert [ref.uri.rsplit("/", 1)[-1] for ref in result.artifacts] == ["validation_checks.py"]
+    spawns = [entry for entry in audits if entry["phase"] == "spawn"]
+    assert [entry["tool"] for entry in spawns] == ["subagent:sandbox", "subagent:reviewer"]
+    reviewer = spawns[1]
+    assert reviewer["tool_tier"] == "readonly"
+    assert reviewer["toolset"] == ["ws_read", "ws_list"]
+    assert reviewer["output_schema_id"] == "robustness-review.v1"
+    review_call = next(c for c in llm.chat_calls if c.label == ValidationNode.review_prompt_id)
+    card = system_prompt_of(review_call)
+    assert "稳健性检验审稿人" in card
+    assert ROBUSTNESS_CODE in card and EXPERIMENT_CODE in card, "检验脚本与实验脚本都进材料"
+    assert '"id": "bootstrap_stability"' in card and '"threshold": 0.15' in card
+    assert "核心指标与首跑逐键一致" in card
+    assert ROBUSTNESS_FINAL["summary"] in card
+    assert "规模过大时求解超时" in card, "风险点段一并给审稿人"
+    assert "整数规划" in card
+    opening = user_prompt_of(review_call)
+    assert "- ws_read：" in opening and "python_run" not in opening
+    assert "每项检查是否真的扰动" in opening
+
+
+def test_robustness_reviewer_rejection_sends_the_generator_back_to_r2_then_re_reviews(registry):
+    llm = validation_llm(
+        sandbox=repairing_sandbox_script(
+            {"summary": "按审稿意见修正判定方向"},
+            first_code=ROBUSTNESS_CODE,
+            repaired_code=ROBUSTNESS_CODE_V2,
+        ),
+        review=reviewer_script(
+            (ROBUSTNESS_CODE_V2, REVIEW_ACCEPT), (ROBUSTNESS_CODE, ROBUSTNESS_REVIEW_REJECT)
+        ),
+    )
+    # 首跑 / 复跑三项全过；修复波起 baseline_margin 判为未通过（队列尾项复用）
+    tools = validation_tools(
+        runs=[
+            tool_success(stdout=robustness_stdout(True, True, True)),
+            tool_success(stdout=robustness_stdout(True, True, True)),
+            tool_success(stdout=robustness_stdout(True, True, False)),
+        ]
+    )
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    # 修复后的检查有一项未通过 → 走 G3 的原有触发（少数未通过 → 推荐接受并记录局限）
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason.startswith("稳健性检查 3 项中 1 项未通过：对基线优势幅度")
+    assert [call[3]["code"] for call in tools.python_calls] == [
+        ROBUSTNESS_CODE, ROBUSTNESS_CODE, ROBUSTNESS_CODE_V2, ROBUSTNESS_CODE_V2,
+    ]
+    robustness = result.outputs["robustness"]
+    assert robustness["review"]["verdict"] == "accept" and robustness["review"]["rounds"] == 2
+    assert robustness["checks_failed"] == 1, "检查结论按最终采用波重算"
+    assert robustness["summary"] == "按审稿意见修正判定方向"
+    assert robustness["attempts"] == 2 and robustness["llm_calls"] == 6
+    repair_wave = next(
+        user_prompt_of(c)
+        for c in llm.chat_calls
+        if c.label == ROBUSTNESS_PROMPT_ID and "审稿驳回意见" in user_prompt_of(c)
+    )
+    assert "[R1｜blocker] baseline_margin：passed 写死为 True" in repair_wave
+    meta = result.review_meta
+    assert meta["impact"]["checks_review_stalemate"] is False
+    assert [option["id"] for option in meta["options"]] == [
+        G3_ACCEPT_OPTION_ID, "redo:EXPERIMENTING", "redo:MODEL_PLANNING",
+    ], "审稿没僵持就不多给「重做检验」"
+    assert [ref.uri.rsplit("/", 1)[-1] for ref in result.artifacts] == ["validation_checks.py"]
+
+
+def test_robustness_review_stalemate_opens_g3_with_a_redo_validating_option(registry):
+    """检验脚本审稿两轮仍有 blocker：检查不可信 ≠ 结论不稳健 → 多给「重做检验」并推荐。"""
+    llm = validation_llm(
+        sandbox=repairing_sandbox_script(
+            ROBUSTNESS_FINAL, first_code=ROBUSTNESS_CODE, repaired_code=ROBUSTNESS_CODE_V2
+        ),
+        review=[stub_response(ROBUSTNESS_REVIEW_REJECT)],
+    )
+    tools = validation_tools(True, True, True)
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    review = result.outputs["robustness"]["review"]
+    assert review["stalemate"] is True and review["rounds"] == 2
+    assert result.review_reason == (
+        "检验脚本的独立审稿 2 轮后仍有 1 条阻断性意见未解决（审稿 2 轮后仍有阻断性意见未解决）。"
+        "请确认实验结果的处置方式"
+    )
+    meta = result.review_meta
+    assert [option["id"] for option in meta["options"]] == [
+        G3_ACCEPT_OPTION_ID, "redo:VALIDATING", "redo:EXPERIMENTING", "redo:MODEL_PLANNING",
+    ]
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["redo:VALIDATING"]
+    assert meta["impact"]["recommended"] == "redo:VALIDATING"
+    assert meta["impact"]["checks_review_stalemate"] is True
+    assert [entry["id"] for entry in meta["impact"]["checks_reviewer_findings"]] == ["R1"]
+    assert meta["impact"]["review_stalemate"] is False, "实验审稿那一路没僵持"
+    assert meta["impact"]["checks_failed"] == 0
+    assert len(tools.python_calls) == 4
+
+
+def test_g3_prefers_redo_experiment_when_both_review_loops_stalemate(registry):
+    llm = validation_llm(review=[stub_response(ROBUSTNESS_REVIEW_REJECT)])
+    tools = validation_tools(True, True, True)
+    prior = validation_prior()
+    prior[TaskState.EXPERIMENTING.value]["review"] = stalemate_review()
+    ctx = make_ctx(TaskState.VALIDATING, prior=prior)
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason.startswith("独立审稿 2 轮后仍有 1 条阻断性意见未解决")
+    assert "；检验脚本的独立审稿 2 轮后仍有 1 条阻断性意见未解决" in result.review_reason
+    meta = result.review_meta
+    assert [option["id"] for option in meta["options"]] == [
+        G3_ACCEPT_OPTION_ID, "redo:VALIDATING", "redo:EXPERIMENTING", "redo:MODEL_PLANNING",
+    ]
+    # 实验本身存疑时重做实验（下游检验一并重做）比只重做检验更彻底
+    assert meta["impact"]["recommended"] == "redo:EXPERIMENTING"
+    assert meta["impact"]["review_stalemate"] is True and meta["impact"]["checks_review_stalemate"] is True
+
+
+def test_robustness_review_reports_an_inconsistent_rerun_per_check_field(registry):
+    """复跑的 checks 与首跑不一致：差异路径精确到 checks[i].value，复跑不一致进审稿材料。"""
+    drifted = robustness_checks(True, True, True)
+    drifted[1]["value"] = 0.09
+    llm = validation_llm()
+    tools = validation_tools(
+        runs=[
+            tool_success(stdout=robustness_stdout(True, True, True)),
+            tool_success(stdout=robustness_stdout(checks=drifted)),
+        ]
+    )
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED, "审稿人（桩）仍接受：不一致由审稿人裁量"
+    rerun = result.outputs["robustness"]["review"]["rerun"]
+    assert rerun["consistent"] is False
+    assert rerun["diff"] == ["checks[1].value：首跑 0.08，复跑 0.09"]
+    card = system_prompt_of(next(c for c in llm.chat_calls if c.label == ValidationNode.review_prompt_id))
+    assert "与首跑不一致" in card and "checks[1].value：首跑 0.08，复跑 0.09" in card
 
 
 @pytest.mark.parametrize(

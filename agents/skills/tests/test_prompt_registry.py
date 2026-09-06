@@ -66,6 +66,7 @@ def test_default_registry_loads_all_stage_prompts():
     registry = load_default_registry()
     assert registry.ids() == [
         "data_cleaning.sandbox",
+        "data_cleaning_review.default",
         "data_preparation.default",
         "experiment_code.default",
         "experiment_code.sandbox",
@@ -81,6 +82,7 @@ def test_default_registry_loads_all_stage_prompts():
         "problem_analysis.default",
         "validating.default",
         "validating.sandbox",
+        "validating_review.default",
     ]
 
     # Every placeholder must be declared in the input schema, for every stage.

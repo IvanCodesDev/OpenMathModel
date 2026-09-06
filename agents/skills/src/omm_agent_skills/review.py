@@ -1,8 +1,9 @@
-"""实验阶段「生成者-评审者」（§8.4）的纯函数件：复跑核对、终答归一化、材料拼接。
+"""「生成者-评审者」（§8.4）的纯函数件：复跑核对、终答归一化、材料拼接。
 
-Reviewer 是实验节点在沙盒执行体验收通过之后派发的子代理（``kind="reviewer"``，
-独立上下文、只读工具），一票驳回退 R2、僵持进 G3。本模块不依赖 ``nodes``：
-这里只有可单测的纯函数与拍板常量，派发与驳回环在 ``nodes.ExperimentExecutionNode``。
+Reviewer 是沙盒消费方在执行体验收通过之后派发的子代理（``kind="reviewer"``，
+独立上下文、只读工具），一票驳回退 R2、僵持进闸门（实验 / 稳健性 → G3，清洗 → G2）。
+三个消费方共用同一套机件，只是角色卡（``*_PROMPT_ID``）与材料不同。本模块不依赖
+``nodes``：这里只有可单测的纯函数与拍板常量，派发与驳回环在 ``nodes._run_review_loop``。
 
 两条纪律（与验证阶段的稳健性复跑同源）：**复跑核对是确定性的**（节点自己再跑一次
 最终脚本、逐键比对指标），模型不得「读代码想象结果」；**驳回必须有 blocker**，
@@ -21,6 +22,9 @@ from omm_agent_harness import LoopBudget
 from .chat_adapter import tool_protocol_note
 
 __all__ = [
+    "CLEANING_REVIEW_FOCUS",
+    "CLEANING_REVIEW_PROMPT_ID",
+    "EXPERIMENT_REVIEW_FOCUS",
     "RERUN_ABS_TOL",
     "RERUN_REL_TOL",
     "REVIEWER_KNOWLEDGE_TOOL_NAMES",
@@ -31,6 +35,8 @@ __all__ = [
     "REVIEW_MAX_ROUNDS",
     "REVIEW_PROMPT_ID",
     "REVIEW_SEVERITIES",
+    "ROBUSTNESS_REVIEW_FOCUS",
+    "ROBUSTNESS_REVIEW_PROMPT_ID",
     "compare_metrics",
     "findings_material",
     "normalize_verdict",
@@ -40,8 +46,11 @@ __all__ = [
     "verdict_summary_text",
 ]
 
-#: 审稿人角色卡模板 id（与 agents/prompts 文件名一致；五处白名单都要有它）。
+#: 三位审稿人的角色卡模板 id（与 agents/prompts 文件名一致；五处白名单都要有）。
+#: 实验审稿人沿用最早的名字 REVIEW_PROMPT_ID。
 REVIEW_PROMPT_ID = "experiment_review.default"
+CLEANING_REVIEW_PROMPT_ID = "data_cleaning_review.default"
+ROBUSTNESS_REVIEW_PROMPT_ID = "validating_review.default"
 
 #: 审稿人的只读工作区工具（看产物表 / 数据文件是否真如脚本所言）；运行部分
 #: 由节点确定性完成，子代理拿不到 python_run / ws_write（§8.2 落地口径：
@@ -101,13 +110,33 @@ _VERDICT_ALIASES = {
 }
 
 
-def reviewer_tool_brief(tools: Sequence[str]) -> str:
-    """审稿会话的开场消息：工具协议（单一出处 chat_adapter）+ 审稿策略。"""
+#: 实验审稿人的静读要点（缺省）；清洗 / 稳健性审稿人各自传自己的 ``focus``。
+EXPERIMENT_REVIEW_FOCUS = (
+    "先对照方案、假设表与符号表静读脚本正文（实现是否偷换假设、"
+    "指标口径是否与基线同口径、随机种子是否显式使用、结果表是否真的写出）；"
+)
+CLEANING_REVIEW_FOCUS = (
+    "先对照数据准备方案静读清洗脚本正文（缺失值 / 异常值处理是否按方案、"
+    "目标列有没有被越权插补、有没有按方案之外的条件静默删行、影响面统计是不是"
+    "由代码真实算出而非写死、每个数据文件是否都处理到且列结构保留）；"
+)
+ROBUSTNESS_REVIEW_FOCUS = (
+    "先对照实验脚本与须检验的假设静读检验脚本正文（每项检查是否真的扰动 / 重采样 / "
+    "对比而非写死 passed、passed 与 value / threshold 的方向是否一致、阈值是否为了"
+    "通过而调、检查是否复用了实验逻辑而不是无关的玩具、assumption_id 指向是否成立）；"
+)
+
+
+def reviewer_tool_brief(tools: Sequence[str], focus: str | None = None) -> str:
+    """审稿会话的开场消息：工具协议（单一出处 chat_adapter）+ 审稿策略。
+
+    ``focus`` 是静读要点那一句（各消费方不同），其余纪律三位审稿人共用。
+    """
     has_knowledge = any(name in REVIEWER_KNOWLEDGE_TOOL_NAMES for name in tools)
     strategy = (
-        "\n\n审稿策略：先对照方案、假设表与符号表静读脚本正文（实现是否偷换假设、"
-        "指标口径是否与基线同口径、随机种子是否显式使用、结果表是否真的写出）；"
-        "复跑核对结果已由系统给出，不要凭想象推断运行结果。需要看产物表或数据文件时"
+        "\n\n审稿策略："
+        + (focus or EXPERIMENT_REVIEW_FOCUS)
+        + "复跑核对结果已由系统给出，不要凭想象推断运行结果。需要看产物表或数据文件时"
         f"用 ws_read / ws_list，每次一个信封、全程至多 {REVIEWER_MAX_TOOL_ROUNDS} 次。"
     )
     if has_knowledge:
@@ -143,27 +172,46 @@ def compare_metrics(
 ) -> tuple[bool, list[str]]:
     """首跑指标 vs 复跑指标：逐键比对，返回 (一致, 差异行)。
 
-    数值键按容差比较，其它类型逐字节；两边键集不同也算差异。空指标（复跑没
-    打印标记行）不算一致——复跑连指标都没打出来就是不可复现。
+    数值按容差比较，其它类型按值 + 类型；嵌套的对象 / 数组递归比（稳健性检查的
+    标记行是 ``checks: [{id, value, ...}]``，差异路径写成 ``checks[1].value``）；
+    两边键集不同也算差异。空指标（复跑没打印标记行）不算一致——复跑连指标都
+    没打出来就是不可复现。
     """
-    diffs: list[str] = []
     if not rerun:
         return False, ["复跑未打印 OMM_METRICS_JSON 标记行"]
-    for key in sorted(set(recorded) | set(rerun)):
-        if key not in rerun:
-            diffs.append(f"{key}：首跑 {recorded[key]!r}，复跑缺失")
-            continue
-        if key not in recorded:
-            diffs.append(f"{key}：首跑缺失，复跑 {rerun[key]!r}")
-            continue
-        before, after = recorded[key], rerun[key]
-        if _is_number(before) and _is_number(after):
-            if not _numbers_close(float(before), float(after)):
-                diffs.append(f"{key}：首跑 {before!r}，复跑 {after!r}")
-        elif before != after or type(before) is not type(after):
-            # bool 是 int 子类（True == 1）：类型也要一样才算同一个值
-            diffs.append(f"{key}：首跑 {before!r}，复跑 {after!r}")
+    diffs: list[str] = []
+    _collect_diffs(recorded, rerun, "", diffs)
     return not diffs, diffs
+
+
+def _collect_diffs(before: Any, after: Any, path: str, diffs: list[str]) -> None:
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        for key in sorted(set(before) | set(after)):
+            child = f"{path}.{key}" if path else str(key)
+            if key not in after:
+                diffs.append(f"{child}：首跑 {before[key]!r}，复跑缺失")
+            elif key not in before:
+                diffs.append(f"{child}：首跑缺失，复跑 {after[key]!r}")
+            else:
+                _collect_diffs(before[key], after[key], child, diffs)
+        return
+    if (
+        isinstance(before, Sequence) and isinstance(after, Sequence)
+        and not isinstance(before, str) and not isinstance(after, str)
+    ):
+        if len(before) != len(after):
+            diffs.append(f"{path}：首跑 {len(before)} 项，复跑 {len(after)} 项")
+            return
+        for index, (left, right) in enumerate(zip(before, after)):
+            _collect_diffs(left, right, f"{path}[{index}]", diffs)
+        return
+    if _is_number(before) and _is_number(after):
+        if not _numbers_close(float(before), float(after)):
+            diffs.append(f"{path}：首跑 {before!r}，复跑 {after!r}")
+        return
+    if before != after or type(before) is not type(after):
+        # bool 是 int 子类（True == 1）：类型也要一样才算同一个值
+        diffs.append(f"{path}：首跑 {before!r}，复跑 {after!r}")
 
 
 def rerun_material(rerun: Mapping[str, Any]) -> str:

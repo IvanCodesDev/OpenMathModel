@@ -41,13 +41,15 @@ from .runtime import WorkerConfig, WorkerRuntime
 #: data_cleaning.sandbox），experiment_code.default 退役；验证阶段的稳健性
 #: 复跑用 validating.sandbox。方案阶段（H3）三视角并行提议 + 归约 + 规范化用
 #: model_planning.proposer / model_planning.reduce / model_planning.formalize，
-#: default 是无监督者时的回落。实验验收后的独立审稿（§8.4）用
-#: experiment_review.default。
+#: default 是无监督者时的回落。三个沙盒消费方验收后的独立审稿（§8.4）各用自己的
+#: 角色卡：experiment_review.default / data_cleaning_review.default /
+#: validating_review.default。
 REQUIRED_PROMPT_IDS = frozenset(
     {
         "problem_analysis.default",
         "data_preparation.default",
         "data_cleaning.sandbox",
+        "data_cleaning_review.default",
         "model_planning.default",
         "model_planning.proposer",
         "model_planning.reduce",
@@ -56,6 +58,7 @@ REQUIRED_PROMPT_IDS = frozenset(
         "experiment_review.default",
         "validating.default",
         "validating.sandbox",
+        "validating_review.default",
         "paper_writing.default",
     }
 )

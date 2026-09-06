@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
@@ -58,12 +58,17 @@ from .frozen_numbers import (
 )
 from .prompt_registry import PromptRegistry, PromptTemplate
 from .review import (
+    CLEANING_REVIEW_FOCUS,
+    CLEANING_REVIEW_PROMPT_ID,
+    EXPERIMENT_REVIEW_FOCUS,
     REVIEW_MAX_ROUNDS,
     REVIEW_PROMPT_ID,
     REVIEWER_KNOWLEDGE_TOOL_NAMES,
     REVIEWER_LOOP_BUDGET,
     REVIEWER_MAX_TOOL_ROUNDS,
     REVIEWER_TOOL_NAMES,
+    ROBUSTNESS_REVIEW_FOCUS,
+    ROBUSTNESS_REVIEW_PROMPT_ID,
     compare_metrics,
     findings_material,
     normalize_verdict,
@@ -1758,11 +1763,14 @@ class DataPreparationNode(LlmSkillNode):
 
     清洗执行是尽力而为的增强：监督者/会话端口/数据文件任一缺席都**如实降级**
     为「仅方案」（cleaning.executed=false + 原因），不阻塞数据阶段——但绝不
-    假装执行过。G2 只在清洗真实执行且影响面超阈值（删行 >5% 或目标列被插补）
-    时触发（§9.1），选项与决策台账见 G2_OPTIONS。
+    假装执行过。清洗验收通过后进生成者-评审者环（§8.4：复跑核对 + 独立审稿，
+    驳回退 R2 修复、僵持记进 ``cleaning["review"]``）。G2 在清洗真实执行且影响面
+    超阈值（删行 >5% 或目标列被插补）或审稿僵持时触发（§9.1），选项与决策台账见
+    G2_OPTIONS。
     """
 
     prompt_id = "data_preparation.default"
+    review_prompt_id = CLEANING_REVIEW_PROMPT_ID
     state = TaskState.DATA_PREPARATION
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
@@ -1785,12 +1793,11 @@ class DataPreparationNode(LlmSkillNode):
         if base.status != NodeResult.SUCCEEDED:
             return base
 
-        capture = _SandboxCapture()
-        cleaning = self._execute_cleaning(
-            ctx, services, base.outputs, capture, data_files
+        cleaning, produced = self._execute_cleaning(
+            ctx, services, base.outputs, data_files
         )
         outputs = {**base.outputs, "cleaning": cleaning}
-        artifacts = base.artifacts + tuple(capture.artifacts)
+        artifacts = base.artifacts + tuple(produced)
 
         gate = self._g2_review(cleaning)
         if gate is not None:
@@ -1813,11 +1820,15 @@ class DataPreparationNode(LlmSkillNode):
         ctx: NodeContext,
         services: NodeServices,
         parsed: Mapping[str, Any],
-        capture: _SandboxCapture,
         data_files: Sequence[str],
-    ) -> dict[str, Any]:
-        def skipped(reason: str) -> dict[str, Any]:
-            return {"executed": False, "reason": reason}
+    ) -> tuple[dict[str, Any], list[Any]]:
+        """清洗沙盒（子代理）→ 验收通过后进生成者-评审者环；返回 (cleaning, 产物引用)。
+
+        产物引用取所有波的并集：修复波只重写 cleaned/ 同名文件，沙盒按「新建文件」
+        捕获产物，首波的清洗数据引用不能因为修复而丢。
+        """
+        def skipped(reason: str) -> tuple[dict[str, Any], list[Any]]:
+            return {"executed": False, "reason": reason}, []
 
         if services.tools is None:
             return skipped("未配置工具端口，跳过清洗执行")
@@ -1853,37 +1864,12 @@ class DataPreparationNode(LlmSkillNode):
             "preparation_plan": json.dumps(plan_slice, ensure_ascii=False),
             "data_files": "\n".join(f"- {path}" for path in data_files),
         })
-
-        final_answer: dict[str, Any] = {}
-        task = SandboxTask(
-            task_id=f"{ctx.step_id}:cleaning",
-            goal="按数据准备方案清洗 data/ 数据文件，产出 cleaned/ 数据与影响面统计",
-            system_prompt=system_prompt,
-            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
-            assertions=(
-                SandboxAssertion(
-                    id="cleaned_files_exist",
-                    description="cleaned/ 目录产出至少一个清洗后数据文件",
-                    check=lambda evidence: (
-                        any(name.startswith("cleaned/") for name in evidence.files),
-                        "；".join(
-                            name for name in evidence.files if name.startswith("cleaned/")
-                        ) or "工作区没有 cleaned/ 下的文件",
-                    ),
-                ),
-                SandboxAssertion(
-                    id="impact_stats_reported",
-                    description=(
-                        "打印影响面统计标记行 OMM_METRICS_JSON"
-                        "（rows_before/rows_after/imputed_columns）"
-                    ),
-                    check=_impact_stats_check,
-                ),
-            ),
-            seeds=dict(SANDBOX_SEEDS),
-            max_runs=max(1, min(SandboxTask.max_runs, budgets.max_sandbox_runs)),
-            extra_final_keys=(),
-        )
+        target_columns = [
+            str(col).strip()
+            for col in (parsed.get("target_columns") or [])
+            if str(col).strip()
+        ]
+        total_runs = max(1, min(SandboxTask.max_runs, budgets.max_sandbox_runs))
 
         llm_calls = {"count": 0}
         chat = text_protocol_chat(
@@ -1891,72 +1877,185 @@ class DataPreparationNode(LlmSkillNode):
             label=CLEANING_PROMPT_ID,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        executor = _sandbox_tool_executor(ctx, services, capture)
         fingerprint = _env_fingerprint(ctx, services)
+        waves: list[_SandboxCapture] = []
+        last_envelope: dict[str, Any] = {}
 
-        def runner(_spec: SpawnSpec) -> ResultEnvelope:
-            report = run_sandbox_task(
-                task,
-                chat=chat,
-                execute_tools=executor,
-                workspace_files=lambda: _workspace_files(ctx, services),
-                read_text=_workspace_reader(ctx, services),
-                env_fingerprint=fingerprint,
-                publish_code=_publish_code_callback(
-                    ctx, services, capture, "cleaning.py"
+        def sandbox_wave(
+            brief_suffix: str | None, max_runs: int
+        ) -> _SandboxWaveResult | None:
+            """一次经监督者派发的清洗沙盒波（首波 / 按审稿意见修复）。"""
+            capture = _SandboxCapture()
+            final_answer: dict[str, Any] = {}
+            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            if brief_suffix:
+                brief += "\n\n" + brief_suffix
+            task = SandboxTask(
+                task_id=f"{ctx.step_id}:cleaning",
+                goal="按数据准备方案清洗 data/ 数据文件，产出 cleaned/ 数据与影响面统计",
+                system_prompt=system_prompt,
+                task_brief=brief,
+                assertions=(
+                    SandboxAssertion(
+                        id="cleaned_files_exist",
+                        description="cleaned/ 目录产出至少一个清洗后数据文件",
+                        check=lambda evidence: (
+                            any(name.startswith("cleaned/") for name in evidence.files),
+                            "；".join(
+                                name for name in evidence.files if name.startswith("cleaned/")
+                            ) or "工作区没有 cleaned/ 下的文件",
+                        ),
+                    ),
+                    SandboxAssertion(
+                        id="impact_stats_reported",
+                        description=(
+                            "打印影响面统计标记行 OMM_METRICS_JSON"
+                            "（rows_before/rows_after/imputed_columns）"
+                        ),
+                        check=_impact_stats_check,
+                    ),
                 ),
-                on_final_answer=final_answer.update,
+                seeds=dict(SANDBOX_SEEDS),
+                max_runs=max_runs,
+                extra_final_keys=(),
             )
-            return ResultEnvelope(
-                status="done",
-                output=report,
-                usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+            executor = _sandbox_tool_executor(ctx, services, capture)
+
+            def runner(_spec: SpawnSpec) -> ResultEnvelope:
+                report = run_sandbox_task(
+                    task,
+                    chat=chat,
+                    execute_tools=executor,
+                    workspace_files=lambda: _workspace_files(ctx, services),
+                    read_text=_workspace_reader(ctx, services),
+                    env_fingerprint=fingerprint,
+                    publish_code=_publish_code_callback(
+                        ctx, services, capture, "cleaning.py"
+                    ),
+                    on_final_answer=final_answer.update,
+                )
+                return ResultEnvelope(
+                    status="done",
+                    output=report,
+                    usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+                )
+
+            envelope = supervisor.spawn(
+                SpawnSpec(
+                    kind="sandbox",
+                    goal=task.goal,
+                    context_slice={
+                        "preparation_plan": plan_slice,
+                        "data_files": data_files,
+                    },
+                    toolset=tuple(SANDBOX_TOOL_NAMES),
+                    tool_tier="execute",
+                    budgets=budgets,
+                    output_schema_id="sandbox-run-report.v1",
+                ),
+                runner,
+                parent_tier="execute",
+                output_validator=_report_shape_problems,
             )
+            waves.append(capture)
+            last_envelope["value"] = envelope
+            if not envelope.ok or envelope.output is None:
+                return None
+            return envelope.output, capture, final_answer
 
-        envelope = supervisor.spawn(
-            SpawnSpec(
-                kind="sandbox",
-                goal=task.goal,
-                context_slice={
-                    "preparation_plan": plan_slice,
-                    "data_files": data_files,
-                },
-                toolset=tuple(SANDBOX_TOOL_NAMES),
-                tool_tier="execute",
-                budgets=budgets,
-                output_schema_id="sandbox-run-report.v1",
-            ),
-            runner,
-            parent_tier="execute",
-            output_validator=_report_shape_problems,
-        )
-
-        if not envelope.ok or envelope.output is None:
+        first = sandbox_wave(None, total_runs)
+        if first is None:
+            envelope = last_envelope["value"]
             return {
                 "executed": False,
                 "reason": f"清洗子代理未完成（{envelope.status}"
                 + (f"，{envelope.error_code}" if envelope.error_code else "")
                 + "）；后续阶段按原始数据继续",
-            }
+            }, _union_artifacts(waves, None)
 
-        report = envelope.output
-        target_columns = [
-            str(col).strip()
-            for col in (parsed.get("target_columns") or [])
-            if str(col).strip()
-        ]
+        report, capture, final_answer = first
+        usage = {"runs": int(report["usage"]["runs"]), "waves": int(report["attempts"])}
+        review: dict[str, Any] | None = None
+        if str(report.get("status")) == "passed":
+            # 生成者-评审者（§8.4）：复跑核对 → 独立审稿 → 驳回退 R2 → 僵持进 G2
+            review, (report, capture, final_answer) = _run_review_loop(
+                ctx,
+                services,
+                supervisor,
+                self._registry,
+                self._review_spec(ctx, plan_slice, data_files, target_columns),
+                first=first,
+                sandbox_wave=sandbox_wave,
+                max_runs=total_runs,
+                usage=usage,
+            )
+
         impact = _cleaning_impact(capture.metrics, target_columns)
-        return {
+        cleaning = {
             "executed": True,
             "status": str(report.get("status") or "failed"),
-            "attempts": int(report.get("attempts") or 0),
-            "llm_calls": llm_calls["count"],
+            "attempts": usage["waves"],
+            "llm_calls": llm_calls["count"] + int((review or {}).get("llm_calls") or 0),
             "summary": str(final_answer.get("summary") or ""),
             "target_columns": target_columns,
             "final_code_artifact": str(report.get("final_code_artifact") or ""),
             "produced_artifacts": list(report.get("produced_artifacts") or []),
             **impact,
         }
+        if review is not None:
+            cleaning["review"] = review
+        return cleaning, _union_artifacts(waves, capture)
+
+    def _review_spec(
+        self,
+        ctx: NodeContext,
+        plan_slice: Mapping[str, Any],
+        data_files: Sequence[str],
+        target_columns: Sequence[str],
+    ) -> _ReviewSpec:
+        """清洗审稿口径：材料 = 准备方案 / 数据文件 / 脚本正文 / 影响面 / 复跑 / 清洗摘要。"""
+        script_path = f"steps/{ctx.step_id}/main.py"
+
+        def materials(
+            capture: _SandboxCapture,
+            final_answer: Mapping[str, Any],
+            rerun: Mapping[str, Any],
+            files: Sequence[str],
+        ) -> dict[str, Any]:
+            return {
+                "preparation_plan": json.dumps(dict(plan_slice), ensure_ascii=False),
+                "data_files": "\n".join(f"- {path}" for path in data_files),
+                "cleaning_code": _clip_code(capture.code, script_path),
+                "impact": json.dumps(
+                    _cleaning_impact(capture.metrics, target_columns), ensure_ascii=False
+                ),
+                "rerun_report": rerun_material(rerun),
+                "cleaning_summary": str(final_answer.get("summary") or "无"),
+                "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
+                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+            }
+
+        def context_slice(
+            capture: _SandboxCapture, rerun: Mapping[str, Any], round_no: int
+        ) -> dict[str, Any]:
+            return {
+                "data_files": list(data_files),
+                "impact": _cleaning_impact(capture.metrics, target_columns),
+                "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+                "round": round_no,
+            }
+
+        return _ReviewSpec(
+            prompt_id=self.review_prompt_id,
+            output_schema_id="cleaning-review.v1",
+            goal="独立核查清洗脚本是否忠实于数据准备方案、清洗产物与影响面统计是否可信",
+            progress_kind="cleaning_review",
+            task_label="cleaning_review",
+            toolset=REVIEWER_TOOL_NAMES,
+            focus=CLEANING_REVIEW_FOCUS,
+            materials=materials,
+            context_slice=context_slice,
+        )
 
     # -- G2 gate ----------------------------------------------------------------
 
@@ -1964,6 +2063,12 @@ class DataPreparationNode(LlmSkillNode):
     def _g2_review(
         cleaning: Mapping[str, Any],
     ) -> tuple[str, dict[str, Any]] | None:
+        """G2 数据闸门的两个触发源（任一即挂门，可叠加）：
+
+        - 清洗真实执行且影响面超阈值（删行 >5% / 目标列被插补）；
+        - 清洗脚本的生成者-评审者环**僵持**（v3.33 起）：独立审稿的阻断性意见到
+          R2 预算 / 审稿轮数用尽仍未解决——不信清洗产物时推荐「改用原始数据」。
+        """
         if not cleaning.get("executed") or cleaning.get("status") != "passed":
             return None
         triggers: list[str] = []
@@ -1973,20 +2078,51 @@ class DataPreparationNode(LlmSkillNode):
         imputed_targets = list(cleaning.get("imputed_target_columns") or [])
         if imputed_targets:
             triggers.append(f"目标列被插补（{'、'.join(imputed_targets)}）")
-        if not triggers:
+        review = cleaning.get("review") or {}
+        stalemate = bool(review.get("executed") and review.get("stalemate"))
+        unresolved = (
+            [
+                dict(entry)
+                for entry in review.get("findings") or []
+                if isinstance(entry, Mapping) and entry.get("severity") == "blocker"
+            ]
+            if stalemate
+            else []
+        )
+        if not triggers and not stalemate:
             return None
-        reason = "数据清洗影响面较大：" + "；".join(triggers) + "。请确认数据处理方式"
+
+        reasons: list[str] = []
+        if triggers:
+            reasons.append("数据清洗影响面较大：" + "；".join(triggers))
+        if stalemate:
+            reasons.append(
+                f"清洗脚本的独立审稿 {int(review.get('rounds') or 0)} 轮后仍有 "
+                f"{len(unresolved)} 条阻断性意见未解决（{review.get('reason') or '僵持'}）"
+            )
+        reason = "；".join(reasons) + "。请确认数据处理方式"
+        recommended = "use_raw" if stalemate else "adopt_cleaned"
+        options = []
+        for option in G2_OPTIONS:
+            entry = dict(option)
+            entry.pop("recommended", None)
+            if entry["id"] == recommended:
+                entry["recommended"] = True
+            options.append(entry)
         meta = {
             "gate": "G2",
             "decision_type": "generic",
             "title": reason,
-            "options": [dict(option) for option in G2_OPTIONS],
+            "options": options,
             "impact": {
                 "rows_before": cleaning.get("rows_before"),
                 "rows_after": cleaning.get("rows_after"),
                 "rows_deleted_ratio": cleaning.get("rows_deleted_ratio"),
                 "imputed_columns": cleaning.get("imputed_columns"),
                 "imputed_target_columns": imputed_targets,
+                # 审稿僵持：未解决的阻断性意见逐条进卡片
+                "review_stalemate": stalemate,
+                "reviewer_findings": unresolved,
             },
         }
         return reason, meta
@@ -2007,6 +2143,289 @@ def _impact_stats_check(evidence) -> tuple[bool, str]:
         f"rows_before={metrics['rows_before']}，rows_after={metrics['rows_after']}，"
         f"imputed_columns={metrics['imputed_columns']}"
     )
+
+
+# ── 生成者-评审者（§8.4）：三个沙盒消费方共用的审稿环 ────────────────────────────
+
+#: 一次沙盒波（首波 / 按审稿意见的修复波）的产物：验收报告、证据捕获、终答。
+_SandboxWaveResult = tuple[dict[str, Any], _SandboxCapture, dict[str, Any]]
+
+
+def _union_artifacts(
+    waves: Sequence[_SandboxCapture], adopted: _SandboxCapture | None
+) -> list[Any]:
+    """所有波的产物引用并集（按出现顺序、uri 去重），未被采用那些波的脚本除外。
+
+    沙盒按「新建文件」捕获产物：修复波只重写同名文件时不会再报一次，首波产出的
+    数据 / 结果文件引用要留下来；脚本（kind=code）只留最终**采用**那一波的（僵持
+    时采用的可能不是最后一波）——其余版本在各波验收报告 ``final_code_artifact``
+    里仍可追溯。
+    """
+    seen: set[str] = set()
+    merged: list[Any] = []
+    for capture in waves:
+        for ref in capture.artifacts:
+            if ref.uri in seen or (ref.kind == "code" and capture is not adopted):
+                continue
+            seen.add(ref.uri)
+            merged.append(ref)
+    return merged
+
+
+@dataclass(frozen=True)
+class _ReviewSpec:
+    """某个沙盒消费方的审稿口径：角色卡 id、材料拼法、派发元数据。
+
+    机件（复跑核对 / 派发 / 驳回修复 / 僵持）三处同一份，只有这里不同。
+    """
+
+    prompt_id: str
+    output_schema_id: str
+    goal: str
+    progress_kind: str
+    task_label: str
+    toolset: tuple[str, ...]
+    focus: str
+    #: (capture, final_answer, rerun, workspace_files) → 角色卡模板变量
+    materials: Callable[
+        [_SandboxCapture, Mapping[str, Any], Mapping[str, Any], Sequence[str]],
+        dict[str, Any],
+    ]
+    #: (capture, rerun, round_no) → SpawnSpec.context_slice（审计里看得到审的是什么）
+    context_slice: Callable[[_SandboxCapture, Mapping[str, Any], int], dict[str, Any]]
+
+
+def _rerun_check(
+    ctx: NodeContext, services: NodeServices, capture: _SandboxCapture
+) -> dict[str, Any]:
+    """确定性复跑核对：同一份最终脚本再跑一次，指标逐键比对首跑。
+
+    节点自己跑、自己比——「复跑核对」不交给模型想象。预算切片不够一次运行
+    或脚本正文缺失时如实 ``executed=false``，审稿照常进行（材料里写明未复跑）。
+    """
+    governor = (services.extras or {}).get("budget_governor")
+    budgets: RunBudget = (
+        governor.subagent_slice() if governor is not None else RunBudget()
+    )
+    if budgets.max_sandbox_runs < 1:
+        return {"executed": False, "reason": "剩余预算不足以复跑核对"}
+    if not capture.code.strip():
+        return {"executed": False, "reason": "沙盒未回传最终脚本正文，无法复跑"}
+    result = services.tools.invoke(
+        ctx.run_id, ctx.step_id, PYTHON_TOOL_NAME, {"code": capture.code}
+    )
+    if not result.ok:
+        output = result.output or {}
+        stderr = str(output.get("stderr") or "").strip()
+        reason = f"复跑失败：{result.error or result.status}"
+        if stderr:
+            reason += "；stderr（尾部）：" + stderr[-500:]
+        return {
+            "executed": True,
+            "consistent": False,
+            "metrics": {},
+            "diff": [],
+            "reason": reason,
+        }
+    scratch = _SandboxCapture()
+    scratch.observe(result)
+    consistent, diff = compare_metrics(capture.metrics, scratch.metrics)
+    return {
+        "executed": True,
+        "consistent": consistent,
+        "metrics": dict(scratch.metrics),
+        "diff": diff,
+        "reason": "" if consistent else "复跑指标与首跑不一致",
+    }
+
+
+def _spawn_reviewer(
+    ctx: NodeContext,
+    services: NodeServices,
+    supervisor: Any,
+    registry: PromptRegistry,
+    spec: _ReviewSpec,
+    capture: _SandboxCapture,
+    final_answer: Mapping[str, Any],
+    rerun: Mapping[str, Any],
+    round_no: int,
+) -> tuple[dict[str, Any] | None, int, str]:
+    """派发一次审稿子代理，返回 (归一化 verdict | None, 模型调用数, 未成功原因)。
+
+    独立上下文 = 只拿 ``spec.materials`` 拼出的结构化切片，不继承生成者会话；
+    tier readonly——运行部分已由节点做完。
+    """
+    governor = (services.extras or {}).get("budget_governor")
+    budgets: RunBudget = (
+        governor.subagent_slice() if governor is not None else RunBudget()
+    )
+    if budgets.max_llm_calls < 1:
+        return None, 0, "剩余预算不足以派发审稿子代理"
+    template = registry.get(spec.prompt_id)
+    files = _workspace_files(ctx, services)
+    variables = spec.materials(capture, final_answer, rerun, files)
+    problems = validate(variables, template.input_schema)
+    if problems:
+        return None, 0, "审稿任务卡输入无效：" + "; ".join(problems)
+    toolset = spec.toolset
+    system_prompt = template.render(variables)
+    llm_calls = {"count": 0}
+    trace = {"error": ""}
+
+    def runner(_spec: SpawnSpec) -> ResultEnvelope:
+        outcome = run_inner_loop(
+            LoopTask(
+                task_id=f"{ctx.step_id}:{spec.task_label}:{round_no}",
+                messages=(
+                    Message(role="system", content=system_prompt),
+                    Message(role="user", content=reviewer_tool_brief(toolset, spec.focus)),
+                ),
+                validator=lambda value: validate(value, template.output_schema),
+                parser=extract_json,
+                budget=REVIEWER_LOOP_BUDGET,
+            ),
+            chat=text_protocol_chat(
+                services.llm,
+                label=spec.prompt_id,
+                on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
+            ),
+            execute_tools=_bounded_tool_executor(
+                ctx, services, toolset, REVIEWER_MAX_TOOL_ROUNDS
+            ),
+        )
+        if not outcome.ok or outcome.value is None:
+            trace["error"] = str(outcome.last_error or outcome.exit_reason or "审稿终答未通过校验")
+            return ResultEnvelope(status="failed")
+        return ResultEnvelope(status="done", output=dict(outcome.value))
+
+    try:
+        envelope = supervisor.spawn(
+            SpawnSpec(
+                kind="reviewer",
+                goal=spec.goal,
+                context_slice=spec.context_slice(capture, rerun, round_no),
+                toolset=toolset,
+                tool_tier="readonly",
+                budgets=budgets,
+                output_schema_id=spec.output_schema_id,
+            ),
+            runner,
+            parent_tier="execute",
+            output_validator=lambda output: validate(output, template.output_schema),
+        )
+    except AgentError as exc:
+        # 装配 / 切片缺陷（E510 等）：审稿按未完成计，不炸消费方节点
+        return None, llm_calls["count"], f"审稿子代理派发被拒（{exc.code.value}：{exc}）"
+    if not envelope.ok or envelope.output is None:
+        detail = envelope.status
+        if envelope.error_code:
+            detail += f"，{envelope.error_code}"
+        if trace["error"]:
+            detail += f"，{trace['error']}"
+        return None, llm_calls["count"], f"审稿子代理未完成（{detail}）"
+    return normalize_verdict(envelope.output), llm_calls["count"], ""
+
+
+def _run_review_loop(
+    ctx: NodeContext,
+    services: NodeServices,
+    supervisor: Any,
+    registry: PromptRegistry,
+    spec: _ReviewSpec,
+    *,
+    first: _SandboxWaveResult,
+    sandbox_wave: Callable[[str, int], _SandboxWaveResult | None],
+    max_runs: int,
+    usage: dict[str, int],
+) -> tuple[dict[str, Any], _SandboxWaveResult]:
+    """复跑核对 → 独立审稿 → 一票驳回退 R2 修复 → 复审 → 僵持。
+
+    返回 ``(review, 最终采用的那一波)``。``sandbox_wave(feedback, max_runs)`` 由消费方
+    提供（实验节点直跑、清洗 / 稳健性经监督者派发），返回 None 表示修复波没派出去；
+    ``usage["runs"|"waves"]`` 就地累加修复波的用量。僵持时保留最后一波**通过验收**的
+    结果——审稿意见记进 ``review``，由闸门裁定，不因审稿把能跑的结果扔掉。
+    """
+    review: dict[str, Any] = {"executed": False, "reason": "", "llm_calls": 0}
+    report, capture, final_answer = first
+    rounds = 0
+    while True:
+        rounds += 1
+        rerun = _rerun_check(ctx, services, capture)
+        verdict, calls, error = _spawn_reviewer(
+            ctx, services, supervisor, registry, spec, capture, final_answer, rerun, rounds
+        )
+        review["llm_calls"] += calls
+        if verdict is None:
+            if rounds == 1:
+                review.update({"rounds": rounds, "rerun": rerun, "reason": error})
+            else:
+                # 修复波之后复审没完成：上一轮的阻断性意见没人证实已解决，
+                # 按僵持处理（宁可多进一次闸门，不把未经复审的修复当通过）
+                review.update({
+                    "rounds": rounds,
+                    "rerun": rerun,
+                    "stalemate": True,
+                    "reason": f"修复后复审未完成（{error}），阻断性意见未经证实解决",
+                })
+            break
+        review.update({
+            "executed": True,
+            "rounds": rounds,
+            "verdict": verdict["verdict"],
+            "findings": verdict["findings"],
+            "blockers": verdict["blockers"],
+            "summary": verdict["summary"],
+            "rerun": rerun,
+            "stalemate": False,
+            "reason": "",
+        })
+        _emit_progress(services, {
+            "kind": spec.progress_kind,
+            "round": rounds,
+            "verdict": verdict["verdict"],
+            "blockers": verdict["blockers"],
+            "findings": len(verdict["findings"]),
+            "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+            "summary": verdict["summary"],
+        })
+        if verdict["verdict"] == "accept":
+            break
+        remaining_runs = max_runs - usage["runs"]
+        if rounds >= REVIEW_MAX_ROUNDS:
+            review.update({
+                "stalemate": True,
+                "reason": f"审稿 {REVIEW_MAX_ROUNDS} 轮后仍有阻断性意见未解决",
+            })
+            break
+        if remaining_runs < 1:
+            review.update({
+                "stalemate": True,
+                "reason": "R2 运行预算已尽，无法按审稿意见修复",
+            })
+            break
+        repair = sandbox_wave(
+            review_feedback(verdict["findings"], verdict["summary"], rerun),
+            remaining_runs,
+        )
+        if repair is None:
+            review.update({
+                "stalemate": True,
+                "reason": "按审稿意见的修复波未能派发，保留已验收结果",
+            })
+            break
+        repair_report, repair_capture, repair_final = repair
+        usage["runs"] += int(repair_report["usage"]["runs"])
+        usage["waves"] += int(repair_report["attempts"])
+        if repair_report["status"] != "passed":
+            # 修复波没过验收：保留上一波已验收的代码与指标，未解决的意见随
+            # stalemate 进闸门
+            review.update({
+                "stalemate": True,
+                "reason": "按审稿意见的修复波未通过验收，保留已验收结果",
+            })
+            break
+        report, capture, final_answer = repair_report, repair_capture, repair_final
+    return review, (report, capture, final_answer)
 
 
 class ExperimentExecutionNode(LlmSkillNode):
@@ -2130,12 +2549,12 @@ class ExperimentExecutionNode(LlmSkillNode):
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
         env_fingerprint = _env_fingerprint(ctx, services)
+        waves: list[_SandboxCapture] = []
 
-        def sandbox_wave(
-            brief_suffix: str | None, max_runs: int
-        ) -> tuple[dict[str, Any], _SandboxCapture, dict[str, Any]]:
+        def sandbox_wave(brief_suffix: str | None, max_runs: int) -> _SandboxWaveResult:
             """一次独立装配的沙盒任务（首轮 / 按审稿意见修复）：每次自己的证据捕获。"""
             capture = _SandboxCapture()
+            waves.append(capture)
             final_answer: dict[str, Any] = {}
             brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
             if brief_suffix:
@@ -2208,82 +2627,25 @@ class ExperimentExecutionNode(LlmSkillNode):
             )
 
         # ── 生成者-评审者（§8.4）：复跑核对 → 独立审稿 → 驳回退 R2 → 僵持进 G3 ──
-        review = {"executed": False, "reason": "", "llm_calls": 0}
         supervisor = (services.extras or {}).get("subagents")
         if supervisor is None:
-            review["reason"] = "未配置子代理监督者，跳过独立审稿"
+            review: dict[str, Any] = {
+                "executed": False,
+                "reason": "未配置子代理监督者，跳过独立审稿",
+                "llm_calls": 0,
+            }
         else:
-            rounds = 0
-            while True:
-                rounds += 1
-                rerun = self._rerun_check(ctx, services, capture)
-                verdict, calls, error = self._spawn_reviewer(
-                    ctx, services, supervisor, plan, planning, capture, final_answer, rerun, rounds
-                )
-                review["llm_calls"] += calls
-                if verdict is None:
-                    if rounds == 1:
-                        review.update({"rounds": rounds, "rerun": rerun, "reason": error})
-                    else:
-                        # 修复波之后复审没完成：上一轮的阻断性意见没人证实已解决，
-                        # 按僵持处理（宁可多进一次 G3，不把未经复审的修复当通过）
-                        review.update({
-                            "rounds": rounds,
-                            "rerun": rerun,
-                            "stalemate": True,
-                            "reason": f"修复后复审未完成（{error}），阻断性意见未经证实解决",
-                        })
-                    break
-                review.update({
-                    "executed": True,
-                    "rounds": rounds,
-                    "verdict": verdict["verdict"],
-                    "findings": verdict["findings"],
-                    "blockers": verdict["blockers"],
-                    "summary": verdict["summary"],
-                    "rerun": rerun,
-                    "stalemate": False,
-                    "reason": "",
-                })
-                _emit_progress(services, {
-                    "kind": "experiment_review",
-                    "round": rounds,
-                    "verdict": verdict["verdict"],
-                    "blockers": verdict["blockers"],
-                    "findings": len(verdict["findings"]),
-                    "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
-                    "summary": verdict["summary"],
-                })
-                if verdict["verdict"] == "accept":
-                    break
-                remaining_runs = self.max_sandbox_runs - usage["runs"]
-                if rounds >= REVIEW_MAX_ROUNDS:
-                    review.update({
-                        "stalemate": True,
-                        "reason": f"审稿 {REVIEW_MAX_ROUNDS} 轮后仍有阻断性意见未解决",
-                    })
-                    break
-                if remaining_runs < 1:
-                    review.update({
-                        "stalemate": True,
-                        "reason": "R2 运行预算已尽，无法按审稿意见修复",
-                    })
-                    break
-                repair_report, repair_capture, repair_final = sandbox_wave(
-                    review_feedback(verdict["findings"], verdict["summary"], rerun),
-                    remaining_runs,
-                )
-                usage["runs"] += int(repair_report["usage"]["runs"])
-                usage["waves"] += int(repair_report["attempts"])
-                if repair_report["status"] != "passed":
-                    # 修复波没过验收：保留首轮已验收的代码与指标（不因审稿把能跑的
-                    # 结果扔掉），未解决的意见随 stalemate 进 G3
-                    review.update({
-                        "stalemate": True,
-                        "reason": "按审稿意见的修复波未通过验收，保留已验收结果",
-                    })
-                    break
-                report, capture, final_answer = repair_report, repair_capture, repair_final
+            review, (report, capture, final_answer) = _run_review_loop(
+                ctx,
+                services,
+                supervisor,
+                self._registry,
+                self._review_spec(plan, planning),
+                first=(report, capture, final_answer),
+                sandbox_wave=sandbox_wave,
+                max_runs=self.max_sandbox_runs,
+                usage=usage,
+            )
 
         node_metrics = {
             "llm_attempts": llm_calls["count"] + int(review["llm_calls"]),
@@ -2325,161 +2687,68 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "review": review,
             },
             metrics=node_metrics,
-            artifacts=tuple(capture.artifacts),
+            # 所有波的产物并集：修复波重写同名结果文件时沙盒不再报新建，首波引用要留
+            artifacts=tuple(_union_artifacts(waves, capture)),
         )
 
     # -- generator / reviewer loop (§8.4) ------------------------------------------
-
-    def _rerun_check(
-        self, ctx: NodeContext, services: NodeServices, capture: _SandboxCapture
-    ) -> dict[str, Any]:
-        """确定性复跑核对：同一份最终脚本再跑一次，指标逐键比对首跑。
-
-        节点自己跑、自己比——「复跑核对」不交给模型想象。预算切片不够一次运行
-        或脚本正文缺失时如实 ``executed=false``，审稿照常进行（材料里写明未复跑）。
-        """
-        governor = (services.extras or {}).get("budget_governor")
-        budgets: RunBudget = (
-            governor.subagent_slice() if governor is not None else RunBudget()
-        )
-        if budgets.max_sandbox_runs < 1:
-            return {"executed": False, "reason": "剩余预算不足以复跑核对"}
-        if not capture.code.strip():
-            return {"executed": False, "reason": "沙盒未回传最终脚本正文，无法复跑"}
-        result = services.tools.invoke(
-            ctx.run_id, ctx.step_id, PYTHON_TOOL_NAME, {"code": capture.code}
-        )
-        if not result.ok:
-            output = result.output or {}
-            stderr = str(output.get("stderr") or "").strip()
-            reason = f"复跑失败：{result.error or result.status}"
-            if stderr:
-                reason += "；stderr（尾部）：" + stderr[-500:]
-            return {
-                "executed": True,
-                "consistent": False,
-                "metrics": {},
-                "diff": [],
-                "reason": reason,
-            }
-        scratch = _SandboxCapture()
-        scratch.observe(result)
-        consistent, diff = compare_metrics(capture.metrics, scratch.metrics)
-        return {
-            "executed": True,
-            "consistent": consistent,
-            "metrics": dict(scratch.metrics),
-            "diff": diff,
-            "reason": "" if consistent else "复跑指标与首跑不一致",
-        }
 
     def _reviewer_toolset(self) -> tuple[str, ...]:
         if self.knowledge is None:
             return REVIEWER_TOOL_NAMES
         return REVIEWER_TOOL_NAMES + REVIEWER_KNOWLEDGE_TOOL_NAMES
 
-    def _spawn_reviewer(
-        self,
-        ctx: NodeContext,
-        services: NodeServices,
-        supervisor: Any,
-        plan: Mapping[str, Any],
-        planning: Mapping[str, Any],
-        capture: _SandboxCapture,
-        final_answer: Mapping[str, Any],
-        rerun: Mapping[str, Any],
-        round_no: int,
-    ) -> tuple[dict[str, Any] | None, int, str]:
-        """派发一次审稿子代理，返回 (归一化 verdict | None, 模型调用数, 未成功原因)。
+    def _review_spec(
+        self, plan: Mapping[str, Any], planning: Mapping[str, Any]
+    ) -> _ReviewSpec:
+        """实验审稿口径：材料 = 方案 / 假设 / 符号 / 脚本正文 / 指标 / 复跑 / 实现摘要。
 
-        独立上下文 = 只拿结构化切片（方案 / 假设 / 符号 / 脚本正文 / 指标 / 复跑
-        结果 / 实现摘要），不继承生成者会话；tier readonly——运行部分已由节点做完。
+        独立上下文 = 只拿这些结构化切片，不继承生成者会话；tier readonly——运行
+        部分已由节点做完。
         """
-        governor = (services.extras or {}).get("budget_governor")
-        budgets: RunBudget = (
-            governor.subagent_slice() if governor is not None else RunBudget()
+        assumptions = assumption_material(plan_assumptions(planning, plan.get("id")))
+        symbols = symbol_material(plan_symbols(planning, plan.get("id")))
+
+        def materials(
+            capture: _SandboxCapture,
+            final_answer: Mapping[str, Any],
+            rerun: Mapping[str, Any],
+            files: Sequence[str],
+        ) -> dict[str, Any]:
+            return {
+                "chosen_plan": json.dumps(dict(plan), ensure_ascii=False),
+                "model_assumptions": assumptions,
+                "model_symbols": symbols,
+                "experiment_code": _clip_code(capture.code),
+                "metrics": json.dumps(dict(capture.metrics), ensure_ascii=False),
+                "rerun_report": rerun_material(rerun),
+                "approach_summary": str(final_answer.get("approach_summary") or "无"),
+                "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
+                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+            }
+
+        def context_slice(
+            capture: _SandboxCapture, rerun: Mapping[str, Any], round_no: int
+        ) -> dict[str, Any]:
+            return {
+                "plan_id": plan.get("id"),
+                "plan_name": plan.get("name"),
+                "metrics": dict(capture.metrics),
+                "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+                "round": round_no,
+            }
+
+        return _ReviewSpec(
+            prompt_id=self.review_prompt_id,
+            output_schema_id="experiment-review.v1",
+            goal="独立核查实验代码与结果能否作为后续检验与论文的依据",
+            progress_kind="experiment_review",
+            task_label="review",
+            toolset=self._reviewer_toolset(),
+            focus=EXPERIMENT_REVIEW_FOCUS,
+            materials=materials,
+            context_slice=context_slice,
         )
-        if budgets.max_llm_calls < 1:
-            return None, 0, "剩余预算不足以派发审稿子代理"
-        template = self._registry.get(self.review_prompt_id)
-        files = _workspace_files(ctx, services)
-        variables = {
-            "chosen_plan": json.dumps(dict(plan), ensure_ascii=False),
-            "model_assumptions": assumption_material(plan_assumptions(planning, plan.get("id"))),
-            "model_symbols": symbol_material(plan_symbols(planning, plan.get("id"))),
-            "experiment_code": _clip_code(capture.code),
-            "metrics": json.dumps(dict(capture.metrics), ensure_ascii=False),
-            "rerun_report": rerun_material(rerun),
-            "approach_summary": str(final_answer.get("approach_summary") or "无"),
-            "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
-            "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
-        }
-        problems = validate(variables, template.input_schema)
-        if problems:
-            return None, 0, "审稿任务卡输入无效：" + "; ".join(problems)
-        toolset = self._reviewer_toolset()
-        system_prompt = template.render(variables)
-        llm_calls = {"count": 0}
-        trace = {"error": ""}
-
-        def runner(_spec: SpawnSpec) -> ResultEnvelope:
-            outcome = run_inner_loop(
-                LoopTask(
-                    task_id=f"{ctx.step_id}:review:{round_no}",
-                    messages=(
-                        Message(role="system", content=system_prompt),
-                        Message(role="user", content=reviewer_tool_brief(toolset)),
-                    ),
-                    validator=lambda value: validate(value, template.output_schema),
-                    parser=extract_json,
-                    budget=REVIEWER_LOOP_BUDGET,
-                ),
-                chat=text_protocol_chat(
-                    services.llm,
-                    label=self.review_prompt_id,
-                    on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
-                ),
-                execute_tools=_bounded_tool_executor(
-                    ctx, services, toolset, REVIEWER_MAX_TOOL_ROUNDS
-                ),
-            )
-            if not outcome.ok or outcome.value is None:
-                trace["error"] = str(outcome.last_error or outcome.exit_reason or "审稿终答未通过校验")
-                return ResultEnvelope(status="failed")
-            return ResultEnvelope(status="done", output=dict(outcome.value))
-
-        try:
-            envelope = supervisor.spawn(
-                SpawnSpec(
-                    kind="reviewer",
-                    goal="独立核查实验代码与结果能否作为后续检验与论文的依据",
-                    context_slice={
-                        "plan_id": plan.get("id"),
-                        "plan_name": plan.get("name"),
-                        "metrics": dict(capture.metrics),
-                        "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
-                        "round": round_no,
-                    },
-                    toolset=toolset,
-                    tool_tier="readonly",
-                    budgets=budgets,
-                    output_schema_id="experiment-review.v1",
-                ),
-                runner,
-                parent_tier="execute",
-                output_validator=lambda output: validate(output, template.output_schema),
-            )
-        except AgentError as exc:
-            # 装配 / 切片缺陷（E510 等）：审稿按未完成计，不炸实验节点
-            return None, llm_calls["count"], f"审稿子代理派发被拒（{exc.code.value}：{exc}）"
-        if not envelope.ok or envelope.output is None:
-            detail = envelope.status
-            if envelope.error_code:
-                detail += f"，{envelope.error_code}"
-            if trace["error"]:
-                detail += f"，{trace['error']}"
-            return None, llm_calls["count"], f"审稿子代理未完成（{detail}）"
-        return normalize_verdict(envelope.output), llm_calls["count"], ""
 
 
 def _experiment_run_ok_check(evidence) -> tuple[bool, str]:
@@ -2536,6 +2805,15 @@ G3_OPTIONS = (
     },
 )
 
+#: 只在检验脚本自己的审稿环僵持时追加的选项（插在「重做实验」之前）：检查不可信
+#: 不等于结论不稳健，重做检验比重做实验便宜得多；同样复用 ``redo:<STATE>`` 语义
+#: （G4 已用 redo:PAPER_WRITING 重做提出闸门的阶段本身）。
+G3_REDO_VALIDATING_OPTION = {
+    "id": "redo:VALIDATING",
+    "label": "重做检验",
+    "description": "保留实验结果，丢弃本次稳健性检查，按审稿意见重新设计并复跑检验脚本",
+}
+
 #: 推荐项口径：未通过项占比不到一半 → 推荐「接受并记录局限」（结论主体成立，
 #: 局限如实写进论文即可）；一半及以上 → 推荐「重做实验」。只是 CTA 预选，
 #: 最终由人拍板。
@@ -2548,12 +2826,13 @@ MIN_ROBUSTNESS_CHECKS = 2
 _EXPERIMENT_CODE_CARD_CHARS = 12_000
 
 
-def _clip_code(code: str) -> str:
+def _clip_code(code: str, path: str = EXPERIMENT_SCRIPT_PATH) -> str:
+    """任务卡里的脚本正文：超长截断并指路（``path`` = 全文在工作区的位置）。"""
     if len(code) <= _EXPERIMENT_CODE_CARD_CHARS:
         return code
     return (
         code[:_EXPERIMENT_CODE_CARD_CHARS]
-        + f"\n# …（脚本共 {len(code)} 字符，此处截断；完整内容请 ws_read {EXPERIMENT_SCRIPT_PATH}）"
+        + f"\n# …（脚本共 {len(code)} 字符，此处截断；完整内容请 ws_read {path}）"
     )
 
 
@@ -2748,12 +3027,15 @@ class ValidationNode(LlmSkillNode):
 
     沙盒复跑是尽力而为的增强（与数据阶段清洗同一纪律）：监督者 / 会话出口 /
     工作区实验脚本任一缺席都**如实降级**为「仅判读」（robustness.executed=false
-    + 原因），绝不假装跑过。G3 只在检查真实执行、脚本跑通且至少一项未通过时
-    触发（§9.1）：判定数字来自检验脚本的标记行，节点只做计数与比例。
+    + 原因），绝不假装跑过。检验验收通过后进生成者-评审者环（§8.4：复跑核对 +
+    独立审稿，驳回退 R2 修复、僵持记进 ``robustness["review"]``）。G3 在检查真实
+    执行、脚本跑通且至少一项未通过，或任一审稿环（实验 / 检验）僵持时触发（§9.1）：
+    判定数字来自检验脚本的标记行，节点只做计数与比例。
     """
 
     prompt_id = "validating.default"
     sandbox_prompt_id = ROBUSTNESS_PROMPT_ID
+    review_prompt_id = ROBUSTNESS_REVIEW_PROMPT_ID
     state = TaskState.VALIDATING
 
     #: R2 运行预算：检验脚本比实验脚本简单，4 次足够（§4.7 loop 行的节点内额度）。
@@ -2795,10 +3077,9 @@ class ValidationNode(LlmSkillNode):
         if base.status != NodeResult.SUCCEEDED:
             return base
 
-        capture = _SandboxCapture()
-        robustness = self._execute_checks(ctx, services, base.outputs, capture)
+        robustness, produced = self._execute_checks(ctx, services, base.outputs)
         outputs = {**base.outputs, "robustness": robustness}
-        artifacts = base.artifacts + tuple(capture.artifacts)
+        artifacts = base.artifacts + tuple(produced)
 
         experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
         gate = self._g3_review(robustness, experiment.get("review"))
@@ -2822,10 +3103,10 @@ class ValidationNode(LlmSkillNode):
         ctx: NodeContext,
         services: NodeServices,
         judgement: Mapping[str, Any],
-        capture: _SandboxCapture,
-    ) -> dict[str, Any]:
-        def skipped(reason: str) -> dict[str, Any]:
-            return {"executed": False, "reason": reason}
+    ) -> tuple[dict[str, Any], list[Any]]:
+        """检验沙盒（子代理）→ 验收通过后进生成者-评审者环；返回 (robustness, 产物引用)。"""
+        def skipped(reason: str) -> tuple[dict[str, Any], list[Any]]:
+            return {"executed": False, "reason": reason}, []
 
         if services.tools is None:
             return skipped("未配置工具端口，跳过稳健性复跑")
@@ -2881,105 +3162,139 @@ class ValidationNode(LlmSkillNode):
             "available_packages": self._available_packages,
         })
 
-        final_answer: dict[str, Any] = {}
-        task = SandboxTask(
-            task_id=f"{ctx.step_id}:robustness",
-            goal="复跑实验逻辑，在受控扰动下检验结论的稳健性并逐项给出判定",
-            system_prompt=system_prompt,
-            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
-            assertions=(
-                SandboxAssertion(
-                    id="run_ok",
-                    description="检验脚本经 python_run 成功运行（退出码 0）",
-                    check=_experiment_run_ok_check,
-                ),
-                SandboxAssertion(
-                    id="checks_reported",
-                    description=(
-                        f"打印检验结果标记行 OMM_METRICS_JSON（checks 列表 ≥ {MIN_ROBUSTNESS_CHECKS} 项，"
-                        "每项含 id/name/passed/value/threshold）"
-                    ),
-                    check=_robustness_checks_check,
-                ),
-                SandboxAssertion(
-                    id="assumptions_covered",
-                    description=(
-                        "至少一项检查通过 assumption_id 指向须检验的模型假设"
-                        + (f"（{'、'.join(focus_ids)}）" if focus_ids else "（本方案无须检验的假设）")
-                    ),
-                    check=_assumption_coverage_check(focus),
-                ),
-            ),
-            seeds=dict(SANDBOX_SEEDS),
-            max_runs=max(1, min(self.max_sandbox_runs, budgets.max_sandbox_runs)),
-        )
-
+        total_runs = max(1, min(self.max_sandbox_runs, budgets.max_sandbox_runs))
         llm_calls = {"count": 0}
         chat = text_protocol_chat(
             services.llm,
             label=self.sandbox_prompt_id,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        executor = _sandbox_tool_executor(ctx, services, capture)
         fingerprint = _env_fingerprint(ctx, services)
+        waves: list[_SandboxCapture] = []
+        last_envelope: dict[str, Any] = {}
 
-        def runner(_spec: SpawnSpec) -> ResultEnvelope:
-            report = run_sandbox_task(
-                task,
-                chat=chat,
-                execute_tools=executor,
-                workspace_files=lambda: _workspace_files(ctx, services),
-                read_text=_workspace_reader(ctx, services),
-                env_fingerprint=fingerprint,
-                publish_code=_publish_code_callback(
-                    ctx, services, capture, "validation_checks.py"
+        def sandbox_wave(
+            brief_suffix: str | None, max_runs: int
+        ) -> _SandboxWaveResult | None:
+            """一次经监督者派发的检验沙盒波（首波 / 按审稿意见修复）。"""
+            capture = _SandboxCapture()
+            final_answer: dict[str, Any] = {}
+            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            if brief_suffix:
+                brief += "\n\n" + brief_suffix
+            task = SandboxTask(
+                task_id=f"{ctx.step_id}:robustness",
+                goal="复跑实验逻辑，在受控扰动下检验结论的稳健性并逐项给出判定",
+                system_prompt=system_prompt,
+                task_brief=brief,
+                assertions=(
+                    SandboxAssertion(
+                        id="run_ok",
+                        description="检验脚本经 python_run 成功运行（退出码 0）",
+                        check=_experiment_run_ok_check,
+                    ),
+                    SandboxAssertion(
+                        id="checks_reported",
+                        description=(
+                            f"打印检验结果标记行 OMM_METRICS_JSON（checks 列表 ≥ {MIN_ROBUSTNESS_CHECKS} 项，"
+                            "每项含 id/name/passed/value/threshold）"
+                        ),
+                        check=_robustness_checks_check,
+                    ),
+                    SandboxAssertion(
+                        id="assumptions_covered",
+                        description=(
+                            "至少一项检查通过 assumption_id 指向须检验的模型假设"
+                            + (f"（{'、'.join(focus_ids)}）" if focus_ids else "（本方案无须检验的假设）")
+                        ),
+                        check=_assumption_coverage_check(focus),
+                    ),
                 ),
-                on_final_answer=final_answer.update,
+                seeds=dict(SANDBOX_SEEDS),
+                max_runs=max_runs,
             )
-            return ResultEnvelope(
-                status="done",
-                output=report,
-                usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+            executor = _sandbox_tool_executor(ctx, services, capture)
+
+            def runner(_spec: SpawnSpec) -> ResultEnvelope:
+                report = run_sandbox_task(
+                    task,
+                    chat=chat,
+                    execute_tools=executor,
+                    workspace_files=lambda: _workspace_files(ctx, services),
+                    read_text=_workspace_reader(ctx, services),
+                    env_fingerprint=fingerprint,
+                    publish_code=_publish_code_callback(
+                        ctx, services, capture, "validation_checks.py"
+                    ),
+                    on_final_answer=final_answer.update,
+                )
+                return ResultEnvelope(
+                    status="done",
+                    output=report,
+                    usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+                )
+
+            envelope = supervisor.spawn(
+                SpawnSpec(
+                    kind="sandbox",
+                    goal=task.goal,
+                    context_slice={
+                        "chosen_plan": plan,
+                        "metrics": metrics,
+                        "risk_points": risk_points,
+                        "assumptions_to_verify": focus,
+                    },
+                    toolset=tuple(SANDBOX_TOOL_NAMES),
+                    tool_tier="execute",
+                    budgets=budgets,
+                    output_schema_id="sandbox-run-report.v1",
+                ),
+                runner,
+                parent_tier="execute",
+                output_validator=_report_shape_problems,
             )
+            waves.append(capture)
+            last_envelope["value"] = envelope
+            if not envelope.ok or envelope.output is None:
+                return None
+            return envelope.output, capture, final_answer
 
-        envelope = supervisor.spawn(
-            SpawnSpec(
-                kind="sandbox",
-                goal=task.goal,
-                context_slice={
-                    "chosen_plan": plan,
-                    "metrics": metrics,
-                    "risk_points": risk_points,
-                    "assumptions_to_verify": focus,
-                },
-                toolset=tuple(SANDBOX_TOOL_NAMES),
-                tool_tier="execute",
-                budgets=budgets,
-                output_schema_id="sandbox-run-report.v1",
-            ),
-            runner,
-            parent_tier="execute",
-            output_validator=_report_shape_problems,
-        )
-
-        if not envelope.ok or envelope.output is None:
+        first = sandbox_wave(None, total_runs)
+        if first is None:
+            envelope = last_envelope["value"]
             return {
                 "executed": False,
                 "reason": f"检验子代理未完成（{envelope.status}"
                 + (f"，{envelope.error_code}" if envelope.error_code else "")
                 + "）；检验结论沿用评审判读",
-            }
+            }, _union_artifacts(waves, None)
 
-        report = envelope.output
+        report, capture, final_answer = first
+        usage = {"runs": int(report["usage"]["runs"]), "waves": int(report["attempts"])}
+        review: dict[str, Any] | None = None
+        if str(report.get("status")) == "passed":
+            # 生成者-评审者（§8.4）：复跑核对 → 独立审稿 → 驳回退 R2 → 僵持进 G3
+            review, (report, capture, final_answer) = _run_review_loop(
+                ctx,
+                services,
+                supervisor,
+                self._registry,
+                self._review_spec(ctx, plan, code, metrics, focus, focus_ids, risk_points),
+                first=first,
+                sandbox_wave=sandbox_wave,
+                max_runs=total_runs,
+                usage=usage,
+            )
+
         status = str(report.get("status") or "failed")
         checks = _normalize_checks(capture.metrics, focus_ids) if status == "passed" else []
         failed = [check for check in checks if not check["passed"]]
         coverage = _assumption_coverage(focus, checks) if status == "passed" else []
-        return {
+        robustness = {
             "executed": True,
             "status": status,
-            "attempts": int(report.get("attempts") or 0),
-            "llm_calls": llm_calls["count"],
+            "attempts": usage["waves"],
+            "llm_calls": llm_calls["count"] + int((review or {}).get("llm_calls") or 0),
             "summary": str(final_answer.get("summary") or ""),
             "checks": checks,
             "checks_total": len(checks),
@@ -2993,6 +3308,69 @@ class ValidationNode(LlmSkillNode):
             "final_code_artifact": str(report.get("final_code_artifact") or ""),
             "produced_artifacts": list(report.get("produced_artifacts") or []),
         }
+        if review is not None:
+            robustness["review"] = review
+        return robustness, _union_artifacts(waves, capture)
+
+    def _review_spec(
+        self,
+        ctx: NodeContext,
+        plan: Mapping[str, Any],
+        experiment_code: str,
+        metrics: Mapping[str, Any],
+        focus: Sequence[Mapping[str, Any]],
+        focus_ids: Sequence[str],
+        risk_points: str,
+    ) -> _ReviewSpec:
+        """稳健性审稿口径：材料 = 方案 / 须检验假设 / 实验脚本 / 检验脚本 / 检查结果 / 复跑。"""
+        script_path = f"steps/{ctx.step_id}/main.py"
+        assumptions = assumption_material(list(focus))
+
+        def materials(
+            capture: _SandboxCapture,
+            final_answer: Mapping[str, Any],
+            rerun: Mapping[str, Any],
+            files: Sequence[str],
+        ) -> dict[str, Any]:
+            return {
+                "chosen_plan": json.dumps(dict(plan), ensure_ascii=False),
+                "model_assumptions": assumptions,
+                "experiment_code": _clip_code(experiment_code),
+                "metrics": json.dumps(dict(metrics), ensure_ascii=False),
+                "checks_code": _clip_code(capture.code, script_path),
+                "checks": json.dumps(
+                    _normalize_checks(capture.metrics, focus_ids), ensure_ascii=False
+                ),
+                "rerun_report": rerun_material(rerun),
+                "checks_summary": str(final_answer.get("summary") or "无"),
+                "risk_points": risk_points or "无",
+                "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
+                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+            }
+
+        def context_slice(
+            capture: _SandboxCapture, rerun: Mapping[str, Any], round_no: int
+        ) -> dict[str, Any]:
+            checks = _normalize_checks(capture.metrics, focus_ids)
+            return {
+                "plan_id": plan.get("id"),
+                "checks_total": len(checks),
+                "checks_failed": sum(1 for check in checks if not check["passed"]),
+                "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+                "round": round_no,
+            }
+
+        return _ReviewSpec(
+            prompt_id=self.review_prompt_id,
+            output_schema_id="robustness-review.v1",
+            goal="独立核查稳健性检验脚本是否真的检验了结论、判定是否可信",
+            progress_kind="robustness_review",
+            task_label="robustness_review",
+            toolset=REVIEWER_TOOL_NAMES,
+            focus=ROBUSTNESS_REVIEW_FOCUS,
+            materials=materials,
+            context_slice=context_slice,
+        )
 
     # -- G3 gate ----------------------------------------------------------------
 
@@ -3001,12 +3379,14 @@ class ValidationNode(LlmSkillNode):
         robustness: Mapping[str, Any],
         review: Mapping[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]] | None:
-        """G3 结果采用闸门的两个触发源（任一即挂门，两者可叠加）：
+        """G3 结果采用闸门的三个触发源（任一即挂门，可叠加）：
 
         - 稳健性复跑真执行、脚本跑通且 ≥1 项检查未通过（v3.20 起）；
         - 实验阶段的生成者-评审者环**僵持**（§8.4「僵持到预算尽 → 上闸门」）：
-          独立审稿的阻断性意见到 R2 预算 / 审稿轮数用尽仍未解决（v3.32 起）。
-        选项 id 与引擎分支不变；僵持时推荐「重做实验」。
+          独立审稿的阻断性意见到 R2 预算 / 审稿轮数用尽仍未解决（v3.32 起）；
+        - 检验脚本自己的审稿环僵持（v3.33 起）：检查本身不可信时多给一个
+          ``redo:VALIDATING``「重做检验」选项（保留实验结果、只重做检验）并推荐它。
+        选项 id 复用修订门的 ``redo:<STATE>`` 语义，引擎分支不变。
         """
         failed: list[dict[str, Any]] = []
         total = 0
@@ -3016,16 +3396,11 @@ class ValidationNode(LlmSkillNode):
             if total <= 0:
                 failed = []
         stalemate = bool(review and review.get("executed") and review.get("stalemate"))
-        unresolved = (
-            [
-                dict(entry)
-                for entry in (review or {}).get("findings") or []
-                if isinstance(entry, Mapping) and entry.get("severity") == "blocker"
-            ]
-            if stalemate
-            else []
-        )
-        if not failed and not stalemate:
+        unresolved = _unresolved_blockers(review) if stalemate else []
+        checks_review = robustness.get("review") or {}
+        checks_stalemate = bool(checks_review.get("executed") and checks_review.get("stalemate"))
+        checks_unresolved = _unresolved_blockers(checks_review) if checks_stalemate else []
+        if not failed and not stalemate and not checks_stalemate:
             return None
 
         reasons: list[str] = []
@@ -3037,17 +3412,26 @@ class ValidationNode(LlmSkillNode):
                 f"独立审稿 {int((review or {}).get('rounds') or 0)} 轮后仍有 "
                 f"{len(unresolved)} 条阻断性意见未解决（{(review or {}).get('reason') or '僵持'}）"
             )
+        if checks_stalemate:
+            reasons.append(
+                f"检验脚本的独立审稿 {int(checks_review.get('rounds') or 0)} 轮后仍有 "
+                f"{len(checks_unresolved)} 条阻断性意见未解决（{checks_review.get('reason') or '僵持'}）"
+            )
         reason = "；".join(reasons) + "。请确认实验结果的处置方式"
         if stalemate or (total > 0 and len(failed) / total >= G3_REDO_RECOMMEND_RATIO):
             recommended = "redo:EXPERIMENTING"
+        elif checks_stalemate:
+            recommended = G3_REDO_VALIDATING_OPTION["id"]
         else:
             recommended = G3_ACCEPT_OPTION_ID
         options = []
         for option in G3_OPTIONS:
-            entry = dict(option)
+            if option["id"] == "redo:EXPERIMENTING" and checks_stalemate:
+                options.append(dict(G3_REDO_VALIDATING_OPTION))
+            options.append(dict(option))
+        for entry in options:
             if entry["id"] == recommended:
                 entry["recommended"] = True
-            options.append(entry)
         meta = {
             "gate": "G3",
             "decision_type": "generic",
@@ -3064,9 +3448,21 @@ class ValidationNode(LlmSkillNode):
                 # 审稿僵持：未解决的阻断性意见逐条进卡片（拍板时看得到审稿人指的是什么）
                 "review_stalemate": stalemate,
                 "reviewer_findings": unresolved,
+                # 检验脚本自己的审稿僵持（检查不可信 ≠ 结论不稳健，分开列）
+                "checks_review_stalemate": checks_stalemate,
+                "checks_reviewer_findings": checks_unresolved,
             },
         }
         return reason, meta
+
+
+def _unresolved_blockers(review: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """审稿环结论里的阻断性意见（僵持时即「未解决」）。"""
+    return [
+        dict(entry)
+        for entry in (review or {}).get("findings") or []
+        if isinstance(entry, Mapping) and entry.get("severity") == "blocker"
+    ]
 
 
 def render_paper_markdown(document: Mapping[str, Any]) -> str:

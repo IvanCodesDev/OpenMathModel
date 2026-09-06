@@ -3,17 +3,22 @@
 import math
 
 from omm_agent_skills import (
+    CLEANING_REVIEW_PROMPT_ID,
     REVIEW_MAX_ROUNDS,
     REVIEW_PROMPT_ID,
     REVIEWER_KNOWLEDGE_TOOL_NAMES,
     REVIEWER_MAX_TOOL_ROUNDS,
     REVIEWER_TOOL_NAMES,
+    ROBUSTNESS_REVIEW_PROMPT_ID,
     compare_metrics,
     normalize_verdict,
     reviewer_tool_brief,
 )
 from omm_agent_skills.review import (
+    CLEANING_REVIEW_FOCUS,
+    EXPERIMENT_REVIEW_FOCUS,
     REVIEW_MAX_FINDINGS,
+    ROBUSTNESS_REVIEW_FOCUS,
     findings_material,
     rerun_material,
     review_feedback,
@@ -23,6 +28,8 @@ from omm_agent_skills.review import (
 
 def test_review_constants_are_the_design_values():
     assert REVIEW_PROMPT_ID == "experiment_review.default"
+    assert CLEANING_REVIEW_PROMPT_ID == "data_cleaning_review.default"
+    assert ROBUSTNESS_REVIEW_PROMPT_ID == "validating_review.default"
     assert REVIEW_MAX_ROUNDS == 2
     assert REVIEWER_MAX_TOOL_ROUNDS == 3
     assert REVIEWER_TOOL_NAMES == ("ws_read", "ws_list")
@@ -61,6 +68,43 @@ def test_compare_metrics_treats_a_missing_marker_line_as_not_reproducible():
 def test_compare_metrics_does_not_confuse_bools_with_numbers():
     consistent, diffs = compare_metrics({"ok": True}, {"ok": 1})
     assert consistent is False and diffs == ["ok：首跑 True，复跑 1"]
+
+
+def test_compare_metrics_recurses_into_check_lists_with_float_tolerance():
+    """稳健性标记行是 checks: [{...}]：逐项逐字段比，数值仍按容差。"""
+    first = {"checks": [
+        {"id": "a", "passed": True, "value": 0.05, "threshold": 0.2},
+        {"id": "b", "passed": False, "value": 0.4, "threshold": 0.15},
+    ]}
+    same = {"checks": [
+        {"id": "a", "passed": True, "value": 0.05 + 1e-12, "threshold": 0.2},
+        {"id": "b", "passed": False, "value": 0.4, "threshold": 0.15},
+    ]}
+    assert compare_metrics(first, same) == (True, [])
+
+    drifted = {"checks": [
+        {"id": "a", "passed": True, "value": 0.06, "threshold": 0.2},
+        {"id": "b", "passed": True, "value": 0.4, "threshold": 0.15, "detail": "x"},
+    ]}
+    consistent, diffs = compare_metrics(first, drifted)
+    assert consistent is False
+    assert diffs == [
+        "checks[0].value：首跑 0.05，复跑 0.06",
+        "checks[1].detail：首跑缺失，复跑 'x'",
+        "checks[1].passed：首跑 False，复跑 True",
+    ]
+
+
+def test_compare_metrics_reports_length_and_shape_mismatches_without_descending():
+    consistent, diffs = compare_metrics(
+        {"checks": [{"id": "a"}, {"id": "b"}], "rows": {"before": 10}},
+        {"checks": [{"id": "a"}], "rows": 10},
+    )
+    assert consistent is False
+    assert diffs == [
+        "checks：首跑 2 项，复跑 1 项",
+        "rows：首跑 {'before': 10}，复跑 10",
+    ]
 
 
 # -- normalize_verdict -----------------------------------------------------------
@@ -131,6 +175,19 @@ def test_reviewer_tool_brief_lists_only_the_granted_tools():
     with_knowledge = reviewer_tool_brief(REVIEWER_TOOL_NAMES + REVIEWER_KNOWLEDGE_TOOL_NAMES)
     assert "- knowledge_search：" in with_knowledge and "- knowledge_read：" in with_knowledge
     assert "标出处 id" in with_knowledge
+
+
+def test_reviewer_tool_brief_swaps_only_the_focus_sentence_per_consumer():
+    """三位审稿人共用工具协议与判定纪律，只有静读要点那一句不同。"""
+    experiment = reviewer_tool_brief(REVIEWER_TOOL_NAMES)
+    cleaning = reviewer_tool_brief(REVIEWER_TOOL_NAMES, CLEANING_REVIEW_FOCUS)
+    robustness = reviewer_tool_brief(REVIEWER_TOOL_NAMES, ROBUSTNESS_REVIEW_FOCUS)
+    assert experiment == reviewer_tool_brief(REVIEWER_TOOL_NAMES, EXPERIMENT_REVIEW_FOCUS)
+    assert "指标口径是否与基线同口径" in experiment
+    assert "目标列有没有被越权插补" in cleaning and "基线同口径" not in cleaning
+    assert "passed 与 value / threshold 的方向" in robustness
+    for brief in (experiment, cleaning, robustness):
+        assert "复跑核对结果已由系统给出" in brief and "至少给出一条 blocker" in brief
 
 
 def test_rerun_material_states_the_facts_for_each_outcome():

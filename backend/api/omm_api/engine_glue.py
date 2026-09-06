@@ -427,13 +427,15 @@ def _sandbox_hardware() -> str:
 #: validating.sandbox——三者缺一同样回落模拟。
 #: H3 方案阶段是三视角 Proposer 并行提议（model_planning.proposer）+ 一次归约
 #: （model_planning.reduce）+ 一次规范化（model_planning.formalize：假设表 / 符号表）；
-#: model_planning.default 保留给无监督者的单次调用路径。实验阶段验收通过后的
-#: 独立审稿（§8.4 生成者-评审者）用 experiment_review.default。
+#: model_planning.default 保留给无监督者的单次调用路径。三个沙盒消费方验收通过
+#: 后的独立审稿（§8.4 生成者-评审者）各用自己的角色卡：experiment_review.default /
+#: data_cleaning_review.default / validating_review.default。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
         "data_preparation.default",
         "data_cleaning.sandbox",
+        "data_cleaning_review.default",
         "model_planning.default",
         "model_planning.proposer",
         "model_planning.reduce",
@@ -442,6 +444,7 @@ _REQUIRED_PROMPTS = frozenset(
         "experiment_review.default",
         "validating.default",
         "validating.sandbox",
+        "validating_review.default",
         "paper_outline.default",
         "paper_section.default",
         "paper_finalize.default",
@@ -478,6 +481,7 @@ _PROMPT_NODE_IDS = {
     "problem_analysis.default": TaskState.PROBLEM_ANALYSIS.value,
     "data_preparation.default": TaskState.DATA_PREPARATION.value,
     "data_cleaning.sandbox": TaskState.DATA_PREPARATION.value,
+    "data_cleaning_review.default": TaskState.DATA_PREPARATION.value,
     "model_planning.default": TaskState.MODEL_PLANNING.value,
     "model_planning.proposer": TaskState.MODEL_PLANNING.value,
     "model_planning.reduce": TaskState.MODEL_PLANNING.value,
@@ -487,6 +491,7 @@ _PROMPT_NODE_IDS = {
     "experiment_review.default": TaskState.EXPERIMENTING.value,
     "validating.default": TaskState.VALIDATING.value,
     "validating.sandbox": TaskState.VALIDATING.value,
+    "validating_review.default": TaskState.VALIDATING.value,
     "paper_outline.default": TaskState.PAPER_WRITING.value,
     "paper_section.default": TaskState.PAPER_WRITING.value,
     "paper_finalize.default": TaskState.PAPER_WRITING.value,
