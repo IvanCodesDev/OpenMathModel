@@ -8,6 +8,14 @@ by replaying the log.
 Concurrency contract: one run is advanced by at most one caller at a time.
 That mutual exclusion is owned by the worker's lease (backend/worker), not
 by this engine.
+
+Scheduling contract (design doc §6): "which state runs next" is asked of a
+``Scheduler`` port. The default ``LinearScheduler`` is the historical
+hard-coded WORK_SEQUENCE walk; ``GraphScheduler`` answers from a GraphSpec.
+An optional shadow scheduler is asked the same question on the same snapshot
+and any disagreement is recorded as a ``SchedulingDivergence`` — never acted
+upon, never emitted as an event (§6.5: shadow equivalence is proven on the
+control-flow event sequence, so the shadow must not touch it).
 """
 
 from __future__ import annotations
@@ -16,11 +24,18 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any
 
+from .graph import (
+    DivergenceHook,
+    LinearScheduler,
+    Scheduler,
+    SchedulingDivergence,
+    ShadowComparator,
+)
 from .models import AgentEvent, EventType, StepStatus, TaskRunSnapshot
 from .nodes import NodeContext, NodeRegistry, NodeResult
 from .ports import Clock, EventSink, IdGenerator, NodeServices
 from .reducer import apply_event
-from .states import TaskState, WORK_STATES, next_work_state
+from .states import TaskState, WORK_STATES
 
 
 @dataclass
@@ -47,12 +62,27 @@ class TaskRunEngine:
         ids: IdGenerator,
         nodes: NodeRegistry,
         services: NodeServices,
+        scheduler: Scheduler | None = None,
+        shadow: Scheduler | None = None,
+        on_divergence: DivergenceHook | None = None,
     ) -> None:
         self._sink = sink
         self._clock = clock
         self._ids = ids
         self._nodes = nodes
         self._services = services
+        # 缺省 = 历史线性推进，行为逐字节不变；影子只观测（§6.5）。
+        self._scheduler: Scheduler = scheduler or LinearScheduler()
+        self._shadow = ShadowComparator(self._scheduler, shadow, on_divergence)
+
+    @property
+    def scheduler(self) -> Scheduler:
+        return self._scheduler
+
+    @property
+    def shadow_divergences(self) -> list[SchedulingDivergence]:
+        """主 / 影子调度器的分歧记录（无影子或从未分歧时为空）。"""
+        return self._shadow.divergences
 
     # -- event plumbing ----------------------------------------------------
 
@@ -129,7 +159,13 @@ class TaskRunEngine:
         if snapshot.state is TaskState.NEEDS_REVIEW or snapshot.paused:
             return AdvanceOutcome(AdvanceOutcome.IDLE, snapshot, events)
 
-        target = self._select_target(snapshot)
+        target = self._scheduler.select_target(snapshot)
+        # 影子在同一份快照上作答，所以在改动快照之前问它。
+        self._shadow.compare_target(snapshot, target)
+        # 调度器是纯函数：兑现 force_rerun（重跑当前）后由引擎清标志。该标志只会在
+        # 工作态为真，且 _on_step_started 也会清一次，这里清是为了让「选中即兑现」
+        # 的语义留在引擎而不散落在各调度器里。
+        snapshot.force_rerun = False
         if target is TaskState.COMPLETED:
             self._record(snapshot, EventType.RUN_COMPLETED, {}, events)
             return AdvanceOutcome(AdvanceOutcome.COMPLETED, snapshot, events)
@@ -182,6 +218,10 @@ class TaskRunEngine:
                     # 闸门元数据（闸门号/选项/证据）只在节点声明时携带；
                     # 缺省时载荷与历史版本逐字节一致（金轨迹稳定）。
                     review_payload["gate"] = dict(result.review_meta)
+                gate_id = (result.review_meta or {}).get("gate")
+                self._shadow.check_gate(
+                    snapshot, target, str(gate_id) if gate_id is not None else None
+                )
                 self._record(
                     snapshot,
                     EventType.REVIEW_REQUESTED,
@@ -364,29 +404,6 @@ class TaskRunEngine:
         return events
 
     # -- internals ----------------------------------------------------------
-
-    def _select_target(self, snapshot: TaskRunSnapshot) -> TaskState:
-        if snapshot.state is TaskState.CREATED:
-            return next_work_state(TaskState.CREATED)  # type: ignore[return-value]
-        if snapshot.state in WORK_STATES:
-            if snapshot.force_rerun:
-                # RUN_RETRIED 要求重跑当前状态（覆盖"最近步骤已 SUCCEEDED 则顺延"的规则）
-                snapshot.force_rerun = False
-                return snapshot.state
-            latest = self._latest_step(snapshot, snapshot.state)
-            if latest is not None and latest.status.value == "SUCCEEDED":
-                return next_work_state(snapshot.state)  # type: ignore[return-value]
-            # No step yet (resumed via retry/review) or last attempt failed:
-            # re-run the current state.
-            return snapshot.state
-        raise RuntimeError(f"advance called in unexpected state {snapshot.state}")
-
-    @staticmethod
-    def _latest_step(snapshot: TaskRunSnapshot, state: TaskState):
-        for step in reversed(snapshot.steps):
-            if step.state is state:
-                return step
-        return None
 
     def _run_node(
         self, snapshot: TaskRunSnapshot, state: TaskState, step_id: str, attempt: int

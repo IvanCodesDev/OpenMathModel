@@ -211,3 +211,86 @@ def test_apply_action_rejects_unknown_action_and_run(tmp_path):
         runtime.apply_action(run_id, "warp")
     with pytest.raises(KeyError):
         runtime.apply_action("run_missing", "pause")
+
+
+# -- 调度档位 OMM_GRAPH（§4.9）：图驱动与线性推进控制流等价（§6.5）------------------------
+
+
+def _control_flow(events):
+    return [
+        (
+            event.event_type,
+            event.payload.get("from"),
+            event.payload.get("to"),
+            event.payload.get("state"),
+            event.payload.get("attempt"),
+            event.payload.get("resume_state"),
+            event.payload.get("approved"),
+            event.payload.get("target_state"),
+        )
+        for event in events
+    ]
+
+
+def _drive_gate_reject_retry(runtime, loop):
+    """审批门 → 拒绝（退回重做）→ 门再弹 → 批准 → 完成：worker 里最曲折的一条控制流。"""
+    run_id = runtime.create_run("proj_1", inputs={"problem_statement": "题目"})
+    assert drain(loop) == [AdvanceOutcome.REVIEW_REQUESTED]
+    runtime.apply_action(run_id, "reject", reason="退回重做")
+    assert drain(loop) == [AdvanceOutcome.REVIEW_REQUESTED]
+    runtime.apply_action(run_id, "approve", reason="方案可行")
+    assert drain(loop) == [AdvanceOutcome.COMPLETED]
+    return run_id
+
+
+def _gated_runtime(root, graph_mode):
+    return WorkerRuntime(
+        WorkerConfig(root=root),
+        nodes=echo_registry({TaskState.MODEL_PLANNING: ReviewNode()}),
+        worker_id=f"worker_{graph_mode}",
+        graph_mode=graph_mode,
+    )
+
+
+def test_graph_driven_worker_matches_linear_control_flow(tmp_path):
+    baseline = _gated_runtime(tmp_path / "linear", "off")
+    graph = _gated_runtime(tmp_path / "graph", "linear-v1")
+    assert (baseline.graph_mode, graph.graph_mode) == ("off", "linear-v1")
+
+    base_run = _drive_gate_reject_retry(baseline, WorkerLoop(baseline))
+    graph_run = _drive_gate_reject_retry(graph, WorkerLoop(graph))
+
+    base_events = baseline.events.load(base_run)
+    graph_events = graph.events.load(graph_run)
+    assert _control_flow(graph_events) == _control_flow(base_events)
+    assert [step.attempt for step in graph.get_snapshot(graph_run).steps
+            if step.state is TaskState.MODEL_PLANNING] == [1, 2]
+    # 图驱动时线性当影子：每一步的决策也逐一相同
+    assert graph.shadow_divergences == []
+
+
+def test_default_graph_mode_is_shadow_and_records_no_divergence(tmp_path, monkeypatch):
+    monkeypatch.delenv("OMM_GRAPH", raising=False)
+    runtime = make_runtime(tmp_path, overrides={TaskState.MODEL_PLANNING: ReviewNode()})
+    assert runtime.graph_mode == "shadow"
+
+    _drive_gate_reject_retry(runtime, WorkerLoop(runtime))
+
+    assert runtime.shadow_divergences == []
+
+
+def test_graph_mode_comes_from_env_and_bad_values_fall_back_with_a_warning(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv("OMM_GRAPH", "linear-v1")
+    assert make_runtime(tmp_path / "a").graph_mode == "linear-v1"
+    monkeypatch.setenv("OMM_GRAPH", "off")
+    assert make_runtime(tmp_path / "b").graph_mode == "off"
+
+    monkeypatch.setenv("OMM_GRAPH", "modeling-v2")
+    with caplog.at_level("WARNING", logger="omm_worker.runtime"):
+        runtime = make_runtime(tmp_path / "c")
+    assert runtime.graph_mode == "shadow"
+    assert any("OMM_GRAPH='modeling-v2'" in record.getMessage() for record in caplog.records)
+    # 显式参数优先于环境变量
+    assert WorkerRuntime(
+        WorkerConfig(root=tmp_path / "d"), nodes=echo_registry(), graph_mode="off"
+    ).graph_mode == "off"

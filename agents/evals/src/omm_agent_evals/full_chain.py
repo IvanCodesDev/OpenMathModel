@@ -41,6 +41,7 @@ from omm_agent_core import (
     TaskState,
     ToolResult,
     replay_events,
+    schedulers_for_mode,
 )
 from omm_agent_harness import SubagentSupervisor
 from omm_agent_skills import (
@@ -536,12 +537,17 @@ def build_full_chain_session(
     record_tool_events: bool = True,
     project_id: str = "proj_eval_full_chain",
     validation_run: ScriptedRun | None = None,
+    graph_mode: str = "off",
 ) -> FullChainSession:
     """Assemble engine + all six real skill nodes over in-memory ports.
 
     ``validation_run`` scripts the validation stage's robustness re-run
     (default: three passing checks); script failing checks to drive the G3
     result gate.
+
+    ``graph_mode`` is the ``OMM_GRAPH`` profile (§4.9): the eval baseline is
+    ``off`` = the historical linear engine; ``linear-v1`` lets the Graph v1
+    scheduler drive and ``shadow`` compares both (see ``shadow.py``).
     """
     registry = load_default_registry()
     sink = InMemoryEventSink()
@@ -578,8 +584,15 @@ def build_full_chain_session(
             registry, require_confirmation=require_confirmation
         ),
     }
+    scheduler, shadow = schedulers_for_mode(graph_mode)
     engine = TaskRunEngine(
-        sink=sink, clock=clock, ids=ids, nodes=nodes, services=services
+        sink=sink,
+        clock=clock,
+        ids=ids,
+        nodes=nodes,
+        services=services,
+        scheduler=scheduler,
+        shadow=shadow,
     )
     snapshot, _ = engine.create_run(
         project_id, inputs={"problem_statement": PROBLEM_STATEMENT}

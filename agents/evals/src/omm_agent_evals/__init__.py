@@ -9,6 +9,8 @@
   DATA_PREPARATION/EXPERIMENTING/VALIDATING/PAPER_WRITING 为场景内简化节点。
 - ``full_chain``：六阶段真实 LLM 节点全链（agents/skills 全部节点），引擎直驱，
   LLM 与 python_run 工具打桩，覆盖审批门、实验修复轮、审批拒绝重试与失败恢复。
+- ``shadow``：Graph v1（linear-v1）影子等价（设计文档 §6.5）——全链场景在现引擎
+  与图调度下各跑一趟，控制流事件序列逐一比对。
 """
 
 from .full_chain import (
@@ -53,6 +55,17 @@ from .scenario import (
     build_runtime,
     canned_proposer,
 )
+from .shadow import (
+    CONTROL_FLOW_FIELDS,
+    SHADOW_SCENARIOS,
+    ShadowReport,
+    ShadowScenario,
+    compare_scenario,
+    control_flow_trace,
+    run_scenario,
+    scenario_names,
+    snapshot_control_flow,
+)
 
 __all__ = [
     "CANNED_ANALYSIS",
@@ -69,6 +82,7 @@ __all__ = [
     "CANNED_ROBUSTNESS",
     "CANNED_VALIDATION",
     "CANNED_VALIDATION_CODE",
+    "CONTROL_FLOW_FIELDS",
     "EXPERIMENT_CODE",
     "FULL_CHAIN_CHAT_SEQUENCE",
     "FULL_CHAIN_ENV",
@@ -79,10 +93,13 @@ __all__ = [
     "FULL_CHAIN_ROBUSTNESS_CHECKS",
     "GOLDEN_EVENT_TYPES",
     "PROBLEM_STATEMENT",
+    "SHADOW_SCENARIOS",
     "VALIDATION_CODE_MARKER",
     "FakeToolInvoker",
     "FullChainSession",
     "ScriptedRun",
+    "ShadowReport",
+    "ShadowScenario",
     "build_full_chain_llm",
     "build_full_chain_session",
     "build_llm",
@@ -90,7 +107,12 @@ __all__ = [
     "canned_paper_section",
     "canned_proposer",
     "canned_sandbox_agent",
+    "compare_scenario",
+    "control_flow_trace",
     "robustness_success",
+    "run_scenario",
     "sandbox_failure",
     "sandbox_success",
+    "scenario_names",
+    "snapshot_control_flow",
 ]

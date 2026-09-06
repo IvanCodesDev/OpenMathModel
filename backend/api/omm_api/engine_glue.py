@@ -34,15 +34,19 @@ from omm_agent_core import (
     AgentEvent as CoreEvent,
 )
 from omm_agent_core import (
+    GRAPH_MODE_ENV,
     ArtifactRef,
     EventType,
     NodeContext,
     NodeResult,
     NodeServices,
+    SchedulingDivergence,
     TaskRunEngine,
     TaskRunSnapshot,
     TaskState,
     replay_events,
+    resolve_graph_mode,
+    schedulers_for_mode,
 )
 from omm_agent_core.errors import AgentError
 from omm_agent_harness import BudgetGovernor, NodeBudget, RunBudget, SubagentSupervisor
@@ -751,6 +755,35 @@ def _nodes_mode() -> str:
         )
         return "mixed"
     return raw
+
+
+def _graph_mode() -> str:
+    """调度档位开关（§4.9 ``OMM_GRAPH=off|shadow|linear-v1``）；缺省 shadow。
+
+    shadow = 现引擎线性推进、Graph v1（linear-v1）当影子逐步比对，分歧只进
+    warning 日志（§6.5：影子永不改推进、永不发事件）；linear-v1 = 图驱动、线性
+    当影子；off = 不比对。非法值按缺省处理并留警告，与 ``_nodes_mode`` 同口径。
+    """
+    mode, warning = resolve_graph_mode(os.environ.get(GRAPH_MODE_ENV))
+    if warning:
+        logger.warning("%s", warning)
+    return mode
+
+
+def _divergence_logger(run_id: str) -> Callable[[SchedulingDivergence], None]:
+    def on_divergence(divergence: SchedulingDivergence) -> None:
+        logger.warning(
+            "graph shadow divergence run=%s seq=%s state=%s kind=%s primary=%s shadow=%s %s",
+            run_id,
+            divergence.seq,
+            divergence.state,
+            divergence.kind,
+            divergence.primary,
+            divergence.shadow,
+            divergence.detail,
+        )
+
+    return on_divergence
 
 
 class _RealModeUnavailableNode:
@@ -1495,12 +1528,16 @@ def _build_engine(
         llm=llm_port,
         extras=extras,
     )
+    scheduler, shadow = schedulers_for_mode(_graph_mode())
     engine = TaskRunEngine(
         sink=_ProjectingSink(session, run, checkpoint=checkpoint),
         clock=_ApiClock(),
         ids=_ApiIds(),
         nodes={**SIM_NODES, **node_overrides},
         services=services,
+        scheduler=scheduler,
+        shadow=shadow,
+        on_divergence=_divergence_logger(run.id),
     )
     return engine, services
 

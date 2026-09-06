@@ -10,11 +10,16 @@ Execution-plane rules implemented here (PROJECT_STRUCTURE / system-overview):
 - events/artifacts are persisted before state moves (engine + JSONL sink);
 - the job loop is budgeted — a runaway registry cannot spin forever;
 - tools are minimally granted: the per-run invoker allowlists python_run only
-  and caps the caller tier at "execute" (isomorphic to the API-side glue).
+  and caps the caller tier at "execute" (isomorphic to the API-side glue);
+- scheduling follows the ``OMM_GRAPH`` profile (§4.9): ``shadow`` (default)
+  keeps the linear engine driving with the Graph v1 scheduler as a shadow,
+  ``linear-v1`` lets the graph drive, ``off`` disables the shadow. Divergences
+  are logged and kept on ``shadow_divergences``; they never alter a run.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -24,17 +29,21 @@ from pathlib import Path
 from typing import Any
 
 from omm_agent_core import (
+    GRAPH_MODE_ENV,
     Clock,
     EventType,
     IdGenerator,
     LlmPort,
     NodeRegistry,
     NodeServices,
+    SchedulingDivergence,
     SystemClock,
     TaskRunEngine,
     TaskRunSnapshot,
     UuidIdGenerator,
     replay_events,
+    resolve_graph_mode,
+    schedulers_for_mode,
 )
 from omm_agent_harness import SubagentSupervisor
 from omm_agent_tools import (
@@ -54,6 +63,8 @@ from omm_agent_tools import (
 from .event_store import JsonlEventStore
 from .lease import RunLeaseStore
 from .queue import FileJobQueue, JobEnvelope
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -99,6 +110,7 @@ class WorkerRuntime:
         clock: Clock | None = None,
         ids: IdGenerator | None = None,
         knowledge: Any = None,
+        graph_mode: str | None = None,
     ) -> None:
         self.config = config
         self.events = JsonlEventStore(config.events_dir)
@@ -117,6 +129,14 @@ class WorkerRuntime:
         # knowledge_read）。缺省与 assembly.build_real_nodes 同一份进程缓存实例，
         # 节点预检索与工具检索读的是同一个库。
         self._knowledge = knowledge if knowledge is not None else load_knowledge_library()
+        # 调度档位（§4.9 OMM_GRAPH）：显式参数优先，否则读环境变量；非法值按缺省
+        # 处理并留警告（与 API 侧 _nodes_mode 同口径，拼写错误不得静默换档）。
+        raw_mode = graph_mode if graph_mode is not None else os.environ.get(GRAPH_MODE_ENV)
+        self.graph_mode, warning = resolve_graph_mode(raw_mode)
+        if warning:
+            logger.warning("%s", warning)
+        #: 主 / 影子调度器的分歧记录（进程内累计；每条也进 warning 日志）。
+        self.shadow_divergences: list[SchedulingDivergence] = []
 
     @property
     def knowledge(self) -> Any:
@@ -215,19 +235,37 @@ class WorkerRuntime:
 
     # -- wiring -----------------------------------------------------------------
 
-    def _build_engine(self) -> tuple[TaskRunEngine, NodeServices]:
+    def _build_engine(self, run_id: str | None = None) -> tuple[TaskRunEngine, NodeServices]:
         services = NodeServices(
             clock=self._clock,
             ids=self._ids,
             artifacts=None,  # bound per run in _open_run
             llm=self._llm,
         )
+        scheduler, shadow = schedulers_for_mode(self.graph_mode)
+
+        def on_divergence(divergence: SchedulingDivergence) -> None:
+            self.shadow_divergences.append(divergence)
+            logger.warning(
+                "graph shadow divergence run=%s seq=%s state=%s kind=%s primary=%s shadow=%s %s",
+                run_id,
+                divergence.seq,
+                divergence.state,
+                divergence.kind,
+                divergence.primary,
+                divergence.shadow,
+                divergence.detail,
+            )
+
         engine = TaskRunEngine(
             sink=self.events,
             clock=self._clock,
             ids=self._ids,
             nodes=self._nodes,
             services=services,
+            scheduler=scheduler,
+            shadow=shadow,
+            on_divergence=on_divergence,
         )
         return engine, services
 
@@ -235,7 +273,7 @@ class WorkerRuntime:
         snapshot = self.get_snapshot(run_id)
         if snapshot is None:
             return None
-        engine, services = self._build_engine()
+        engine, services = self._build_engine(run_id)
 
         workspace = TaskWorkspace(self.config.workspaces_dir, run_id)
         services.artifacts = WorkspaceArtifactStore(workspace)

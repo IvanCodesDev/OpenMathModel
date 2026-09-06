@@ -125,6 +125,7 @@ def create_real_runtime(
     ids: Any = None,
     prompts: PromptRegistry | None = None,
     knowledge: KnowledgePort | None = None,
+    graph_mode: str | None = None,
 ) -> WorkerRuntime:
     """装配跑真实六阶段链的 WorkerRuntime。
 
@@ -133,7 +134,8 @@ def create_real_runtime(
     ``apply_action`` 转发审批/重试等控制动作。
 
     ``knowledge`` 缺省为进程缓存的卡片知识库；显式注入时节点与运行时拿到的是
-    同一个对象（提议人预检索与工具检索同库）。
+    同一个对象（提议人预检索与工具检索同库）。``graph_mode`` 缺省读 ``OMM_GRAPH``
+    （§4.9：off / shadow / linear-v1）。
     """
     library = knowledge if knowledge is not None else load_knowledge_library()
     return WorkerRuntime(
@@ -144,4 +146,5 @@ def create_real_runtime(
         clock=clock,
         ids=ids,
         knowledge=library,
+        graph_mode=graph_mode,
     )
