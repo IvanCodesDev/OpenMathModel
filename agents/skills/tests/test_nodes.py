@@ -2102,6 +2102,332 @@ def test_experiment_requires_prior_planning(registry):
     assert tools.python_calls == []
 
 
+# -- 生成者-评审者（§8.4）：确定性复跑核对 → reviewer 子代理 → 驳回退 R2 → 僵持进 G3 ----
+
+EXPERIMENT_CODE_V2 = EXPERIMENT_CODE.replace("rmse", "rmse_v2")
+
+REVIEW_ACCEPT = {
+    "verdict": "accept",
+    "findings": [
+        {
+            "id": "R1",
+            "severity": "minor",
+            "location": "metrics",
+            "issue": "只报了 rmse 一个口径",
+            "fix_hint": "论文阶段补 MAE",
+        }
+    ],
+    "summary": "实现忠实于方案，复跑一致，可作为后续检验依据。",
+}
+
+REVIEW_REJECT = {
+    "verdict": "reject",
+    "findings": [
+        {
+            "id": "R1",
+            "severity": "blocker",
+            "location": "baseline",
+            "issue": "基线与模型用了不同的评估切分，rmse 不可比",
+            "fix_hint": "基线改用同一份验证集",
+        },
+        {"id": "R2", "severity": "minor", "issue": "变量命名未按符号表"},
+    ],
+    "summary": "基线口径不同，结论暂不可信。",
+}
+
+
+def review_services(llm, tools, audits=None, governor=None):
+    services = make_full_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor(
+        audit=audits.append if audits is not None else None
+    )
+    if governor is not None:
+        services.extras["budget_governor"] = governor
+    return services
+
+
+def repairing_sandbox_script(final, first_code=EXPERIMENT_CODE, repaired_code=EXPERIMENT_CODE_V2):
+    """生成者会话：首波交 v1；看到「审稿驳回意见」的修复波交 v2。"""
+
+    def reply(messages):
+        if _saw_observation(messages):
+            return stub_response(final)
+        repairing = any("审稿驳回意见" in message["content"] for message in messages)
+        return tool_envelope(PYTHON_TOOL_NAME, code=repaired_code if repairing else first_code)
+
+    return [reply]
+
+
+def reviewer_script(*verdicts_by_code):
+    """审稿人会话：按 system 段里出现的脚本正文决定结论（独立上下文只认材料）。"""
+    table = list(verdicts_by_code)
+
+    def reply(messages):
+        system = next(m["content"] for m in messages if m["role"] == "system")
+        for code, verdict in table:
+            if code in system:
+                return stub_response(verdict)
+        raise AssertionError("reviewer card carries an unexpected script body")
+
+    return [reply]
+
+
+def review_llm(sandbox_script_entries, reviewer_entries):
+    return StubLlmPort(
+        {},
+        chat_scripts={
+            ExperimentExecutionNode.prompt_id: sandbox_script_entries,
+            ExperimentExecutionNode.review_prompt_id: reviewer_entries,
+        },
+    )
+
+
+def test_experiment_review_reruns_deterministically_then_spawns_an_accepting_reviewer(registry):
+    audits = []
+    llm = review_llm(sandbox_script(EXPERIMENT_FINAL), [stub_response(REVIEW_ACCEPT)])
+    tools = SandboxToolInvoker(runs=[tool_success(artifacts=(artifact(),))], files=["data/orders.csv"])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools, audits))
+
+    assert result.status == NodeResult.SUCCEEDED
+    # 复跑核对是节点自己做的：同一份脚本再 python_run 一次，不占生成者的 R2 运行数
+    assert [call[3]["code"] for call in tools.python_calls] == [EXPERIMENT_CODE, EXPERIMENT_CODE]
+    review = result.outputs["review"]
+    assert review["executed"] is True
+    assert review["verdict"] == "accept" and review["rounds"] == 1 and review["blockers"] == 0
+    assert review["stalemate"] is False
+    assert review["rerun"] == {
+        "executed": True,
+        "consistent": True,
+        "metrics": {"rmse": 0.12},
+        "diff": [],
+        "reason": "",
+    }
+    assert [entry["id"] for entry in review["findings"]] == ["R1"]
+    assert result.metrics == {"llm_attempts": 3, "code_rounds": 1, "waves": 1, "review_rounds": 1}
+    assert "独立审稿通过（1 轮，1 条意见）" in result.outputs["experiment_summary"]
+    # 首跑的结论原样保留，脚本照常落工作区
+    assert result.outputs["metrics"] == {"rmse": 0.12}
+    assert tools.written == {EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE}
+    assert [ref.kind for ref in result.artifacts] == ["table", "code"]
+    # 审稿人是独立上下文的 reviewer 子代理：只读工具、不给 python_run；审计带 toolset
+    spawn = next(entry for entry in audits if entry["phase"] == "spawn")
+    assert spawn["tool"] == "subagent:reviewer"
+    assert spawn["tool_tier"] == "readonly"
+    assert spawn["toolset"] == ["ws_read", "ws_list"]
+    assert spawn["output_schema_id"] == "experiment-review.v1"
+    review_call = next(c for c in llm.chat_calls if c.label == ExperimentExecutionNode.review_prompt_id)
+    card = system_prompt_of(review_call)
+    assert "实验审稿人" in card and EXPERIMENT_CODE in card
+    assert '"rmse": 0.12' in card
+    assert "核心指标与首跑逐键一致" in card
+    assert EXPERIMENT_FINAL["approach_summary"] in card
+    assert "- data/orders.csv" in card
+    assert "整数规划" in card, "审稿人拿到的是选中方案的结构化切片"
+    opening = user_prompt_of(review_call)
+    assert "- ws_read：" in opening and "- ws_list：" in opening
+    assert "python_run" not in opening and "knowledge_search" not in opening
+    assert "至多 3 次" in opening
+
+
+def test_experiment_reviewer_gets_knowledge_tools_when_the_port_is_wired(registry):
+    class KnowledgeAwareInvoker(SandboxToolInvoker):
+        def invoke(self, run_id, step_id, tool_name, arguments):
+            if tool_name == "knowledge_search":
+                self.calls.append((tool_name, dict(arguments)))
+                return ToolResult(status="succeeded", output={"hits": [], "reason": "知识库不可用"})
+            return super().invoke(run_id, step_id, tool_name, arguments)
+
+    def reviewer(messages):
+        if _saw_observation(messages):
+            return stub_response(REVIEW_ACCEPT)
+        return tool_envelope("knowledge_search", query="整数规划 基线 口径", kind="paper")
+
+    audits = []
+    llm = review_llm(sandbox_script(EXPERIMENT_FINAL), [reviewer])
+    tools = KnowledgeAwareInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry, knowledge=object()).run(
+        ctx, review_services(llm, tools, audits)
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["review"]["verdict"] == "accept"
+    spawn = next(entry for entry in audits if entry["phase"] == "spawn")
+    assert spawn["toolset"] == ["ws_read", "ws_list", "knowledge_search", "knowledge_read"]
+    assert ("knowledge_search", {"query": "整数规划 基线 口径", "kind": "paper"}) in tools.calls
+    review_calls = [c for c in llm.chat_calls if c.label == ExperimentExecutionNode.review_prompt_id]
+    assert len(review_calls) == 2, "一轮检索 + 一轮终答"
+    assert "knowledge_search" in user_prompt_of(review_calls[0])
+    assert result.metrics["llm_attempts"] == 4
+
+
+def test_experiment_reviewer_rejection_sends_the_generator_back_to_r2_then_re_reviews(registry):
+    llm = review_llm(
+        repairing_sandbox_script(EXPERIMENT_FINAL),
+        reviewer_script((EXPERIMENT_CODE_V2, REVIEW_ACCEPT), (EXPERIMENT_CODE, REVIEW_REJECT)),
+    )
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    # 首跑 v1 → 复跑 v1 → 驳回 → 修复波 v2 → 复跑 v2 → 复审接受
+    assert [call[3]["code"] for call in tools.python_calls] == [
+        EXPERIMENT_CODE, EXPERIMENT_CODE, EXPERIMENT_CODE_V2, EXPERIMENT_CODE_V2,
+    ]
+    review = result.outputs["review"]
+    assert review["verdict"] == "accept" and review["rounds"] == 2 and review["stalemate"] is False
+    assert [entry["id"] for entry in review["findings"]] == ["R1"], "记录的是复审那一轮的意见"
+    # 修复波的任务说明带着逐条驳回意见（结构化，不转录审稿对话），生成者必须处理
+    repair_wave = next(
+        user_prompt_of(c)
+        for c in llm.chat_calls
+        if c.label == ExperimentExecutionNode.prompt_id and "审稿驳回意见" in user_prompt_of(c)
+    )
+    assert "[R1｜blocker] baseline：基线与模型用了不同的评估切分" in repair_wave
+    assert "（修法：基线改用同一份验证集）" in repair_wave
+    assert "[R2｜minor]" in repair_wave
+    assert "审稿总结：基线口径不同" in repair_wave
+    # 最终以修复后的脚本为准
+    assert tools.written == {EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE_V2}
+    assert result.outputs["sandbox_report"]["status"] == "passed"
+    assert result.metrics["code_rounds"] == 2 and result.metrics["waves"] == 2
+    assert result.metrics["review_rounds"] == 2
+    assert result.metrics["llm_attempts"] == 6, "两波生成者各 2 次 + 两轮审稿各 1 次"
+
+
+def test_experiment_review_stalemate_after_max_rounds_keeps_the_result_and_flags_it(registry):
+    llm = review_llm(repairing_sandbox_script(EXPERIMENT_FINAL), [stub_response(REVIEW_REJECT)])
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED, "僵持不是失败：已验收结果保留，交 G3 裁定"
+    review = result.outputs["review"]
+    assert review["verdict"] == "reject" and review["rounds"] == 2
+    assert review["stalemate"] is True
+    assert review["reason"] == "审稿 2 轮后仍有阻断性意见未解决"
+    assert review["blockers"] == 1
+    assert len(tools.python_calls) == 4, "两轮各一次生成者运行 + 一次复跑"
+    assert tools.written == {EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE_V2}
+    assert "仍有 1 条阻断性意见未解决" in result.outputs["experiment_summary"]
+
+
+def test_experiment_review_stalemate_when_the_repair_wave_fails_keeps_the_first_accepted_result(registry):
+    llm = review_llm(repairing_sandbox_script(EXPERIMENT_FINAL), [stub_response(REVIEW_REJECT)])
+    # 首跑成功、复跑成功、修复波每次运行都失败（队列尾项复用）
+    tools = SandboxToolInvoker(runs=[tool_success(), tool_success(), tool_failure()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    review = result.outputs["review"]
+    assert review["stalemate"] is True
+    assert review["reason"] == "按审稿意见的修复波未通过验收，保留已验收结果"
+    assert review["rounds"] == 1
+    # 首轮已验收的代码与指标是最终结果，修复波的失败不覆盖它
+    assert result.outputs["metrics"] == {"rmse": 0.12}
+    assert tools.written == {EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE}
+    assert result.outputs["sandbox_report"]["status"] == "passed"
+    # 修复波用掉的运行数计入 R2 账（1 首跑 + 3 波修复各 1 次）
+    assert result.metrics["code_rounds"] == 4 and result.metrics["waves"] == 4
+
+
+def test_experiment_review_rejects_without_a_blocker_count_as_accept(registry):
+    soft_reject = {
+        "verdict": "reject",
+        "findings": [{"id": "R1", "severity": "major", "issue": "基线太弱"}],
+        "summary": "建议换更强的基线",
+    }
+    llm = review_llm(sandbox_script(EXPERIMENT_FINAL), [stub_response(soft_reject)])
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools))
+
+    review = result.outputs["review"]
+    assert review["verdict"] == "accept" and review["blockers"] == 0
+    assert review["findings"][0]["severity"] == "major", "意见照录，只是拿不到否决权"
+    assert len(tools.python_calls) == 2, "没有修复波"
+
+
+def test_experiment_review_reports_an_inconsistent_rerun_to_the_reviewer(registry):
+    llm = review_llm(sandbox_script(EXPERIMENT_FINAL), [stub_response(REVIEW_ACCEPT)])
+    tools = SandboxToolInvoker(
+        runs=[tool_success(), tool_success(stdout='OMM_METRICS_JSON: {"rmse": 0.3}\n')]
+    )
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools))
+
+    rerun = result.outputs["review"]["rerun"]
+    assert rerun["consistent"] is False
+    assert rerun["diff"] == ["rmse：首跑 0.12，复跑 0.3"]
+    card = system_prompt_of(
+        next(c for c in llm.chat_calls if c.label == ExperimentExecutionNode.review_prompt_id)
+    )
+    assert "与首跑不一致" in card and "rmse：首跑 0.12，复跑 0.3" in card
+
+
+def test_experiment_review_skips_the_rerun_when_the_budget_slice_cannot_afford_it(registry):
+    from omm_agent_harness import BudgetGovernor, RunBudget
+
+    llm = review_llm(sandbox_script(EXPERIMENT_FINAL), [stub_response(REVIEW_ACCEPT)])
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+    governor = BudgetGovernor(RunBudget(max_sandbox_runs=2))  # 25% 切片 = 0 次运行
+
+    result = ExperimentExecutionNode(registry).run(
+        ctx, review_services(llm, tools, governor=governor)
+    )
+
+    assert len(tools.python_calls) == 1, "没预算就不复跑"
+    review = result.outputs["review"]
+    assert review["rerun"] == {"executed": False, "reason": "剩余预算不足以复跑核对"}
+    assert review["verdict"] == "accept", "审稿照常进行，材料里如实写未复跑"
+    card = system_prompt_of(
+        next(c for c in llm.chat_calls if c.label == ExperimentExecutionNode.review_prompt_id)
+    )
+    assert "未复跑：剩余预算不足以复跑核对" in card
+
+
+def test_experiment_review_is_reported_not_faked_without_a_supervisor(registry):
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, make_full_services(llm, tools))
+
+    assert result.outputs["review"] == {
+        "executed": False,
+        "reason": "未配置子代理监督者，跳过独立审稿",
+        "llm_calls": 0,
+    }
+    assert len(tools.python_calls) == 1
+    assert "review_rounds" not in result.metrics
+
+
+def test_experiment_review_survives_a_reviewer_that_never_answers_validly(registry):
+    llm = review_llm(sandbox_script(EXPERIMENT_FINAL), ["这不是 JSON"])
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    ctx = make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning())
+
+    result = ExperimentExecutionNode(registry).run(ctx, review_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    review = result.outputs["review"]
+    assert review["executed"] is False and review["rounds"] == 1
+    assert review["reason"].startswith("审稿子代理未完成（failed")
+    assert review["rerun"]["consistent"] is True
+    assert result.outputs["metrics"] == {"rmse": 0.12}
+
+
 # -- ValidationNode：LLM 判读 → 稳健性沙盒复跑 → G3 --------------------------------
 
 
@@ -2280,6 +2606,85 @@ def test_g3_recommends_redo_experiment_when_majority_fails(registry):
     meta = result.review_meta
     assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["redo:EXPERIMENTING"]
     assert meta["impact"]["recommended"] == "redo:EXPERIMENTING"
+
+
+def stalemate_review(**overrides):
+    """实验阶段生成者-评审者环僵持后留在 outputs["review"] 的形状。"""
+    review = {
+        "executed": True,
+        "rounds": 2,
+        "verdict": "reject",
+        "blockers": 1,
+        "findings": list(REVIEW_REJECT["findings"]),
+        "summary": REVIEW_REJECT["summary"],
+        "rerun": {"executed": True, "consistent": True, "metrics": {"rmse": 0.12}, "diff": [], "reason": ""},
+        "stalemate": True,
+        "reason": "审稿 2 轮后仍有阻断性意见未解决",
+        "llm_calls": 2,
+    }
+    review.update(overrides)
+    return review
+
+
+def test_g3_gate_triggers_on_a_review_stalemate_even_when_every_check_passes(registry):
+    """§8.4「僵持到预算尽 → 上闸门」= 复用 G3：稳健性全过也要请人裁定未解决的阻断性意见。"""
+    llm = validation_llm()
+    tools = validation_tools(True, True, True)
+    prior = validation_prior()
+    prior[TaskState.EXPERIMENTING.value]["review"] = stalemate_review()
+    ctx = make_ctx(TaskState.VALIDATING, prior=prior)
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason == (
+        "独立审稿 2 轮后仍有 1 条阻断性意见未解决（审稿 2 轮后仍有阻断性意见未解决）。"
+        "请确认实验结果的处置方式"
+    )
+    meta = result.review_meta
+    assert meta["gate"] == "G3"
+    assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["redo:EXPERIMENTING"]
+    assert meta["impact"]["checks_total"] == 3 and meta["impact"]["checks_failed"] == 0
+    assert meta["impact"]["review_stalemate"] is True
+    assert [entry["id"] for entry in meta["impact"]["reviewer_findings"]] == ["R1"], "只有 blocker 进卡片"
+    # 稳健性检查照常执行并落库；审稿意见排在复跑任务卡风险点最前
+    assert result.outputs["robustness"]["checks_failed"] == 0
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "- 审稿意见（blocker｜未解决）：baseline——基线与模型用了不同的评估切分" in card
+    assert card.index("审稿意见（blocker") < card.index("方案风险：")
+
+
+def test_g3_gate_combines_failed_checks_with_a_review_stalemate(registry):
+    llm = validation_llm()
+    tools = validation_tools(True, False, True)
+    prior = validation_prior()
+    prior[TaskState.EXPERIMENTING.value]["review"] = stalemate_review()
+    ctx = make_ctx(TaskState.VALIDATING, prior=prior)
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.review_reason.startswith("稳健性检查 3 项中 1 项未通过：bootstrap 重采样稳定性；独立审稿 2 轮后")
+    meta = result.review_meta
+    assert meta["impact"]["checks_failed"] == 1 and meta["impact"]["review_stalemate"] is True
+    # 少数未通过本会推荐「接受并记录局限」，僵持把推荐抬到「重做实验」
+    assert meta["impact"]["recommended"] == "redo:EXPERIMENTING"
+
+
+def test_g3_stays_closed_when_the_review_accepted_and_only_records_its_remarks(registry):
+    llm = validation_llm()
+    tools = validation_tools(True, True, True)
+    prior = validation_prior()
+    prior[TaskState.EXPERIMENTING.value]["review"] = stalemate_review(
+        verdict="accept", blockers=0, stalemate=False, reason="", findings=list(REVIEW_ACCEPT["findings"])
+    )
+    ctx = make_ctx(TaskState.VALIDATING, prior=prior)
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "- 审稿意见（minor｜已记录）：metrics——只报了 rmse 一个口径" in card
 
 
 @pytest.mark.parametrize(

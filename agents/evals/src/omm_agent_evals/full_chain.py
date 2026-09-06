@@ -110,6 +110,23 @@ CANNED_EXPERIMENT = {
     "progress_note": "实验代码已跑通，RMSE 0.042 对比均值基线 0.31，下一步做稳健性检验。",
 }
 
+#: Verdict of the independent experiment reviewer (§8.4 generator / reviewer):
+#: the happy path accepts on the first round with one minor remark, so the
+#: experiment stage stays free of repair waves and the G3 gate stays closed.
+CANNED_REVIEW = {
+    "verdict": "accept",
+    "findings": [
+        {
+            "id": "R1",
+            "severity": "minor",
+            "location": "metrics",
+            "issue": "基线对比只报了 RMSE，未报 MAE 等第二口径",
+            "fix_hint": "论文阶段补一列 MAE 即可，不影响结论",
+        }
+    ],
+    "summary": "实现忠实于方案，同种子复跑一致，可作为后续检验与论文的依据。",
+}
+
 CANNED_VALIDATION = {
     "verdict": "pass",
     "checks": [
@@ -506,6 +523,8 @@ def build_full_chain_llm(
             ExperimentExecutionNode.prompt_id: [
                 canned_sandbox_agent(CANNED_EXPERIMENT, CANNED_EXPERIMENT_CODE)
             ],
+            # 独立审稿人（reviewer 子代理）：一轮直接接受，不发工具信封
+            ExperimentExecutionNode.review_prompt_id: [stub_response(CANNED_REVIEW)],
             ValidationNode.sandbox_prompt_id: [
                 canned_sandbox_agent(CANNED_ROBUSTNESS, CANNED_VALIDATION_CODE)
             ],
@@ -639,10 +658,12 @@ FULL_CHAIN_PROMPT_SEQUENCE = [
 
 #: Conversational (``chat_text``) labels in order: one wave of a sandbox agent
 #: = one tool turn + one final answer; the experiment agent first, then the
-#: validation stage's robustness re-run.
+#: independent reviewer (one verdict call, no tool turn), then the validation
+#: stage's robustness re-run.
 FULL_CHAIN_CHAT_SEQUENCE = [
     "experiment_code.sandbox",
     "experiment_code.sandbox",
+    "experiment_review.default",
     "validating.sandbox",
     "validating.sandbox",
 ]
@@ -673,6 +694,10 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.TOOL_CALLED,  # env_probe（报告的环境指纹）
     EventType.TOOL_CALLED,  # python_run（模型自主调用，scripted sandbox）
     EventType.TOOL_CALLED,  # ws_list（断言证据：产物清单）
+    # 生成者-评审者（§8.4）：节点用同一脚本确定性复跑核对指标，再派独立审稿人
+    # （审稿任务卡带工作区清单；本评测审稿人一轮接受、不发工具信封）
+    EventType.TOOL_CALLED,  # python_run（复跑核对）
+    EventType.TOOL_CALLED,  # ws_list（审稿任务卡的工作区文件）
     EventType.TOOL_CALLED,  # ws_write（最终脚本落工作区 experiment.py，供验证阶段复跑）
     EventType.ARTIFACT_PRODUCED,  # results.csv
     EventType.ARTIFACT_PRODUCED,  # experiment.py (generated code, reproducible)

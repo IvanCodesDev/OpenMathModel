@@ -427,7 +427,8 @@ def _sandbox_hardware() -> str:
 #: validating.sandbox——三者缺一同样回落模拟。
 #: H3 方案阶段是三视角 Proposer 并行提议（model_planning.proposer）+ 一次归约
 #: （model_planning.reduce）+ 一次规范化（model_planning.formalize：假设表 / 符号表）；
-#: model_planning.default 保留给无监督者的单次调用路径。
+#: model_planning.default 保留给无监督者的单次调用路径。实验阶段验收通过后的
+#: 独立审稿（§8.4 生成者-评审者）用 experiment_review.default。
 _REQUIRED_PROMPTS = frozenset(
     {
         "problem_analysis.default",
@@ -438,6 +439,7 @@ _REQUIRED_PROMPTS = frozenset(
         "model_planning.reduce",
         "model_planning.formalize",
         "experiment_code.sandbox",
+        "experiment_review.default",
         "validating.default",
         "validating.sandbox",
         "paper_outline.default",
@@ -482,6 +484,7 @@ _PROMPT_NODE_IDS = {
     "model_planning.formalize": TaskState.MODEL_PLANNING.value,
     "experiment_code.default": TaskState.EXPERIMENTING.value,
     "experiment_code.sandbox": TaskState.EXPERIMENTING.value,
+    "experiment_review.default": TaskState.EXPERIMENTING.value,
     "validating.default": TaskState.VALIDATING.value,
     "validating.sandbox": TaskState.VALIDATING.value,
     "paper_outline.default": TaskState.PAPER_WRITING.value,
@@ -911,10 +914,13 @@ def _llm_wiring_impl(
             TaskState.MODEL_PLANNING: ModelPlanningNode(
                 registry, knowledge=load_knowledge_library()
             ),
+            # 实验审稿人（§8.4）拿同一个知识库的两个只读工具：知识端口在场即列入
+            # 子代理工具清单（工具本体已随知识库注册进 ToolBus）
             TaskState.EXPERIMENTING: ExperimentExecutionNode(
                 registry,
                 available_packages=_sandbox_packages(),
                 hardware_note=_sandbox_hardware(),
+                knowledge=load_knowledge_library(),
             ),
             # 稳健性复跑的检验脚本与实验脚本共用同一沙箱解释器：包白名单同源
             TaskState.VALIDATING: ValidationNode(

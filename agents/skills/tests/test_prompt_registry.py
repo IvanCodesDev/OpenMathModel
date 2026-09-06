@@ -69,6 +69,7 @@ def test_default_registry_loads_all_stage_prompts():
         "data_preparation.default",
         "experiment_code.default",
         "experiment_code.sandbox",
+        "experiment_review.default",
         "model_planning.default",
         "model_planning.formalize",
         "model_planning.proposer",

@@ -57,6 +57,21 @@ from .frozen_numbers import (
     unsourced_numbers,
 )
 from .prompt_registry import PromptRegistry, PromptTemplate
+from .review import (
+    REVIEW_MAX_ROUNDS,
+    REVIEW_PROMPT_ID,
+    REVIEWER_KNOWLEDGE_TOOL_NAMES,
+    REVIEWER_LOOP_BUDGET,
+    REVIEWER_MAX_TOOL_ROUNDS,
+    REVIEWER_TOOL_NAMES,
+    compare_metrics,
+    findings_material,
+    normalize_verdict,
+    rerun_material,
+    review_feedback,
+    reviewer_tool_brief,
+    verdict_summary_text,
+)
 from .schema import validate
 
 _FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$", re.MULTILINE)
@@ -1995,16 +2010,23 @@ def _impact_stats_check(evidence) -> tuple[bool, str]:
 
 
 class ExperimentExecutionNode(LlmSkillNode):
-    """实验阶段 = 沙盒 Agent 执行体（H3 前置刀：迁移自单发生成+私有重试环）。
+    """实验阶段 = 沙盒 Agent 执行体（H3 前置刀：迁移自单发生成+私有重试环）+ 独立审稿（§8.4）。
 
     模型在多轮会话里写码/跑码/读反馈直到验收断言通过或 R2 预算（6 次运行，
     §5.4）耗尽；验收以确定性断言为准（最后一次运行成功 + 指标标记行在场），
     模型自述完成无效。输出形状与迁移前一致（approach_summary/metrics/
     stdout_tail/experiment_summary/progress_note），下游（验证/论文）零改动；
     新增 sandbox_report（sandbox-run-report.v1 形状）供复现与评测。
+
+    验收通过后进入**生成者-评审者**环：节点先用同一份脚本、同一种子确定性复跑
+    一次核对指标，再经监督者派发 ``reviewer`` 子代理（独立上下文、只读工具）
+    审稿；一票驳回（reject + ≥1 blocker）退回 R2 按意见修复后复审一次，仍驳回
+    或修不动即「僵持」——保留已验收结果、把未解决的意见记进 ``outputs["review"]``
+    交验证阶段的 G3 结果采用闸门裁定。监督者缺席时如实 ``review.executed=false``。
     """
 
     prompt_id = "experiment_code.sandbox"
+    review_prompt_id = REVIEW_PROMPT_ID
     state = TaskState.EXPERIMENTING
 
     #: R2 运行预算（§4.7/§5.4 拍板值）：整个实验步骤最多 6 次沙箱运行。
@@ -2015,6 +2037,7 @@ class ExperimentExecutionNode(LlmSkillNode):
         registry: PromptRegistry,
         available_packages: str = DEFAULT_AVAILABLE_PACKAGES,
         hardware_note: str = DEFAULT_HARDWARE_NOTE,
+        knowledge: KnowledgePort | None = None,
     ) -> None:
         super().__init__(registry)
         # Which third-party packages the sandbox interpreter really offers:
@@ -2025,6 +2048,9 @@ class ExperimentExecutionNode(LlmSkillNode):
         # computation onto the local GPU when the runtime probed one, and
         # stays CPU-conservative otherwise.
         self._hardware_note = hardware_note
+        # 知识库端口在场 = 两个只读知识工具已注册进 ToolBus（两个装配点一起做）：
+        # 审稿人据此拿到 knowledge_search / knowledge_read；缺席时只有工作区只读工具。
+        self.knowledge = knowledge
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
@@ -2094,64 +2120,74 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "prompt input invalid: " + "; ".join(input_problems)
             )
 
-        plan = chosen_plan(
-            _require_outputs(ctx, TaskState.MODEL_PLANNING), ctx.review_decisions
-        )
-        capture = _SandboxCapture()
-        final_answer: dict[str, Any] = {}
+        planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
+        plan = chosen_plan(planning, ctx.review_decisions)
+        system_prompt = template.render(variables)
         llm_calls = {"count": 0}
-        task = SandboxTask(
-            task_id=f"{ctx.step_id}:experiment",
-            goal=(
-                f"实现并运行方案「{plan.get('name') or plan.get('id') or '选定方案'}」"
-                "的实验代码，产出真实指标与结果表"
-            ),
-            system_prompt=template.render(variables),
-            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
-            assertions=(
-                SandboxAssertion(
-                    id="run_ok",
-                    description="实验脚本经 python_run 成功运行（退出码 0）",
-                    check=_experiment_run_ok_check,
-                ),
-                SandboxAssertion(
-                    id="metrics_reported",
-                    description="打印核心指标标记行 OMM_METRICS_JSON（含基线对比）",
-                    check=_experiment_metrics_check,
-                ),
-            ),
-            seeds=dict(SANDBOX_SEEDS),
-            max_runs=self.max_sandbox_runs,
-            extra_final_keys=(
-                (
-                    "approach_summary",
-                    "实现思路摘要：算法、数据来源/构造方式、评估口径与基线设置，不超过 200 字",
-                ),
-                (
-                    "progress_note",
-                    "两三句面向用户的进度汇报（实现了什么、对比基线看什么指标、下一步验证什么），口语化",
-                ),
-            ),
-        )
         chat = text_protocol_chat(
             services.llm,
             label=self.prompt_id,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        report = run_sandbox_task(
-            task,
-            chat=chat,
-            execute_tools=_sandbox_tool_executor(ctx, services, capture),
-            workspace_files=lambda: _workspace_files(ctx, services),
-            read_text=_workspace_reader(ctx, services),
-            env_fingerprint=_env_fingerprint(ctx, services),
-            publish_code=_publish_code_callback(ctx, services, capture, "experiment.py"),
-            on_final_answer=final_answer.update,
-        )
+        env_fingerprint = _env_fingerprint(ctx, services)
 
-        node_metrics = {
-            "llm_attempts": llm_calls["count"],
-            "code_rounds": int(report["usage"]["runs"]),
+        def sandbox_wave(
+            brief_suffix: str | None, max_runs: int
+        ) -> tuple[dict[str, Any], _SandboxCapture, dict[str, Any]]:
+            """一次独立装配的沙盒任务（首轮 / 按审稿意见修复）：每次自己的证据捕获。"""
+            capture = _SandboxCapture()
+            final_answer: dict[str, Any] = {}
+            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            if brief_suffix:
+                brief += "\n\n" + brief_suffix
+            task = SandboxTask(
+                task_id=f"{ctx.step_id}:experiment",
+                goal=(
+                    f"实现并运行方案「{plan.get('name') or plan.get('id') or '选定方案'}」"
+                    "的实验代码，产出真实指标与结果表"
+                ),
+                system_prompt=system_prompt,
+                task_brief=brief,
+                assertions=(
+                    SandboxAssertion(
+                        id="run_ok",
+                        description="实验脚本经 python_run 成功运行（退出码 0）",
+                        check=_experiment_run_ok_check,
+                    ),
+                    SandboxAssertion(
+                        id="metrics_reported",
+                        description="打印核心指标标记行 OMM_METRICS_JSON（含基线对比）",
+                        check=_experiment_metrics_check,
+                    ),
+                ),
+                seeds=dict(SANDBOX_SEEDS),
+                max_runs=max_runs,
+                extra_final_keys=(
+                    (
+                        "approach_summary",
+                        "实现思路摘要：算法、数据来源/构造方式、评估口径与基线设置，不超过 200 字",
+                    ),
+                    (
+                        "progress_note",
+                        "两三句面向用户的进度汇报（实现了什么、对比基线看什么指标、下一步验证什么），口语化",
+                    ),
+                ),
+            )
+            report = run_sandbox_task(
+                task,
+                chat=chat,
+                execute_tools=_sandbox_tool_executor(ctx, services, capture),
+                workspace_files=lambda: _workspace_files(ctx, services),
+                read_text=_workspace_reader(ctx, services),
+                env_fingerprint=env_fingerprint,
+                publish_code=_publish_code_callback(ctx, services, capture, "experiment.py"),
+                on_final_answer=final_answer.update,
+            )
+            return report, capture, final_answer
+
+        report, capture, final_answer = sandbox_wave(None, self.max_sandbox_runs)
+        usage = {
+            "runs": int(report["usage"]["runs"]),
             "waves": int(report["attempts"]),
         }
         if report["status"] != "passed":
@@ -2164,9 +2200,98 @@ class ExperimentExecutionNode(LlmSkillNode):
             return NodeResult.failed(
                 f"experiment sandbox failed after {report['attempts']} wave(s), "
                 f"{report['usage']['runs']} run(s): {detail}",
-                metrics=node_metrics,
+                metrics={
+                    "llm_attempts": llm_calls["count"],
+                    "code_rounds": usage["runs"],
+                    "waves": usage["waves"],
+                },
             )
 
+        # ── 生成者-评审者（§8.4）：复跑核对 → 独立审稿 → 驳回退 R2 → 僵持进 G3 ──
+        review = {"executed": False, "reason": "", "llm_calls": 0}
+        supervisor = (services.extras or {}).get("subagents")
+        if supervisor is None:
+            review["reason"] = "未配置子代理监督者，跳过独立审稿"
+        else:
+            rounds = 0
+            while True:
+                rounds += 1
+                rerun = self._rerun_check(ctx, services, capture)
+                verdict, calls, error = self._spawn_reviewer(
+                    ctx, services, supervisor, plan, planning, capture, final_answer, rerun, rounds
+                )
+                review["llm_calls"] += calls
+                if verdict is None:
+                    if rounds == 1:
+                        review.update({"rounds": rounds, "rerun": rerun, "reason": error})
+                    else:
+                        # 修复波之后复审没完成：上一轮的阻断性意见没人证实已解决，
+                        # 按僵持处理（宁可多进一次 G3，不把未经复审的修复当通过）
+                        review.update({
+                            "rounds": rounds,
+                            "rerun": rerun,
+                            "stalemate": True,
+                            "reason": f"修复后复审未完成（{error}），阻断性意见未经证实解决",
+                        })
+                    break
+                review.update({
+                    "executed": True,
+                    "rounds": rounds,
+                    "verdict": verdict["verdict"],
+                    "findings": verdict["findings"],
+                    "blockers": verdict["blockers"],
+                    "summary": verdict["summary"],
+                    "rerun": rerun,
+                    "stalemate": False,
+                    "reason": "",
+                })
+                _emit_progress(services, {
+                    "kind": "experiment_review",
+                    "round": rounds,
+                    "verdict": verdict["verdict"],
+                    "blockers": verdict["blockers"],
+                    "findings": len(verdict["findings"]),
+                    "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+                    "summary": verdict["summary"],
+                })
+                if verdict["verdict"] == "accept":
+                    break
+                remaining_runs = self.max_sandbox_runs - usage["runs"]
+                if rounds >= REVIEW_MAX_ROUNDS:
+                    review.update({
+                        "stalemate": True,
+                        "reason": f"审稿 {REVIEW_MAX_ROUNDS} 轮后仍有阻断性意见未解决",
+                    })
+                    break
+                if remaining_runs < 1:
+                    review.update({
+                        "stalemate": True,
+                        "reason": "R2 运行预算已尽，无法按审稿意见修复",
+                    })
+                    break
+                repair_report, repair_capture, repair_final = sandbox_wave(
+                    review_feedback(verdict["findings"], verdict["summary"], rerun),
+                    remaining_runs,
+                )
+                usage["runs"] += int(repair_report["usage"]["runs"])
+                usage["waves"] += int(repair_report["attempts"])
+                if repair_report["status"] != "passed":
+                    # 修复波没过验收：保留首轮已验收的代码与指标（不因审稿把能跑的
+                    # 结果扔掉），未解决的意见随 stalemate 进 G3
+                    review.update({
+                        "stalemate": True,
+                        "reason": "按审稿意见的修复波未通过验收，保留已验收结果",
+                    })
+                    break
+                report, capture, final_answer = repair_report, repair_capture, repair_final
+
+        node_metrics = {
+            "llm_attempts": llm_calls["count"] + int(review["llm_calls"]),
+            "code_rounds": usage["runs"],
+            "waves": usage["waves"],
+        }
+        if review.get("rounds"):
+            node_metrics["review_rounds"] = int(review["rounds"])
         approach = str(final_answer.get("approach_summary") or "")
         metrics = dict(capture.metrics)
         summary_bits = [approach]
@@ -2177,6 +2302,8 @@ class ExperimentExecutionNode(LlmSkillNode):
                 ref.uri.rstrip("/").rsplit("/", 1)[-1] for ref in capture.artifacts
             ]
             summary_bits.append("产物文件：" + "、".join(names))
+        if review.get("executed"):
+            summary_bits.append(verdict_summary_text(review))
         # 最终脚本落工作区固定路径：验证阶段据此复跑（steps/<id>/main.py 的
         # 即时副本下游拿不到 id）。
         script_path = _stage_final_script(ctx, services, capture.code)
@@ -2193,10 +2320,166 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "sandbox_report": report,
                 # 工作区里的最终脚本路径（写入失败为空串，下游据此判断能否复跑）
                 "script_path": script_path,
+                # 生成者-评审者环的结论（§8.4）：复跑核对 + 独立审稿意见；僵持时
+                # stalemate=true，验证阶段据此挂 G3
+                "review": review,
             },
             metrics=node_metrics,
             artifacts=tuple(capture.artifacts),
         )
+
+    # -- generator / reviewer loop (§8.4) ------------------------------------------
+
+    def _rerun_check(
+        self, ctx: NodeContext, services: NodeServices, capture: _SandboxCapture
+    ) -> dict[str, Any]:
+        """确定性复跑核对：同一份最终脚本再跑一次，指标逐键比对首跑。
+
+        节点自己跑、自己比——「复跑核对」不交给模型想象。预算切片不够一次运行
+        或脚本正文缺失时如实 ``executed=false``，审稿照常进行（材料里写明未复跑）。
+        """
+        governor = (services.extras or {}).get("budget_governor")
+        budgets: RunBudget = (
+            governor.subagent_slice() if governor is not None else RunBudget()
+        )
+        if budgets.max_sandbox_runs < 1:
+            return {"executed": False, "reason": "剩余预算不足以复跑核对"}
+        if not capture.code.strip():
+            return {"executed": False, "reason": "沙盒未回传最终脚本正文，无法复跑"}
+        result = services.tools.invoke(
+            ctx.run_id, ctx.step_id, PYTHON_TOOL_NAME, {"code": capture.code}
+        )
+        if not result.ok:
+            output = result.output or {}
+            stderr = str(output.get("stderr") or "").strip()
+            reason = f"复跑失败：{result.error or result.status}"
+            if stderr:
+                reason += "；stderr（尾部）：" + stderr[-500:]
+            return {
+                "executed": True,
+                "consistent": False,
+                "metrics": {},
+                "diff": [],
+                "reason": reason,
+            }
+        scratch = _SandboxCapture()
+        scratch.observe(result)
+        consistent, diff = compare_metrics(capture.metrics, scratch.metrics)
+        return {
+            "executed": True,
+            "consistent": consistent,
+            "metrics": dict(scratch.metrics),
+            "diff": diff,
+            "reason": "" if consistent else "复跑指标与首跑不一致",
+        }
+
+    def _reviewer_toolset(self) -> tuple[str, ...]:
+        if self.knowledge is None:
+            return REVIEWER_TOOL_NAMES
+        return REVIEWER_TOOL_NAMES + REVIEWER_KNOWLEDGE_TOOL_NAMES
+
+    def _spawn_reviewer(
+        self,
+        ctx: NodeContext,
+        services: NodeServices,
+        supervisor: Any,
+        plan: Mapping[str, Any],
+        planning: Mapping[str, Any],
+        capture: _SandboxCapture,
+        final_answer: Mapping[str, Any],
+        rerun: Mapping[str, Any],
+        round_no: int,
+    ) -> tuple[dict[str, Any] | None, int, str]:
+        """派发一次审稿子代理，返回 (归一化 verdict | None, 模型调用数, 未成功原因)。
+
+        独立上下文 = 只拿结构化切片（方案 / 假设 / 符号 / 脚本正文 / 指标 / 复跑
+        结果 / 实现摘要），不继承生成者会话；tier readonly——运行部分已由节点做完。
+        """
+        governor = (services.extras or {}).get("budget_governor")
+        budgets: RunBudget = (
+            governor.subagent_slice() if governor is not None else RunBudget()
+        )
+        if budgets.max_llm_calls < 1:
+            return None, 0, "剩余预算不足以派发审稿子代理"
+        template = self._registry.get(self.review_prompt_id)
+        files = _workspace_files(ctx, services)
+        variables = {
+            "chosen_plan": json.dumps(dict(plan), ensure_ascii=False),
+            "model_assumptions": assumption_material(plan_assumptions(planning, plan.get("id"))),
+            "model_symbols": symbol_material(plan_symbols(planning, plan.get("id"))),
+            "experiment_code": _clip_code(capture.code),
+            "metrics": json.dumps(dict(capture.metrics), ensure_ascii=False),
+            "rerun_report": rerun_material(rerun),
+            "approach_summary": str(final_answer.get("approach_summary") or "无"),
+            "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
+            "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+        }
+        problems = validate(variables, template.input_schema)
+        if problems:
+            return None, 0, "审稿任务卡输入无效：" + "; ".join(problems)
+        toolset = self._reviewer_toolset()
+        system_prompt = template.render(variables)
+        llm_calls = {"count": 0}
+        trace = {"error": ""}
+
+        def runner(_spec: SpawnSpec) -> ResultEnvelope:
+            outcome = run_inner_loop(
+                LoopTask(
+                    task_id=f"{ctx.step_id}:review:{round_no}",
+                    messages=(
+                        Message(role="system", content=system_prompt),
+                        Message(role="user", content=reviewer_tool_brief(toolset)),
+                    ),
+                    validator=lambda value: validate(value, template.output_schema),
+                    parser=extract_json,
+                    budget=REVIEWER_LOOP_BUDGET,
+                ),
+                chat=text_protocol_chat(
+                    services.llm,
+                    label=self.review_prompt_id,
+                    on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
+                ),
+                execute_tools=_bounded_tool_executor(
+                    ctx, services, toolset, REVIEWER_MAX_TOOL_ROUNDS
+                ),
+            )
+            if not outcome.ok or outcome.value is None:
+                trace["error"] = str(outcome.last_error or outcome.exit_reason or "审稿终答未通过校验")
+                return ResultEnvelope(status="failed")
+            return ResultEnvelope(status="done", output=dict(outcome.value))
+
+        try:
+            envelope = supervisor.spawn(
+                SpawnSpec(
+                    kind="reviewer",
+                    goal="独立核查实验代码与结果能否作为后续检验与论文的依据",
+                    context_slice={
+                        "plan_id": plan.get("id"),
+                        "plan_name": plan.get("name"),
+                        "metrics": dict(capture.metrics),
+                        "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+                        "round": round_no,
+                    },
+                    toolset=toolset,
+                    tool_tier="readonly",
+                    budgets=budgets,
+                    output_schema_id="experiment-review.v1",
+                ),
+                runner,
+                parent_tier="execute",
+                output_validator=lambda output: validate(output, template.output_schema),
+            )
+        except AgentError as exc:
+            # 装配 / 切片缺陷（E510 等）：审稿按未完成计，不炸实验节点
+            return None, llm_calls["count"], f"审稿子代理派发被拒（{exc.code.value}：{exc}）"
+        if not envelope.ok or envelope.output is None:
+            detail = envelope.status
+            if envelope.error_code:
+                detail += f"，{envelope.error_code}"
+            if trace["error"]:
+                detail += f"，{trace['error']}"
+            return None, llm_calls["count"], f"审稿子代理未完成（{detail}）"
+        return normalize_verdict(envelope.output), llm_calls["count"], ""
 
 
 def _experiment_run_ok_check(evidence) -> tuple[bool, str]:
@@ -2274,9 +2557,28 @@ def _clip_code(code: str) -> str:
     )
 
 
-def _risk_points(plan: Mapping[str, Any], judgement: Mapping[str, Any]) -> str:
-    """检验任务卡的风险点段：方案自报风险 + 评审判读的保留意见与风险。"""
+def _risk_points(
+    plan: Mapping[str, Any],
+    judgement: Mapping[str, Any],
+    review: Mapping[str, Any] | None = None,
+) -> str:
+    """检验任务卡的风险点段：方案自报风险 + 评审判读的保留意见与风险 + 实验审稿意见。
+
+    审稿人（§8.4 生成者-评审者）留下的意见排在最前：稳健性检查优先冲着独立审稿
+    指出的疑点去；僵持未解决的阻断性意见尤其要有检查对应。
+    """
     lines: list[str] = []
+    if review and review.get("executed"):
+        for entry in review.get("findings") or []:
+            if not isinstance(entry, Mapping) or not str(entry.get("issue") or "").strip():
+                continue
+            status = "未解决" if review.get("stalemate") else "已记录"
+            location = str(entry.get("location") or "").strip()
+            lines.append(
+                f"- 审稿意见（{entry.get('severity') or 'minor'}｜{status}）："
+                + (f"{location}——" if location else "")
+                + str(entry.get("issue")).strip()
+            )
     for risk in plan.get("risks") or []:
         if str(risk).strip():
             lines.append(f"- 方案风险：{str(risk).strip()}")
@@ -2498,7 +2800,8 @@ class ValidationNode(LlmSkillNode):
         outputs = {**base.outputs, "robustness": robustness}
         artifacts = base.artifacts + tuple(capture.artifacts)
 
-        gate = self._g3_review(robustness)
+        experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
+        gate = self._g3_review(robustness, experiment.get("review"))
         if gate is not None:
             reason, meta = gate
             return NodeResult.needs_review(
@@ -2554,7 +2857,7 @@ class ValidationNode(LlmSkillNode):
         )
         experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
         metrics = dict(experiment.get("metrics") or {})
-        risk_points = _risk_points(plan, judgement)
+        risk_points = _risk_points(plan, judgement, experiment.get("review"))
         # 须检验的假设进任务卡：检查优先围绕重点验证 / 待检验假设设计，标记行用
         # assumption_id 回指；已知 id 集合用于归一化与覆盖统计。
         focus = self._focus_assumptions(ctx)
@@ -2696,23 +2999,49 @@ class ValidationNode(LlmSkillNode):
     @staticmethod
     def _g3_review(
         robustness: Mapping[str, Any],
+        review: Mapping[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]] | None:
-        if not robustness.get("executed") or robustness.get("status") != "passed":
-            return None
-        failed = [dict(check) for check in robustness.get("failed_checks") or []]
-        total = int(robustness.get("checks_total") or 0)
-        if not failed or total <= 0:
-            return None
-        names = "、".join(str(check.get("name") or check.get("id")) for check in failed)
-        reason = (
-            f"稳健性检查 {total} 项中 {len(failed)} 项未通过：{names}。"
-            "请确认实验结果的处置方式"
+        """G3 结果采用闸门的两个触发源（任一即挂门，两者可叠加）：
+
+        - 稳健性复跑真执行、脚本跑通且 ≥1 项检查未通过（v3.20 起）；
+        - 实验阶段的生成者-评审者环**僵持**（§8.4「僵持到预算尽 → 上闸门」）：
+          独立审稿的阻断性意见到 R2 预算 / 审稿轮数用尽仍未解决（v3.32 起）。
+        选项 id 与引擎分支不变；僵持时推荐「重做实验」。
+        """
+        failed: list[dict[str, Any]] = []
+        total = 0
+        if robustness.get("executed") and robustness.get("status") == "passed":
+            failed = [dict(check) for check in robustness.get("failed_checks") or []]
+            total = int(robustness.get("checks_total") or 0)
+            if total <= 0:
+                failed = []
+        stalemate = bool(review and review.get("executed") and review.get("stalemate"))
+        unresolved = (
+            [
+                dict(entry)
+                for entry in (review or {}).get("findings") or []
+                if isinstance(entry, Mapping) and entry.get("severity") == "blocker"
+            ]
+            if stalemate
+            else []
         )
-        recommended = (
-            "redo:EXPERIMENTING"
-            if len(failed) / total >= G3_REDO_RECOMMEND_RATIO
-            else G3_ACCEPT_OPTION_ID
-        )
+        if not failed and not stalemate:
+            return None
+
+        reasons: list[str] = []
+        if failed:
+            names = "、".join(str(check.get("name") or check.get("id")) for check in failed)
+            reasons.append(f"稳健性检查 {total} 项中 {len(failed)} 项未通过：{names}")
+        if stalemate:
+            reasons.append(
+                f"独立审稿 {int((review or {}).get('rounds') or 0)} 轮后仍有 "
+                f"{len(unresolved)} 条阻断性意见未解决（{(review or {}).get('reason') or '僵持'}）"
+            )
+        reason = "；".join(reasons) + "。请确认实验结果的处置方式"
+        if stalemate or (total > 0 and len(failed) / total >= G3_REDO_RECOMMEND_RATIO):
+            recommended = "redo:EXPERIMENTING"
+        else:
+            recommended = G3_ACCEPT_OPTION_ID
         options = []
         for option in G3_OPTIONS:
             entry = dict(option)
@@ -2732,6 +3061,9 @@ class ValidationNode(LlmSkillNode):
                 # 哪些须检验的假设被覆盖 / 未通过 / 没覆盖：拍板「接受并记录局限」
                 # 时用户看得到局限落在哪条假设上
                 "assumption_coverage": list(robustness.get("assumption_coverage") or []),
+                # 审稿僵持：未解决的阻断性意见逐条进卡片（拍板时看得到审稿人指的是什么）
+                "review_stalemate": stalemate,
+                "reviewer_findings": unresolved,
             },
         }
         return reason, meta

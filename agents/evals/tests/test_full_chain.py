@@ -246,9 +246,11 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
     # Tool calls recorded through the engine with production payload: the
     # data stage lists data/ once (profiling preflight, empty here); the
     # experiment stage is a sandbox agent, so it surveys the workspace and
-    # environment, runs code, re-lists for assertion evidence, then stages
-    # the final script into the workspace; the validation stage finds that
-    # script, reads it into the task card and re-runs it in the sandbox.
+    # environment, runs code, re-lists for assertion evidence, then re-runs
+    # the accepted script once for the reviewer's reproducibility check and
+    # lists the workspace for the reviewer's card, then stages the final
+    # script into the workspace; the validation stage finds that script,
+    # reads it into the task card and re-runs it in the sandbox.
     all_tool_events = tool_events(completed_session)
     experiment_step = steps_for(completed_session, TaskState.EXPERIMENTING)[0]
     validation_step = steps_for(completed_session, TaskState.VALIDATING)[0]
@@ -264,6 +266,8 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
             "env_probe",
             PYTHON_TOOL_NAME,
             "ws_list",
+            PYTHON_TOOL_NAME,  # 复跑核对（§8.4 生成者-评审者）
+            "ws_list",  # 审稿任务卡的工作区清单
             "ws_write",
         ],
         validation_step.step_id: [
@@ -276,10 +280,11 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
     }
     assert all(event.payload["status"] == "succeeded" for event in all_tool_events)
 
-    # The invoker saw one python_run per sandbox stage, each carrying the code
-    # the model wrote through the tool envelope; the validation stage read back
-    # exactly the script the experiment stage staged.
-    experiment_call, validation_call = [
+    # The invoker saw the experiment script twice (the model's run through the
+    # tool envelope, then the node's deterministic re-run for the reviewer)
+    # and the validation script once; the validation stage read back exactly
+    # the script the experiment stage staged.
+    experiment_call, rerun_call, validation_call = [
         entry for entry in completed_session.tools.calls if entry[2] == PYTHON_TOOL_NAME
     ]
     assert experiment_call[:3] == (
@@ -288,8 +293,26 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
         PYTHON_TOOL_NAME,
     )
     assert experiment_call[3]["code"] == CANNED_EXPERIMENT_CODE
+    assert rerun_call[:3] == experiment_call[:3]
+    assert rerun_call[3]["code"] == CANNED_EXPERIMENT_CODE
     assert validation_call[1] == validation_step.step_id
     assert validation_call[3]["code"] == CANNED_VALIDATION_CODE
+    # 审稿结论随实验产出落库：一轮接受、复跑一致、一条 minor 意见；G3 不因审稿而开
+    review = completed_session.snapshot.outputs[TaskState.EXPERIMENTING.value]["review"]
+    assert review["executed"] is True and review["verdict"] == "accept"
+    assert review["rounds"] == 1 and review["stalemate"] is False
+    assert review["rerun"]["consistent"] is True
+    assert [entry["severity"] for entry in review["findings"]] == ["minor"]
+    assert experiment_step.metrics["review_rounds"] == 1
+    reviewer_card = next(
+        m["content"]
+        for call in completed_session.llm.chat_calls
+        if call.label == "experiment_review.default"
+        for m in call.messages
+        if m["role"] == "system"
+    )
+    assert "实验审稿人" in reviewer_card and CANNED_EXPERIMENT_CODE in reviewer_card
+    assert "核心指标与首跑逐键一致" in reviewer_card
     assert completed_session.tools.workspace_texts == {
         EXPERIMENT_SCRIPT_PATH: CANNED_EXPERIMENT_CODE
     }
@@ -362,20 +385,23 @@ def test_experiment_repair_round_feeds_error_back_and_completes():
     assert outcome.status == AdvanceOutcome.COMPLETED
     (experiment_step,) = steps_for(session, TaskState.EXPERIMENTING)
     assert experiment_step.status is StepStatus.SUCCEEDED
-    # 两波修复，每波两次会话（工具轮 + 终答）；code_rounds 是真实沙箱运行次数。
+    # 两波修复，每波两次会话（工具轮 + 终答）+ 审稿人一次；code_rounds 是生成者的
+    # 真实沙箱运行次数（审稿前的确定性复跑不占 R2 账）。
     assert experiment_step.metrics == {
-        "llm_attempts": 4,
+        "llm_attempts": 5,
         "code_rounds": 2,
         "waves": 2,
+        "review_rounds": 1,
     }
 
-    # Two experiment sandbox invocations: the failing one, then the regenerated
-    # one (the validation stage's robustness re-run is a third python_run on
-    # its own step and is filtered out here).
+    # Three experiment-step python_run invocations: the failing one, the
+    # regenerated one, then the node's deterministic re-run for the reviewer
+    # (the validation stage's robustness re-run is on its own step and is
+    # filtered out here).
     sandbox_calls = experiment_sandbox_calls(session)
-    assert [call[2] for call in sandbox_calls] == [PYTHON_TOOL_NAME] * 2
+    assert [call[2] for call in sandbox_calls] == [PYTHON_TOOL_NAME] * 3
     recorded = experiment_sandbox_events(session)
-    assert [event.payload["status"] for event in recorded] == ["failed", "succeeded"]
+    assert [event.payload["status"] for event in recorded] == ["failed", "succeeded", "succeeded"]
     assert all(
         event.payload["step_id"] == experiment_step.step_id for event in recorded
     )
@@ -563,9 +589,10 @@ def test_experiment_double_failure_recovers_within_single_attempt():
     (experiment_step,) = steps_for(session, TaskState.EXPERIMENTING)
     assert experiment_step.status is StepStatus.SUCCEEDED
     assert experiment_step.metrics == {
-        "llm_attempts": 6,
+        "llm_attempts": 7,  # 三波各 2 次 + 审稿人 1 次
         "code_rounds": 3,
         "waves": 3,
+        "review_rounds": 1,
     }
 
     assert_replay_matches(session)
@@ -607,11 +634,13 @@ def test_experiment_rounds_exhausted_fails_run_then_retry_recovers():
         StepStatus.FAILED,
         StepStatus.SUCCEEDED,
     ]
-    assert len(experiment_sandbox_calls(session)) == 4
+    # 第二次尝试：生成者一次成功 + 审稿前复跑一次
+    assert len(experiment_sandbox_calls(session)) == 5
     assert [event.payload["status"] for event in experiment_sandbox_events(session)] == [
         "failed",
         "failed",
         "failed",
+        "succeeded",
         "succeeded",
     ]
 
@@ -724,7 +753,7 @@ def test_g3_redo_experiment_reruns_experiment_and_validation_then_completes():
     assert snapshot.review.resume_state is TaskState.VALIDATING
     assert [step.attempt for step in steps_for(session, TaskState.EXPERIMENTING)] == [1, 2]
     assert [step.attempt for step in steps_for(session, TaskState.VALIDATING)] == [1, 2]
-    assert len(experiment_sandbox_calls(session)) == 2
+    assert len(experiment_sandbox_calls(session)) == 4  # 两趟各：生成者运行 + 审稿前复跑
 
     engine.resolve_review(snapshot, approved=True, reason=G3_ACCEPT_OPTION_ID)
     outcome = confirm_delivery(session, engine.run_until_blocked(snapshot))

@@ -41,7 +41,8 @@ from .runtime import WorkerConfig, WorkerRuntime
 #: data_cleaning.sandbox），experiment_code.default 退役；验证阶段的稳健性
 #: 复跑用 validating.sandbox。方案阶段（H3）三视角并行提议 + 归约 + 规范化用
 #: model_planning.proposer / model_planning.reduce / model_planning.formalize，
-#: default 是无监督者时的回落。
+#: default 是无监督者时的回落。实验验收后的独立审稿（§8.4）用
+#: experiment_review.default。
 REQUIRED_PROMPT_IDS = frozenset(
     {
         "problem_analysis.default",
@@ -52,6 +53,7 @@ REQUIRED_PROMPT_IDS = frozenset(
         "model_planning.reduce",
         "model_planning.formalize",
         "experiment_code.sandbox",
+        "experiment_review.default",
         "validating.default",
         "validating.sandbox",
         "paper_writing.default",
@@ -99,15 +101,17 @@ def build_real_nodes(
             "提示词模板不齐套，真实节点装配失败（worker 无模拟链可回落）："
             + ", ".join(sorted(missing))
         )
+    library = knowledge if knowledge is not None else load_knowledge_library()
     return {
         TaskState.PROBLEM_ANALYSIS: GoalProblemAnalysisNode(registry),
         TaskState.DATA_PREPARATION: DataPreparationNode(registry),
         TaskState.MODEL_PLANNING: ModelPlanningNode(
             registry,
             require_confirmation=not unattended,
-            knowledge=knowledge if knowledge is not None else load_knowledge_library(),
+            knowledge=library,
         ),
-        TaskState.EXPERIMENTING: ExperimentExecutionNode(registry),
+        # 实验审稿人（§8.4）与方案提议人共用同一知识库的两个只读工具
+        TaskState.EXPERIMENTING: ExperimentExecutionNode(registry, knowledge=library),
         TaskState.VALIDATING: ValidationNode(registry),
         TaskState.PAPER_WRITING: PaperWritingNode(
             registry, require_confirmation=not unattended

@@ -81,6 +81,16 @@ from .prompt_registry import (
     load_default_registry,
     parse_prompt_text,
 )
+from .review import (
+    REVIEW_MAX_ROUNDS,
+    REVIEW_PROMPT_ID,
+    REVIEWER_KNOWLEDGE_TOOL_NAMES,
+    REVIEWER_MAX_TOOL_ROUNDS,
+    REVIEWER_TOOL_NAMES,
+    compare_metrics,
+    normalize_verdict,
+    reviewer_tool_brief,
+)
 from .schema import validate
 
 __all__ = [
@@ -113,6 +123,11 @@ __all__ = [
     "PROPOSER_VIEWS",
     "PYTHON_TOOL_NAME",
     "REDUCE_PROMPT_ID",
+    "REVIEWER_KNOWLEDGE_TOOL_NAMES",
+    "REVIEWER_MAX_TOOL_ROUNDS",
+    "REVIEWER_TOOL_NAMES",
+    "REVIEW_MAX_ROUNDS",
+    "REVIEW_PROMPT_ID",
     "ROBUSTNESS_PROMPT_ID",
     "SANDBOX_TOOL_NAMES",
     "ChatCall",
@@ -137,6 +152,7 @@ __all__ = [
     "audit_document",
     "build_frozen_numbers",
     "chosen_plan",
+    "compare_metrics",
     "complete_notation",
     "extract_json",
     "gpu_hardware_note",
@@ -149,12 +165,14 @@ __all__ = [
     "normalize_language",
     "normalize_plan_languages",
     "normalize_symbols",
+    "normalize_verdict",
     "parse_prompt_text",
     "plan_assumptions",
     "plan_symbols",
     "proposer_tool_brief",
     "render_frozen_numbers",
     "render_paper_markdown",
+    "reviewer_tool_brief",
     "stub_response",
     "supports_chat",
     "symbol_material",

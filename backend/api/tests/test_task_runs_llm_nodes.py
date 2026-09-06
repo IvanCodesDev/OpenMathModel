@@ -164,6 +164,22 @@ EXPERIMENT_OUTPUT = {
     "progress_note": "实验代码已跑通，核心指标 rmse=0.5，下一步进入结果检验。",
 }
 
+#: 实验审稿人（§8.4 生成者-评审者，独立上下文的 reviewer 子代理）的终答：接受，
+#: 留一条 minor 意见；stage-outputs 投影与 G3 都不受一条 minor 影响。
+REVIEW_OUTPUT = {
+    "verdict": "accept",
+    "findings": [
+        {
+            "id": "R1",
+            "severity": "minor",
+            "location": "metrics",
+            "issue": "只报了 rmse，未与随机基线的 rmse 并列",
+            "fix_hint": "论文阶段并列基线指标",
+        }
+    ],
+    "summary": "实现忠实于方案 A，同种子复跑一致，可作为检验与论文依据。",
+}
+
 #: 清洗沙盒会话（仅有数据文件下发的用例走到）：读 data/ 原文件、写 cleaned/
 #: 同名文件、打印影响面统计标记行（数字为脚本真实统计）。
 CLEANING_CODE = (
@@ -358,6 +374,18 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
     if "数据清洗执行工程师" in system:
         assert "- data/orders.csv" in system, "清洗任务卡应携带待清洗数据文件清单"
         return _sandbox_reply(messages, CLEANING_CODE, CLEANING_OUTPUT)
+    if "实验审稿人" in system:
+        # 审稿人角色卡正文里也提到「实验工程师」（它审的就是实验工程师的实现），
+        # 所以这个锚点必须先于实验工程师判断
+        assert EXPERIMENT_CODE in system, "审稿任务卡应携带实验脚本正文"
+        assert '"rmse": 0.5' in system, "审稿任务卡应携带首跑真实指标"
+        assert "核心指标与首跑逐键一致" in system, "节点应先确定性复跑再派审稿人"
+        assert EXPERIMENT_OUTPUT["approach_summary"] in system, "审稿人拿实验工程师的实现摘要"
+        opening = messages[1]["content"]
+        assert messages[1]["role"] == "user" and "- ws_read：" in opening
+        assert "python_run" not in opening and "ws_write" not in opening, "审稿人只读"
+        assert "- knowledge_search：" in opening, "API 装配把知识库两个只读工具接给了审稿人"
+        return _llm_reply(REVIEW_OUTPUT)
     if "实验工程师" in system:
         assert '"id": "A"' in system, "实验任务卡应携带选中的方案 A"
         return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
@@ -788,7 +816,9 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
     def router(request: httpx.Request) -> httpx.Response:
         messages = _wire_messages(request)
         system = _system_of(messages)
-        if "实验工程师" in system:
+        if "实验审稿人" in system:
+            seen["review_system"] = system
+        elif "实验工程师" in system:
             seen["experiment_system"] = system
             return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
         if "稳健性检验工程师" in system:
@@ -816,6 +846,10 @@ def test_g1_adopt_b_routes_downstream_stages_to_plan_b(client, monkeypatch):
     assert gate["title"].startswith("论文草稿已生成"), "选 B 后照常走到 G4"
     assert '"id": "B"' in seen["experiment_system"] and "启发式" in seen["experiment_system"]
     assert '"id": "A"' not in seen["experiment_system"], "实验任务卡只带用户选定的方案"
+    # 实验审稿人拿到的也是选中方案 B 的切片（假设 / 符号按选案过滤）
+    assert '"id": "B"' in seen["review_system"] and '"id": "A"' not in seen["review_system"]
+    assert "- B1【待检验｜影响中｜方案 B】局部搜索邻域可覆盖可行域" in seen["review_system"]
+    assert "A1【" not in seen["review_system"]
     # 假设表随选案进实验任务卡（切片 3）：全局 + B 的假设，A 的不进
     assert "## 模型假设" in seen["experiment_system"]
     assert "- G1【已确认｜影响中｜全局】需求服从泊松分布" in seen["experiment_system"]
@@ -1289,7 +1323,8 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
 
     def router(request: httpx.Request) -> httpx.Response:
         messages = _wire_messages(request)
-        if "实验工程师" not in _system_of(messages):
+        system = _system_of(messages)
+        if "实验审稿人" in system or "实验工程师" not in system:
             return _stage_router(request)
         if _saw_observation(messages):
             return _llm_reply(EXPERIMENT_OUTPUT)
@@ -1311,8 +1346,9 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
     assert final["status"] == "COMPLETED", "一波代码修复后任务应完整走完"
     assert len(experiment_cards) == 2, "两波各装配一次任务卡"
 
-    # 两次沙箱运行都留 TOOL_CALLED 痕：先失败后成功。按 step 归属区分实验与
-    # 检验阶段——验证阶段自 G3 落地后也在沙盒里复跑一次稳健性检查。
+    # 两次沙箱运行都留 TOOL_CALLED 痕：先失败后成功，再加审稿前对通过版脚本的
+    # 确定性复跑。按 step 归属区分实验与检验阶段——验证阶段自 G3 落地后也在
+    # 沙盒里复跑一次稳健性检查。
     events = client.get(f"/api/v1/task-runs/{run['id']}/events/history").json()["items"]
     logs = [event["payload"] for event in events if event["type"] == "run.log"]
     runs = [entry for entry in logs if entry.get("tool") == "python_run"]
@@ -1321,7 +1357,7 @@ def test_experiment_runtime_failure_regenerates_with_feedback(client, monkeypatc
     by_node: dict[str, list[str]] = {}
     for entry in runs:
         by_node.setdefault(node_of_step[entry["step_id"]], []).append(entry["status"])
-    assert by_node["EXPERIMENTING"] == ["failed", "succeeded"]
+    assert by_node["EXPERIMENTING"] == ["failed", "succeeded", "succeeded"]
     assert by_node["VALIDATING"] == ["succeeded"], "修好的脚本进工作区后检验阶段照常复跑"
 
 
@@ -1360,7 +1396,7 @@ def test_g2_data_gate_requests_confirmation_and_ledgers_decision(
             return _sandbox_reply(
                 messages, heavy_cleaning_code, {"summary": "剔除异常行 25% 后落 cleaned/"}
             )
-        if "实验工程师" in system:
+        if "实验工程师" in system and "实验审稿人" not in system:
             experiment_cards.append(system)
         return _stage_router(request)
 
