@@ -1,10 +1,10 @@
 """调度档位开关（§4.9）：OMM_GRAPH=off|shadow|linear-v1。
 
-Graph v1（linear-v1）是现有六阶段线性推进的图化形式（§6.1 三步走第一步）。
-切换前先做影子等价（§6.5）：只比控制流——事件类型序列、状态转移、步骤/attempt
-计数、审批点位置——不比 outputs 正文、时间戳、id。这里锚定 API 装配点的三条边界：
-图驱动整链与线性推进控制流逐一相等；缺省 shadow 档一趟下来零分歧警告；非法值
-按缺省处理并留警告（不得静默换档）。
+Graph v1（linear-v1）是现有六阶段线性推进的图化形式（§6.1 三步走第一步），影子
+等价（§6.5）只比控制流——事件类型序列、状态转移、步骤/attempt 计数、审批点位置——
+不比 outputs 正文、时间戳、id。第二步「等价证明后切换默认」已切：缺省 linear-v1
+图驱动、线性当影子。这里锚定 API 装配点的三条边界：图驱动整链与线性推进控制流
+逐一相等；缺省档一趟下来零分歧警告；非法值按缺省处理并留警告（不得静默换档）。
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from conftest import API, approve_when_asked, create_project, create_run, run_status_is, wait_until
+from omm_agent_core import DEFAULT_GRAPH_MODE
 
 from omm_api.engine_glue import _graph_mode
 
@@ -68,9 +69,9 @@ def test_graph_driven_run_matches_linear_control_flow(client, monkeypatch, caplo
     assert not [r for r in caplog.records if DIVERGENCE_MARK in r.getMessage()]
 
 
-def test_default_shadow_mode_records_no_divergence(client, monkeypatch, caplog) -> None:
+def test_default_mode_is_graph_driven_and_records_no_divergence(client, monkeypatch, caplog) -> None:
     monkeypatch.delenv("OMM_GRAPH", raising=False)
-    assert _graph_mode() == "shadow"
+    assert _graph_mode() == DEFAULT_GRAPH_MODE == "linear-v1"
 
     with caplog.at_level(logging.WARNING, logger="omm.engine"):
         run_id = _drive_reject_then_approve(client)
@@ -79,10 +80,10 @@ def test_default_shadow_mode_records_no_divergence(client, monkeypatch, caplog) 
     assert not [r for r in caplog.records if DIVERGENCE_MARK in r.getMessage()]
 
 
-def test_invalid_mode_value_warns_and_behaves_as_shadow(client, monkeypatch, caplog) -> None:
+def test_invalid_mode_value_warns_and_behaves_as_default(client, monkeypatch, caplog) -> None:
     monkeypatch.setenv("OMM_GRAPH", "modeling-v2")  # §4.9 留位、尚未落地的档位
     with caplog.at_level(logging.WARNING, logger="omm.engine"):
-        assert _graph_mode() == "shadow"
+        assert _graph_mode() == DEFAULT_GRAPH_MODE
     assert any("OMM_GRAPH='modeling-v2'" in r.getMessage() for r in caplog.records)
 
     # 非法值不影响推进：整链照常跑完

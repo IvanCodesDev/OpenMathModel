@@ -594,9 +594,11 @@ class ShadowComparator:
 
 GRAPH_MODE_ENV = "OMM_GRAPH"
 GRAPH_MODES: tuple[str, ...] = ("off", "shadow", "linear-v1")
-#: 缺省影子：零成本、零行为差异，真实运行也在积累等价证据；「切换默认 = linear-v1」
-#: 留给等价证明之后（§6.1 第二步）。``modeling-v2`` 随 H4 才成为合法值。
-DEFAULT_GRAPH_MODE = "shadow"
+#: 缺省图驱动（§6.1 第二步「等价证明后切换默认」）：等价证据 = evals 12 剧本 off vs
+#: linear-v1 控制流等价 + core 双调度器逐快照同答 + worker / API 全链；线性调度器留作
+#: 影子，分歧照旧只进日志。``shadow`` / ``off`` 仍可显式选回；``modeling-v2`` 随 H4
+#: 才成为合法值。
+DEFAULT_GRAPH_MODE = "linear-v1"
 
 
 def resolve_graph_mode(raw: str | None) -> tuple[str, str | None]:

@@ -554,4 +554,10 @@ def test_schedulers_for_mode_pairs_primary_and_shadow():
     assert isinstance(primary, GraphScheduler) and isinstance(shadow, LinearScheduler)
     with pytest.raises(ValueError):
         schedulers_for_mode("modeling-v2")
-    assert DEFAULT_GRAPH_MODE == "shadow"
+
+
+def test_default_mode_is_graph_driven_with_the_linear_engine_as_shadow():
+    """§6.1 第二步：等价证明后切换默认——缺省图驱动，线性调度器留作影子。"""
+    assert DEFAULT_GRAPH_MODE == "linear-v1"
+    primary, shadow = schedulers_for_mode(resolve_graph_mode(None)[0])
+    assert isinstance(primary, GraphScheduler) and isinstance(shadow, LinearScheduler)

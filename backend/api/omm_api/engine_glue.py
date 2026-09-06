@@ -758,11 +758,12 @@ def _nodes_mode() -> str:
 
 
 def _graph_mode() -> str:
-    """调度档位开关（§4.9 ``OMM_GRAPH=off|shadow|linear-v1``）；缺省 shadow。
+    """调度档位开关（§4.9 ``OMM_GRAPH=off|shadow|linear-v1``）；缺省 linear-v1。
 
-    shadow = 现引擎线性推进、Graph v1（linear-v1）当影子逐步比对，分歧只进
-    warning 日志（§6.5：影子永不改推进、永不发事件）；linear-v1 = 图驱动、线性
-    当影子；off = 不比对。非法值按缺省处理并留警告，与 ``_nodes_mode`` 同口径。
+    linear-v1 = Graph v1 图驱动、线性调度器当影子逐步比对（§6.1 第二步已切）；
+    shadow = 线性推进驱动、图当影子；off = 不比对。分歧只进 warning 日志（§6.5：
+    影子永不改推进、永不发事件）。非法值按缺省处理并留警告，与 ``_nodes_mode``
+    同口径。
     """
     mode, warning = resolve_graph_mode(os.environ.get(GRAPH_MODE_ENV))
     if warning:

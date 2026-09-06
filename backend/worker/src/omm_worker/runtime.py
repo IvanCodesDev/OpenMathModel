@@ -11,10 +11,11 @@ Execution-plane rules implemented here (PROJECT_STRUCTURE / system-overview):
 - the job loop is budgeted — a runaway registry cannot spin forever;
 - tools are minimally granted: the per-run invoker allowlists python_run only
   and caps the caller tier at "execute" (isomorphic to the API-side glue);
-- scheduling follows the ``OMM_GRAPH`` profile (§4.9): ``shadow`` (default)
-  keeps the linear engine driving with the Graph v1 scheduler as a shadow,
-  ``linear-v1`` lets the graph drive, ``off`` disables the shadow. Divergences
-  are logged and kept on ``shadow_divergences``; they never alter a run.
+- scheduling follows the ``OMM_GRAPH`` profile (§4.9): ``linear-v1`` (default)
+  lets the Graph v1 scheduler drive with the linear engine as a shadow,
+  ``shadow`` keeps the linear engine driving with the graph as a shadow,
+  ``off`` disables the shadow. Divergences are logged and kept on
+  ``shadow_divergences``; they never alter a run.
 """
 
 from __future__ import annotations

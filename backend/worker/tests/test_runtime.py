@@ -1,6 +1,7 @@
 import pytest
 
 from omm_agent_core import (
+    DEFAULT_GRAPH_MODE,
     AdvanceOutcome,
     NodeResult,
     StepStatus,
@@ -269,10 +270,11 @@ def test_graph_driven_worker_matches_linear_control_flow(tmp_path):
     assert graph.shadow_divergences == []
 
 
-def test_default_graph_mode_is_shadow_and_records_no_divergence(tmp_path, monkeypatch):
+def test_default_graph_mode_is_graph_driven_with_zero_divergence(tmp_path, monkeypatch):
+    """缺省 = linear-v1 图驱动、线性当影子（§6.1 第二步已切）；整条曲折链零分歧。"""
     monkeypatch.delenv("OMM_GRAPH", raising=False)
     runtime = make_runtime(tmp_path, overrides={TaskState.MODEL_PLANNING: ReviewNode()})
-    assert runtime.graph_mode == "shadow"
+    assert runtime.graph_mode == DEFAULT_GRAPH_MODE == "linear-v1"
 
     _drive_gate_reject_retry(runtime, WorkerLoop(runtime))
 
@@ -280,15 +282,15 @@ def test_default_graph_mode_is_shadow_and_records_no_divergence(tmp_path, monkey
 
 
 def test_graph_mode_comes_from_env_and_bad_values_fall_back_with_a_warning(tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("OMM_GRAPH", "linear-v1")
-    assert make_runtime(tmp_path / "a").graph_mode == "linear-v1"
+    monkeypatch.setenv("OMM_GRAPH", "shadow")
+    assert make_runtime(tmp_path / "a").graph_mode == "shadow"
     monkeypatch.setenv("OMM_GRAPH", "off")
     assert make_runtime(tmp_path / "b").graph_mode == "off"
 
     monkeypatch.setenv("OMM_GRAPH", "modeling-v2")
     with caplog.at_level("WARNING", logger="omm_worker.runtime"):
         runtime = make_runtime(tmp_path / "c")
-    assert runtime.graph_mode == "shadow"
+    assert runtime.graph_mode == DEFAULT_GRAPH_MODE
     assert any("OMM_GRAPH='modeling-v2'" in record.getMessage() for record in caplog.records)
     # 显式参数优先于环境变量
     assert WorkerRuntime(
