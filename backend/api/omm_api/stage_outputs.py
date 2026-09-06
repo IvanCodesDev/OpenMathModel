@@ -456,6 +456,61 @@ def _threshold(value: Any) -> Any:
     return None
 
 
+_REVIEW_VERDICTS = frozenset({"accept", "reject"})
+_REVIEW_SEVERITIES = frozenset({"blocker", "major", "minor"})
+
+
+def _review_report(raw: Any) -> Optional[dict[str, Any]]:
+    """生成者-评审者环的 ``review`` 输出 → 契约 ``review_report``（experiment-summary.v1）。
+
+    实验节点 ``outputs["review"]`` 与验证节点 ``robustness["review"]`` 同一形状
+    （nodes._run_review_loop）：未执行 ``{executed: false, reason, llm_calls[, rounds,
+    rerun]}``；已执行还带 verdict / findings / blockers / summary / rerun / stalemate。
+    契约九键全必填且 additionalProperties=false：未执行形状补齐空值；过程字段
+    （llm_calls、rerun 的 metrics / diff）剔除；意见逐条清洗（无 issue 剔除、
+    severity 枚举外按 minor、缺 id 按序补）；``blockers`` 按投影后的意见重算。
+    审稿环之前的运行与模拟节点没有该键 → null（契约允许）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    executed = raw.get("executed") is True
+    findings: list[dict[str, Any]] = []
+    if executed:
+        for index, entry in enumerate(raw.get("findings") or [], start=1):
+            if not isinstance(entry, dict):
+                continue
+            issue = str(entry.get("issue") or "").strip()
+            if not issue:
+                continue
+            severity = str(entry.get("severity") or "").strip().lower()
+            findings.append(
+                {
+                    "id": str(entry.get("id") or "").strip() or f"R{index}",
+                    "severity": severity if severity in _REVIEW_SEVERITIES else "minor",
+                    "location": str(entry.get("location") or "").strip(),
+                    "issue": issue,
+                    "fix_hint": str(entry.get("fix_hint") or "").strip(),
+                }
+            )
+    verdict = raw.get("verdict") if executed else None
+    rounds = raw.get("rounds")
+    rerun = raw.get("rerun")
+    rerun_consistent: Optional[bool] = None
+    if isinstance(rerun, dict) and rerun.get("executed") is True:
+        rerun_consistent = rerun.get("consistent") is True
+    return {
+        "executed": executed,
+        "verdict": verdict if verdict in _REVIEW_VERDICTS else None,
+        "rounds": rounds if isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0 else 0,
+        "findings": findings,
+        "blockers": sum(1 for finding in findings if finding["severity"] == "blocker"),
+        "summary": str(raw.get("summary") or "") if executed else "",
+        "stalemate": raw.get("stalemate") is True,
+        "rerun_consistent": rerun_consistent,
+        "reason": str(raw.get("reason") or ""),
+    }
+
+
 def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
     """验证节点 ``robustness`` 输出 → 契约 ``robustness_report``（experiment-summary.v1）。
 
@@ -465,7 +520,8 @@ def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
     produced_artifacts）。契约七键全必填且 additionalProperties=false：未执行形状
     补齐空值，过程字段剔除（活动流另有展示）。沙盒化之前的运行与模拟节点没有该键
     → null（契约允许）。计数按投影后的 checks 重算，保证 ``checks_total ==
-    len(checks)`` 的契约不变量不受个别畸形项被剔除的影响。
+    len(checks)`` 的契约不变量不受个别畸形项被剔除的影响。检验脚本的独立审稿
+    （``review``，§8.4）随报告一起投影为可选键。
     """
     if not isinstance(raw, dict):
         return None
@@ -500,6 +556,7 @@ def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
         "checks_total": len(checks),
         "checks_failed": sum(1 for check in checks if not check["passed"]),
         "reason": str(raw.get("reason") or ""),
+        "review": _review_report(raw.get("review")),
     }
 
 
@@ -550,6 +607,8 @@ def _experiment_summary(
         stdout_tail=str(outputs.get("stdout_tail") or ""),
         experiment_summary=str(outputs.get("experiment_summary") or ""),
         validation=validation,
+        # 实验代码的独立审稿结论（§8.4 生成者-评审者环）；审稿环之前的运行 → null
+        review=_review_report(outputs.get("review")),
         updated_at=iso_z(updated_at),
     )
 

@@ -22,6 +22,7 @@ from omm_agent_skills.review import (
     findings_material,
     rerun_material,
     review_feedback,
+    review_material,
     verdict_summary_text,
 )
 
@@ -233,3 +234,38 @@ def test_verdict_summary_text_covers_accept_stalemate_and_skipped():
         "stalemate": True, "reason": "审稿 2 轮后仍有阻断性意见未解决",
     })
     assert text == "独立审稿 2 轮后仍有 1 条阻断性意见未解决（审稿 2 轮后仍有阻断性意见未解决），交结果采用闸门裁定"
+
+
+def test_review_material_writes_paper_facts_only_when_reviewed():
+    """论文材料：未审稿不声称审过；通过一句话（轮数 / 意见数 / 复跑三态）；僵持把
+    未解决的阻断性意见逐条列出并点明须进局限性。"""
+    assert review_material(None, "实验代码") == ""
+    assert review_material({"executed": False, "reason": "未配置子代理监督者"}, "实验代码") == ""
+
+    accepted = review_material({
+        "executed": True, "rounds": 1, "verdict": "accept",
+        "findings": [{"id": "R1", "severity": "minor", "issue": "命名"}],
+        "blockers": 0, "rerun": {"executed": True, "consistent": True}, "stalemate": False,
+    }, "实验代码")
+    assert accepted == "实验代码经独立审稿通过（1 轮，1 条意见；确定性复跑核对一致）。"
+    unrerun = review_material({
+        "executed": True, "rounds": 1, "verdict": "accept", "findings": [], "blockers": 0,
+        "rerun": {"executed": False, "reason": "剩余预算不足以复跑核对"}, "stalemate": False,
+    }, "稳健性检验脚本")
+    assert unrerun == "稳健性检验脚本经独立审稿通过（1 轮，0 条意见；未复跑核对）。"
+
+    stalemate = review_material({
+        "executed": True, "rounds": 2, "verdict": "reject",
+        "findings": [
+            {"id": "R1", "severity": "blocker", "location": "perturb()", "issue": "评估集未同步扰动", "fix_hint": "同步扰动"},
+            {"id": "R2", "severity": "minor", "issue": "阈值来源未说明"},
+        ],
+        "blockers": 1, "rerun": {"executed": True, "consistent": False},
+        "stalemate": True, "reason": "审稿 2 轮后仍有阻断性意见未解决",
+    }, "稳健性检验脚本")
+    assert stalemate == (
+        "稳健性检验脚本经独立审稿 2 轮后仍有 1 条阻断性意见未解决"
+        "（审稿 2 轮后仍有阻断性意见未解决；确定性复跑核对不一致（可复现性存疑）），须在模型检验与局限性部分如实说明：\n"
+        "[R1｜blocker] perturb()：评估集未同步扰动（修法：同步扰动）"
+    )
+    assert "R2" not in stalemate, "非阻断意见不进论文的局限性清单"

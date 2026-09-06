@@ -22,14 +22,21 @@ from conftest import (
 )
 
 from omm_api.orm import ApprovalRequestRow
-from omm_api.stage_outputs import StageState, _plan_proposal, _robustness_report, _validation_report
-from omm_contracts.v1.experiment_summary import ValidationReport
+from omm_api.stage_outputs import (
+    StageState,
+    _plan_proposal,
+    _review_report,
+    _robustness_report,
+    _validation_report,
+)
+from omm_contracts.v1.experiment_summary import ReviewReport, ValidationReport
 from test_task_runs_llm_nodes import (
     ANALYSIS_OUTPUT,
     EXPERIMENT_OUTPUT,
     PAPER_OUTPUT,
     PLANNING_OUTPUT,
     PREPARATION_OUTPUT,
+    REVIEW_OUTPUT,
     VALIDATION_OUTPUT,
     _configure_llm,
 )
@@ -139,6 +146,23 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
         "produced_artifacts", "assumption_coverage", "uncovered_focus",
     ):
         assert key not in robustness, f"过程字段 {key} 不得进入投影"
+    # H4 切片 12：三条审稿链里进这页的两条——实验代码审稿挂顶层、检验脚本审稿挂
+    # 稳健性报告；桩审稿人一轮 accept + 一条 minor 意见，节点确定性复跑一致
+    expected_review = {
+        "executed": True,
+        "verdict": "accept",
+        "rounds": 1,
+        "findings": REVIEW_OUTPUT["findings"],
+        "blockers": 0,
+        "summary": REVIEW_OUTPUT["summary"],
+        "stalemate": False,
+        "rerun_consistent": True,
+        "reason": "",
+    }
+    assert experiment_summary["review"] == expected_review
+    assert robustness["review"] == expected_review
+    for key in ("llm_calls", "rerun"):
+        assert key not in experiment_summary["review"], f"审稿过程字段 {key} 不得进入投影"
 
     document_draft = payload["document_draft"]
     validate_contract("document-draft.schema.json", document_draft)
@@ -238,7 +262,8 @@ def _validation_with(robustness: dict | None) -> dict:
 
 
 def test_robustness_projection_fills_unexecuted_shape():
-    """节点如实降级为「仅判读」时只给 {executed, reason}：投影补齐契约七键。"""
+    """节点如实降级为「仅判读」时只给 {executed, reason}：投影补齐契约七键；
+    没跑复跑就没有检验脚本可审，审稿键为 null。"""
     report = _robustness_report({"executed": False, "reason": "未配置工具端口，跳过稳健性复跑"})
     assert report == {
         "executed": False,
@@ -248,6 +273,7 @@ def test_robustness_projection_fills_unexecuted_shape():
         "checks_total": 0,
         "checks_failed": 0,
         "reason": "未配置工具端口，跳过稳健性复跑",
+        "review": None,
     }
     ValidationReport.model_validate(_validation_with(report))
 
@@ -298,7 +324,9 @@ def test_robustness_projection_strips_process_fields_and_recounts():
         "checks_total",
         "checks_failed",
         "reason",
+        "review",
     }
+    assert report["review"] is None, "审稿环之前的运行没有 review 键 → null"
     assert report["checks"] == [
         {
             "id": "sensitivity",
@@ -351,6 +379,120 @@ def test_robustness_projection_unfinished_sandbox_and_absent_field():
     legacy.outputs = {"verdict": "pass", "checks": [], "risks": [], "validation_summary": "旧运行"}
     assert _validation_report(legacy)["robustness"] is None
     ValidationReport.model_validate(_validation_report(legacy))
+
+
+# -- 独立审稿结论（§8.4 生成者-评审者环）的投影 -----------------------------------------
+
+
+def test_review_projection_fills_unexecuted_shape_and_keeps_legacy_null():
+    """审稿没派出去（无监督者 / 预算不足 / 子代理未完成）：节点只给 {executed:false,
+    reason, llm_calls[, rounds, rerun]} → 投影补齐契约九键；审稿环之前的运行没有该键
+    → null，而不是编一个「未审稿」。"""
+    skipped = _review_report({"executed": False, "reason": "未配置子代理监督者，跳过独立审稿", "llm_calls": 0})
+    assert skipped == {
+        "executed": False,
+        "verdict": None,
+        "rounds": 0,
+        "findings": [],
+        "blockers": 0,
+        "summary": "",
+        "stalemate": False,
+        "rerun_consistent": None,
+        "reason": "未配置子代理监督者，跳过独立审稿",
+    }
+    ReviewReport.model_validate(skipped)
+
+    # 首轮审稿人没给出有效终答：节点记了 rounds 与复跑核对，但 executed=false —
+    # verdict / findings / summary 不得从半成品里捞
+    failed_round = _review_report(
+        {
+            "executed": False,
+            "rounds": 1,
+            "rerun": {"executed": True, "consistent": True, "metrics": {"rmse": 0.5}, "diff": [], "reason": ""},
+            "reason": "审稿子代理未完成（failed）",
+            "llm_calls": 2,
+            "verdict": "reject",
+            "findings": [{"id": "R1", "severity": "blocker", "issue": "半成品"}],
+            "summary": "半成品",
+        }
+    )
+    assert failed_round["executed"] is False and failed_round["rounds"] == 1
+    assert failed_round["verdict"] is None and failed_round["findings"] == [] and failed_round["summary"] == ""
+    assert failed_round["rerun_consistent"] is True
+    ReviewReport.model_validate(failed_round)
+
+    assert _review_report(None) is None
+    assert _review_report("garbage") is None
+
+
+def test_review_projection_strips_process_fields_cleans_findings_and_recounts():
+    """已执行形状带过程字段（llm_calls、rerun 的 metrics / diff）：契约
+    additionalProperties=false 会把接口打成 500 → 投影剔除；意见逐条清洗后 blockers
+    按投影结果重算，不信节点给的计数。"""
+    raw = {
+        "executed": True,
+        "rounds": 2,
+        "verdict": "reject",
+        "findings": [
+            {"id": "R1", "severity": "blocker", "location": "robustness.py:perturb()", "issue": " 扰动只作用在训练集 ", "fix_hint": "同步扰动评估集"},
+            # severity 枚举外 → minor；缺 id → 按序补 R2；location / fix_hint 缺省空串
+            {"severity": "critical", "issue": "阈值来源未说明"},
+            {"id": "R3", "severity": "major", "issue": ""},  # 无 issue → 剔除
+            "not-a-dict",
+            {"id": "R4", "severity": "BLOCKER", "issue": "大写枚举也认"},
+        ],
+        "blockers": 9,
+        "summary": "扰动实现有缺陷",
+        "rerun": {"executed": True, "consistent": False, "metrics": {"rmse": 0.7}, "diff": ["rmse: 0.5 → 0.7"], "reason": "复跑指标与首跑不一致"},
+        "stalemate": True,
+        "reason": "审稿 2 轮后仍有阻断性意见未解决",
+        "llm_calls": 4,
+    }
+    report = _review_report(raw)
+    assert set(report) == {
+        "executed", "verdict", "rounds", "findings", "blockers", "summary", "stalemate", "rerun_consistent", "reason",
+    }
+    assert report["findings"] == [
+        {"id": "R1", "severity": "blocker", "location": "robustness.py:perturb()", "issue": "扰动只作用在训练集", "fix_hint": "同步扰动评估集"},
+        {"id": "R2", "severity": "minor", "location": "", "issue": "阈值来源未说明", "fix_hint": ""},
+        {"id": "R4", "severity": "blocker", "location": "", "issue": "大写枚举也认", "fix_hint": ""},
+    ]
+    assert report["blockers"] == 2 and report["rounds"] == 2 and report["verdict"] == "reject"
+    assert report["stalemate"] is True and report["rerun_consistent"] is False
+    assert report["summary"] == "扰动实现有缺陷" and report["reason"] == raw["reason"]
+    ReviewReport.model_validate(report)
+
+    # 通过的形状：未复跑 → rerun_consistent null；verdict 不在枚举 → null；rounds 畸形 → 0
+    accepted = _review_report(
+        {
+            "executed": True,
+            "rounds": "1",
+            "verdict": "approve",
+            "findings": [],
+            "blockers": 0,
+            "summary": "实现忠实于方案",
+            "rerun": {"executed": False, "reason": "剩余预算不足以复跑核对"},
+            "stalemate": False,
+            "reason": "",
+            "llm_calls": 1,
+        }
+    )
+    assert accepted["verdict"] is None and accepted["rounds"] == 0 and accepted["rerun_consistent"] is None
+    assert accepted["stalemate"] is False and accepted["summary"] == "实现忠实于方案"
+    ReviewReport.model_validate(accepted)
+
+    # 检验脚本的审稿随稳健性报告投影为可选键，整份 validation 仍过契约模型
+    robustness = _robustness_report(
+        {
+            "executed": True,
+            "status": "passed",
+            "summary_text": "沙盒复跑稳健性检查 1 项，通过 1 项，全部达标。",
+            "checks": [{"id": "sensitivity", "name": "需求率扰动", "passed": True, "value": 0.05, "threshold": 0.2, "detail": ""}],
+            "review": raw,
+        }
+    )
+    assert robustness["review"] == report
+    ValidationReport.model_validate(_validation_with(robustness))
 
 
 _RUN_ID = "run_" + "0" * 32

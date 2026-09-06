@@ -3222,6 +3222,59 @@ def test_paper_material_carries_robustness_and_g3_decision(registry):
     )
 
 
+def test_paper_material_carries_review_verdicts_of_both_sandbox_consumers(registry):
+    """论文材料：检验脚本的审稿结论进检验材料（通过与僵持都写）；实验代码审稿只在
+    僵持时把未解决的阻断性意见追加进实验材料（通过句节点已写进 experiment_summary）。"""
+    prior = paper_prior()
+    prior[TaskState.EXPERIMENTING.value] = {
+        **prior[TaskState.EXPERIMENTING.value],
+        "review": {
+            "executed": True, "rounds": 2, "verdict": "reject", "blockers": 1,
+            "findings": [
+                {"id": "R1", "severity": "blocker", "location": "experiment.py:split", "issue": "训练 / 评估切分泄漏", "fix_hint": "按时间切分"},
+                {"id": "R2", "severity": "minor", "location": "", "issue": "命名", "fix_hint": ""},
+            ],
+            "summary": "存在泄漏", "rerun": {"executed": True, "consistent": True},
+            "stalemate": True, "reason": "R2 运行预算已尽，无法按审稿意见修复",
+        },
+    }
+    prior[TaskState.VALIDATING.value] = {
+        **VALIDATION_OK,
+        "robustness": {
+            "executed": True,
+            "status": "passed",
+            "summary_text": "沙盒复跑稳健性检查 3 项，通过 3 项，全部达标。",
+            "review": {
+                "executed": True, "rounds": 1, "verdict": "accept", "blockers": 0,
+                "findings": [], "summary": "检验口径与实验一致",
+                "rerun": {"executed": True, "consistent": True}, "stalemate": False, "reason": "",
+            },
+        },
+    }
+    ctx = make_ctx(TaskState.PAPER_WRITING, prior=prior)
+
+    variables = PaperWritingNode(registry).build_variables(ctx)
+
+    experiment_material = variables["experiment_summary"]
+    assert experiment_material.startswith(prior[TaskState.EXPERIMENTING.value]["experiment_summary"])
+    assert "实验代码经独立审稿 2 轮后仍有 1 条阻断性意见未解决" in experiment_material
+    assert "[R1｜blocker] experiment.py:split：训练 / 评估切分泄漏（修法：按时间切分）" in experiment_material
+    assert "[R2｜minor]" not in experiment_material, "非阻断意见不进论文的局限性清单"
+    assert "须在模型检验与局限性部分如实说明" in experiment_material
+    validation_material = variables["validation_summary"]
+    assert validation_material.endswith(
+        "稳健性检验脚本经独立审稿通过（1 轮，0 条意见；确定性复跑核对一致）。"
+    )
+
+    # 实验审稿通过（未僵持）：实验材料保持节点输出原样——通过句已在 experiment_summary 里
+    prior[TaskState.EXPERIMENTING.value]["review"] = {
+        "executed": True, "rounds": 1, "verdict": "accept", "blockers": 0, "findings": [],
+        "summary": "忠实于方案", "rerun": {"executed": True, "consistent": True}, "stalemate": False, "reason": "",
+    }
+    accepted = PaperWritingNode(registry).build_variables(make_ctx(TaskState.PAPER_WRITING, prior=prior))
+    assert accepted["experiment_summary"] == prior[TaskState.EXPERIMENTING.value]["experiment_summary"]
+
+
 # -- 假设表的下游消费：实验任务卡 / 判读 / 稳健性检验 / 论文材料 ----------------------
 
 

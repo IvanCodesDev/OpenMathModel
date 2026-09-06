@@ -1,0 +1,22 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "构造合成需求数据",
+  "metrics": {},
+  "stdout_tail": "",
+  "experiment_summary": "构造合成需求数据",
+  "validation": null,
+  "review": {
+    "executed": true,
+    "verdict": "accept",
+    "rounds": 1,
+    "findings": [
+      { "id": "R1", "severity": "critical", "location": "", "issue": "severity 不在 blocker / major / minor 枚举内", "fix_hint": "" }
+    ],
+    "blockers": 0,
+    "summary": "",
+    "stalemate": false,
+    "rerun_consistent": null,
+    "reason": ""
+  },
+  "updated_at": "2026-09-06T12:00:00.000000Z"
+}

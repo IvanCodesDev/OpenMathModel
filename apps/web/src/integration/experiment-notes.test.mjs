@@ -8,7 +8,7 @@ const source = await readFile(new URL("./experiment-notes.ts", import.meta.url),
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { describeRobustness, formatMetricValue } = await import(
+const { describeReview, describeRobustness, formatMetricValue } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
@@ -93,6 +93,87 @@ test("unfinished sandbox session (status ≠ passed) keeps the honest summary se
 test("absent field (runs before sandboxing / sim nodes) renders nothing about the rerun", () => {
   assert.deepEqual(describeRobustness(null), { kind: "absent" });
   assert.deepEqual(describeRobustness(undefined), { kind: "absent" });
+});
+
+// ── 独立审稿（契约 review / robustness.review，fixture experiment-summary.5） ──
+
+/** fixture.5 的实验代码审稿：一轮通过，一条 minor 意见，复跑一致。 */
+function acceptedReview() {
+  return {
+    executed: true,
+    verdict: "accept",
+    rounds: 1,
+    findings: [
+      { id: "R1", severity: "minor", location: "experiment.py:12", issue: "随机种子写死在脚本里，建议改为常量集中管理", fix_hint: "抽成 SEED 常量" },
+    ],
+    blockers: 0,
+    summary: "实现忠实于方案 A，指标口径与方案一致，可复现",
+    stalemate: false,
+    rerun_consistent: true,
+    reason: "",
+  };
+}
+
+/** fixture.5 的检验脚本审稿：两轮后僵持，一条 blocker + 一条 minor。 */
+function stalemateReview() {
+  return {
+    executed: true,
+    verdict: "reject",
+    rounds: 2,
+    findings: [
+      { id: "R1", severity: "blocker", location: "robustness.py:perturb()", issue: "扰动只作用在训练集，评估集未同步扰动，敏感性数值偏乐观", fix_hint: "扰动后重新切分并同时评估" },
+      { id: "R2", severity: "minor", location: "", issue: "阈值 0.2 未说明来源", fix_hint: "" },
+    ],
+    blockers: 1,
+    summary: "扰动实现有缺陷，敏感性结论不能采信",
+    stalemate: true,
+    rerun_consistent: true,
+    reason: "审稿 2 轮后仍有阻断性意见未解决",
+  };
+}
+
+test("accepted review: rounds, every finding (location-prefixed), rerun state, reviewer summary", () => {
+  assert.deepEqual(describeReview(acceptedReview()), {
+    kind: "accepted",
+    rounds: 1,
+    findings: [
+      { severity: "minor", severityLabel: "次要", text: "experiment.py:12：随机种子写死在脚本里，建议改为常量集中管理" },
+    ],
+    summary: "实现忠实于方案 A，指标口径与方案一致，可复现",
+    rerun: "consistent",
+  });
+});
+
+test("stalemate review: only blockers are listed (they are what G3 and the paper must carry)", () => {
+  assert.deepEqual(describeReview(stalemateReview()), {
+    kind: "stalemate",
+    rounds: 2,
+    blockers: 1,
+    findings: [
+      { severity: "blocker", severityLabel: "阻断", text: "robustness.py:perturb()：扰动只作用在训练集，评估集未同步扰动，敏感性数值偏乐观" },
+    ],
+    summary: "扰动实现有缺陷，敏感性结论不能采信",
+    reason: "审稿 2 轮后仍有阻断性意见未解决",
+    rerun: "consistent",
+  });
+});
+
+test("rerun state: null → not_run, false → inconsistent; blank location keeps the bare issue", () => {
+  const noRerun = describeReview({ ...acceptedReview(), rerun_consistent: null, findings: [
+    { id: "R1", severity: "major", location: "  ", issue: "只报了 rmse", fix_hint: "" },
+  ] });
+  assert.equal(noRerun.rerun, "not_run");
+  assert.deepEqual(noRerun.findings, [{ severity: "major", severityLabel: "主要", text: "只报了 rmse" }]);
+  assert.equal(describeReview({ ...stalemateReview(), rerun_consistent: false }).rerun, "inconsistent");
+});
+
+test("skipped review surfaces the node's reason; absent field renders nothing", () => {
+  assert.deepEqual(
+    describeReview({ executed: false, verdict: null, rounds: 0, findings: [], blockers: 0, summary: "", stalemate: false, rerun_consistent: null, reason: "未配置子代理监督者，跳过独立审稿" }),
+    { kind: "skipped", reason: "未配置子代理监督者，跳过独立审稿" },
+  );
+  assert.deepEqual(describeReview(null), { kind: "absent" });
+  assert.deepEqual(describeReview(undefined), { kind: "absent" });
 });
 
 test("formatMetricValue: thousands separators, bounded decimals, non-numbers untouched", () => {

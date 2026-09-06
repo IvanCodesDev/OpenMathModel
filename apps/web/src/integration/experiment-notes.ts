@@ -2,7 +2,9 @@
  * 实验与验证页的纯数据整形（不碰 DOM，node --test 直接断言）：
  * - 指标值格式化；
  * - experiment-summary 契约 validation.robustness（沙盒复跑的稳健性检查，G3 结果
- *   采用闸门的判定依据）→「稳健性与风险结论」小节的条目。
+ *   采用闸门的判定依据）→「稳健性与风险结论」小节的条目；
+ * - 契约 review / validation.robustness.review（实验代码 / 检验脚本的独立审稿结论，
+ *   §8.4 生成者-评审者环）→ 同一小节的审稿条目。
  *
  * 文案只产出中文源串；调用方按片段 t() 翻译后再拼接——词典按整段文本节点匹配，
  * 拼好的「通过｜实测 0.25｜阈值 0.2」译不到。
@@ -13,6 +15,8 @@ import type { ExperimentSummary } from "@openmathmodel/contracts";
 export type ValidationReport = NonNullable<ExperimentSummary["validation"]>;
 export type RobustnessReport = NonNullable<ValidationReport["robustness"]>;
 export type RobustnessCheck = RobustnessReport["checks"][number];
+export type ReviewReport = NonNullable<ExperimentSummary["review"]>;
+export type ReviewFinding = ReviewReport["findings"][number];
 
 /** 指标值展示：千分位 + 有限小数；非数值原样。大数不带小数尾巴，小数保留 4 位。 */
 export function formatMetricValue(value: unknown): string {
@@ -84,5 +88,72 @@ export function describeRobustness(
     total: robustness.checks_total,
     failed: robustness.checks_failed,
     rows: robustness.checks.map(checkRow),
+  };
+}
+
+/** 一条审稿意见的展示行：严重度中文源串（调用方 t()）+ 「位置：问题」正文。 */
+export interface ReviewFindingRow {
+  severity: "blocker" | "major" | "minor";
+  /** 「阻断 / 主要 / 次要」中文源串，调用方 t()。 */
+  severityLabel: string;
+  /** 「location：issue」；没给位置时只有 issue。修法不进结果页（生成者已按它修过）。 */
+  text: string;
+}
+
+/** 节点确定性复跑核对的三态：一致 / 不一致 / 未复跑（预算不足或脚本正文缺失）。 */
+export type RerunState = "consistent" | "inconsistent" | "not_run";
+
+export type ReviewSection =
+  /** 契约字段缺席（审稿环之前的运行 / 模拟节点）：小节不提审稿。 */
+  | { kind: "absent" }
+  /** 审稿没派出去（无监督者 / 预算不足 / 子代理未完成）：把原因摆出来，不让「没审」看起来像「审过」。 */
+  | { kind: "skipped"; reason: string }
+  /** 审稿通过：轮数、意见数（含 minor）、复跑三态、审稿人一句话。 */
+  | { kind: "accepted"; rounds: number; findings: ReviewFindingRow[]; summary: string; rerun: RerunState }
+  /** 僵持：驳回后修不动 / 未经复审，未解决的阻断性意见交 G3 裁定；结果页要能看到是哪几条。 */
+  | { kind: "stalemate"; rounds: number; blockers: number; findings: ReviewFindingRow[]; summary: string; reason: string; rerun: RerunState };
+
+const SEVERITY_LABEL: Record<ReviewFindingRow["severity"], string> = {
+  blocker: "阻断",
+  major: "主要",
+  minor: "次要",
+};
+
+function findingRow(finding: ReviewFinding): ReviewFindingRow {
+  const location = finding.location.trim();
+  return {
+    severity: finding.severity,
+    severityLabel: SEVERITY_LABEL[finding.severity],
+    text: location ? `${location}：${finding.issue}` : finding.issue,
+  };
+}
+
+function rerunState(review: ReviewReport): RerunState {
+  if (review.rerun_consistent === null || review.rerun_consistent === undefined) return "not_run";
+  return review.rerun_consistent ? "consistent" : "inconsistent";
+}
+
+export function describeReview(review: ReviewReport | null | undefined): ReviewSection {
+  if (!review) return { kind: "absent" };
+  if (!review.executed) return { kind: "skipped", reason: review.reason };
+  const findings = review.findings.map(findingRow);
+  if (review.stalemate) {
+    return {
+      kind: "stalemate",
+      rounds: review.rounds,
+      blockers: review.blockers,
+      // 僵持时只列阻断性意见：这些才是没解决、要进闸门与论文局限性的
+      findings: findings.filter(row => row.severity === "blocker"),
+      summary: review.summary,
+      reason: review.reason,
+      rerun: rerunState(review),
+    };
+  }
+  return {
+    kind: "accepted",
+    rounds: review.rounds,
+    findings,
+    summary: review.summary,
+    rerun: rerunState(review),
   };
 }

@@ -311,6 +311,34 @@ def review_feedback(
     return "\n\n".join(parts)
 
 
+def review_material(review: Any, subject: str) -> str:
+    """论文材料里的一段独立审稿结论；``subject`` 是被审对象（「实验代码」/「稳健性检验脚本」）。
+
+    未执行 → 空串（论文不声称审过）；通过 → 一句话（轮数、意见数、复跑核对三态）；
+    僵持 → 未解决的阻断性意见逐条列出，并点明须进模型检验与局限性——用户在闸门
+    选了接受也不能让它们从论文里消失。数字只来自节点记录，不是模型转述。
+    """
+    if not isinstance(review, Mapping) or not review.get("executed"):
+        return ""
+    rounds = int(review.get("rounds") or 0)
+    findings = [entry for entry in review.get("findings") or [] if isinstance(entry, Mapping)]
+    rerun = review.get("rerun") if isinstance(review.get("rerun"), Mapping) else {}
+    if not rerun.get("executed"):
+        rerun_text = "未复跑核对"
+    elif rerun.get("consistent"):
+        rerun_text = "确定性复跑核对一致"
+    else:
+        rerun_text = "确定性复跑核对不一致（可复现性存疑）"
+    if review.get("stalemate"):
+        blockers = [entry for entry in findings if entry.get("severity") == "blocker"]
+        head = (
+            f"{subject}经独立审稿 {rounds} 轮后仍有 {len(blockers)} 条阻断性意见未解决"
+            f"（{review.get('reason') or '僵持'}；{rerun_text}），须在模型检验与局限性部分如实说明："
+        )
+        return head + "\n" + findings_material(blockers)
+    return f"{subject}经独立审稿通过（{rounds} 轮，{len(findings)} 条意见；{rerun_text}）。"
+
+
 def verdict_summary_text(review: Mapping[str, Any]) -> str:
     """面向用户的一句话审稿结论（进度旁路 / 进度叙述用）。"""
     if not review.get("executed"):

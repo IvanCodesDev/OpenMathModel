@@ -20,7 +20,8 @@ import type {
 import { currentLocale, t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
-import { describeRobustness, formatMetricValue } from "./experiment-notes";
+import { describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
+import type { ReviewSection } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 import { describePaperAudit, paperAuditStamp } from "./paper-audit";
 import type { PlanDecisionView } from "./plan-decision";
@@ -840,6 +841,34 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
       list.append(noteItem("warn", "warning-circle", t("稳健性复跑未完成"), rerun.summary));
     } else if (rerun.kind === "skipped") {
       list.append(noteItem("warn", "warning-circle", t("稳健性复跑未执行"), rerun.reason));
+    }
+    // 独立审稿（§8.4 生成者-评审者环）紧随复跑逐项：同为代码侧的独立证据，G3 的
+    // 另一半依据。实验代码一条、检验脚本一条；僵持时把未解决的阻断性意见摆出来，
+    // 没派出去的审稿写明原因；审稿环之前的运行没有该键，不出现。
+    const reviewItem = (subject: string, skipped: string, section: ReviewSection): HTMLElement | null => {
+      if (section.kind === "absent") return null;
+      if (section.kind === "skipped") {
+        return noteItem("warn", "warning-circle", t(skipped), section.reason);
+      }
+      const rerunCopy = section.rerun === "consistent" ? "复跑一致" : section.rerun === "inconsistent" ? "复跑不一致" : "未复跑";
+      const findings = section.findings
+        .map(row => `[${t(row.severityLabel)}] ${row.text}`)
+        .join("；");
+      if (section.kind === "stalemate") {
+        const facts = [t("未通过"), `${section.rounds} ${t("轮")}`, `${section.blockers} ${t("条阻断性意见未解决")}`, t(rerunCopy)];
+        const tail = findings ? `。${t("未解决意见")}：${findings}` : "";
+        return noteItem("fail", "x-circle", t(subject), `${facts.join("｜")} — ${section.reason}${tail}`);
+      }
+      const facts = [t("通过"), `${section.rounds} ${t("轮")}`, `${section.findings.length} ${t("条意见")}`, t(rerunCopy)];
+      const lead = section.summary ? `${facts.join("｜")} — ${section.summary}` : facts.join("｜");
+      const tail = findings ? `。${t("意见")}：${findings}` : "";
+      return noteItem("pass", "check-circle", t(subject), `${lead}${tail}`);
+    };
+    for (const item of [
+      reviewItem("实验代码独立审稿", "实验代码独立审稿未执行", describeReview(summary.review)),
+      reviewItem("检验脚本独立审稿", "检验脚本独立审稿未执行", describeReview(validation?.robustness?.review)),
+    ]) {
+      if (item) list.append(item);
     }
     for (const check of validation?.checks ?? []) {
       const tone = check.result === "pass" ? "pass" : check.result === "warn" ? "warn" : "fail";

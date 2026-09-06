@@ -802,6 +802,22 @@ const EXPERIMENT_STAGE: Record<string, string> = {
   "未通过": "Failed",
   "实测": "Observed",
   "阈值": "Threshold",
+  // 独立审稿条目（stage-content：experiment-summary.review / robustness.review，H4 切片 12）
+  "实验代码独立审稿": "Independent review of experiment code",
+  "实验代码独立审稿未执行": "Independent review of experiment code not executed",
+  "检验脚本独立审稿": "Independent review of validation script",
+  "检验脚本独立审稿未执行": "Independent review of validation script not executed",
+  "轮": "round(s)",
+  "条意见": "finding(s)",
+  "条阻断性意见未解决": "unresolved blocker(s)",
+  "复跑一致": "Rerun consistent",
+  "复跑不一致": "Rerun inconsistent",
+  "未复跑": "No rerun",
+  "意见": "Findings",
+  "未解决意见": "Unresolved findings",
+  "阻断": "Blocker",
+  "主要": "Major",
+  "次要": "Minor",
   "在 5 个不同随机种子下波动较小，最大标准差 1.52%。":
     "Across five random seeds the spread stays small, with a maximum standard deviation of 1.52%.",
   "跨时段与区域验证均优于基线，整体性能稳定。":

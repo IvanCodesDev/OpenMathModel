@@ -74,6 +74,7 @@ from .review import (
     normalize_verdict,
     rerun_material,
     review_feedback,
+    review_material,
     reviewer_tool_brief,
     verdict_summary_text,
 )
@@ -3570,14 +3571,30 @@ def _emit_progress(services: NodeServices, payload: dict[str, Any]) -> None:
         pass
 
 
+def _experiment_material(experiment: Mapping[str, Any]) -> str:
+    """论文的实验材料：节点的实验过程摘要 + 独立审稿僵持时未解决的阻断性意见。
+
+    通过的审稿结论节点已写进 ``experiment_summary``（一行「独立审稿通过…」），这里
+    不重复；僵持才追加——用户在 G3 选了接受，未解决的意见也必须进论文的局限性。
+    """
+    summary = str(experiment.get("experiment_summary") or "无")
+    review = experiment.get("review")
+    if isinstance(review, Mapping) and review.get("stalemate"):
+        text = review_material(review, "实验代码")
+        if text:
+            summary = f"{summary}\n{text}"
+    return summary
+
+
 def _validation_material(
     validation: Mapping[str, Any], review_decisions: Mapping[str, str]
 ) -> str:
-    """论文的检验材料：评审判读 + 沙盒复跑的稳健性结论 + G3 决策台账。
+    """论文的检验材料：评审判读 + 沙盒复跑的稳健性结论 + 检验脚本审稿结论 + G3 决策台账。
 
-    稳健性一句话由验证节点按标记行数字生成（不是模型转述）；用户在 G3 选了
-    「接受并记录局限」时把这条纪律写进材料——未通过的检查项必须进论文的局限性，
-    不允许因为用户点了接受就把它们淡化掉。
+    稳健性一句话由验证节点按标记行数字生成（不是模型转述）；检验脚本的独立审稿
+    （§8.4）通过与僵持都写——检验章要说得出「检验代码本身经过核查」，僵持时未解决
+    的意见逐条进局限性；用户在 G3 选了「接受并记录局限」时把这条纪律写进材料——
+    未通过的检查项必须进论文的局限性，不允许因为用户点了接受就把它们淡化掉。
     """
     summary = str(validation.get("validation_summary") or "无")
     robustness = validation.get("robustness")
@@ -3588,6 +3605,9 @@ def _validation_material(
         coverage_text = _assumption_coverage_text(robustness.get("assumption_coverage"))
         if coverage_text:
             summary = f"{summary}\n{coverage_text}"
+        review_text = review_material(robustness.get("review"), "稳健性检验脚本")
+        if review_text:
+            summary = f"{summary}\n{review_text}"
     if review_decisions.get(TaskState.VALIDATING.value) == G3_ACCEPT_OPTION_ID:
         summary += (
             "\n用户已在结果采用闸门确认「接受并记录局限」：未通过的检查项必须在"
@@ -3661,7 +3681,7 @@ class PaperWritingNode(LlmSkillNode):
                 plan_assumptions(planning, plan.get("id"))
             ),
             "model_symbols": symbol_material(plan_symbols(planning, plan.get("id"))),
-            "experiment_summary": str(experiment.get("experiment_summary") or "无"),
+            "experiment_summary": _experiment_material(experiment),
             "validation_summary": _validation_material(validation, ctx.review_decisions),
             "frozen_numbers": render_frozen_numbers(build_frozen_numbers(ctx.prior_outputs)),
         }
