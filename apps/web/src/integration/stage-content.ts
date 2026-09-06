@@ -409,8 +409,6 @@ function planDetail(
   approach.append(el("h2", "", t("建模思路")), richBlock(plan.approach));
   detail.append(approach);
 
-  if (plan.steps.length) detail.append(listBlock(t("实验步骤"), plan.steps, 3));
-  if (plan.risks.length) detail.append(listBlock(t("主要风险"), plan.risks, 3));
   // 实现语言随 G1 一并确认（设计 §7.4）：有就亮出来；旧运行没有该键则不猜
   const language = languageLabel(plan.language);
   if (language) {
@@ -419,22 +417,22 @@ function planDetail(
     detail.append(block);
   }
 
+  if (plan.steps.length) detail.append(listBlock(t("实验步骤"), plan.steps, 3));
+  if (plan.risks.length) detail.append(listBlock(t("主要风险"), plan.risks, 3));
   if (recommended && rationale) {
     const why = el("div");
     why.append(el("h2", "", t("推荐理由")), richBlock(rationale));
     detail.append(why);
   }
-  return detail;
-}
   // 用户确认时写的备注是决策的一部分，原文示人（不做 markdown 渲染，不改写）
   if (decision && decision.chosenPlanId === plan.id && decision.comment) {
     const note = el("div");
     note.append(el("h2", "", t("确认备注")), el("p", "", decision.comment));
     detail.append(note);
   }
+  return detail;
+}
 
-function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
-  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="model-plan"]');
 /** 结论条一句话：有台账写「已确认采用」+ 确认时间；没有沿用「建议采用」口径。 */
 function planConclusion(
   proposal: PlanProposal,
@@ -450,6 +448,8 @@ function planConclusion(
   return `${t("已确认采用方案")} ${plan.id}（${plan.name}）${origin}，${t("确认于")} ${localizedMoment(decision.resolvedAt)}`;
 }
 
+function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="model-plan"]');
   // 台账落地不改 updated_at（那是方案产出时间），签名要连 resolved_at 一起看
   if (!panel || !shouldRender(panel, "model", planProposalStamp(proposal))) return;
 
@@ -695,9 +695,9 @@ function renderImplementationPanel(
   root: HTMLElement,
   proposal: PlanProposal,
   plan: PlanProposal["plans"][number],
+  decision: PlanDecisionView | null = null,
 ): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="implementation"]');
-  decision: PlanDecisionView | null = null,
   if (!panel || plan.steps.length === 0) return;
   panel.dataset.stageContentSource = "api";
 
