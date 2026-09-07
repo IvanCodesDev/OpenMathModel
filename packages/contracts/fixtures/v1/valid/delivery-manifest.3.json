@@ -1,0 +1,85 @@
+{
+  "run_id": "run_5e6f708192a3b4c5d6e7f8091a2b3c4d",
+  "problem_title": "共享单车调度优化",
+  "artifacts": [
+    {
+      "id": "art_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "kind": "table",
+      "name": "results.csv",
+      "media_type": "text/csv",
+      "size_bytes": 23,
+      "status": "READY",
+      "producer_node": "EXPERIMENTING",
+      "download_url": "/api/v1/artifacts/art_0f1e2d3c4b5a69788796a5b4c3d2e1f0/download",
+      "sha256": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+    },
+    {
+      "id": "art_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+      "kind": "figure",
+      "name": "fit_vs_baseline.png",
+      "media_type": "image/png",
+      "size_bytes": 20480,
+      "status": "READY",
+      "producer_node": "EXPERIMENTING",
+      "download_url": "/api/v1/artifacts/art_1a2b3c4d5e6f708192a3b4c5d6e7f809/download",
+      "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+    },
+    {
+      "id": "art_9f8e7d6c5b4a30211203a4b5c6d7e8f9",
+      "kind": "paper",
+      "name": "paper-draft.md",
+      "media_type": "text/markdown",
+      "size_bytes": 2048,
+      "status": "READY",
+      "producer_node": "PAPER_WRITING",
+      "download_url": "/api/v1/artifacts/art_9f8e7d6c5b4a30211203a4b5c6d7e8f9/download",
+      "sha256": "fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9"
+    },
+    {
+      "id": "art_aaaabbbbccccddddeeeeffff00001111",
+      "kind": "log",
+      "name": "run.log",
+      "media_type": "text/plain",
+      "size_bytes": 512,
+      "status": "PENDING",
+      "producer_node": null,
+      "download_url": null,
+      "sha256": null
+    }
+  ],
+  "key_metrics": { "rmse": 0.12 },
+  "validation_verdict": "pass",
+  "paper_citation": {
+    "title": "基于整数规划的共享单车调度优化",
+    "abstract": "本文建立整数规划模型求解调度问题，贪心基线 rmse=0.12。",
+    "keywords": ["整数规划", "调度"],
+    "artifact_id": "art_9f8e7d6c5b4a30211203a4b5c6d7e8f9"
+  },
+  "delivery": {
+    "status": "confirmed",
+    "paper_version": 1,
+    "approval_id": "appr_8b1d6f2a3c4e5f60718293a4b5c6d7e8",
+    "confirmed_at": "2026-09-07T05:40:00.000000Z",
+    "comment": "结论可用，直接交付。",
+    "audit": {
+      "findings_total": 0,
+      "findings_by_kind": {},
+      "frozen_numbers_total": 3,
+      "figures_total": 2,
+      "figures_inserted": 1,
+      "references_total": 2,
+      "references_cited": 1
+    },
+    "checks": [
+      { "id": "paper_artifact_ready", "label": "论文草稿产物可读且哈希对得上", "passed": true, "detail": "paper-draft.md（fcde2b2edba5…）" },
+      { "id": "audit_clean", "label": "终稿审计 0 发现", "passed": true, "detail": "数值、图表与引用审计 0 违规" },
+      { "id": "figures_delivered", "label": "已插入图件都有可下载产物", "passed": true, "detail": "1 / 1 张已插入图件有可下载产物" },
+      { "id": "metrics_in_paper", "label": "实验指标出现在论文里", "passed": true, "detail": "1 / 1 个实验指标出现在论文正文或摘要中" },
+      { "id": "validation_reported", "label": "检验结论在场", "passed": true, "detail": "检验结论：pass" }
+    ],
+    "files_total": 4,
+    "files_ready": 3,
+    "files_hashed": 3
+  },
+  "updated_at": "2026-09-07T05:40:00.000000Z"
+}

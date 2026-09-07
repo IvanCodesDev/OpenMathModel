@@ -24,7 +24,12 @@ from .orm import (
     TaskRunRow,
 )
 from .serialize import iso_z
-from .stage_outputs import StageState, current_pass_artifacts, replay_stage_outputs
+from .stage_outputs import (
+    StageState,
+    _registered_sha256,
+    current_pass_artifacts,
+    replay_stage_outputs,
+)
 from .workflow import STAGE_LABELS
 
 PAGE_SPECS: tuple[dict[str, Any], ...] = (
@@ -426,6 +431,8 @@ def build_modeling_workspace_view(
                 "status": row.status,
                 "producer_node": producer_node,
                 "download_url": f"/api/v1/artifacts/{row.id}/download" if downloadable else None,
+                # 登记哈希：交付清单「文件 + 哈希」的同一口径（下载端点按它核验）
+                "sha256": _registered_sha256(row.sha256),
             }
         )
 

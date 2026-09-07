@@ -1,0 +1,21 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "problem_title": "共享单车调度优化",
+  "artifacts": [],
+  "key_metrics": null,
+  "validation_verdict": null,
+  "paper_citation": null,
+  "delivery": {
+    "status": "shipped",
+    "paper_version": 1,
+    "approval_id": null,
+    "confirmed_at": null,
+    "comment": null,
+    "audit": null,
+    "checks": [],
+    "files_total": 0,
+    "files_ready": 0,
+    "files_hashed": 0
+  },
+  "updated_at": "2026-09-07T05:40:00.000000Z"
+}

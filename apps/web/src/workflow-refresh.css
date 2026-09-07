@@ -3037,6 +3037,66 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   font-weight: 650;
 }
 
+/* 成果页交付记录（DeliveryManifest.delivery）：状态三档语气、检查逐条 ✓ / ✗、文件行带登记哈希。
+   全是契约事实的呈现，不另起版面：仍是 .summary-row 的右列。 */
+.final-delivery-document .delivery-status { font-weight: 650; }
+.final-delivery-document .delivery-status.is-ok { color: #2f7d4f; }
+.final-delivery-document .delivery-status.is-warn { color: #a8711c; }
+.final-delivery-document .delivery-status.is-muted { color: #6a6a65; }
+.final-delivery-document .delivery-comment {
+  margin-left: 8px;
+  font-weight: 400;
+  color: #6a6a65;
+}
+
+.final-delivery-document .delivery-checks,
+.final-delivery-document .delivery-files {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  line-height: 1.7;
+}
+
+.final-delivery-document .delivery-checks li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.final-delivery-document .delivery-checks li > i { flex: none; }
+.final-delivery-document .delivery-checks li.is-passed > i { color: #2f7d4f; }
+.final-delivery-document .delivery-checks li.is-failed > i { color: #b3541e; }
+
+.final-delivery-document .delivery-check-detail {
+  color: #6a6a65;
+  font-size: 13px;
+}
+
+.final-delivery-document .delivery-files li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.final-delivery-document .delivery-files li.is-pending { color: #8a8a85; }
+
+.final-delivery-document .delivery-file-hash {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: 12px;
+  color: #6a6a65;
+}
+
+html[data-theme="dark"] .final-delivery-document .delivery-status.is-ok,
+html[data-theme="dark"] .final-delivery-document .delivery-checks li.is-passed > i { color: #7fc39a; }
+html[data-theme="dark"] .final-delivery-document .delivery-status.is-warn { color: #e0b15c; }
+html[data-theme="dark"] .final-delivery-document .delivery-checks li.is-failed > i { color: #e29a6a; }
+html[data-theme="dark"] .final-delivery-document .delivery-status.is-muted,
+html[data-theme="dark"] .final-delivery-document .delivery-comment,
+html[data-theme="dark"] .final-delivery-document .delivery-check-detail,
+html[data-theme="dark"] .final-delivery-document .delivery-file-hash { color: #a8a8a3; }
+
 .paper-editing-section {
   margin-top: 16px;
 }

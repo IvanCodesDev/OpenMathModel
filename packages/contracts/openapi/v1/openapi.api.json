@@ -1655,6 +1655,91 @@
         "title": "DecisionType",
         "type": "string"
       },
+      "DeliveryAudit": {
+        "additionalProperties": false,
+        "properties": {
+          "figures_inserted": {
+            "minimum": 0.0,
+            "title": "Figures Inserted",
+            "type": "integer"
+          },
+          "figures_total": {
+            "minimum": 0.0,
+            "title": "Figures Total",
+            "type": "integer"
+          },
+          "findings_by_kind": {
+            "additionalProperties": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "description": "发现类型 → 条数（键取 audit_finding.kind；消费者须容忍未知取值）。",
+            "title": "Findings By Kind",
+            "type": "object"
+          },
+          "findings_total": {
+            "minimum": 0.0,
+            "title": "Findings Total",
+            "type": "integer"
+          },
+          "frozen_numbers_total": {
+            "minimum": 0.0,
+            "title": "Frozen Numbers Total",
+            "type": "integer"
+          },
+          "references_cited": {
+            "minimum": 0.0,
+            "title": "References Cited",
+            "type": "integer"
+          },
+          "references_total": {
+            "minimum": 0.0,
+            "title": "References Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "findings_total",
+          "findings_by_kind",
+          "frozen_numbers_total",
+          "figures_total",
+          "figures_inserted",
+          "references_total",
+          "references_cited"
+        ],
+        "title": "DeliveryAudit",
+        "type": "object"
+      },
+      "DeliveryCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "description": "判定依据（计数、缺失项点名）。",
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "label": {
+            "description": "人可读的检查名。",
+            "title": "Label",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "passed",
+          "detail"
+        ],
+        "title": "DeliveryCheck",
+        "type": "object"
+      },
       "DeliveryManifest": {
         "additionalProperties": false,
         "description": "最终成果页正文投影：本次运行的成果交付清单。数据源是 artifacts 表（run 产出的产物列表）与各阶段最新成功输出（题目标题、实验关键指标、检验结论、论文引用）。运行尚无任何可交付内容时整体为 null，由 stage-outputs 端点表达。",
@@ -1666,6 +1751,17 @@
             },
             "title": "Artifacts",
             "type": "array"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryRecord"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "交付记录（H5 DeliveryManifest 真实化）：G4 定稿闸门的交付状态 + 终稿审计计数 + 确定性一致性检查（论文产物哈希可读、审计 0 发现、已插入图件有产物、实验指标出现在论文里、检验结论在场）+ 文件计数；只有真实论文草稿在场时才有，否则（模拟链、未到论文阶段）为 null。可选字段：旧消费者可忽略。"
           },
           "key_metrics": {
             "anyOf": [
@@ -1731,6 +1827,113 @@
           "updated_at"
         ],
         "title": "DeliveryManifest",
+        "type": "object"
+      },
+      "DeliveryRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "G4 审批 id；没挂过 G4 时为 null。",
+            "title": "Approval Id"
+          },
+          "audit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryAudit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "终稿审计与图件 / 文献计数（来自 DocumentDraft 的确定性字段）；论文未审计（旧运行）为 null。"
+          },
+          "checks": {
+            "description": "一致性检查，固定顺序：paper_artifact_ready → audit_clean → figures_delivered → metrics_in_paper → validation_reported。全是代码判定，不经模型。",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "用户在 G4 拍板时留下的备注（确认或退回）；没有为 null。",
+            "title": "Comment"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "用户确认交付的时间；未确认为 null。"
+          },
+          "files_hashed": {
+            "description": "其中带登记哈希的产物数。",
+            "minimum": 0.0,
+            "title": "Files Hashed",
+            "type": "integer"
+          },
+          "files_ready": {
+            "description": "其中可下载（READY 且内容对象可读、哈希对得上）的产物数。",
+            "minimum": 0.0,
+            "title": "Files Ready",
+            "type": "integer"
+          },
+          "files_total": {
+            "description": "交付清单里的产物数（与 artifacts 同口径）。",
+            "minimum": 0.0,
+            "title": "Files Total",
+            "type": "integer"
+          },
+          "paper_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "对应的 DocumentDraft.version。",
+            "title": "Paper Version"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status1"
+          }
+        },
+        "required": [
+          "status",
+          "paper_version",
+          "approval_id",
+          "confirmed_at",
+          "comment",
+          "audit",
+          "checks",
+          "files_total",
+          "files_ready",
+          "files_hashed"
+        ],
+        "title": "DeliveryRecord",
         "type": "object"
       },
       "DocumentDraft": {
@@ -1992,6 +2195,18 @@
         },
         "title": "HTTPValidationError",
         "type": "object"
+      },
+      "Id": {
+        "description": "检查项：论文草稿产物可读且哈希对得上 / 终稿审计 0 发现 / 已插入图件都有可下载产物 / 实验指标（冻结清单 EXPERIMENTING 项）逐个出现在论文里 / 检验结论在场。消费者须容忍未知取值。",
+        "enum": [
+          "paper_artifact_ready",
+          "audit_clean",
+          "figures_delivered",
+          "metrics_in_paper",
+          "validation_reported"
+        ],
+        "title": "Id",
+        "type": "string"
       },
       "Impact": {
         "description": "假设不成立时对结论的影响程度。",
@@ -4167,6 +4382,18 @@
         "title": "StageOutputs",
         "type": "object"
       },
+      "Status1": {
+        "description": "交付状态（按产出当前论文那一趟的 G4 审批回放）：pending_confirmation = G4 挂起待人确认；confirmed = 用户「确认交付」；returned_for_revision = 用户「退回修改」（新一版论文到来前保持）；unattended = 论文已发布但该运行没有挂 G4（无人值守 / 评测）；not_ready = 审批过期 / 取消等未成交付的状态。",
+        "enum": [
+          "not_ready",
+          "pending_confirmation",
+          "confirmed",
+          "returned_for_revision",
+          "unattended"
+        ],
+        "title": "Status1",
+        "type": "string"
+      },
       "StepRun": {
         "additionalProperties": false,
         "description": "状态机中单个节点的一次执行记录。同一节点重试产生新的 attempt。",
@@ -5044,6 +5271,19 @@
             ],
             "title": "Producer Node"
           },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "产物登记时的内容摘要（下载端点按它核验）；交付清单据此做「文件 + 哈希」。可选字段（形状与 ModelingWorkspaceView.artifacts 一致、另带哈希）：旧消费者可忽略；登记缺失时为 null。",
+            "title": "Sha256"
+          },
           "size_bytes": {
             "anyOf": [
               {
@@ -5155,6 +5395,19 @@
               }
             ],
             "title": "Producer Node"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "产物登记时的内容摘要（下载端点按它核验）；交付清单据此做「文件 + 哈希」。可选字段（形状与 ModelingWorkspaceView.artifacts 一致、另带哈希）：旧消费者可忽略；登记缺失时为 null。",
+            "title": "Sha256"
           },
           "size_bytes": {
             "anyOf": [

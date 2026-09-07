@@ -36,6 +36,7 @@ from omm_api.stage_outputs import (
     _robustness_report,
     _validation_report,
 )
+from omm_contracts import DeliveryManifest
 from omm_contracts.v1.dataset_profile import CleaningReport
 from omm_contracts.v1.experiment_summary import ReviewReport, ValidationReport
 from test_task_runs_llm_nodes import (
@@ -206,6 +207,33 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert delivery_manifest["paper_citation"]["artifact_id"] in paper_artifact_ids
     table_artifacts = [a for a in delivery_manifest["artifacts"] if a["kind"] == "table"]
     assert table_artifacts and table_artifacts[0]["producer_node"] == "EXPERIMENTING"
+    # H5 切片 17：文件 + 哈希 + 一致性结果——每个产物带登记哈希；用户在 G4「确认交付」后
+    # 交付记录 confirmed，五项确定性检查全过（论文产物可读、审计 0 发现、无图件、
+    # 实验指标 rmse=0.5 出现在正文、检验结论在场）
+    assert all(len(a["sha256"]) == 64 for a in delivery_manifest["artifacts"]), "产物哈希齐全"
+    delivery = delivery_manifest["delivery"]
+    # 审批接口不透出 evidence.gate，按 G4 的选项 id 认门（与 conftest.confirm_delivery 同口径）
+    g4 = next(
+        item for item in client.get(f"{API}/task-runs/{run['id']}/approvals").json()["items"]
+        if [option["id"] for option in item["options"]] == ["confirm_delivery", "redo:PAPER_WRITING"]
+    )
+    assert delivery["status"] == "confirmed"
+    assert delivery["approval_id"] == g4["id"]
+    assert delivery["confirmed_at"] == g4["resolution"]["resolved_at"]
+    assert delivery["paper_version"] == 1 and delivery["comment"] is None
+    assert delivery["audit"] == {
+        "findings_total": 0, "findings_by_kind": {},
+        "frozen_numbers_total": len(document_draft["frozen_numbers"]),
+        "figures_total": 0, "figures_inserted": 0, "references_total": 0, "references_cited": 0,
+    }
+    assert [(check["id"], check["passed"]) for check in delivery["checks"]] == [
+        ("paper_artifact_ready", True), ("audit_clean", True), ("figures_delivered", True),
+        ("metrics_in_paper", True), ("validation_reported", True),
+    ]
+    assert delivery["checks"][3]["detail"].startswith("1 / 1 个实验指标出现在论文正文或摘要中")
+    assert delivery["files_total"] == len(delivery_manifest["artifacts"])
+    assert delivery["files_hashed"] == delivery["files_total"]
+    assert delivery["files_ready"] == sum(1 for a in delivery_manifest["artifacts"] if a["download_url"])
 
 
 def test_stage_outputs_null_before_stage_completes(client, make_run, tick):
@@ -265,6 +293,122 @@ def test_stage_outputs_completed_sim_chain_returns_nulls_not_500(
     assert manifest["paper_citation"] is None, "sim 论文阶段无标题等契约字段，引用应为 null"
     kinds = sorted(a["kind"] for a in manifest["artifacts"])
     assert kinds == ["figure", "report"], "成果清单应列出模拟链的两个真实产物"
+    assert manifest["delivery"] is None, "没有真实论文草稿就没有交付记录（不装作有）"
+    assert all(len(a["sha256"]) == 64 for a in manifest["artifacts"]), "模拟链产物同样带登记哈希"
+
+
+def _paper_state(outputs: dict, step_id: str = "step_paper_1", count: int = 1) -> StageState:
+    state = StageState()
+    state.at = datetime(2026, 9, 7, 5, 40, tzinfo=timezone.utc)
+    state.count = count
+    state.step_id = step_id
+    state.outputs = outputs
+    return state
+
+
+def _g4_row(step_id: str, status: str = "RESOLVED", option_id: str | None = "confirm_delivery", comment: str | None = None):
+    from omm_api.orm import ApprovalRequestRow
+
+    return ApprovalRequestRow(
+        id="appr_8b1d6f2a3c4e5f60718293a4b5c6d7e8",
+        run_id=_RUN_ID,
+        decision_type="generic",
+        title="论文草稿已生成",
+        options=[{"id": "confirm_delivery", "label": "确认交付"}, {"id": "redo:PAPER_WRITING", "label": "退回修改"}],
+        evidence={"note": "论文草稿已生成", "requested_by_step": step_id, "gate": "G4"},
+        status=status,
+        requested_at=datetime(2026, 9, 7, 5, 30, tzinfo=timezone.utc),
+        resolution=(
+            {"option_id": option_id, "resolved_at": "2026-09-07T05:40:00.000000Z", "actor": "user", "comment": comment}
+            if option_id is not None else None
+        ),
+    )
+
+
+def test_delivery_record_replays_g4_and_runs_deterministic_checks(validate_contract):
+    """交付记录：G4 审批 → 状态 / 确认时间 / 备注；五项检查如实 passed 与依据；论文缺席 → null。"""
+    from omm_api.stage_outputs import _delivery_record
+
+    paper_id = "art_9f8e7d6c5b4a30211203a4b5c6d7e8f9"
+    fig_id = "art_1a2b3c4d5e6f708192a3b4c5d6e7f809"
+    artifacts = [
+        {"id": paper_id, "kind": "paper", "name": "paper-draft.md", "media_type": "text/markdown", "size_bytes": 10,
+         "status": "READY", "producer_node": "PAPER_WRITING", "download_url": f"/api/v1/artifacts/{paper_id}/download",
+         "sha256": "fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9"},
+        {"id": fig_id, "kind": "figure", "name": "fit.png", "media_type": "image/png", "size_bytes": 10,
+         "status": "READY", "producer_node": "EXPERIMENTING", "download_url": None, "sha256": None},
+    ]
+    outputs = {
+        **PAPER_OUTPUT,
+        "abstract": "贪心基线 rmse=0.12。",
+        "sections": [{"heading": "5 求解", "content": "见图 1。\n\n![图 1 拟合](fit.png)\n\nrmse=0.12，但 mae 没写。"}],
+        "frozen_numbers": [
+            {"id": "metrics.rmse", "label": "rmse", "value": 0.12, "source_stage": "EXPERIMENTING", "source_path": "metrics.rmse"},
+            {"id": "metrics.mae", "label": "mae", "value": 3.0, "source_stage": "EXPERIMENTING", "source_path": "metrics.mae"},
+            {"id": "robustness.x", "label": "x", "value": 0.2, "source_stage": "VALIDATING", "source_path": "robustness.checks[0].value"},
+        ],
+        "audit_findings": [
+            {"scope": "第1章《5 求解》", "kind": "unsourced_number", "numbers": ["0.87"], "detail": "无出处"},
+            {"scope": "第1章《5 求解》", "kind": "phantom_table", "numbers": ["表 2"], "detail": "幽灵表"},
+        ],
+        "figures": [
+            {"number": 1, "name": "fit.png", "artifact_id": fig_id, "caption": "拟合", "source_stage": "EXPERIMENTING", "inserted": True},
+            {"number": 2, "name": "conv.svg", "artifact_id": "art_2", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
+        ],
+        "references": [
+            {"number": 1, "title": "T", "text": "T[Z].", "url": None, "source": "plan_citation", "card_id": None, "cited": True},
+        ],
+    }
+    paper = _paper_state(outputs)
+
+    # 已确认交付 + 三项检查不过（审计有发现 / 已插入图件的产物不可下载 / mae 没出现在正文）
+    record = _delivery_record(paper, [_g4_row("step_paper_1", comment=" 直接交付 ")], artifacts, paper_id, "pass")
+    assert (record["status"], record["confirmed_at"], record["comment"], record["approval_id"]) == (
+        "confirmed", "2026-09-07T05:40:00.000000Z", "直接交付", "appr_8b1d6f2a3c4e5f60718293a4b5c6d7e8",
+    )
+    assert record["paper_version"] == 1
+    assert record["audit"] == {
+        "findings_total": 2, "findings_by_kind": {"unsourced_number": 1, "phantom_table": 1},
+        "frozen_numbers_total": 3, "figures_total": 2, "figures_inserted": 1, "references_total": 1, "references_cited": 1,
+    }
+    assert [(c["id"], c["passed"]) for c in record["checks"]] == [
+        ("paper_artifact_ready", True), ("audit_clean", False), ("figures_delivered", False),
+        ("metrics_in_paper", False), ("validation_reported", True),
+    ]
+    assert record["checks"][0]["detail"] == "paper-draft.md（fcde2b2edba5…）"
+    assert record["checks"][1]["detail"] == "终稿审计发现 2 处（phantom_table 1 处、unsourced_number 1 处）"
+    assert record["checks"][2]["detail"] == "0 / 1 张已插入图件有可下载产物；缺：fit.png"
+    assert record["checks"][3]["detail"] == "1 / 2 个实验指标出现在论文正文或摘要中；未出现：metrics.mae"
+    assert record["checks"][4]["detail"] == "检验结论：pass"
+    assert (record["files_total"], record["files_ready"], record["files_hashed"]) == (2, 1, 1)
+
+    # 状态回放：挂起 / 退回 / 过期 / 没挂 G4（无人值守）/ 审批是别趟 step 的不算
+    assert _delivery_record(paper, [_g4_row("step_paper_1", status="PENDING", option_id=None)], artifacts, paper_id, None)["status"] == "pending_confirmation"
+    returned = _delivery_record(paper, [_g4_row("step_paper_1", option_id="redo:PAPER_WRITING", comment="重写")], artifacts, paper_id, None)
+    assert (returned["status"], returned["confirmed_at"], returned["comment"]) == ("returned_for_revision", None, "重写")
+    assert _delivery_record(paper, [_g4_row("step_paper_1", status="EXPIRED", option_id=None)], artifacts, paper_id, None)["status"] == "not_ready"
+    unattended = _delivery_record(paper, [_g4_row("step_paper_0")], artifacts, paper_id, None)
+    assert unattended["status"] == "unattended" and unattended["approval_id"] is None
+    assert unattended["checks"][4] == {"id": "validation_reported", "label": "检验结论在场", "passed": False, "detail": "检验阶段没有给出结论"}
+
+    # 未审计的旧运行：audit null、audit_clean 不过；论文产物缺失点名
+    legacy = _delivery_record(_paper_state(dict(PAPER_OUTPUT)), [], [], None, None)
+    assert legacy["audit"] is None
+    assert legacy["checks"][0] == {"id": "paper_artifact_ready", "label": "论文草稿产物可读且哈希对得上", "passed": False, "detail": "论文草稿产物缺失或内容对象不可读"}
+    assert legacy["checks"][1]["detail"] == "论文未做终稿审计"
+    assert legacy["checks"][2]["detail"] == "本次运行的论文没有插入图件"
+    assert legacy["checks"][3]["detail"] == "冻结清单里没有实验指标"
+
+    # 没有真实论文（sim / 未到论文阶段）→ null
+    assert _delivery_record(None, [], artifacts, None, "pass") is None
+    assert _delivery_record(_paper_state({"label": "写入建模报告草稿（模拟）"}), [], artifacts, None, "pass") is None
+
+    # 整份 DeliveryManifest 过 JSON Schema（含 sha256 与 delivery）
+    manifest = DeliveryManifest(
+        run_id=_RUN_ID, problem_title="题", artifacts=artifacts, key_metrics={"rmse": 0.12},
+        validation_verdict="pass", paper_citation=None, delivery=record, updated_at="2026-09-07T05:40:00.000000Z",
+    ).model_dump(mode="json")
+    validate_contract("delivery-manifest.schema.json", manifest)
 
 
 def _validation_with(robustness: dict | None) -> dict:

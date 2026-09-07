@@ -859,6 +859,15 @@ def _document_draft(run_id: str, state: Optional[StageState]) -> Optional[Docume
     )
 
 
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _registered_sha256(value: Any) -> Optional[str]:
+    """产物登记哈希 → 契约 ``sha256``（64 位小写十六进制才认，其余 → null，不把脏值当哈希示人）。"""
+    text = str(value or "").strip().lower()
+    return text if _SHA256_HEX.match(text) else None
+
+
 def _artifact_projection(
     row: ArtifactRow, producer_node: Optional[str], blobs: ArtifactBlobStore
 ) -> dict[str, Any]:
@@ -874,7 +883,183 @@ def _artifact_projection(
         "status": row.status,
         "producer_node": producer_node,
         "download_url": f"/api/v1/artifacts/{row.id}/download" if downloadable else None,
+        # 「文件 + 哈希」：交付清单直接带登记摘要（下载端点按同一值核验）
+        "sha256": _registered_sha256(row.sha256),
     }
+
+
+#: G4 定稿闸门在审批表里的样子（engine_glue REVIEW_REQUESTED：evidence.gate = "G4"）与
+#: 两个选项 id（omm_agent_skills.nodes.G4_CONFIRM_OPTION_ID / G4_REDO_OPTION_ID 同一口径）。
+_G4_GATE = "G4"
+_G4_CONFIRM_OPTION_ID = "confirm_delivery"
+_G4_REDO_OPTION_PREFIX = "redo:"
+#: 交付状态（契约 enum）。
+_DELIVERY_NOT_READY = "not_ready"
+_DELIVERY_PENDING = "pending_confirmation"
+_DELIVERY_CONFIRMED = "confirmed"
+_DELIVERY_RETURNED = "returned_for_revision"
+_DELIVERY_UNATTENDED = "unattended"
+
+
+def _g4_approval(
+    paper: StageState, approvals: Iterable[ApprovalRequestRow]
+) -> Optional[ApprovalRequestRow]:
+    """产出当前这一版论文的那一趟 step 挂的 G4 审批（多条取最晚请求的那条）。"""
+    if not paper.step_id:
+        return None
+    matches = [
+        approval
+        for approval in approvals
+        if isinstance(approval.evidence, dict)
+        and str(approval.evidence.get("gate") or "") == _G4_GATE
+        and str(approval.evidence.get("requested_by_step") or "") == paper.step_id
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda approval: (as_utc(approval.requested_at) or datetime.min.replace(tzinfo=timezone.utc), approval.id))
+
+
+def _delivery_status(approval: Optional[ApprovalRequestRow]) -> tuple[str, Optional[str], Optional[str]]:
+    """G4 审批 → (交付状态, 确认时间, 用户备注)。"""
+    if approval is None:
+        return _DELIVERY_UNATTENDED, None, None
+    resolution = approval.resolution if isinstance(approval.resolution, dict) else {}
+    comment = resolution.get("comment")
+    comment_text = comment.strip() if isinstance(comment, str) and comment.strip() else None
+    if approval.status == ApprovalStatus.PENDING.value:
+        return _DELIVERY_PENDING, None, None
+    if approval.status == ApprovalStatus.RESOLVED.value:
+        option_id = str(resolution.get("option_id") or "")
+        if option_id == _G4_CONFIRM_OPTION_ID:
+            resolved_at = str(resolution.get("resolved_at") or "") or iso_z(as_utc(approval.requested_at))
+            return _DELIVERY_CONFIRMED, resolved_at, comment_text
+        if option_id.startswith(_G4_REDO_OPTION_PREFIX):
+            return _DELIVERY_RETURNED, None, comment_text
+    return _DELIVERY_NOT_READY, None, comment_text
+
+
+def _check(check_id: str, label: str, passed: bool, detail: str) -> dict[str, Any]:
+    return {"id": check_id, "label": label, "passed": bool(passed), "detail": detail}
+
+
+def _paper_text(outputs: dict[str, Any]) -> str:
+    parts = [str(outputs.get("abstract") or "")]
+    for entry in outputs.get("sections") or []:
+        if isinstance(entry, dict):
+            parts.append(str(entry.get("heading") or ""))
+            parts.append(str(entry.get("content") or ""))
+    return "\n".join(parts)
+
+
+def _delivery_record(
+    paper: Optional[StageState],
+    approvals: Iterable[ApprovalRequestRow],
+    artifacts: list[dict[str, Any]],
+    paper_artifact_id: Optional[str],
+    validation_verdict: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """交付记录（delivery-manifest.v1 ``delivery``）：G4 状态 + 审计计数 + 五项确定性一致性检查 + 文件计数。
+
+    只有真实论文草稿在场（PAPER_WRITING outputs 带 title）才有；模拟链 / 未到论文阶段 → null，
+    不装作有交付记录。检查全是代码判定、如实给 passed 与依据，不经模型。
+    """
+    if paper is None or "title" not in paper.outputs:
+        return None
+    outputs = paper.outputs
+    approval = _g4_approval(paper, approvals)
+    status, confirmed_at, comment = _delivery_status(approval)
+
+    frozen = _frozen_numbers(outputs.get("frozen_numbers"))
+    findings = _audit_findings(outputs.get("audit_findings"))
+    figures = _figures(outputs.get("figures")) or []
+    references = _references(outputs.get("references")) or []
+    by_kind: dict[str, int] = {}
+    for finding in findings or []:
+        by_kind[finding["kind"]] = by_kind.get(finding["kind"], 0) + 1
+    audit: Optional[dict[str, Any]] = None
+    if findings is not None:
+        audit = {
+            "findings_total": len(findings),
+            "findings_by_kind": by_kind,
+            "frozen_numbers_total": len(frozen or []),
+            "figures_total": len(figures),
+            "figures_inserted": sum(1 for figure in figures if figure["inserted"]),
+            "references_total": len(references),
+            "references_cited": sum(1 for reference in references if reference["cited"]),
+        }
+
+    by_id = {artifact["id"]: artifact for artifact in artifacts}
+    ready_ids = {artifact["id"] for artifact in artifacts if artifact["download_url"]}
+
+    checks: list[dict[str, Any]] = []
+    paper_artifact = by_id.get(paper_artifact_id or "")
+    if paper_artifact is not None and paper_artifact["download_url"]:
+        digest = paper_artifact.get("sha256") or ""
+        checks.append(_check(
+            "paper_artifact_ready", "论文草稿产物可读且哈希对得上", True,
+            f"{paper_artifact['name']}（{digest[:12]}…）" if digest else paper_artifact["name"],
+        ))
+    else:
+        checks.append(_check(
+            "paper_artifact_ready", "论文草稿产物可读且哈希对得上", False,
+            "论文草稿产物缺失或内容对象不可读" if paper_artifact is None else f"{paper_artifact['name']} 状态 {paper_artifact['status']}，内容对象不可读",
+        ))
+
+    if findings is None:
+        checks.append(_check("audit_clean", "终稿审计 0 发现", False, "论文未做终稿审计"))
+    elif findings:
+        summary = "、".join(f"{kind} {count} 处" for kind, count in sorted(by_kind.items()))
+        checks.append(_check("audit_clean", "终稿审计 0 发现", False, f"终稿审计发现 {len(findings)} 处（{summary}）"))
+    else:
+        checks.append(_check("audit_clean", "终稿审计 0 发现", True, "数值、图表与引用审计 0 违规"))
+
+    inserted = [figure for figure in figures if figure["inserted"]]
+    if not inserted:
+        checks.append(_check("figures_delivered", "已插入图件都有可下载产物", True, "本次运行的论文没有插入图件"))
+    else:
+        delivered = [figure for figure in inserted if figure["artifact_id"] in ready_ids]
+        missing = [figure["name"] for figure in inserted if figure["artifact_id"] not in ready_ids]
+        detail = f"{len(delivered)} / {len(inserted)} 张已插入图件有可下载产物"
+        if missing:
+            detail += f"；缺：{'、'.join(missing[:3])}{'…' if len(missing) > 3 else ''}"
+        checks.append(_check("figures_delivered", "已插入图件都有可下载产物", not missing, detail))
+
+    metrics = [entry for entry in (frozen or []) if entry["source_stage"] == "EXPERIMENTING"]
+    if not metrics:
+        checks.append(_check("metrics_in_paper", "实验指标出现在论文里", True, "冻结清单里没有实验指标"))
+    else:
+        text = _paper_text(outputs)
+        present = [entry for entry in metrics if _number_text(entry["value"]) in text]
+        missing_ids = [entry["id"] for entry in metrics if _number_text(entry["value"]) not in text]
+        detail = f"{len(present)} / {len(metrics)} 个实验指标出现在论文正文或摘要中"
+        if missing_ids:
+            detail += f"；未出现：{'、'.join(missing_ids[:3])}{'…' if len(missing_ids) > 3 else ''}"
+        checks.append(_check("metrics_in_paper", "实验指标出现在论文里", not missing_ids, detail))
+
+    checks.append(_check(
+        "validation_reported", "检验结论在场", validation_verdict is not None,
+        f"检验结论：{validation_verdict}" if validation_verdict else "检验阶段没有给出结论",
+    ))
+
+    return {
+        "status": status,
+        "paper_version": max(paper.count, 1),
+        "approval_id": approval.id if approval is not None else None,
+        "confirmed_at": confirmed_at,
+        "comment": comment,
+        "audit": audit,
+        "checks": checks,
+        "files_total": len(artifacts),
+        "files_ready": len(ready_ids),
+        "files_hashed": sum(1 for artifact in artifacts if artifact.get("sha256")),
+    }
+
+
+def _number_text(value: Any) -> str:
+    """冻结值的正文写法：整数不带 .0（与 frozen_numbers 的 token 口径一致），其余 str()。"""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def _delivery_manifest(
@@ -883,6 +1068,7 @@ def _delivery_manifest(
     step_nodes: dict[str, str],
     artifact_rows: list[ArtifactRow],
     blobs: ArtifactBlobStore,
+    approvals: Iterable[ApprovalRequestRow] = (),
 ) -> Optional[DeliveryManifest]:
     analysis = stages.get(_PROBLEM_ANALYSIS)
     experimenting = stages.get(_EXPERIMENTING)
@@ -945,6 +1131,8 @@ def _delivery_manifest(
         key_metrics=key_metrics,
         validation_verdict=validation_verdict,
         paper_citation=paper_citation,
+        # 交付记录：G4 状态 + 审计计数 + 一致性检查 + 文件计数（真实论文在场才有）
+        delivery=_delivery_record(paper, approvals, artifacts, paper_artifact_id, validation_verdict),
         updated_at=iso_z(max(times)) if times else iso_z(run.updated_at),
     )
 
@@ -983,5 +1171,5 @@ def build_stage_outputs(
             run.id, stages.get(_EXPERIMENTING), stages.get(_VALIDATING)
         ),
         document_draft=_document_draft(run.id, stages.get(_PAPER_WRITING)),
-        delivery_manifest=_delivery_manifest(run, stages, step_nodes, artifact_rows, blobs),
+        delivery_manifest=_delivery_manifest(run, stages, step_nodes, artifact_rows, blobs, approvals),
     )

@@ -192,6 +192,10 @@ class ArtifactProjection(BaseModel):
     download_url: (
         constr(pattern=r"^/api/v1/artifacts/art_[0-9a-f]{32}/download$") | None
     )
+    sha256: constr(pattern=r"^[0-9a-f]{64}$") | None = Field(
+        None,
+        description="产物登记时的内容摘要（下载端点按它核验）；交付清单据此做「文件 + 哈希」。可选字段（形状与 ModelingWorkspaceView.artifacts 一致、另带哈希）：旧消费者可忽略；登记缺失时为 null。",
+    )
 
 
 class ApprovalOption(BaseModel):

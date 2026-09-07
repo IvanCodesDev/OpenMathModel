@@ -1183,7 +1183,26 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "用户提供": "Provided by the user",
   "已引用": "cited",
   "未引用": "not cited",
-  // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」已在其他阶段词典里）
+  // 成果页交付记录（DeliveryManifest.delivery，DeliveryManifest 真实化）：状态 / 检查 / 计数片段；文件名与哈希原样
+  "尚未成交付": "Not delivered",
+  "等待确认交付": "Awaiting delivery confirmation",
+  "已确认交付": "Delivery confirmed",
+  "已退回修改": "Returned for revision",
+  "已发布，未挂定稿闸门": "Published without a final-draft gate",
+  "一致性检查": "Consistency checks",
+  "项通过": "passed",
+  "论文草稿产物可读且哈希对得上": "Paper draft artifact readable and hash verified",
+  "终稿审计 0 发现": "Final-draft audit has no findings",
+  "已插入图件都有可下载产物": "Every inserted figure has a downloadable artifact",
+  "实验指标出现在论文里": "Experiment metrics appear in the paper",
+  "检验结论在场": "Validation verdict present",
+  "处发现": "findings",
+  "张图件已插入": "figures inserted",
+  "条文献已引用": "references cited",
+  "个可下载": "downloadable",
+  "个已登记 SHA-256": "with a registered SHA-256",
+  "论文未做终稿审计": "The paper was not audited",
+  // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」「交付状态」「文件」「个文件」已在其他词典里）
 };
 
 /** 赛题库、论文库与方法库。 */

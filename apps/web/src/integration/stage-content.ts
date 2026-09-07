@@ -20,6 +20,8 @@ import type {
 import { currentLocale, t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
+import { describeDelivery } from "./delivery-record";
+import type { DeliveryView } from "./delivery-record";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
@@ -1535,6 +1537,18 @@ function summaryRow(label: string, content: string | HTMLElement): HTMLElement {
   return row;
 }
 
+function formatTimestamp(value: string): string {
+  const ms = new Date(value).getTime();
+  if (!Number.isFinite(ms)) return value;
+  return new Date(ms).toLocaleString(currentLocale() === "en-US" ? "en-US" : "zh-CN");
+}
+
+/** 交付状态一句：状态 + 确认时间（有则带）。 */
+function deliveryStatusText(view: DeliveryView): string {
+  const label = t(view.statusLabel);
+  return view.confirmedAt ? `${label} · ${formatTimestamp(view.confirmedAt)}` : label;
+}
+
 function renderCompletePanel(root: HTMLElement, manifest: DeliveryManifest): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="final-summary"]');
   if (!panel || !shouldRender(panel, "complete", manifest.updated_at)) return;
@@ -1562,7 +1576,89 @@ function renderCompletePanel(root: HTMLElement, manifest: DeliveryManifest): voi
     rows.push(summaryRow(t("论文"), citation));
   }
   rows.push(summaryRow(t("产物数量"), `${manifest.artifacts.length}`));
+  // 交付记录（DeliveryManifest 真实化）：有真实论文的运行才多这两行，模拟链 / 旧接口逐字不变
+  const delivery = describeDelivery(manifest);
+  if (delivery) {
+    const status = el("span", `delivery-status is-${delivery.tone}`, deliveryStatusText(delivery));
+    rows.push(summaryRow(t("交付状态"), status));
+    rows.push(summaryRow(
+      t("一致性检查"),
+      `${delivery.summary.passed} / ${delivery.summary.total} ${t("项通过")}`,
+    ));
+  }
   if (rows.length) summary.replaceChildren(...rows);
+}
+
+// ── 成果页「交付记录」分页（DeliveryManifest.delivery + artifacts[].sha256 → 现有摘要槽位） ──
+//
+// 文件 + 哈希 + 一致性结果的正面：交付状态（G4 回放）、五项确定性检查逐条给依据、终稿审计计数、
+// 文件计数与每个文件的登记哈希。全是契约里的事实，页面不下结论。.deliverables 文件表仍由
+// 工作台控制器按产物 kind 填，这里只填 .complete-project-name 与 .result-summary。
+
+const CHECK_LABELS: Record<string, string> = {
+  paper_artifact_ready: "论文草稿产物可读且哈希对得上",
+  audit_clean: "终稿审计 0 发现",
+  figures_delivered: "已插入图件都有可下载产物",
+  metrics_in_paper: "实验指标出现在论文里",
+  validation_reported: "检验结论在场",
+};
+
+function renderDeliveryRecordPanel(root: HTMLElement, manifest: DeliveryManifest): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="delivery-record"]');
+  if (!panel) return;
+  const delivery = describeDelivery(manifest);
+  // 没有交付记录（模拟链 / 未到论文阶段 / 旧接口）：分页保持空态，不编一条记录
+  if (!delivery || !shouldRender(panel, "delivery-record", manifest.updated_at)) return;
+
+  if (manifest.problem_title) {
+    const name = panel.querySelector<HTMLElement>(".complete-project-name");
+    if (name) name.textContent = manifest.problem_title;
+  }
+  const summary = panel.querySelector<HTMLElement>(".result-summary");
+  if (!summary) return;
+
+  const status = el("span", `delivery-status is-${delivery.tone}`, deliveryStatusText(delivery));
+  if (delivery.comment) status.append(el("span", "delivery-comment", `「${delivery.comment}」`));
+
+  const checks = el("ul", "delivery-checks");
+  for (const check of delivery.checks) {
+    const item = el("li", check.passed ? "is-passed" : "is-failed");
+    item.append(
+      icon(check.passed ? "check-circle" : "warning-circle"),
+      el("strong", "", t(CHECK_LABELS[check.id] ?? check.label)),
+      el("span", "delivery-check-detail", check.detail),
+    );
+    checks.append(item);
+  }
+  const checksBlock = el("div");
+  checksBlock.append(
+    el("div", "", `${delivery.summary.passed} / ${delivery.summary.total} ${t("项通过")}`),
+    checks,
+  );
+
+  const audit = delivery.audit;
+  const auditText = audit
+    ? `${audit.findings_total} ${t("处发现")}，${audit.frozen_numbers_total} ${t("项冻结数字")}，`
+      + `${audit.figures_inserted} / ${audit.figures_total} ${t("张图件已插入")}，`
+      + `${audit.references_cited} / ${audit.references_total} ${t("条文献已引用")}`
+    : t("论文未做终稿审计");
+
+  const files = el("div");
+  files.append(el("div", "", `${delivery.files.total} ${t("个文件")}，${delivery.files.ready} ${t("个可下载")}，${delivery.files.hashed} ${t("个已登记 SHA-256")}`));
+  const list = el("ul", "delivery-files");
+  for (const row of delivery.rows) {
+    const item = el("li", row.ready ? "" : "is-pending");
+    item.append(el("span", "delivery-file-name", row.name), el("code", "delivery-file-hash", row.hash));
+    list.append(item);
+  }
+  files.append(list);
+
+  summary.replaceChildren(
+    summaryRow(t("交付状态"), status),
+    summaryRow(t("一致性检查"), checksBlock),
+    summaryRow(t("终稿审计"), auditText),
+    summaryRow(t("文件"), files),
+  );
 }
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
@@ -1576,5 +1672,8 @@ export function renderStageContent(root: HTMLElement, outputs: StageOutputsPaylo
     renderPaperAudit(root, outputs.document_draft);
     renderEditorPanel(root, outputs.document_draft);
   }
-  if (outputs.delivery_manifest) renderCompletePanel(root, outputs.delivery_manifest);
+  if (outputs.delivery_manifest) {
+    renderCompletePanel(root, outputs.delivery_manifest);
+    renderDeliveryRecordPanel(root, outputs.delivery_manifest);
+  }
 }
