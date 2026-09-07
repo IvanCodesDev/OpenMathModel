@@ -412,6 +412,9 @@ def test_experiment_repair_round_feeds_error_back_and_completes():
         "code_rounds": 2,
         "waves": 2,
         "review_rounds": 1,
+        # 符号一致性代码侧核验：评测方案带三条记号，桩脚本一条都没用 → 如实记警告、覆盖率 0
+        "quality_warnings": ["符号表 3 条记号中 3 条在实验脚本里找不到对应变量（t \\in \\mathcal{T}、y_t、n_k）"],
+        "symbol_coverage": 0.0,
     }
 
     # Three experiment-step python_run invocations: the failing one, the
@@ -613,6 +616,8 @@ def test_experiment_double_failure_recovers_within_single_attempt():
         "code_rounds": 3,
         "waves": 3,
         "review_rounds": 1,
+        "quality_warnings": ["符号表 3 条记号中 3 条在实验脚本里找不到对应变量（t \\in \\mathcal{T}、y_t、n_k）"],
+        "symbol_coverage": 0.0,
     }
 
     assert_replay_matches(session)

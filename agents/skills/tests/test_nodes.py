@@ -2214,6 +2214,82 @@ def test_experiment_reports_real_figures_with_engineer_notes(registry):
     assert '"figure_notes": "（可选）已保存的每张图表一行' in card
 
 
+def test_experiment_checks_script_symbols_against_plan_symbol_table(registry):
+    """符号一致性的代码侧核验：通过验收的脚本用 ast 收集变量名，与选中方案的符号表三级对账；
+    结果进 outputs.symbol_check、覆盖率进 metrics、未命中记警告；审稿人材料的符号表后附同一份对照。"""
+    code = (
+        "import json\n"
+        "N = 5\n"
+        "x_i = [1, 0, 1, 0, 1]\n"
+        "ci = [3.0] * N\n"
+        "profit = sum(x_i) * 2.5\n"
+        "print('OMM_METRICS_JSON: ' + json.dumps({'rmse': 0.12}))\n"
+    )
+    planning = {
+        **PLANNING_OK,
+        "symbols": [
+            {"symbol": "$x_i$", "kind": "variable", "definition": "候选点 i 是否开店", "plan_id": "A"},
+            {"symbol": "\\(c_i\\)", "kind": "parameter", "definition": "开店成本", "plan_id": None},
+            {"symbol": "N", "kind": "set", "definition": "候选点数", "plan_id": None},
+            {"symbol": "z", "kind": "objective", "definition": "总利润", "plan_id": "A"},
+            {"symbol": "\\lambda", "kind": "parameter", "definition": "只属于方案 B 的记号", "plan_id": "B"},
+        ],
+    }
+    prior = {**prior_through_planning(), TaskState.MODEL_PLANNING.value: planning}
+    llm = StubLlmPort(
+        {},
+        chat_scripts={
+            ExperimentExecutionNode.prompt_id: sandbox_script(EXPERIMENT_FINAL, code=code),
+            ExperimentExecutionNode.review_prompt_id: [stub_response({"verdict": "accept", "findings": [], "summary": "忠实于方案"})],
+        },
+    )
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    services = make_full_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+
+    result = ExperimentExecutionNode(registry).run(
+        make_ctx(TaskState.EXPERIMENTING, prior=prior), services
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    check = result.outputs["symbol_check"]
+    # 方案 B 专有的 λ 不在方案 A 的符号表里，不参与对账
+    assert check["covered"] == [
+        {"symbol": "$x_i$", "variable": "x_i", "match": "exact"},
+        {"symbol": "\\(c_i\\)", "variable": "ci", "match": "variant"},
+        {"symbol": "N", "variable": "N", "match": "exact"},
+    ]
+    assert check["missing"] == ["z"] and check["unmapped_variables"] == ["profit"]
+    assert check["coverage"] == 0.75 and result.metrics["symbol_coverage"] == 0.75
+    assert result.metrics["quality_warnings"] == [
+        "符号表 4 条记号中 1 条在实验脚本里找不到对应变量（z）"
+    ]
+    # 审稿人的材料：符号表原文 + 代码侧对照段（同一份事实，不让审稿人自己猜）
+    review_call = next(call for call in llm.chat_calls if call.label == ExperimentExecutionNode.review_prompt_id)
+    card = system_prompt_of(review_call)
+    assert "- $x_i$（决策变量｜方案 A）＝候选点 i 是否开店" in card
+    assert "符号对照（代码侧核验，确定性）：符号表 4 条记号，脚本变量命中 3 条（精确 2 / 变体 1 / 仅主体 0）。" in card
+    assert "- 未命中（脚本里找不到对应变量）：z" in card
+    assert "- 脚本里未对应到符号表的变量：profit" in card
+
+
+def test_experiment_without_symbol_table_reports_empty_symbol_check(registry):
+    """旧运行 / 单次调用路径没有符号表：对账结果如实为空、coverage None，不记警告、不计覆盖率。"""
+    llm = experiment_llm()
+    tools = SandboxToolInvoker(runs=[tool_success()])
+
+    result = ExperimentExecutionNode(registry).run(
+        make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning()),
+        make_full_services(llm, tools),
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["symbol_check"] == {
+        "covered": [], "missing": [], "unmapped_variables": [], "coverage": None,
+    }
+    assert "quality_warnings" not in result.metrics and "symbol_coverage" not in result.metrics
+
+
 def test_experiment_reports_empty_script_path_when_workspace_write_fails(registry):
     """落工作区失败只影响下游复跑，不影响实验步骤成败，且如实给空路径。"""
 

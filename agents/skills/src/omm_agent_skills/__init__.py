@@ -124,6 +124,13 @@ from .review import (
     reviewer_tool_brief,
 )
 from .schema import validate
+from .symbols import (
+    check_symbols,
+    script_identifiers,
+    symbol_candidates,
+    symbol_check_material,
+    symbol_check_warning,
+)
 
 __all__ = [
     "ADOPT_OPTION_PREFIX",
@@ -195,6 +202,7 @@ __all__ = [
     "build_frozen_numbers",
     "build_reference_library",
     "card_ids_in_text",
+    "check_symbols",
     "chosen_plan",
     "compare_metrics",
     "complete_notation",
@@ -229,9 +237,13 @@ __all__ = [
     "render_reference_material",
     "renderable_data_files",
     "reviewer_tool_brief",
+    "script_identifiers",
     "stub_response",
     "summarize_kinds",
     "supports_chat",
+    "symbol_candidates",
+    "symbol_check_material",
+    "symbol_check_warning",
     "symbol_material",
     "text_protocol_chat",
     "tool_protocol_note",

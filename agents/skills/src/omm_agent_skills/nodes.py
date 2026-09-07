@@ -96,6 +96,7 @@ from .review import (
     verdict_summary_text,
 )
 from .schema import validate
+from .symbols import check_symbols, symbol_check_material, symbol_check_warning
 
 _FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$", re.MULTILINE)
 
@@ -2714,6 +2715,14 @@ class ExperimentExecutionNode(LlmSkillNode):
         }
         if review.get("rounds"):
             node_metrics["review_rounds"] = int(review["rounds"])
+        # 符号一致性的代码侧核验（§9.1「同一符号贯穿」）：最终脚本的变量名与方案符号表确定性
+        # 对账，结果进产出与警告（审稿材料里每轮也带同一份对照）；对不上不阻断，交审稿人与人裁。
+        symbol_check = check_symbols(plan_symbols(planning, plan.get("id")), capture.code)
+        symbol_warning = symbol_check_warning(symbol_check)
+        if symbol_warning:
+            node_metrics["quality_warnings"] = [symbol_warning]
+        if symbol_check["coverage"] is not None:
+            node_metrics["symbol_coverage"] = symbol_check["coverage"]
         approach = str(final_answer.get("approach_summary") or "")
         metrics = dict(capture.metrics)
         summary_bits = [approach]
@@ -2751,6 +2760,8 @@ class ExperimentExecutionNode(LlmSkillNode):
                 # 画图工程师的逐张说明（只挂到真实文件上）；论文节点据此给写手图源、
                 # 终稿审计据此核对「图 N」
                 "figures": figure_manifest(artifacts, final_answer.get(FIGURE_NOTES_FINAL_KEY[0])),
+                # 符号一致性核验（代码侧）：脚本变量 ↔ 方案符号表的三级对账结果
+                "symbol_check": symbol_check,
             },
             metrics=node_metrics,
             artifacts=tuple(artifacts),
@@ -2772,7 +2783,8 @@ class ExperimentExecutionNode(LlmSkillNode):
         部分已由节点做完。
         """
         assumptions = assumption_material(plan_assumptions(planning, plan.get("id")))
-        symbols = symbol_material(plan_symbols(planning, plan.get("id")))
+        symbol_rows = plan_symbols(planning, plan.get("id"))
+        symbols = symbol_material(symbol_rows)
 
         def materials(
             capture: _SandboxCapture,
@@ -2783,7 +2795,10 @@ class ExperimentExecutionNode(LlmSkillNode):
             return {
                 "chosen_plan": json.dumps(dict(plan), ensure_ascii=False),
                 "model_assumptions": assumptions,
-                "model_symbols": symbols,
+                # 符号表后附代码侧对照（每轮按当前脚本重算）：审稿人据此判断脚本是否忠实于方案记号
+                "model_symbols": symbols + "\n\n" + symbol_check_material(
+                    check_symbols(symbol_rows, capture.code)
+                ),
                 "experiment_code": _clip_code(capture.code),
                 "metrics": json.dumps(dict(capture.metrics), ensure_ascii=False),
                 "rerun_report": rerun_material(rerun),
