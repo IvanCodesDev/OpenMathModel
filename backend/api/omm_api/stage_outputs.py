@@ -693,6 +693,9 @@ _AUDIT_FINDING_KINDS = frozenset(
 _FIGURE_SOURCE_STAGES = frozenset({"EXPERIMENTING", "VALIDATING", "PAPER_WRITING"})
 #: 引用条目的来源（契约 enum）：方案引用的知识库先例 / 用户提供并匹配到知识库的资料。
 _REFERENCE_SOURCES = frozenset({"plan_citation", "user_reference"})
+#: 引用 key（`\cite{key}`）与记录级验证三态（契约 enum）。
+_REFERENCE_KEY = re.compile(r"^[a-z_][a-z0-9_]*$")
+_REFERENCE_VERIFICATIONS = frozenset({"source_verified", "title_matched", "unverified"})
 _HTTP_URL = re.compile(r"^https?://\S+$")
 
 
@@ -721,6 +724,8 @@ def _references(raw: Any) -> Optional[list[dict[str, Any]]]:
             continue
         url = str(item.get("url") or "").strip()
         card_id = str(item.get("card_id") or "").strip()
+        key = str(item.get("key") or "").strip()
+        verification = str(item.get("verification") or "").strip()
         references.append(
             {
                 "number": number,
@@ -730,6 +735,9 @@ def _references(raw: Any) -> Optional[list[dict[str, Any]]]:
                 "source": source,
                 "card_id": card_id or None,
                 "cited": bool(item.get("cited")),
+                # refs/ 文件化：稳定 key 与记录级验证状态（老运行没有 → null；脏值不透）
+                "key": key if _REFERENCE_KEY.match(key) else None,
+                "verification": verification if verification in _REFERENCE_VERIFICATIONS else None,
             }
         )
     return references

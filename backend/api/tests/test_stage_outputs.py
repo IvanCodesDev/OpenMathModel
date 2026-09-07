@@ -858,10 +858,12 @@ def test_references_projection_whitelists_verified_entries_and_drops_malformed(v
     """本次运行的已验证引用库进契约：编号 / 标题 / 来源畸形的条目剔除，非 http(s) 链接归 null、
     card_id 空串归 null、cited 强制布尔；缺键 → null、空数组原样。"""
     raw = [
+        # refs/ 文件化：稳定 key 与记录级验证状态透传；脏 key（大写 / 空格）与未知状态归 null
         {"number": 1, "title": "生产企业原材料的订购与运输", "text": "全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/c)",
-         "url": "https://example.test/c", "source": "plan_citation", "card_id": "problem:cumcm-2021-c", "cited": True},
+         "url": "https://example.test/c", "source": "plan_citation", "card_id": "problem:cumcm-2021-c", "cited": True,
+         "key": "problem_cumcm_2021_c", "verification": "source_verified"},
         {"number": 2, "title": "机场出租车排队仿真", "text": "", "url": "javascript:alert(1)", "source": "user_reference",
-         "card_id": "", "cited": "yes"},
+         "card_id": "", "cited": "yes", "key": "Bad Key", "verification": "checked_by_hand"},
         {"number": 0, "title": "编号为零", "text": "x", "url": None, "source": "plan_citation", "card_id": None, "cited": False},
         {"number": True, "title": "编号是布尔", "text": "x", "url": None, "source": "plan_citation", "card_id": None, "cited": False},
         {"number": 3, "title": "  ", "text": "x", "url": None, "source": "plan_citation", "card_id": None, "cited": False},
@@ -872,9 +874,10 @@ def test_references_projection_whitelists_verified_entries_and_drops_malformed(v
     assert references == [
         {"number": 1, "title": "生产企业原材料的订购与运输",
          "text": "全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/c)",
-         "url": "https://example.test/c", "source": "plan_citation", "card_id": "problem:cumcm-2021-c", "cited": True},
+         "url": "https://example.test/c", "source": "plan_citation", "card_id": "problem:cumcm-2021-c", "cited": True,
+         "key": "problem_cumcm_2021_c", "verification": "source_verified"},
         {"number": 2, "title": "机场出租车排队仿真", "text": "机场出租车排队仿真", "url": None, "source": "user_reference",
-         "card_id": None, "cited": True},
+         "card_id": None, "cited": True, "key": None, "verification": None},
     ]
     assert _references(None) is None and _references("oops") is None and _references([]) == []
 

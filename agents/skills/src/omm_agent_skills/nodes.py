@@ -67,11 +67,15 @@ from .frozen_numbers import (
 from .paper_audit import audit_chain, count_by_kind, summarize_kinds
 from .prompt_registry import PromptRegistry, PromptTemplate
 from .references import (
+    REFS_BIB_PATH,
+    REFS_JSON_PATH,
     build_reference_library,
     mark_cited,
     reference_inventory,
     reference_titles,
     render_reference_material,
+    render_references_bib,
+    render_references_json,
     verified_reference_ids,
 )
 from .review import (
@@ -713,6 +717,8 @@ def _plan_blurb(plan: Mapping[str, Any]) -> str:
     role = PLAN_ROLE_LABELS.get(str(plan.get("role") or ""), PLAN_ROLE_LABELS["candidate"])
     approach = str(plan.get("approach") or "").strip()
     lead = re.split(r"(?<=[。；;.!?！？])", approach, maxsplit=1)[0].strip() or approach
+    # 首句自带的句读去掉：后面还要接「（触发条件…）」「；实现语言」，否则卡片上出现「；；」
+    lead = lead.rstrip("。；;.!?！？")
     if len(lead) > 80:
         lead = lead[:79] + "…"
     condition = str(plan.get("fallback_condition") or "").strip()
@@ -924,7 +930,7 @@ class ModelPlanningNode(LlmSkillNode):
             return NodeResult.failed("no LLM port configured for this run")
         supervisor = (services.extras or {}).get("subagents")
         if not self._views or supervisor is None:
-            return self._with_references(ctx, super().run(ctx, services))
+            return self._with_references(ctx, super().run(ctx, services), services)
         try:
             variables = self.build_variables(ctx)
         except KeyError as exc:
@@ -972,6 +978,9 @@ class ModelPlanningNode(LlmSkillNode):
         # 解析成带出处 URL 的条目；论文阶段按 G1 选中的方案取子集当参考文献。
         references, reference_warnings = self._reference_library(ctx, reduced["plans"], reduced.get("rationale"))
         warnings.extend(reference_warnings)
+        # refs/ 文件化（第二步）：引用库落成工作区 refs/references.json + .bib 与两个产物
+        reference_artifacts, file_warnings = self._publish_reference_files(ctx, services, references)
+        warnings.extend(file_warnings)
 
         outputs: dict[str, Any] = {
             "plans": [dict(plan) for plan in reduced["plans"]],
@@ -991,11 +1000,55 @@ class ModelPlanningNode(LlmSkillNode):
             "references": references,
         }
         if not self._require_confirmation:
-            return NodeResult.succeeded(outputs=outputs, metrics={"llm_attempts": llm_calls})
+            return NodeResult.succeeded(
+                outputs=outputs, metrics={"llm_attempts": llm_calls}, artifacts=tuple(reference_artifacts)
+            )
         reason, meta = self._g1_review(reduced, proposals, failures)
-        return NodeResult.needs_review(reason=reason, outputs=outputs, review_meta=meta)
+        return NodeResult.needs_review(
+            reason=reason, outputs=outputs, review_meta=meta, artifacts=tuple(reference_artifacts)
+        )
 
-    # -- reference library (refs/ 第一步) -------------------------------------------
+    # -- reference library (refs/ 第一步 + 文件化) -------------------------------------
+
+    @staticmethod
+    def _publish_reference_files(
+        ctx: NodeContext, services: NodeServices, references: Sequence[Mapping[str, Any]]
+    ) -> tuple[list[Any], list[str]]:
+        """引用库文件化：``refs/references.json``（机器可读）+ ``refs/references.bib``（LaTeX 导出用）。
+
+        两份都发布为产物（内容寻址、可下载），有工具端口时同时落到工作区 ``refs/``（下游沙盒 /
+        导出可读）；空库不写文件（没有条目就没有「引用库」，不装作有）；写不进只记警告不阻断。
+        """
+        if not references:
+            return [], []
+        files = (
+            (REFS_JSON_PATH, render_references_json(references), "application/json", "dataset"),
+            (REFS_BIB_PATH, render_references_bib(references), "application/x-bibtex", "other"),
+        )
+        artifacts: list[Any] = []
+        warnings: list[str] = []
+        for path, text, media_type, kind in files:
+            name = path.rsplit("/", 1)[-1]
+            if services.artifacts is not None:
+                try:
+                    artifacts.append(
+                        services.artifacts.put(
+                            ctx.run_id, kind, name, text.encode("utf-8"), media_type, ctx.step_id
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - 引用库文件是材料不是闸门
+                    warnings.append(f"引用库文件 {name} 未能发布为产物（{exc}）")
+            if services.tools is not None:
+                try:
+                    result = services.tools.invoke(
+                        ctx.run_id, ctx.step_id, "ws_write", {"path": path, "text": text}
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result = None
+                    warnings.append(f"引用库文件 {path} 未能写入工作区（{exc}）")
+                if result is not None and not result.ok:
+                    warnings.append(f"引用库文件 {path} 未能写入工作区（{result.error or result.status}）")
+        return artifacts, warnings
 
     def _reference_library(
         self, ctx: NodeContext, plans: Sequence[Mapping[str, Any]], rationale: Any
@@ -1009,19 +1062,26 @@ class ModelPlanningNode(LlmSkillNode):
             reference_metadata if isinstance(reference_metadata, list) else (),
         )
 
-    def _with_references(self, ctx: NodeContext, result: NodeResult) -> NodeResult:
-        """单次调用路径同样结算引用库：outputs 补 ``references``，解析警告并入 quality_warnings。"""
+    def _with_references(
+        self, ctx: NodeContext, result: NodeResult, services: NodeServices | None = None
+    ) -> NodeResult:
+        """单次调用路径同样结算引用库：outputs 补 ``references``，解析警告并入 quality_warnings，
+        引用库文件同样发布为产物 / 落工作区。"""
         if result.status == NodeResult.FAILED:
             return result
         plans = [plan for plan in result.outputs.get("plans") or [] if isinstance(plan, Mapping)]
         references, warnings = self._reference_library(ctx, plans, result.outputs.get("rationale"))
+        artifacts: list[Any] = []
+        if services is not None:
+            artifacts, file_warnings = self._publish_reference_files(ctx, services, references)
+            warnings = [*warnings, *file_warnings]
         outputs = {**result.outputs, "references": references}
         if warnings:
             outputs["quality_warnings"] = [
                 *[str(item) for item in result.outputs.get("quality_warnings") or []],
                 *warnings,
             ]
-        return replace(result, outputs=outputs)
+        return replace(result, outputs=outputs, artifacts=tuple(result.artifacts) + tuple(artifacts))
 
     def _propose(
         self,
@@ -4879,8 +4939,10 @@ class PaperWritingNode(LlmSkillNode):
             allowed=allowed,
             abstract_allowed=abstract_allowed,
             available_figures=available_figure_names(figures),
+            # 编号 [n] 与 \cite{key} 同等合法；条目数按表算（verified 集合里每条占两个成员）
             verified_refs=verified_reference_ids(references),
             reference_titles=reference_titles(references),
+            reference_count=len(references),
         )
         outputs = {
             **outputs,

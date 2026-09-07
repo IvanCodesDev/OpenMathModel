@@ -357,6 +357,7 @@ def audit_citations(
     abstract: str,
     verified_refs: Iterable[str] = (),
     reference_titles: Mapping[str, str] | None = None,
+    reference_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """引用审计：引用标记与参考文献条目必须来自已验证的引用库。
 
@@ -368,8 +369,10 @@ def audit_citations(
     """
     verified = {str(item) for item in verified_refs if str(item)}
     titles = {str(key): str(value) for key, value in (reference_titles or {}).items() if str(value)}
+    # 库里的条目数：verified 里既有编号 ``[n]`` 也有每条的 ``\cite{key}`` key，调用方给条目数就用它
+    entry_count = reference_count if reference_count is not None else len(verified)
     why_missing = (
-        f"不在本次运行的引用库（{len(verified)} 条）中" if verified
+        f"不在本次运行的引用库（{entry_count} 条）中" if verified
         else "本次运行没有可核实的引用条目，无法核实"
     )
     scopes = _scopes(sections, abstract)
@@ -445,12 +448,13 @@ def audit_chain(
     available_figures: Iterable[str] = (),
     verified_refs: Iterable[str] = (),
     reference_titles: Mapping[str, str] | None = None,
+    reference_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """顺序过三审计：数值 → 图表 → 引用；发现按审计顺序拼接（数值发现在前）。"""
     return [
         *audit_document(sections, abstract, allowed, abstract_allowed),
         *audit_figures_and_tables(sections, abstract, available_figures),
-        *audit_citations(sections, abstract, verified_refs, reference_titles),
+        *audit_citations(sections, abstract, verified_refs, reference_titles, reference_count),
     ]
 
 

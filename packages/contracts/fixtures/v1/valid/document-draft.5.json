@@ -23,7 +23,9 @@
       "url": "https://www.mcm.edu.cn/html_cn/node/2021c.html",
       "source": "plan_citation",
       "card_id": "problem:cumcm-2021-c",
-      "cited": true
+      "cited": true,
+      "key": "problem_cumcm_2021_c",
+      "verification": "source_verified"
     },
     {
       "number": 2,
@@ -32,7 +34,9 @@
       "url": "https://github.com/Jackksonns/MCM-ICM-Outstanding-Papers/blob/d29267cb9e993419749e6111981b30a44183fdf8/2025/D/2504188.pdf",
       "source": "user_reference",
       "card_id": "paper:comap-2025-icm-d-2504188",
-      "cited": false
+      "cited": false,
+      "key": "paper_comap_2025_icm_d_2504188",
+      "verification": "title_matched"
     },
     {
       "number": 3,

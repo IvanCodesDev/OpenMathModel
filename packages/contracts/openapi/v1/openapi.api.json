@@ -3080,9 +3080,22 @@
             "title": "Card Id"
           },
           "cited": {
-            "description": "正文（含摘要）是否引用了该条目（任一 [n] 标记展开后命中编号），由节点确定性判定。",
+            "description": "正文（含摘要）是否引用了该条目（任一 [n] / \\cite{key} 标记展开后命中编号或 key），由节点确定性判定。",
             "title": "Cited",
             "type": "boolean"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z_][a-z0-9_]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "稳定的引用 key（`\\cite{key}` 与 refs/references.bib 用），由卡片 id 确定性生成；老运行没有为 null。",
+            "title": "Key"
           },
           "number": {
             "description": "全文固定编号 n（正文引用标记「[n]」与参考文献条目编号），按 方案引用 → 用户提供 顺序赋予，不因未引用而重编。",
@@ -3116,6 +3129,17 @@
             ],
             "description": "出处链接（论文全文或来源页，仅 http(s)）；卡片没有可用链接时为 null。",
             "title": "Url"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verification"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。"
           }
         },
         "required": [
@@ -5188,6 +5212,16 @@
           "fail"
         ],
         "title": "Verdict",
+        "type": "string"
+      },
+      "Verification": {
+        "description": "记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。",
+        "enum": [
+          "source_verified",
+          "title_matched",
+          "unverified"
+        ],
+        "title": "Verification",
         "type": "string"
       },
       "omm_contracts__v1__approval_request__Status": {

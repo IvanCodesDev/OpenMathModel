@@ -16,6 +16,7 @@ G1 选中的方案取子集、编成 [1..N] 进每章材料，写手只准引 ``
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
@@ -27,19 +28,41 @@ from .paper_audit import cited_reference_ids
 __all__ = [
     "REFERENCE_SOURCE_PLAN",
     "REFERENCE_SOURCE_USER",
+    "REFS_BIB_PATH",
+    "REFS_JSON_PATH",
+    "VERIFICATION_SOURCE_VERIFIED",
+    "VERIFICATION_TITLE_MATCHED",
+    "VERIFICATION_UNVERIFIED",
+    "assign_reference_keys",
     "build_reference_library",
     "card_ids_in_text",
     "format_reference_entry",
     "mark_cited",
     "reference_inventory",
+    "reference_key",
     "reference_titles",
     "render_reference_material",
+    "render_references_bib",
+    "render_references_json",
+    "verification_status",
     "verified_reference_ids",
 ]
 
 #: 与 document-draft.v1 ``paper_reference.source`` enum 对齐。
 REFERENCE_SOURCE_PLAN = "plan_citation"
 REFERENCE_SOURCE_USER = "user_reference"
+#: 与 document-draft.v1 ``paper_reference.verification`` enum 对齐（记录级验证的三态）：
+#: 知识库卡片自带来源 URL / 用户资料按标题匹配到知识库 / 两者皆非（留给以后的附件解析条目）。
+VERIFICATION_SOURCE_VERIFIED = "source_verified"
+VERIFICATION_TITLE_MATCHED = "title_matched"
+VERIFICATION_UNVERIFIED = "unverified"
+#: refs/ 文件化：引用库在 run 工作区里的两个落点（机器可读 JSON + 供 LaTeX 导出的 BibTeX）。
+REFS_JSON_PATH = "refs/references.json"
+REFS_BIB_PATH = "refs/references.bib"
+REFS_JSON_VERSION = 1
+_KEY_NOISE = re.compile(r"[^a-z0-9]+")
+_KEY_MAX_CHARS = 48
+_BIB_ESCAPE = str.maketrans({"{": "\\{", "}": "\\}", "\\": "\\textbackslash{}", "%": "\\%", "&": "\\&", "#": "\\#"})
 
 #: 方案文本里的卡片 id 标记（与 nodes.knowledge_hit_ids 同一口径）。
 _CARD_REF = re.compile(r"\[((?:problem|paper):[^\]\s]+)\]")
@@ -124,7 +147,8 @@ def format_reference_entry(card: Mapping[str, Any]) -> str:
 
 
 def _entry(card: Mapping[str, Any], source: str, cited_by: Sequence[str]) -> dict[str, Any]:
-    return {
+    year = card.get("year")
+    entry = {
         "card_id": str(card.get("id") or ""),
         "kind": str(card.get("kind") or ""),
         "title": str(card.get("title") or "").strip(),
@@ -132,7 +156,98 @@ def _entry(card: Mapping[str, Any], source: str, cited_by: Sequence[str]) -> dic
         "url": _http_url(card.get("full_text_url"), card.get("source_url")),
         "source": source,
         "cited_by": list(cited_by),
+        # BibTeX 需要的两个结构化字段（条目正文里也有，但不再反解）
+        "year": str(year).strip() if year not in (None, "") else None,
+        "competition": str(card.get("competition") or "").strip() or None,
     }
+    entry["verification"] = verification_status(entry)
+    return entry
+
+
+def verification_status(entry: Mapping[str, Any]) -> str:
+    """记录级验证三态（确定性）：用户资料按标题匹配到知识库 → title_matched；知识库卡片自带来源
+    URL → source_verified；其余 → unverified。不做联网核实——那是以后的事，这里只如实说来路。"""
+    if str(entry.get("source") or "") == REFERENCE_SOURCE_USER:
+        return VERIFICATION_TITLE_MATCHED
+    if _http_url(entry.get("url")):
+        return VERIFICATION_SOURCE_VERIFIED
+    return VERIFICATION_UNVERIFIED
+
+
+def reference_key(entry: Mapping[str, Any]) -> str:
+    """稳定的引用 key（``\\cite{key}`` / BibTeX 用）：``problem:cumcm-2021-c`` → ``problem_cumcm_2021_c``；
+    没有卡片 id 就用标题的 ASCII 片段，再不行给 ``ref``（由 ``assign_reference_keys`` 加序号去重）。"""
+    card_id = str(entry.get("card_id") or "").strip().lower()
+    base = card_id.replace(":", "_") if card_id else str(entry.get("title") or "").lower()
+    slug = _KEY_NOISE.sub("_", base).strip("_")[:_KEY_MAX_CHARS].strip("_")
+    if not slug or slug[0].isdigit():
+        slug = f"ref_{slug}" if slug else "ref"
+    return slug
+
+
+def assign_reference_keys(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """给每条引用一个唯一 key（重复 slug 加 ``_2`` / ``_3``），已有合法 key 的条目原样保留。"""
+    taken: set[str] = {str(item.get("key")) for item in entries if item.get("key")}
+    keyed: list[dict[str, Any]] = []
+    for item in entries:
+        entry = dict(item)
+        if not entry.get("key"):
+            base = reference_key(entry)
+            key, index = base, 1
+            while key in taken:
+                index += 1
+                key = f"{base}_{index}"
+            taken.add(key)
+            entry["key"] = key
+        if not entry.get("verification"):
+            entry["verification"] = verification_status(entry)
+        keyed.append(entry)
+    return keyed
+
+
+def render_references_json(entries: Sequence[Mapping[str, Any]]) -> str:
+    """``refs/references.json``：机器可读的引用库（版本号 + 逐条 key / 来路 / 验证状态 / 出处）。"""
+    payload = {
+        "version": REFS_JSON_VERSION,
+        "references": [
+            {
+                "key": item.get("key"),
+                "card_id": item.get("card_id") or None,
+                "kind": item.get("kind") or None,
+                "title": item.get("title"),
+                "text": item.get("text"),
+                "url": item.get("url"),
+                "source": item.get("source"),
+                "verification": item.get("verification"),
+                "cited_by": list(item.get("cited_by") or []),
+                "year": item.get("year"),
+            }
+            for item in assign_reference_keys(entries)
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def _bib_escape(text: Any) -> str:
+    return str(text or "").translate(_BIB_ESCAPE)
+
+
+def render_references_bib(entries: Sequence[Mapping[str, Any]]) -> str:
+    """``refs/references.bib``：每条一个 ``@misc``（赛题 / 获奖论文没有期刊卷期，misc 最诚实）；
+    字段缺哪个就少哪个，不编造作者与年份。"""
+    blocks: list[str] = []
+    for item in assign_reference_keys(entries):
+        fields = [f"  title = {{{_bib_escape(item.get('title'))}}}"]
+        if item.get("competition"):
+            fields.append(f"  organization = {{{_bib_escape(item['competition'])}}}")
+        if item.get("year"):
+            fields.append(f"  year = {{{_bib_escape(item['year'])}}}")
+        if item.get("url"):
+            fields.append(f"  howpublished = {{\\url{{{item['url']}}}}}")
+        fields.append(f"  note = {{{_bib_escape(item.get('text'))}}}")
+        fields.append(f"  annote = {{source={item.get('source')}; verification={item.get('verification')}}}")
+        blocks.append(f"@misc{{{item['key']},\n" + ",\n".join(fields) + "\n}")
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
 def _read_card(port: KnowledgePort, card_id: str) -> Mapping[str, Any] | None:
@@ -225,7 +340,7 @@ def build_reference_library(
         warnings.append(
             f"用户提供的 {len(unmatched)} 份资料在知识库里找不到同题条目（{'、'.join(unmatched[:3])}），不进引用库"
         )
-    return list(entries.values()), warnings
+    return assign_reference_keys(list(entries.values())), warnings
 
 
 def reference_inventory(
@@ -257,6 +372,7 @@ def reference_inventory(
             continue
         seen.add(key)
         source = str(item.get("source") or "")
+        verification = str(item.get("verification") or "")
         inventory.append({
             "number": len(inventory) + 1,
             "title": str(item.get("title") or "").strip(),
@@ -264,11 +380,24 @@ def reference_inventory(
             "url": _http_url(item.get("url")),
             "source": source if source in (REFERENCE_SOURCE_PLAN, REFERENCE_SOURCE_USER) else REFERENCE_SOURCE_PLAN,
             "card_id": card_id or None,
+            # refs/ 文件化：稳定 key（`\cite{key}`）与记录级验证状态；老运行没有就按同一规则补算
+            "key": str(item.get("key") or "").strip() or None,
+            "verification": verification if verification in _VERIFICATIONS else None,
         })
-    return inventory
+    keyed = assign_reference_keys(inventory)
+    for item in keyed:
+        if item["verification"] not in _VERIFICATIONS:
+            item["verification"] = verification_status(item)
+    return keyed
 
 
+_VERIFICATIONS = (VERIFICATION_SOURCE_VERIFIED, VERIFICATION_TITLE_MATCHED, VERIFICATION_UNVERIFIED)
 _SOURCE_LABELS = {REFERENCE_SOURCE_PLAN: "方案引用的先例", REFERENCE_SOURCE_USER: "用户提供"}
+_VERIFICATION_LABELS = {
+    VERIFICATION_SOURCE_VERIFIED: "知识库来源可核",
+    VERIFICATION_TITLE_MATCHED: "按标题匹配知识库",
+    VERIFICATION_UNVERIFIED: "未验证",
+}
 
 
 def render_reference_material(inventory: Sequence[Mapping[str, Any]]) -> str:
@@ -279,7 +408,7 @@ def render_reference_material(inventory: Sequence[Mapping[str, Any]]) -> str:
             "也不得写参考文献列表）"
         )
     lines = [
-        "本次运行可核实的引用条目（正文引用只准写 `[n]`，n 取自此表；论文末章「参考文献」按编号逐条写 "
+        "本次运行可核实的引用条目（正文引用只准写 `[n]` 或 `\\cite{key}`，n / key 取自此表；论文末章「参考文献」按编号逐条写 "
         "`[n] 条目`，条目正文逐字照抄本表、不得增删改；表外文献一律不得引用）：",
         "",
         "| 编号 | 条目 | 来源 |",
@@ -288,12 +417,24 @@ def render_reference_material(inventory: Sequence[Mapping[str, Any]]) -> str:
     for item in inventory:
         source = _SOURCE_LABELS.get(str(item.get("source") or ""), str(item.get("source") or ""))
         lines.append(f"| [{item['number']}] | {item['text']} | {source} |")
+    keyed = [item for item in inventory if item.get("key")]
+    if keyed:
+        lines.append("")
+        lines.append(
+            "引用 key（`\\cite{key}` 用）与验证状态："
+            + "；".join(
+                f"[{item['number']}] = {item['key']}（{_VERIFICATION_LABELS.get(str(item.get('verification')), '未验证')}）"
+                for item in keyed
+            )
+        )
     return "\n".join(lines)
 
 
 def verified_reference_ids(inventory: Sequence[Mapping[str, Any]]) -> set[str]:
-    """给引用审计的已验证编号集合。"""
-    return {str(item["number"]) for item in inventory if item.get("number")}
+    """给引用审计的已验证集合：编号 ``[n]`` 与 key ``\\cite{key}`` 同等合法。"""
+    verified = {str(item["number"]) for item in inventory if item.get("number")}
+    verified.update(str(item["key"]) for item in inventory if item.get("key"))
+    return verified
 
 
 def reference_titles(inventory: Sequence[Mapping[str, Any]]) -> dict[str, str]:
@@ -306,6 +447,12 @@ def mark_cited(
     sections: Sequence[Mapping[str, Any]],
     abstract: str = "",
 ) -> list[dict[str, Any]]:
-    """文献表逐条标 ``cited``：正文（含摘要）任一引用标记展开后命中编号即已引用。"""
+    """文献表逐条标 ``cited``：正文（含摘要）任一引用标记展开后命中编号或 key 即已引用。"""
     cited = cited_reference_ids(sections, abstract)
-    return [{**dict(item), "cited": str(item.get("number")) in cited} for item in inventory]
+    return [
+        {
+            **dict(item),
+            "cited": str(item.get("number")) in cited or (bool(item.get("key")) and str(item.get("key")) in cited),
+        }
+        for item in inventory
+    ]

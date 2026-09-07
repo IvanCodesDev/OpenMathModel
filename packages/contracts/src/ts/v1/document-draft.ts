@@ -155,7 +155,15 @@ export interface PaperReference {
    */
   card_id: null | string;
   /**
-   * 正文（含摘要）是否引用了该条目（任一 [n] 标记展开后命中编号），由节点确定性判定。
+   * 正文（含摘要）是否引用了该条目（任一 [n] / \cite{key} 标记展开后命中编号或 key），由节点确定性判定。
    */
   cited: boolean;
+  /**
+   * 稳定的引用 key（`\cite{key}` 与 refs/references.bib 用），由卡片 id 确定性生成；老运行没有为 null。
+   */
+  key?: null | string;
+  /**
+   * 记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。
+   */
+  verification?: null | ("source_verified" | "title_matched" | "unverified");
 }

@@ -117,6 +117,16 @@ class Source(Enum):
     user_reference = "user_reference"
 
 
+class Verification(Enum):
+    """
+    记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。
+    """
+
+    source_verified = "source_verified"
+    title_matched = "title_matched"
+    unverified = "unverified"
+
+
 class PaperReference(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -145,7 +155,15 @@ class PaperReference(BaseModel):
     )
     cited: bool = Field(
         ...,
-        description="正文（含摘要）是否引用了该条目（任一 [n] 标记展开后命中编号），由节点确定性判定。",
+        description="正文（含摘要）是否引用了该条目（任一 [n] / \\cite{key} 标记展开后命中编号或 key），由节点确定性判定。",
+    )
+    key: constr(pattern=r"^[a-z_][a-z0-9_]*$") | None = Field(
+        None,
+        description="稳定的引用 key（`\\cite{key}` 与 refs/references.bib 用），由卡片 id 确定性生成；老运行没有为 null。",
+    )
+    verification: Verification | None = Field(
+        None,
+        description="记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。",
     )
 
 

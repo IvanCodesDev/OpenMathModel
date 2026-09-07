@@ -1034,6 +1034,69 @@ def test_model_planning_settles_the_reference_library_on_both_paths(registry):
     assert plain.outputs["references"] == [] and "quality_warnings" not in plain.outputs
 
 
+def test_model_planning_writes_reference_library_files_as_artifacts_and_workspace(registry):
+    """refs/ 文件化：引用库落成 refs/references.json + refs/references.bib——两份都是产物（可下载），
+    有工具端口时同时写进工作区；条目带稳定 key 与记录级验证状态；空库不写文件；写不进只记警告。"""
+    # 单次调用路径（提议人子代理会经工具端口查知识库，这里的假工具面只认沙盒工具）
+    cited_plan = {
+        **PLANNING_OK,
+        "plans": [{**PLANNING_OK["plans"][0], "approach": "MILP 建模，借鉴 [problem:cumcm-2021-c] 的订购思路。"}, PLANNING_OK["plans"][1]],
+    }
+    inputs = {"params": {"reference_metadata": [{"kind": "paper", "title": "机场出租车排队仿真", "excerpt": "…"}]}}
+    llm = StubLlmPort({"model_planning.default": stub_response(cited_plan)})
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    services = make_fanout_services(llm)
+    services = NodeServices(clock=services.clock, ids=services.ids, artifacts=services.artifacts, llm=llm, tools=tools,
+                            extras=services.extras)
+
+    result = ModelPlanningNode(registry, proposer_views=(), knowledge=FakeKnowledge()).run(
+        make_ctx(TaskState.MODEL_PLANNING, inputs=inputs, prior=prior_with_analysis()), services
+    )
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    references = result.outputs["references"]
+    assert [(r["key"], r["verification"]) for r in references] == [
+        ("problem_cumcm_2021_c", "source_verified"),
+        ("paper_orphan", "title_matched"),
+    ]
+    # 两个产物：JSON（dataset）+ BibTeX（other），正文就是渲染函数的输出
+    assert [(ref.kind, ref.uri.rsplit("/", 1)[-1], ref.media_type) for ref in result.artifacts] == [
+        ("dataset", "references.json", "application/json"),
+        ("other", "references.bib", "application/x-bibtex"),
+    ]
+    json_text = services.artifacts.blobs[result.artifacts[0].uri].decode("utf-8")
+    payload = json.loads(json_text)
+    assert payload["version"] == 1 and [r["key"] for r in payload["references"]] == ["problem_cumcm_2021_c", "paper_orphan"]
+    bib_text = services.artifacts.blobs[result.artifacts[1].uri].decode("utf-8")
+    assert bib_text.startswith("@misc{problem_cumcm_2021_c,\n  title = {生产企业原材料的订购与运输},")
+    # 同时落工作区 refs/（下游沙盒 / 导出可读）
+    assert set(tools.written) == {"refs/references.json", "refs/references.bib"}
+    assert tools.written["refs/references.json"] == json_text and tools.written["refs/references.bib"] == bib_text
+    assert not [w for w in result.outputs.get("quality_warnings", []) if "引用库文件" in w]
+
+    # 空库：不写文件、无产物
+    empty = ModelPlanningNode(registry, proposer_views=()).run(
+        make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis()),
+        make_fanout_services(StubLlmPort({"model_planning.default": stub_response(PLANNING_OK)})),
+    )
+    assert empty.artifacts == ()
+
+    # 工作区写不进：产物照发、只记警告
+    class NoWriteInvoker(SandboxToolInvoker):
+        def invoke(self, run_id, step_id, tool_name, arguments):
+            if tool_name == "ws_write":
+                return ToolResult(status="failed", error="workspace quota exceeded")
+            return super().invoke(run_id, step_id, tool_name, arguments)
+
+    blocked = NodeServices(clock=services.clock, ids=services.ids, artifacts=InMemoryArtifactStore(), llm=llm,
+                           tools=NoWriteInvoker(runs=[tool_success()]), extras={"subagents": SubagentSupervisor()})
+    degraded = ModelPlanningNode(registry, proposer_views=(), knowledge=FakeKnowledge()).run(
+        make_ctx(TaskState.MODEL_PLANNING, inputs=inputs, prior=prior_with_analysis()), blocked
+    )
+    assert len(degraded.artifacts) == 2
+    assert [w for w in degraded.outputs["quality_warnings"] if w.startswith("引用库文件 refs/references.json 未能写入工作区（workspace quota exceeded）")]
+
+
 def test_model_planning_knowledge_failure_does_not_block_the_stage(registry):
     llm = StubLlmPort(fanout_stubs())
     node = ModelPlanningNode(registry, knowledge=FakeKnowledge(error=RuntimeError("boom")))
@@ -5389,13 +5452,15 @@ def test_paper_writing_feeds_verified_references_to_materials_audit_and_outputs(
         assert "### 可引用文献表" in call.variables["materials"]
     # 审计：[1] 在库、参考文献章照抄 → 引用一条 0 发现；条目里的年份不算无出处数值
     assert result.outputs["audit_findings"] == []
+    # refs/ 文件化：每条带稳定 key（`\cite{key}`）与记录级验证状态（老运行没有 key 时按同一规则补算）
     assert result.outputs["references"] == [
         {"number": 1, "title": "生产企业原材料的订购与运输", "text": REFERENCE_ENTRY_1,
          "url": "https://example.test/cumcm-2021-c", "source": "plan_citation",
-         "card_id": "problem:cumcm-2021-c", "cited": True},
+         "card_id": "problem:cumcm-2021-c", "key": "problem_cumcm_2021_c", "verification": "source_verified",
+         "cited": True},
         {"number": 2, "title": "机场出租车排队仿真", "text": REFERENCE_ENTRY_2,
          "url": "https://example.test/orphan", "source": "user_reference",
-         "card_id": "paper:orphan", "cited": False},
+         "card_id": "paper:orphan", "key": "paper_orphan", "verification": "title_matched", "cited": False},
     ]
     impact = result.review_meta["impact"]
     assert impact["references_total"] == 2 and impact["references_cited"] == 1

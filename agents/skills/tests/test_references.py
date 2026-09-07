@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import json
+
 from omm_agent_skills import (
     REFERENCE_SOURCE_PLAN,
     REFERENCE_SOURCE_USER,
+    VERIFICATION_SOURCE_VERIFIED,
+    VERIFICATION_TITLE_MATCHED,
+    VERIFICATION_UNVERIFIED,
+    assign_reference_keys,
     audit_citations,
     build_reference_library,
     card_ids_in_text,
     format_reference_entry,
     mark_cited,
     reference_inventory,
+    reference_key,
     reference_titles,
     render_reference_material,
+    render_references_bib,
+    render_references_json,
+    verification_status,
     verified_reference_ids,
 )
 
@@ -136,7 +146,16 @@ def test_build_reference_library_resolves_plan_citations_rationale_and_user_refe
         "url": "https://example.test/paper-2021-c-1",
         "source": REFERENCE_SOURCE_USER,
         "cited_by": ["user"],
+        # refs/ 文件化：BibTeX 用的结构化字段 + 稳定 key + 记录级验证状态
+        "year": "2021",
+        "competition": "全国大学生数学建模竞赛",
+        "key": "paper_cumcm_2021_c_01",
+        "verification": VERIFICATION_TITLE_MATCHED,
     }
+    assert [(r["key"], r["verification"]) for r in references[:2]] == [
+        ("problem_cumcm_2021_c", VERIFICATION_SOURCE_VERIFIED),
+        ("paper_comap_2025_d_2504188", VERIFICATION_SOURCE_VERIFIED),
+    ]
     assert references[0]["url"] == "https://example.test/cumcm-2021-c"
     assert warnings == [
         "方案文本引用了 1 张知识库里不存在的卡片（paper:ghost），不进引用库",
@@ -180,7 +199,11 @@ def test_reference_inventory_keeps_chosen_plan_and_user_entries_in_fixed_order()
         (1, "problem:cumcm-2021-c", REFERENCE_SOURCE_PLAN),
         (2, "paper:cumcm-2021-c-01", REFERENCE_SOURCE_USER),
     ]
-    assert set(inventory[0]) == {"number", "title", "text", "url", "source", "card_id"}
+    assert set(inventory[0]) == {"number", "title", "text", "url", "source", "card_id", "key", "verification"}
+    assert [(r["key"], r["verification"]) for r in inventory] == [
+        ("problem_cumcm_2021_c", VERIFICATION_SOURCE_VERIFIED),
+        ("paper_cumcm_2021_c_01", VERIFICATION_TITLE_MATCHED),
+    ]
     # 选另一张方案卡：换成它引用的先例，用户资料照常在
     assert [r["card_id"] for r in reference_inventory(library_outputs(), "B")] == [
         "paper:comap-2025-d-2504188", "paper:cumcm-2021-c-01",
@@ -198,8 +221,14 @@ def test_render_reference_material_and_audit_sets():
     assert "| [1] | 全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/cumcm-2021-c) | 方案引用的先例 |" in material
     assert "| [2] | 全国大学生数学建模竞赛. 基于混合整数规划的订购方案[Z]. 全国大学生数学建模竞赛 2021，国家一等奖. [全文](https://example.test/paper-2021-c-1) | 用户提供 |" in material
     assert "逐字照抄本表" in material
+    assert "`[n]` 或 `\\cite{key}`" in material
+    assert (
+        "引用 key（`\\cite{key}` 用）与验证状态：[1] = problem_cumcm_2021_c（知识库来源可核）；"
+        "[2] = paper_cumcm_2021_c_01（按标题匹配知识库）"
+    ) in material
     assert render_reference_material([]).startswith("无（本次运行没有可核实的引用条目")
-    assert verified_reference_ids(inventory) == {"1", "2"}
+    # 审计集合：编号与 key 同等合法
+    assert verified_reference_ids(inventory) == {"1", "2", "problem_cumcm_2021_c", "paper_cumcm_2021_c_01"}
     assert reference_titles(inventory) == {"1": "生产企业原材料的订购与运输", "2": "基于混合整数规划的订购方案"}
 
 
@@ -214,15 +243,81 @@ def test_mark_cited_and_audit_agree_on_the_same_library():
     assert "cited" not in inventory[0], "原表不被改写"
     # 同一张表喂审计：编号在库、条目照抄 → 0 发现
     assert audit_citations(sections, "", verified_reference_ids(inventory), reference_titles(inventory)) == []
-    # 条目被改写成另一篇 → 记发现；引用表外编号 → 记发现
+    # 条目被改写成另一篇 → 记发现；引用表外编号 → 记发现（条目数按表算：论文节点传 len(references)）
     forged = [
         sections[0],
         {"heading": "参考文献", "content": f"[1] 张三. 编造的一本书. 2020.\n[2] {inventory[1]['text']}"},
     ]
-    findings = audit_citations(forged, "另见 [3]。", verified_reference_ids(inventory), reference_titles(inventory))
+    findings = audit_citations(
+        forged, "另见 [3]。", verified_reference_ids(inventory), reference_titles(inventory), len(inventory)
+    )
     assert [(f["scope"], f["numbers"]) for f in findings] == [
         ("第2章《参考文献》", ["[1]"]),
         ("摘要", ["[3]"]),
     ]
     assert "库中为《生产企业原材料的订购与运输》" in findings[0]["detail"]
     assert "不在本次运行的引用库（2 条）中" in findings[1]["detail"]
+
+
+# -- refs/ 文件化：key / 验证状态 / JSON / BibTeX / \cite{key} ------------------------------
+
+
+def test_reference_keys_are_stable_slugs_and_deduplicated():
+    assert reference_key({"card_id": "problem:cumcm-2021-c"}) == "problem_cumcm_2021_c"
+    assert reference_key({"card_id": "Paper:COMAP-2025/ICM-D_2504188"}) == "paper_comap_2025_icm_d_2504188"
+    assert reference_key({"card_id": "", "title": "A Roadmap to a Better City"}) == "a_roadmap_to_a_better_city"
+    assert reference_key({"title": "无链接的旧卡"}) == "ref", "纯中文标题给不出 ASCII 片段 → ref（由去重加序号）"
+    assert reference_key({"card_id": "2021:c"}) == "ref_2021_c", "不能以数字开头"
+    keyed = assign_reference_keys([
+        {"title": "甲", "source": REFERENCE_SOURCE_PLAN},
+        {"title": "乙", "source": REFERENCE_SOURCE_PLAN},
+        {"card_id": "problem:x", "title": "丙", "source": REFERENCE_SOURCE_PLAN, "key": "custom_key"},
+        {"card_id": "problem:x", "title": "丁", "source": REFERENCE_SOURCE_PLAN},
+    ])
+    assert [item["key"] for item in keyed] == ["ref", "ref_2", "custom_key", "problem_x"]
+    assert all(item["verification"] == VERIFICATION_UNVERIFIED for item in keyed), "无 URL 的方案引用 = 未验证"
+
+
+def test_verification_status_is_deterministic_by_provenance():
+    assert verification_status({"source": REFERENCE_SOURCE_USER, "url": None}) == VERIFICATION_TITLE_MATCHED
+    assert verification_status({"source": REFERENCE_SOURCE_PLAN, "url": "https://example.test/x"}) == VERIFICATION_SOURCE_VERIFIED
+    assert verification_status({"source": REFERENCE_SOURCE_PLAN, "url": "javascript:alert(1)"}) == VERIFICATION_UNVERIFIED
+    assert verification_status({"source": REFERENCE_SOURCE_PLAN, "url": None}) == VERIFICATION_UNVERIFIED
+
+
+def test_reference_files_render_json_and_bibtex_verbatim():
+    references, _ = build_reference_library(
+        Port(), [{"id": "A", "approach": "[problem:cumcm-2021-c]"}],
+        reference_metadata=[{"kind": "paper", "title": "基于混合整数规划的订购方案"}],
+    )
+    payload = json.loads(render_references_json(references))
+    assert payload["version"] == 1
+    assert [(r["key"], r["verification"], r["cited_by"], r["year"]) for r in payload["references"]] == [
+        ("problem_cumcm_2021_c", VERIFICATION_SOURCE_VERIFIED, ["A"], "2021"),
+        ("paper_cumcm_2021_c_01", VERIFICATION_TITLE_MATCHED, ["user"], "2021"),
+    ]
+    assert payload["references"][0]["url"] == "https://example.test/cumcm-2021-c"
+    bib = render_references_bib(references)
+    assert bib.startswith("@misc{problem_cumcm_2021_c,\n  title = {生产企业原材料的订购与运输},\n  organization = {全国大学生数学建模竞赛},\n  year = {2021},\n  howpublished = {\\url{https://example.test/cumcm-2021-c}},\n")
+    assert "  annote = {source=plan_citation; verification=source_verified}\n}" in bib
+    assert "@misc{paper_cumcm_2021_c_01,\n" in bib and "verification=title_matched" in bib
+    assert bib.endswith("}\n") and bib.count("@misc{") == 2
+    assert render_references_bib([]) == "" and json.loads(render_references_json([]))["references"] == []
+    # 花括号 / 百分号等 BibTeX 特殊字符转义
+    escaped = render_references_bib([{"title": "100% {sure}", "text": "a & b", "source": REFERENCE_SOURCE_PLAN}])
+    assert "title = {100\\% \\{sure\\}}" in escaped and "note = {a \\& b}" in escaped
+
+
+def test_cite_key_marks_pass_audit_and_count_as_cited():
+    inventory = reference_inventory(library_outputs(), "A")
+    sections = [
+        {"heading": "5 模型建立", "content": "分层思路借鉴了赛题先例 \\cite{problem_cumcm_2021_c}，另见 \\cite{paper_cumcm_2021_c_01}。"},
+        {"heading": "参考文献", "content": f"[1] {inventory[0]['text']}\n[2] {inventory[1]['text']}"},
+    ]
+    assert audit_citations(sections, "", verified_reference_ids(inventory), reference_titles(inventory), len(inventory)) == []
+    assert [(r["number"], r["cited"]) for r in mark_cited(inventory, sections)] == [(1, True), (2, True)]
+    # 表外 key → 记发现，条目数按表算（2 条，不是编号 + key 的 4 个成员）
+    forged = [{"heading": "5 模型建立", "content": "另见 \\cite{smith2020}。"}, sections[1]]
+    findings = audit_citations(forged, "", verified_reference_ids(inventory), reference_titles(inventory), len(inventory))
+    assert [(f["scope"], f["numbers"]) for f in findings] == [("第1章《5 模型建立》", ["\\cite{smith2020}"])]
+    assert "不在本次运行的引用库（2 条）中" in findings[0]["detail"]
