@@ -88,7 +88,7 @@ from omm_contracts import (
 from .blobstore import ArtifactBlobStore, LocalContentStore
 from .config import Settings, get_settings
 from .errors import ApiError
-from .events import append_event
+from .events import append_event, lock_run
 from .ids import new_id
 from .llm import EngineLlmPort, config_usable, is_third_party_host, parse_llm_config
 from .models import User
@@ -103,7 +103,7 @@ from .orm import (
     StepRunRow,
     TaskRunRow,
 )
-from .serialize import utcnow
+from .serialize import iso_z, utcnow
 from .stage_outputs import REQUIRED_OUTPUT_KEYS, STAGE_OUTPUT_SCHEMA_IDS
 from .usage import budget_exhausted, is_free_endpoint, record_usage
 from .workflow import NODE_COMPLETED, STAGE_LABELS, STAGES
@@ -498,6 +498,30 @@ _PROMPT_NODE_IDS = {
     "paper_writing.default": TaskState.PAPER_WRITING.value,
 }
 
+#: 提示词 → 设置中心「智能路由」的任务类型（ADR-0015 决策 3）。数据准备阶段
+#: 拆开：出清洗方案是分析（research），沙盒里写码跑码是编程（coding）。
+#: 表外的提示词、接待判定与 Auto 难度判定不受定向影响，按主接口链处理。
+_PROMPT_TASK_KINDS = {
+    "problem_analysis.default": "research",
+    "data_preparation.default": "research",
+    "data_cleaning.sandbox": "coding",
+    "data_cleaning_review.default": "coding",
+    "model_planning.default": "research",
+    "model_planning.proposer": "research",
+    "model_planning.reduce": "research",
+    "model_planning.formalize": "research",
+    "experiment_code.default": "coding",
+    "experiment_code.sandbox": "coding",
+    "experiment_review.default": "coding",
+    "validating.default": "coding",
+    "validating.sandbox": "coding",
+    "validating_review.default": "coding",
+    "paper_outline.default": "writing",
+    "paper_section.default": "writing",
+    "paper_finalize.default": "writing",
+    "paper_writing.default": "writing",
+}
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -599,6 +623,7 @@ _FAILURE_CLASS_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "无法连接接口",  # ApiError 未经包装直达时的兜底关键词
         "未响应",
         "触发限流",
+        "暂时不可用",  # LLM_UPSTREAM_UNAVAILABLE：网关自身故障
     )),
     # 失控保护（预算硬停 E31x/E32x）：策略拦截而非代码缺陷
     ("POLICY_BLOCK", ("[E31", "[E32")),
@@ -646,6 +671,11 @@ _API_ERROR_GUIDANCE: dict[str, str] = {
     "LLM_RATE_LIMITED": (
         "这是接口限流（与余额无关）：请稍等片刻重试，"
         "或在设置中心追加备用接口分担调用。"
+    ),
+    "LLM_UPSTREAM_UNAVAILABLE": (
+        "这是接口服务端自身的临时故障（鉴权服务超时、数据库连接打满、服务繁忙之类，"
+        "与余额、密钥无关）：已自动退避重试仍失败，请稍后再试；"
+        "反复出现时在设置中心更换更稳定的接口或追加备用接口。"
     ),
     "LLM_NO_BALANCE": "请在设置中心为该接口充值，或更换/追加有余额的备用接口后重试。",
 }
@@ -908,6 +938,7 @@ def _llm_wiring_impl(
         node_for_prompt=_PROMPT_NODE_IDS,
         user_notes=user_notes,
         lock=control_lock,
+        task_kind_for_prompt=_PROMPT_TASK_KINDS,
     )
     overrides = {
         state: _BudgetGuardedNode(node)
@@ -1411,6 +1442,44 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             _project_status(session, run, TaskRunStatus.RUNNING.value, "重试失败阶段")
         return
 
+    if kind is EventType.RUN_REDO:
+        # 任意非完成状态从选定阶段重做（ADR-0019）。控制面这边要把三样东西收干净：
+        # 待审批门作废（引擎已丢掉 review）、在途步骤行按 CANCELLED 关掉（引擎快照
+        # 里同样关掉了，其执行器的迟到写入会撞 seq 唯一约束被推进器丢弃）、失败 /
+        # 暂停 / 结束标记清空；current_node 摆回目标阶段，免得下个 tick 起步前工作台
+        # 还画着旧阶段。
+        target = str(payload.get("target_state") or "")
+        label = STAGE_LABELS.get(target, target)
+        now = utcnow()
+        for approval in session.execute(
+            select(ApprovalRequestRow).where(
+                ApprovalRequestRow.run_id == run.id,
+                ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+            )
+        ).scalars():
+            # 契约的 resolution 是「选了哪个选项」（option_id / actor 必填），作废的门没有
+            # 选项可记，和取消路径一样留空；为什么作废记在内部的 evidence 里供审计。
+            approval.status = ApprovalStatus.CANCELLED.value
+            evidence = dict(approval.evidence) if isinstance(approval.evidence, dict) else {}
+            evidence["superseded_by"] = {"kind": "redo", "target_state": target, "at": iso_z(now)}
+            approval.evidence = evidence
+        for step in session.execute(
+            select(StepRunRow).where(
+                StepRunRow.run_id == run.id,
+                StepRunRow.status == StepRunStatus.RUNNING.value,
+            )
+        ).scalars():
+            step.status = StepRunStatus.CANCELLED.value
+            step.detail = f"已被「从「{label}」重做」取代"
+            step.ended_at = now
+        run.failure_class = None
+        run.failure_message = None
+        run.paused_from_status = None
+        run.ended_at = None
+        _project_node(session, run, target, f"从「{label}」重做")
+        _project_status(session, run, TaskRunStatus.RUNNING.value, f"用户要求从「{label}」重做")
+        return
+
     if kind is EventType.RUN_PAUSED:
         run.paused_from_status = run.status
         _project_status(session, run, TaskRunStatus.PAUSED.value, "用户暂停")
@@ -1827,15 +1896,18 @@ def suggest_revision_stage(text: str) -> str:
     return "PAPER_WRITING"
 
 
-def request_revision(session: Session, run: TaskRunRow, text: str, note_id: str) -> tuple[int, str]:
+def request_revision(
+    session: Session, run: TaskRunRow, text: str, note_id: str, stage: Optional[str] = None
+) -> tuple[int, str]:
     """修订回合的引擎侧（ADR-0013）：开审批门等用户确认重做起点，不立即重跑。
 
     返回 ``(轮次, 审批 id)``。审批行由 REVISION_REQUESTED 的投影建出，这里回查
     一次拿它的 id 做回执——重做起点要人确认，接口回执必须能把用户带到那个门前。
+    ``stage`` 显式给出建议起点（对话里点名了阶段，ADR-0018）；缺省按正文关键词推断。
     """
     engine, snapshot = open_engine(session, run)
     engine.request_revision(
-        snapshot, TaskState(suggest_revision_stage(text)), reason=text, note_id=note_id
+        snapshot, TaskState(stage or suggest_revision_stage(text)), reason=text, note_id=note_id
     )
     approval = session.execute(
         select(ApprovalRequestRow)
@@ -1846,3 +1918,137 @@ def request_revision(session: Session, run: TaskRunRow, text: str, note_id: str)
         .order_by(ApprovalRequestRow.requested_at.desc())
     ).scalars().first()
     return snapshot.revision_round, approval.id if approval is not None else ""
+
+
+def accept_revision(
+    session: Session, run: TaskRunRow, text: str, stage: Optional[str] = None
+) -> dict[str, Any]:
+    """受理一条修改要求（ADR-0013）：校验状态与轮数、落 global 备注、开修订门、记回执事件。
+
+    HTTP 路由 ``POST /task-runs/{id}/revisions`` 与对话控制面（ADR-0018）共用这一个
+    入口——同一把锁、同一事务、同一套 409。要求正文同时落成备注：重做阶段的节点
+    靠它读到「要改什么」，不落的话重跑一遍只会原样再产出一次。返回
+    ``{run_id, round, approval_id, suggested_stage, note_id}``（与 RunRevision 同形）。
+    """
+    locked = lock_run(session, run.id)
+    run = locked if locked is not None else run
+    if run.status != TaskRunStatus.COMPLETED.value:
+        raise ApiError(
+            409,
+            "RUN_NOT_COMPLETED",
+            f"状态 {run.status} 不支持提出修改要求；仅已完成的运行可以发起修订",
+        )
+    rounds = revision_rounds(session, run.id)
+    if rounds >= MAX_REVISION_ROUNDS:
+        raise ApiError(
+            409,
+            "REVISION_LIMIT_REACHED",
+            f"本次运行的修改轮数已达上限（{MAX_REVISION_ROUNDS} 轮）；"
+            "如仍需调整，请基于当前结果新建任务",
+        )
+    text = text.strip()
+    if not text:
+        raise ApiError(422, "EMPTY_TEXT", "修改要求不能为空")
+    if stage is not None and stage not in STAGES:
+        raise ApiError(422, "INVALID_STAGE", f"未知阶段：{stage}")
+
+    note = RunNoteRow(
+        id=new_id("note"),
+        run_id=run.id,
+        text=text,
+        scope="global",
+        created_at=utcnow(),
+    )
+    session.add(note)
+    session.flush()  # 备注行先于领域事件落库：重做的节点按 run_id 读它
+
+    suggested = stage or suggest_revision_stage(text)
+    round_no, approval_id = request_revision(session, run, text, note.id, stage=suggested)
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_log.value,
+        {
+            "kind": "revision_requested",
+            "note_id": note.id,
+            "round": round_no,
+            "suggested_stage": suggested,
+            "text": text[:500],
+            "message": (
+                f"已受理第 {round_no} 轮修改要求，建议从「"
+                f"{STAGE_LABELS.get(suggested, suggested)}」重做；"
+                "请在待确认事项中选定重做起点后生效"
+            ),
+        },
+    )
+    return {
+        "run_id": run.id,
+        "round": round_no,
+        "approval_id": approval_id,
+        "suggested_stage": suggested,
+        "note_id": note.id,
+    }
+
+
+#: 可以「从阶段重做」的 v1 状态（ADR-0019）。COMPLETED 走修订门；QUEUED 还没有可重做的
+#: 东西；CANCELLED 是真正的终点。
+REDO_STATUSES = frozenset(
+    {
+        TaskRunStatus.RUNNING.value,
+        TaskRunStatus.PAUSED.value,
+        TaskRunStatus.WAITING_APPROVAL.value,
+        TaskRunStatus.FAILED.value,
+    }
+)
+
+
+def redo_run(session: Session, run: TaskRunRow, stage: str, text: str) -> dict[str, Any]:
+    """任意非完成状态下从选定阶段重做（ADR-0019）：落 global 备注 → RUN_REDO → run.log 回执。
+
+    对话控制面在用户确认提案之后调用；HTTP 侧目前没有独立端点（按钮路径仍是
+    时间线上的重试 / 闸门回退）。要求正文同时落成备注：重做的节点靠它读到「要改
+    什么」，不落的话回退一趟只会原样再产出一次。返回 ``{run_id, stage, note_id, from_status}``。
+    """
+    locked = lock_run(session, run.id)
+    run = locked if locked is not None else run
+    if run.status not in REDO_STATUSES:
+        raise ApiError(
+            409,
+            "RUN_NOT_REDOABLE",
+            f"状态 {run.status} 不支持从阶段重做"
+            + ("；已完成的运行请通过修改要求发起修订" if run.status == TaskRunStatus.COMPLETED.value else ""),
+        )
+    if stage not in STAGES:
+        raise ApiError(422, "INVALID_STAGE", f"未知阶段：{stage}")
+    text = text.strip()
+    if not text:
+        raise ApiError(422, "EMPTY_TEXT", "重做要求不能为空")
+
+    note = RunNoteRow(
+        id=new_id("note"),
+        run_id=run.id,
+        text=text[:2000],
+        scope="global",
+        created_at=utcnow(),
+    )
+    session.add(note)
+    session.flush()  # 备注行先于领域事件落库：重做的节点按 run_id 读它
+
+    from_status = run.status
+    engine, snapshot = open_engine(session, run)
+    engine.redo(snapshot, TaskState(stage), reason=text, note_id=note.id)
+    label = STAGE_LABELS.get(stage, stage)
+    append_event(
+        session,
+        run.id,
+        AgentEventType.run_log.value,
+        {
+            "kind": "redo_requested",
+            "note_id": note.id,
+            "stage": stage,
+            "from_status": from_status,
+            "text": text[:500],
+            "message": f"已按你的要求从「{label}」重做，该阶段及其之后的阶段会整段重跑",
+        },
+    )
+    return {"run_id": run.id, "stage": stage, "note_id": note.id, "from_status": from_status}

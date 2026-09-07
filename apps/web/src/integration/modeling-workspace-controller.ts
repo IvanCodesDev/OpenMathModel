@@ -1,7 +1,9 @@
-import type { ModelingWorkspaceView } from "@openmathmodel/contracts";
+import { TERMINAL_TASK_RUN_STATUSES, type ModelingWorkspaceView } from "@openmathmodel/contracts";
 import { mountComposerAttachments } from "../attachments/composer-attachments";
+import { invalidateMe } from "../auth/api";
 import { currentLocale, t } from "../i18n/locale";
-import { configureConversation } from "./agent-chat";
+import { configureConversation, hydrateConversation } from "./agent-chat";
+import { redirectToLogin } from "./auth-guard";
 import {
   applyChosenOption,
   REJECT_OPTION_ID,
@@ -57,6 +59,8 @@ const STATUS_LABELS: Record<string, string> = {
   FAILED: "执行失败",
   CANCELLED: "已取消",
 };
+/** 服务端在这些状态下会给 SSE 发 stream.end 收尾（routers/events.py 的 _TERMINAL）。 */
+const TERMINAL_RUN_STATUSES = new Set<string>(TERMINAL_TASK_RUN_STATUSES);
 let activeCleanup: (() => void) | undefined;
 
 function activeRunId(): string | null {
@@ -164,11 +168,16 @@ function renderStatus(root: HTMLElement, screen: ScreenId, view: ModelingWorkspa
 
   root.querySelectorAll<HTMLElement>('[data-bind="project-name"], .focused-task-name span, .task-toolbar h2')
     .forEach(element => replaceText(element, view.project_name));
+  // 状态徽标与首气泡在空态骨架里都是藏着的（没有真实运行就不摆「加载中…」
+  // 和一个只剩「Agent」头像的空壳），拿到真实快照才放出。
   root.querySelectorAll<HTMLElement>(".run-status").forEach(element => {
+    element.hidden = false;
     element.classList.toggle("complete", view.run_status === "COMPLETED");
     element.replaceChildren(Object.assign(document.createElement("b"), { ariaHidden: "true" }));
     element.append(` ${STATUS_LABELS[view.run_status] ?? view.run_status}`);
   });
+  root.querySelectorAll<HTMLElement>(".chat-scroll .assistant-block:not(.follow-up-reply)")
+    .forEach(block => { block.hidden = false; });
 
   const stagePane = root.querySelector<HTMLElement>(".focused-stage-pane, .modeling-stage-pane");
   if (stagePane) {
@@ -426,27 +435,54 @@ function firstAssistantMessage(root: HTMLElement, scroll: HTMLElement): { block:
   return { block, sealed: !pending && root.dataset.planPhase === "revealed" };
 }
 
-/** 对话末尾的执行轨迹块：与首条 Agent 消息同构（署名 + 可展开折叠头 + 活动流）。
- *  尾部已是轨迹块则继续续写；被用户消息或对话回复隔断后，新事件另起一块，
- *  保证执行过程与对话在页面上严格按发生顺序交替。 */
-function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLElement | null {
-  const tail = scroll.lastElementChild;
-  if (tail instanceof HTMLElement && tail.classList.contains("agent-activity-block")) {
-    return tail.querySelector<HTMLElement>(".agent-stream");
-  }
-  const block = document.createElement("div");
-  block.className = "assistant-block follow-up-reply agent-activity-block";
-  const identity = identitySource.querySelector<HTMLElement>(".assistant-id");
-  if (identity) block.append(identity.cloneNode(true));
+/** 「收起执行步骤」折叠头：点击由页面层 toggle-activity 接管，折叠紧随其后的活动流。 */
+function activityHeader(): HTMLButtonElement {
   const header = document.createElement("button");
   header.type = "button";
   header.className = "activity-summary";
   header.dataset.action = "toggle-activity";
   header.setAttribute("aria-expanded", "true");
   header.innerHTML = `<i class="ph ph-eye-slash" aria-hidden="true"></i> ${t("收起执行步骤")} <i class="ph ph-caret-up" aria-hidden="true"></i>`;
+  return header;
+}
+
+/** 对话回复块里的运行步骤区：回复正文（与复制按钮）之后挂折叠头 + 活动流，只建一次。
+ *  对话即控制面（ADR-0018）之后，「继续」「用方案 B」这类话是由对话轮自己把运行推
+ *  起来的：回复与随之而来的执行步骤是同一轮的两半，属于同一条 Agent 消息——不能在
+ *  还在生成的回复下面再立一个带署名的新块，否则页面上两个「Agent」同时活着
+ *  （2026-09-07 用户截图：上面「正在生成回复」、下面「收起执行步骤」各转各的）。 */
+function replyRunTraceHost(replyBlock: HTMLElement): HTMLElement {
+  const existing = replyBlock.querySelector<HTMLElement>(":scope > .agent-stream.run-trace");
+  if (existing) return existing;
+  const host = document.createElement("div");
+  host.className = "agent-stream run-trace";
+  replyBlock.append(activityHeader(), host);
+  return host;
+}
+
+/** 对话末尾的执行轨迹落点：
+ *  - 尾部已是轨迹块 → 继续续写；
+ *  - 尾部是对话回复块（生成中或已完成）→ 写进该回复块内部的运行步骤区
+ *    （replyRunTraceHost），不另起署名块；
+ *  - 尾部是用户消息等其它元素 → 另起一个与首条 Agent 消息同构的轨迹块
+ *    （署名 + 折叠头 + 活动流）。
+ *  三条规则合起来保证执行过程与对话在页面上严格按发生顺序交替，且 Agent 不会
+ *  连着出现两个署名。 */
+function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLElement | null {
+  const tail = scroll.lastElementChild;
+  if (tail instanceof HTMLElement) {
+    if (tail.classList.contains("agent-activity-block")) {
+      return tail.querySelector<HTMLElement>(".agent-stream");
+    }
+    if (tail.classList.contains("follow-up-reply")) return replyRunTraceHost(tail);
+  }
+  const block = document.createElement("div");
+  block.className = "assistant-block follow-up-reply agent-activity-block";
+  const identity = identitySource.querySelector<HTMLElement>(".assistant-id");
+  if (identity) block.append(identity.cloneNode(true));
   const host = document.createElement("div");
   host.className = "agent-stream";
-  block.append(header, host);
+  block.append(activityHeader(), host);
   scroll.append(block);
   return host;
 }
@@ -932,8 +968,9 @@ function ingestStreamEvent(
         if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
         return;
       }
-      if (kind === "task_renamed" || kind === "budget_limit") {
-        // 有现成人话 message 的运营事件：以叙述行呈现，不落进原始 JSON 兜底
+      if (kind === "task_renamed" || kind === "budget_limit" || kind === "user_note") {
+        // 有现成人话 message 的运营事件（改名 / 预算 / 用户补充要求已落成运行备注）：
+        // 以叙述行呈现，不落进原始 JSON 兜底——兜底会把备注全文连 note_id 一起摊开
         const message = String(payload.message ?? "").trim();
         if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
         return;
@@ -1421,6 +1458,13 @@ function renderWorkspace(root: HTMLElement, screen: ScreenId, view: ModelingWork
 }
 
 function renderError(root: HTMLElement, error: unknown): void {
+  // 会话中途失效：进页面时 auth-guard 看到的还是有效缓存，401 到这里才暴露。
+  // 不在运行页上摆一句「请先登录」让人对着空壳发呆，直接送去登录页，登录后回来。
+  if (error instanceof WorkspaceApiError && error.status === 401) {
+    invalidateMe();
+    redirectToLogin();
+    return;
+  }
   root.dataset.integrationState = "error";
   const copy = root.querySelector<HTMLElement>(
     ".focused-agent-copy, .modeling-agent-copy[data-agent-summary]",
@@ -1436,6 +1480,8 @@ function renderError(root: HTMLElement, error: unknown): void {
   const paragraph = document.createElement("p");
   paragraph.textContent = message;
   copy.replaceChildren(title, paragraph);
+  // 首气泡在空态下整块藏着；真实故障要说得出口，这里连壳一起放出。
+  copy.closest<HTMLElement>(".assistant-block")?.removeAttribute("hidden");
 }
 
 function downloadArtifactManifest(view: ModelingWorkspaceView): void {
@@ -1488,7 +1534,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   let actionPending = false;
   let actionToken: string | undefined;
   let actionFingerprint: string | undefined;
-  let conversationConfigured = false;
+  // 对话归属绑定 + 服务端对话轮拉齐的一次性过程：所有刷新都等它落定再渲染工作台
+  let conversationReady: Promise<void> | null = null;
   // 本页刚提交过修订撤回：随后的 WAITING_APPROVAL → COMPLETED 是回落不是新完成，
   // 桌面通知按此静默（走查观感：撤回后再弹一次「任务已完成」）。观察到状态真正
   // 变化后即清除，不影响之后任何一次真实完成的提醒。
@@ -1562,15 +1609,30 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         void hydrateRecentTasks();
       }
       currentView = view;
-      // 首个快照到手即绑定对话归属：agent-chat 按 run 隔离上下文并从本机记录
-      // 恢复历史；页面层随后把首条气泡换成该运行的真实题面并重建对话气泡。
-      if (!conversationConfigured) {
-        conversationConfigured = true;
-        configureConversation(view.run_id, view.goal);
-        document.dispatchEvent(new CustomEvent("omm:conversation-restore", {
-          detail: { runId: view.run_id, goal: view.goal },
-        }));
+      // 终态收过 stream.end 之后运行又活了（「重试当前阶段」把 FAILED 置回 RUNNING、
+      // 修订重开把 COMPLETED 置回 WAITING_APPROVAL）：事件流必须重接，否则新一次
+      // 尝试的 step.started / llm_call_* / 再次失败一条都到不了页面——徽标停在
+      // 「进行中」、执行计划面板停在思考态、CTA 隐藏，看起来就是「点了没反应」
+      // （2026-09-05 用户报障，本地库里 RUN_RETRIED 后 28 秒的第二次失败页面全无感知）。
+      if (streamEnded && !TERMINAL_RUN_STATUSES.has(view.run_status)) reopenStream();
+      // 首个快照到手即绑定对话归属并从服务端拉齐这个运行的全部对话轮（ADR-0016：
+      // 记录与生成都在服务端，仍在生成的轮带半截正文回来）；页面层随后把首条
+      // 气泡换成该运行的真实题面、重建对话气泡、续接直播。必须先于首次
+      // renderWorkspace：规划阶段广播 omm:run-planning 时页面要已经知道服务端
+      // 有没有开场轮，否则会重复发起一次开场分析。
+      if (!conversationReady) {
+        conversationReady = (async () => {
+          configureConversation(view.run_id, view.goal);
+          const turns = await hydrateConversation(view.run_id);
+          if (disposed) return;
+          document.dispatchEvent(new CustomEvent("omm:conversation-restore", {
+            detail: { runId: view.run_id, goal: view.goal, turns },
+          }));
+        })();
       }
+      // 并发的刷新（SSE 事件触发）同样等对话拉齐，不抢在恢复之前渲染
+      await conversationReady;
+      if (disposed) return;
       renderWorkspace(root, currentScreen, view);
       // 五类页面正文（数据画像/方案/实验/论文/交付）：拉取失败或阶段未产出
       // 时保留演示模板，绝不阻断主视图刷新；渲染器内部按 updated_at 幂等。
@@ -1661,19 +1723,27 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     });
   };
 
+  // 终态之后运行被重新打开时重接事件流（after=lastSequence，只接新增量）。两条路
+  // 都会走到这里：refresh 看见非终态快照（重试失败阶段）、对话层受理修订成功广播
+  // omm:run-reopened（ADR-0013）。
+  const reopenStream = (): void => {
+    if (disposed) return;
+    streamEnded = false;
+    eventSource?.close();
+    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+    connectEvents();
+  };
+
   // 已完成的运行被修订要求重新打开（ADR-0013）：服务端在终态时已经发过 stream.end、
   // 这里也把 SSE 关掉不再重连，于是 COMPLETED → WAITING_APPROVAL 这一步页面上什么都
   // 收不到——修订门不出现、状态仍写着「已完成」、也没有「需要你确认」的提醒，直到用户
   // 手动刷新（2026-09-02 无头浏览器走查实测）。对话层受理成功后广播本事件，这里
-  // 立刻拉一次快照并重新接上事件流（after=lastSequence，只接新增量）。
+  // 立刻重新接上事件流并拉一次快照。
   const onRunReopened = (event: Event): void => {
     const detail = (event as CustomEvent<{ runId?: string }>).detail;
     if (disposed || detail?.runId !== runId) return;
-    streamEnded = false;
-    eventSource?.close();
-    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+    reopenStream();
     void refresh(false);
-    connectEvents();
   };
   document.addEventListener("omm:run-reopened", onRunReopened);
 

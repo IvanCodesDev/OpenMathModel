@@ -16,6 +16,11 @@ Design decisions (kept deliberately small for the MVP loop):
 - COMPLETED is terminal for the loop too; the only way out is an explicit
   ``request_revision`` (ADR-0013), which suspends into NEEDS_REVIEW carrying
   the stage the user wants redone.
+- Any unfinished run (work state, FAILED, NEEDS_REVIEW) can be sent BACK to
+  an earlier work state by the explicit ``redo`` action (ADR-0019). That edge
+  lives only in the RUN_REDO reducer, never in ``can_transition``: the
+  forward matrix below keeps validating STATE_CHANGED so a scheduler bug
+  cannot hide behind "work states may jump anywhere".
 - Pause/cancel are control flags on the run, not states: they gate scheduling
   without exploding the transition matrix.
 """

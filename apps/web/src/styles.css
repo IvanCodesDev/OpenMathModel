@@ -42,7 +42,6 @@ button {
   transition: background .15s ease, border-color .15s ease, transform .08s ease;
 }
 
-button:hover { background: #f7f7f7; border-color: #cfcfcf; }
 button:active { transform: translateY(1px); }
 
 a { color: inherit; text-decoration: none; }
@@ -637,9 +636,6 @@ html[data-theme="dark"] .recent::-webkit-scrollbar-thumb:hover { background: #5a
 .mini-progress { height: 4px; margin-top: 12px; background: #dedede; border-radius: 4px; overflow: hidden; }
 .mini-progress span { display: block; width: 45%; height: 100%; background: #111; }
 .experiment-detail { border: 1px solid #dedede; border-radius: 7px; overflow: auto; }
-.experiment-titlebar { height: 76px; padding: 0 18px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
-.experiment-titlebar h2 { margin: 0 28px 0 0; font-size: 20px; }
-.experiment-titlebar .status-copy { color: #777; margin-right: 28px; }
 .experiment-actions { margin-left: auto; display: flex; gap: 12px; }
 .experiment-actions button { height: 37px; padding: 0 14px; }
 .experiment-tabs { height: 44px; padding-left: 10px; border-bottom: 1px solid var(--line); display: flex; }
@@ -961,7 +957,9 @@ button {
   border-radius: 9px;
 }
 
-button:hover { background: #f2f2ef; border-color: #d9d9d5; }
+/* 按钮悬停一律不改底色：全局 button:hover 的浅灰底盒特异性（0,1,1）高于
+   .primary-small 这类自带底色的类选择器（0,1,0），会把黑底按钮冲成白盒 +
+   白字（文字看不见）。取消全局悬停底色后，按钮保持各自原本的黑/白底不变。 */
 
 .sidebar {
   padding: 16px 14px 14px;
@@ -2182,20 +2180,6 @@ html[data-theme="dark"] .analysis-copy blockquote { border-left-color: #4a4a46; 
   padding: 16px 20px;
 }
 
-.experiment-titlebar {
-  min-height: 88px;
-  height: auto;
-  padding: 15px 20px;
-}
-
-.experiment-titlebar h2 {
-  margin-right: 22px;
-}
-
-.experiment-titlebar .status-copy {
-  margin-right: 22px;
-}
-
 .experiment-actions {
   gap: 10px;
 }
@@ -2305,11 +2289,6 @@ html[data-theme="dark"] select {
   border-color: #3d3d3a;
   background: #20201f;
   color: #efefec;
-}
-
-html[data-theme="dark"] button:hover {
-  border-color: #50504c;
-  background: #292927;
 }
 
 html[data-theme="dark"] .sidebar,
@@ -2504,15 +2483,6 @@ html[data-theme="dark"] .resource-pagination button.active {
   border-color: #ecece8;
   background: #ecece8;
   color: #171716;
-}
-
-html[data-theme="dark"] .primary:hover,
-html[data-theme="dark"] .next-step-link:hover,
-html[data-theme="dark"] .primary-small:hover,
-html[data-theme="dark"] .settings-footer .primary:hover {
-  border-color: #fff;
-  background: #fff;
-  color: #111;
 }
 
 html[data-theme="dark"] .settings-backdrop {
@@ -3639,6 +3609,19 @@ html[data-theme="dark"] .usage-chart {
   color: #898984;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.settings-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 型号目录新鲜度：紧跟说明文字，另起一行避免与长句挤在一起 */
+.settings-section-heading p [data-catalog-status] {
+  display: block;
+  margin-top: 2px;
 }
 
 .settings-grid {

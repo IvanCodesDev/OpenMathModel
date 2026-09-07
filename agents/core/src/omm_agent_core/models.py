@@ -41,6 +41,8 @@ class EventType(str, Enum):
     RUN_CANCELLED = "RUN_CANCELLED"
     RUN_RETRIED = "RUN_RETRIED"
     REVISION_REQUESTED = "REVISION_REQUESTED"
+    #: 任意非完成状态下回退到选定阶段重做（ADR-0019）；在途步骤被取代。
+    RUN_REDO = "RUN_REDO"
     RUN_COMPLETED = "RUN_COMPLETED"
     RUN_FAILED = "RUN_FAILED"
 

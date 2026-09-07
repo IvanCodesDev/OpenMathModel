@@ -7,6 +7,7 @@
  */
 
 import { ApiError, authApi, type LlmConfig, type LlmEndpoint } from "../auth/api";
+import { taskRoutesFromForm } from "./task-routes";
 
 const PROTOCOL_PAIRS: Array<[string, LlmEndpoint["protocol"]]> = [
   ["OpenAI Compatible", "openai"],
@@ -65,6 +66,18 @@ function flagsFromForm(values: Record<string, unknown>) {
   };
 }
 
+/**
+ * 「智能路由」区块的即时读数（ADR-0015）：总开关 + 四个任务类型下拉。
+ * 与三个行为开关同一纪律——凡是把表单值推送上去的保存路径都一并携带，
+ * 否则整体替换式的 PUT 会把服务端已存的定向抹成缺省。
+ */
+function routingFromForm(values: Record<string, unknown>) {
+  return {
+    smart_routing: values.smartRouting !== false,
+    task_routes: taskRoutesFromForm(values),
+  };
+}
+
 /** 读取服务端配置；未登录或后端不可用返回 null（面板保持本机显示）。 */
 export async function fetchLlmConfig(): Promise<LlmConfig | null> {
   try {
@@ -113,7 +126,7 @@ function syncFailureMessage(error: unknown): string {
 
 /**
  * 「保存更改」时调用：表单值更新目标接口（编辑态更新被编辑的那条，否则
- * 更新当前主接口；无任何接口时创建首个），三个开关一并落库。
+ * 更新当前主接口；无任何接口时创建首个），三个开关与智能路由一并落库。
  * 返回要提示用户的文案，null 表示成功无需提示。
  */
 export async function persistLlmSettings(values: Record<string, unknown>): Promise<string | null> {
@@ -123,7 +136,7 @@ export async function persistLlmSettings(values: Record<string, unknown>): Promi
     const config = (await authApi.getLlmConfig()).config;
     if (!endpoint && config.endpoints.length === 0) {
       // 表单还是示例占位且从未保存过接口：只有开关需要落库
-      await authApi.updateLlmConfig({ ...config, ...flagsFromForm(values) });
+      await authApi.updateLlmConfig({ ...config, ...flagsFromForm(values), ...routingFromForm(values) });
       return null;
     }
     const endpoints = [...config.endpoints];
@@ -140,6 +153,7 @@ export async function persistLlmSettings(values: Record<string, unknown>): Promi
     }
     await authApi.updateLlmConfig({
       ...flagsFromForm(values),
+      ...routingFromForm(values),
       endpoints,
       active_endpoint_id: active,
     });
@@ -158,6 +172,7 @@ export async function saveEndpointAsNew(values: Record<string, unknown>): Promis
     await authApi.updateLlmConfig({
       ...config,
       ...flagsFromForm(values),
+      ...routingFromForm(values),
       endpoints: [...config.endpoints, endpoint],
     });
     return "已保存为新接口";

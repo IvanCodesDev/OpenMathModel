@@ -39,6 +39,7 @@ from .orm import (
     ApprovalRequestRow,
     ArtifactRow,
     ArtifactTextRow,
+    ChatTurnRow,
     DomainEventRow,
     PaperExportRow,
     ProjectRow,
@@ -165,6 +166,8 @@ def _delete_runs(session: Session, run_ids: list[str], blobs: Optional[LocalCont
         DomainEventRow,
     ):
         session.execute(delete(model).where(model.run_id.in_(run_ids)))
+    # 任务页对话记录（ADR-0016）：scope_id 即 run id，无外键，随任务一起清。
+    session.execute(delete(ChatTurnRow).where(ChatTurnRow.scope_id.in_(run_ids)))
     session.execute(delete(TaskRunRow).where(TaskRunRow.id.in_(run_ids)))
     session.flush()
     return len(run_ids)

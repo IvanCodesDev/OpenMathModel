@@ -55,6 +55,12 @@ export interface LlmEndpoint {
   weight?: number;
 }
 
+/** 设置中心「智能路由」的四个任务类型（ADR-0015）。 */
+export type TaskRouteKind = "coding" | "research" | "writing" | "vision";
+
+/** 任务类型 → 已保存接口 id；null = 自动（沿用主接口链）。 */
+export type TaskRoutes = Record<TaskRouteKind, string | null>;
+
 /** 设置中心「自定义 API」的服务端配置：对话回复与任务执行都按它调用模型。 */
 export interface LlmConfig {
   endpoints: LlmEndpoint[];
@@ -62,6 +68,10 @@ export interface LlmConfig {
   allow_proxy: boolean;
   stream: boolean;
   fallback: boolean;
+  /** 「启用模型智能路由」总开关：关闭后 task_routes 保留但不生效。旧后端缺省视为开启。 */
+  smart_routing?: boolean;
+  /** 按任务类型定向的接口（ADR-0015）；旧后端不返回此字段。 */
+  task_routes?: Partial<TaskRoutes>;
 }
 
 export interface LlmTestResult {
@@ -78,6 +88,50 @@ export interface LlmModelsResult {
   models: string[];
   host: string;
   third_party: boolean;
+}
+
+/** 服务端同步的模型目录里一款可对话模型（ADR-0017）。 */
+export interface CatalogModel {
+  id: string;
+  name: string;
+  /** YYYY-MM-DD 或 YYYY-MM；目录未标注时为空串 */
+  release_date: string;
+  reasoning: boolean;
+  vision: boolean;
+  context: number;
+  /** "" 正式 / "beta" / "preview" */
+  status: string;
+  input_usd: number | null;
+  output_usd: number | null;
+  /** *-latest 别名或带日期的快照 ID：可手填，不进卡片亮点 */
+  alias: boolean;
+}
+
+export interface CatalogProvider {
+  id: string;
+  label: string;
+  logo: string;
+  protocol: LlmEndpoint["protocol"];
+  base_url: string;
+  alt_hosts: string[];
+  subtitle: string;
+  /** catalog = 来自同步目录；builtin = 服务端内置快照；none = 该厂商没有目录概念（本地模型） */
+  source: "catalog" | "builtin" | "none";
+  /** 卡片副标题展示的型号（新在前） */
+  highlights: string[];
+  /** 全部可对话型号（新在前），供模型 ID 补全 */
+  models: CatalogModel[];
+}
+
+export interface ModelCatalogView {
+  source: "catalog" | "builtin";
+  enabled: boolean;
+  catalog_url: string;
+  synced_at: string | null;
+  stale: boolean;
+  refreshing: boolean;
+  error: string | null;
+  providers: CatalogProvider[];
 }
 
 /** 设置中心「用量监控」的三个预算项；硬限制由服务端在调用路径上执行。 */
@@ -249,6 +303,12 @@ export const authApi = {
   listLlmModels(body: LlmEndpoint & { allow_proxy: boolean }) {
     return request<LlmModelsResult>("/api/llm/models", { method: "POST", body });
   },
+  getModelCatalog() {
+    return request<ModelCatalogView>("/api/llm/catalog");
+  },
+  refreshModelCatalog() {
+    return request<ModelCatalogView>("/api/llm/catalog/refresh", { method: "POST" });
+  },
   getUsageSummary(month?: string) {
     return request<UsageSummary>(`/api/usage/summary${month ? `?month=${encodeURIComponent(month)}` : ""}`);
   },
@@ -308,23 +368,31 @@ export const authApi = {
 
 /** 当前登录用户缓存：undefined = 未拉取，null = 未登录。 */
 let cachedMe: MeResponse | null | undefined;
+// 同一次冷启动里多处同时问「谁登录了」（路由闸门 + 侧栏用户区）：共用同一个
+// 在途请求，避免每次切屏都打两次 /me。
+let pendingMe: Promise<MeResponse | null> | undefined;
 
 export async function fetchMe(force = false): Promise<MeResponse | null> {
   if (!force && cachedMe !== undefined) return cachedMe;
-  try {
-    cachedMe = await authApi.me();
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 401) {
-      cachedMe = null;
-    } else {
-      throw error;
+  if (!force && pendingMe) return pendingMe;
+  pendingMe = (async () => {
+    try {
+      cachedMe = await authApi.me();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        cachedMe = null;
+      } else {
+        throw error;
+      }
     }
-  }
-  return cachedMe;
+    return cachedMe;
+  })().finally(() => { pendingMe = undefined; });
+  return pendingMe;
 }
 
 export function invalidateMe(): void {
   cachedMe = undefined;
+  pendingMe = undefined;
 }
 
 export function cachedUser(): MeResponse | null | undefined {

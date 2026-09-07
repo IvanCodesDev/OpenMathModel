@@ -12,8 +12,9 @@
 
 回退语义与设置面板文案一致：超时、网络层失败、HTTP 429 限流或 HTTP 402
 余额不足时切到下一个已保存接口——余额是接口各自独立的资产，主接口欠费不代表
-备用接口不可用；其余模型侧 4xx/5xx 属于配置或内容问题，换接口大概率同样失败，
-直接报错。
+备用接口不可用；网关自身的基础设施故障（502/503/504，或错误正文写明鉴权服务
+超时、数据库连接打满、服务繁忙之类）同样切换并允许稍后重试；其余模型侧
+4xx/5xx 属于配置或内容问题，换接口大概率同样失败，直接报错。
 """
 
 from __future__ import annotations
@@ -129,6 +130,11 @@ class LlmEndpoint:
         return urlsplit(self.base_url).hostname or ""
 
 
+#: 设置中心「智能路由」的四个任务类型（ADR-0015）：编程与 Agent / 深度研究 /
+#: 长文写作 / 视觉理解。task_routes 的键只认这四个。
+TASK_ROUTE_KINDS = ("coding", "research", "writing", "vision")
+
+
 @dataclass(frozen=True)
 class LlmConfig:
     endpoints: tuple[LlmEndpoint, ...] = ()
@@ -136,6 +142,10 @@ class LlmConfig:
     allow_proxy: bool = True
     stream: bool = True
     fallback: bool = True
+    #: 「启用模型智能路由」总开关：关闭后 task_routes 保留但不生效。
+    smart_routing: bool = True
+    #: 任务类型 → 已保存接口 id（ADR-0015）。只含指向现存接口的项。
+    task_routes: tuple[tuple[str, str], ...] = ()
 
     def active(self) -> Optional[LlmEndpoint]:
         for endpoint in self.endpoints:
@@ -161,6 +171,42 @@ class LlmConfig:
             if endpoint.id == endpoint_id:
                 return endpoint
         return None
+
+    def route_for(self, kind: Optional[str]) -> Optional[LlmEndpoint]:
+        """任务类型的定向接口；开关关闭、未定向或接口已不存在时为 None。"""
+        if not kind or not self.smart_routing:
+            return None
+        for route_kind, endpoint_id in self.task_routes:
+            if route_kind == kind:
+                return self.find(endpoint_id)
+        return None
+
+    def chain_for(self, kind: Optional[str]) -> list[LlmEndpoint]:
+        """按任务类型取调用链：有定向就以定向接口为主，否则沿用主接口链。
+
+        定向只改变「先打谁」——回退、中转站门控、预算硬限制全部沿用既有路径。
+        """
+        pinned = self.route_for(kind)
+        return self.chain_from(pinned) if pinned is not None else self.chain()
+
+
+def normalize_task_routes(
+    raw: object, known_ids: Sequence[str]
+) -> dict[str, Optional[str]]:
+    """task_routes 的规范形：四个键齐全，值为现存接口 id 或 None。
+
+    保存与解析共用：指向已删除接口的定向在这里丢成 None，删接口不需要前端
+    再补一次保存；未知的任务类型键静默忽略。
+    """
+    routes: dict[str, Optional[str]] = {kind: None for kind in TASK_ROUTE_KINDS}
+    if not isinstance(raw, dict):
+        return routes
+    ids = set(known_ids)
+    for kind in TASK_ROUTE_KINDS:
+        value = raw.get(kind)
+        if isinstance(value, str) and value in ids:
+            routes[kind] = value
+    return routes
 
 
 def parse_llm_config(raw: object) -> LlmConfig:
@@ -192,12 +238,19 @@ def parse_llm_config(raw: object) -> LlmConfig:
                 weight=weight,
             )
         )
+    routes = normalize_task_routes(
+        raw.get("task_routes"), [endpoint.id for endpoint in endpoints if endpoint.id]
+    )
     return LlmConfig(
         endpoints=tuple(endpoints),
         active_endpoint_id=str(raw.get("active_endpoint_id") or ""),
         allow_proxy=bool(raw.get("allow_proxy", True)),
         stream=bool(raw.get("stream", True)),
         fallback=bool(raw.get("fallback", True)),
+        smart_routing=bool(raw.get("smart_routing", True)),
+        task_routes=tuple(
+            (kind, endpoint_id) for kind, endpoint_id in routes.items() if endpoint_id
+        ),
     )
 
 
@@ -237,12 +290,12 @@ def ensure_proxy_allowed(endpoint: LlmEndpoint, allow_proxy: bool) -> None:
 # （1-5），再把问题路由到强弱合适的接口。
 
 #: 模型名中的旗舰/推理型信号与轻量型信号；两类都命中时相互抵消。
-#: 各家的档位记号会随命名习惯变化（OpenAI 5.6 的 sol/terra/luna、Anthropic 的
-#: fable 都是无先例的新词），带连字符的条目是为了不误伤名字里恰好含该词根的
-#: 模型（如 "sol" 会命中 solar 系列）。命中不了的模型按中位 5 处理，用户随时
-#: 可以在接口上填「模型能力权重」直接覆盖推断结果。
+#: 各家的档位记号会随命名习惯变化（OpenAI 5.6 的 sol/terra/luna、6 代的 astra、
+#: Anthropic 的 fable 都是无先例的新词），带连字符的条目是为了不误伤名字里恰好
+#: 含该词根的模型（如 "sol" 会命中 solar 系列）。命中不了的模型按中位 5 处理，
+#: 用户随时可以在接口上填「模型能力权重」直接覆盖推断结果。
 _STRONG_MODEL_HINTS = (
-    "opus", "reasoner", "thinking", "max", "pro", "ultra", "sonnet", "fable", "-sol",
+    "opus", "reasoner", "thinking", "max", "pro", "ultra", "sonnet", "fable", "-sol", "-astra",
 )
 _LIGHT_MODEL_HINTS = (
     "flash", "mini", "lite", "nano", "haiku", "turbo", "air", "tiny", "small", "-luna",
@@ -821,6 +874,46 @@ def _client(read_timeout: float, url: str = "") -> httpx.Client:
     )
 
 
+#: 网关把自身基础设施故障包在 4xx/5xx 里返回时，错误正文里的特征词。真实事故
+#: （2026-09-05，中转站上的 GLM）：HTTP 401「鉴权服务请求失败: Post …/internal/auth/
+#: verify: context deadline exceeded (Client.Timeout exceeded while awaiting headers)」
+#: ——鉴权微服务超时，不是密钥错；几分钟后 HTTP 500「failed to connect to `user=
+#: postgres …`: FATAL: sorry, too many clients already」——中转站自家数据库连接池打满。
+#: 两者与密钥、模型 ID、请求内容都无关，按确定性失败处理等于一次都不重试、备用接口
+#: 也不切，整个任务当场判死。全部小写比对。
+_UPSTREAM_TRANSIENT_HINTS: tuple[str, ...] = (
+    "deadline exceeded",
+    "client.timeout",
+    "timed out",
+    "timeout",
+    "too many clients",
+    "too many connections",
+    "connection refused",
+    "connection reset",
+    "temporarily unavailable",
+    "service unavailable",
+    "overloaded",
+    "server is busy",
+    "鉴权服务请求失败",
+    "请求超时",
+    "服务繁忙",
+    "系统繁忙",
+)
+
+#: 单看状态码就能断定是网关 / 上游链路问题的：Bad Gateway、Service Unavailable、
+#: Gateway Timeout。普通 500 不在其中——「boom」式内部错误可能就是这条请求的内容
+#: 触发的，只有正文命中特征词才按瞬态处理。
+_UPSTREAM_TRANSIENT_STATUSES = frozenset({502, 503, 504})
+
+
+def upstream_failure_is_transient(status_code: int, message: str) -> bool:
+    """上游 4xx/5xx 是否是「换接口或稍后重来大概率能过」的网关故障。"""
+    if status_code in _UPSTREAM_TRANSIENT_STATUSES:
+        return True
+    lowered = message.lower()
+    return any(hint in lowered for hint in _UPSTREAM_TRANSIENT_HINTS)
+
+
 def _upstream_error(endpoint: LlmEndpoint, response: httpx.Response) -> ApiError:
     snippet = response.text[:300]
     try:
@@ -841,6 +934,14 @@ def _upstream_error(endpoint: LlmEndpoint, response: httpx.Response) -> ApiError
             "LLM_NO_BALANCE",
             f"接口「{endpoint.name}」余额不足（HTTP 402）：{snippet}",
         )
+    if upstream_failure_is_transient(response.status_code, snippet):
+        # 网关自身故障：进回退集（换备用接口）与瞬态集（引擎整次调用退避重试）。
+        # 状态码原样保留在文案里，用户对照中转站日志时不必猜。
+        return ApiError(
+            502,
+            "LLM_UPSTREAM_UNAVAILABLE",
+            f"接口「{endpoint.name}」暂时不可用（HTTP {response.status_code}）：{snippet}",
+        )
     return ApiError(
         502,
         "LLM_UPSTREAM_ERROR",
@@ -848,17 +949,25 @@ def _upstream_error(endpoint: LlmEndpoint, response: httpx.Response) -> ApiError
     )
 
 
-#: 换一个接口就可能成功的错误：限流 / 超时 / 网络层失败，以及 402 余额不足——
-#: 余额是接口各自独立的资产（真实事故：DeepSeek 402 时链里的 GLM 余额充足，
-#: 却因 402 不回退导致整个任务失败）。
+#: 换一个接口就可能成功的错误：限流 / 超时 / 网络层失败 / 网关自身故障，以及
+#: 402 余额不足——余额是接口各自独立的资产（真实事故：DeepSeek 402 时链里的 GLM
+#: 余额充足，却因 402 不回退导致整个任务失败）。
 _FALLBACK_CODES = frozenset(
-    {"LLM_RATE_LIMITED", "LLM_TIMEOUT", "LLM_UNREACHABLE", "LLM_NO_BALANCE"}
+    {
+        "LLM_RATE_LIMITED",
+        "LLM_TIMEOUT",
+        "LLM_UNREACHABLE",
+        "LLM_UPSTREAM_UNAVAILABLE",
+        "LLM_NO_BALANCE",
+    }
 )
 
 #: 同一条调用链稍后重来就可能自愈的瞬态类（EngineLlmPort 整次调用重试用）。
 #: 402 不在其中：余额不足是确定性失败，链内回退已试过备用接口，原样重试
 #: 只会再撞一次。
-_TRANSIENT_CODES = frozenset({"LLM_RATE_LIMITED", "LLM_TIMEOUT", "LLM_UNREACHABLE"})
+_TRANSIENT_CODES = frozenset(
+    {"LLM_RATE_LIMITED", "LLM_TIMEOUT", "LLM_UNREACHABLE", "LLM_UPSTREAM_UNAVAILABLE"}
+)
 
 
 def _should_fall_back(error: Exception) -> bool:
@@ -1468,6 +1577,7 @@ class EngineLlmPort:
         node_for_prompt: Optional[dict[str, str]] = None,
         user_notes: Sequence[tuple[str, str]] = (),
         lock: Optional[threading.RLock] = None,
+        task_kind_for_prompt: Optional[dict[str, str]] = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -1477,6 +1587,9 @@ class EngineLlmPort:
         # 预检、拿到回复后 charge_llm 记账；超限由治理器抛 AgentError 硬停。
         self._budget = budget
         self._node_for_prompt = dict(node_for_prompt or {})
+        # 提示词 → 任务类型（ADR-0015）：设置中心「智能路由」按它把某类调用定向到
+        # 指定接口；表里没有的提示词走主接口链。
+        self._task_kind_for_prompt = dict(task_kind_for_prompt or {})
         # 运行中用户备注（(scope, text) 时间序）：端口按 tick 重建，新备注在
         # 下一次节点执行自然生效（§11.3「下一次节点执行注入」的落点）。
         self._user_notes = tuple(user_notes)
@@ -1512,6 +1625,8 @@ class EngineLlmPort:
         部分增量作废、从头重新生成。前端对重复的 llm_call_started 会复用同
         一行、清空实时区并把标题标成「第 N 次尝试」，事件语义现成。
         """
+        # 按任务类型定向（ADR-0015）：有定向就以定向接口为主，其余接口照常备用。
+        chain = self._config.chain_for(self._task_kind_for_prompt.get(prompt_id))
         last_error: Exception | None = None
         for attempt in range(1, ENGINE_CALL_MAX_ATTEMPTS + 1):
             # 预算预检（失控保护）：超限在花钱之前拦下（重试轮也要过这道门，
@@ -1534,11 +1649,11 @@ class EngineLlmPort:
                     # 增量缓冲，截断预算随尝试重置。
                     deltas = _DeltaEventBuffer(self._emit, prompt_id)
                     outcome = stream_complete_with_fallback(
-                        self._config, messages, on_delta=deltas.push
+                        self._config, messages, chain=chain, on_delta=deltas.push
                     )
                     deltas.flush()
                     return outcome
-                return complete_with_fallback(self._config, messages)
+                return complete_with_fallback(self._config, messages, chain=chain)
             except Exception as error:
                 # 失败也要给事件流一个收尾：没有这条事件，工作台的走秒思考行会
                 # 永远悬挂（页面重进时还会堆出一排同秒走时的僵尸行）。
@@ -1654,6 +1769,7 @@ class EngineLlmPort:
                 "elapsed_ms": outcome.elapsed_ms,
                 "text": _clip_thinking(outcome.reasoning),
             })
+        task_kind = self._task_kind_for_prompt.get(prompt_id)
         self._emit({
             "kind": "llm_call",
             "prompt_id": prompt_id,
@@ -1666,5 +1782,14 @@ class EngineLlmPort:
             # 「同输入同 prompt」的纯函数纪律由此可在事件日志层面被 evals 断言。
             "prompt_hash": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(),
             **({"tokens_estimated": True} if estimated else {}),
+            # ADR-0015：这一步归哪类任务、是否命中了设置中心的任务类型定向
+            **(
+                {
+                    "task_kind": task_kind,
+                    "pinned": self._config.route_for(task_kind) is not None,
+                }
+                if task_kind
+                else {}
+            ),
         })
         return outcome.text

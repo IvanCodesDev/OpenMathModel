@@ -40,6 +40,7 @@ CONTROL_FLOW_FIELDS: dict[EventType, tuple[str, ...]] = {
     EventType.REVIEW_RESOLVED: ("approved", "resume_state", "rerun", "revision_round"),
     EventType.REVISION_REQUESTED: ("target_state", "round"),
     EventType.RUN_RETRIED: ("target_state",),
+    EventType.RUN_REDO: ("target_state", "from_state"),
     EventType.RUN_FAILED: ("failed_state",),
 }
 

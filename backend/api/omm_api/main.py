@@ -9,8 +9,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.engine import make_url
 
-from . import engine_glue
+from . import engine_glue, model_catalog
 from .blobstore import LocalContentStore
+from .chat_turns import ChatTurnHub
 from .config import Settings, get_settings
 from .db import Database
 from .db_ready import ensure_database_ready
@@ -46,6 +47,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         ensure_database_ready(db, resolved)
         # 开发环境用 create_all 保证可用；PostgreSQL 部署走 Alembic 迁移。
         db.create_all()
+        # 托管对话轮（ADR-0016）：上一进程里还在生成的轮已经没人接手，如实标中断。
+        app.state.chat_turns.recover_interrupted()
         runner: Optional[RunnerThread] = None
         if resolved.runner_enabled:
             runner = RunnerThread(db, resolved)
@@ -64,6 +67,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             exporter = PaperExportThread(app.state.paper_exports, resolved)
             exporter.start()
         app.state.paper_export_thread = exporter
+        # 模型目录（ADR-0017）：后台按 TTL 拉公共目录；启动不等它，先用缓存/内置快照。
+        if resolved.model_catalog_enabled:
+            app.state.model_catalog.start()
         try:
             yield
         finally:
@@ -73,6 +79,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 sweeper.stop()
             if exporter is not None:
                 exporter.stop()
+            app.state.model_catalog.stop()
+            app.state.chat_turns.shutdown()
             db.dispose()
 
     app = FastAPI(
@@ -82,6 +90,12 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     )
     app.state.settings = resolved
     app.state.db = db
+    # 服务端托管对话轮的进程内中枢（ADR-0016）：生成线程、事件缓冲与回写。
+    app.state.chat_turns = ChatTurnHub(db)
+    # 模型目录（ADR-0017）：厂商在售型号与单价的同步视图；用量估价经进程级访问点取用。
+    catalog = model_catalog.ModelCatalog(resolved)
+    app.state.model_catalog = catalog
+    model_catalog.set_current(catalog)
     # Artifact 二进制内容存储（本地内容寻址）；引擎产物经同一存储端口写入
     blobs = LocalContentStore(resolved.artifacts_dir)
     app.state.blobs = blobs

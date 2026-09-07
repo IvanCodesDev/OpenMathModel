@@ -316,6 +316,43 @@ class ApprovalRequestRow(Base):
     client_token: Mapped[Optional[str]] = mapped_column(String(64))
 
 
+class ChatTurnRow(Base):
+    """服务端托管的一轮对话（ADR-0016）。
+
+    对话生成不再随页面生死：POST /api/chat/turns 建行后由后台线程出网调用模型，
+    reply/reasoning 随流式增量回写（约每秒一次），终态时定格。页面只是观众——
+    刷新、切任务、关标签页都不影响生成；重进按 scope 拉全部轮，running 的轮拿
+    半截内容与 last_seq 续接直播。scope_id 是 run_…（任务页）或 chat_…（首页对话），
+    不设外键：首页对话没有服务端实体，任务删除时由 privacy._delete_runs 顺带清理。
+    user_id 同理不设外键，与 llm_usage_records 一致。「保存任务历史」关闭时不建行，
+    只在内存托管。
+    """
+
+    __tablename__ = "chat_turns"
+    __table_args__ = (Index("ix_chat_turns_scope_created", "scope_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scope_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: running / completed / failed / stopped / interrupted
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    #: 系统自动发起的开场分析（没有用户气泡，text 为空）
+    opening: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    attachments: Mapped[Optional[list[str]]] = mapped_column(JSON)
+    reply: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: endpoint / host / model / third_party / fallback_used / route / usage / elapsed_ms / stopped
+    meta: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
+    error_message: Mapped[Optional[str]] = mapped_column(String(2000))
+    #: 页面侧回复轨迹行（附件解析、难度判定、生成计时……），回复完成后 PATCH 补写
+    trace: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class LlmUsageRow(Base):
     """一次成功的模型调用 = 一行（设置中心「用量监控」的数据源）。
 

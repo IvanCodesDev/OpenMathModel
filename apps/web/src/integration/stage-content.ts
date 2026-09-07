@@ -283,6 +283,8 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
   const fieldsTotal = profile.datasets.reduce((total, item) => total + item.fields.length, 0);
   const metrics = panel.querySelector<HTMLElement>(".focused-metrics");
   if (metrics) {
+    // 空态骨架里指标区是藏着的（没有真实数据不摆假数字），有画像才放出
+    metrics.hidden = false;
     metrics.replaceChildren(
       ...([
         [t("数据集"), String(profile.datasets.length)],
@@ -933,6 +935,8 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   }
   const advice = notes[1];
   if (advice) {
+    // 空态骨架里两个 article 都是藏着的，填进真实内容才放出
+    advice.hidden = false;
     advice.replaceChildren(el("h2", "", t("实现思路")), richBlock(summary.approach_summary));
   }
   settleClamps(panel);
@@ -1563,7 +1567,7 @@ function renderCompletePanel(root: HTMLElement, manifest: DeliveryManifest): voi
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
-/** 把五类正文填进对应面板；契约为 null 的阶段保留演示内容。 */
+/** 把五类正文填进对应面板；契约为 null 的阶段保留空态骨架（不再回落演示内容）。 */
 export function renderStageContent(root: HTMLElement, outputs: StageOutputsPayload): void {
   if (outputs.dataset_profile) renderDataPanel(root, outputs.dataset_profile);
   if (outputs.plan_proposal) renderModelPanel(root, outputs.plan_proposal);

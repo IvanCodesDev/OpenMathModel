@@ -1088,6 +1088,156 @@
         "title": "ChatRouteStateModel",
         "type": "object"
       },
+      "ChatTurnStartRequest": {
+        "description": "POST /api/chat/turns：在 /api/chat 请求体之上带记录字段（ADR-0016）。\n\nmessages 仍由前端携带（模型看到的上下文），text / opening / attachments 是\n落库的展示字段：text 为用户原话（不含前端注入的任务/附件/模式块），opening\n为系统自动发起的开场分析（无用户气泡）。stream 字段忽略——托管轮永远流式。",
+        "properties": {
+          "attachments": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Attachments",
+            "type": "array"
+          },
+          "endpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Id"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ChatImageModel"
+            },
+            "maxItems": 4,
+            "title": "Images",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageModel"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "opening": {
+            "default": false,
+            "title": "Opening",
+            "type": "boolean"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "route_context": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Context"
+          },
+          "route_question": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Question"
+          },
+          "route_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatRouteStateModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope_id": {
+            "maxLength": 64,
+            "pattern": "^(run|chat)_[A-Za-z0-9]{6,40}$",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "stream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 100000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "messages",
+          "scope_id"
+        ],
+        "title": "ChatTurnStartRequest",
+        "type": "object"
+      },
+      "ChatTurnTraceRequest": {
+        "description": "PATCH /api/chat/turns/{id}：页面侧回复轨迹行（附件解析、难度判定、耗时……）。",
+        "properties": {
+          "trace": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 50,
+            "title": "Trace",
+            "type": "array"
+          }
+        },
+        "title": "ChatTurnTraceRequest",
+        "type": "object"
+      },
       "CleaningReport": {
         "additionalProperties": false,
         "properties": {
@@ -1937,10 +2087,18 @@
             "title": "Fallback",
             "type": "boolean"
           },
+          "smart_routing": {
+            "default": true,
+            "title": "Smart Routing",
+            "type": "boolean"
+          },
           "stream": {
             "default": true,
             "title": "Stream",
             "type": "boolean"
+          },
+          "task_routes": {
+            "$ref": "#/components/schemas/TaskRoutesModel"
           }
         },
         "title": "LlmConfigUpdateRequest",
@@ -4342,6 +4500,61 @@
         "title": "TaskIntakeResult",
         "type": "object"
       },
+      "TaskRoutesModel": {
+        "description": "设置中心「智能路由」四个任务类型 → 已保存接口 id（ADR-0015）。\n\nNone = 自动（沿用主接口链）。指向不存在接口的值在保存时丢成 None。",
+        "properties": {
+          "coding": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coding"
+          },
+          "research": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research"
+          },
+          "vision": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vision"
+          },
+          "writing": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writing"
+          }
+        },
+        "title": "TaskRoutesModel",
+        "type": "object"
+      },
       "TaskRun": {
         "additionalProperties": false,
         "description": "一次可暂停、恢复、重试、分支的 Agent 运行。status 是稳定生命周期枚举；current_node 是随 workflow_version 演进的领域阶段，消费方必须容忍未知节点名。",
@@ -5503,7 +5716,7 @@
         ]
       },
       "put": {
-        "description": "整体替换保存九个面板项。设置存服务端而不是浏览器：任务保留与文件\n缓存清理由服务端后台清扫按此执行，换浏览器/清缓存后设置照常生效。",
+        "description": "整体替换保存九个面板项。设置存服务端而不是浏览器：任务保留与文件\n缓存清理由服务端后台清扫按此执行，换浏览器/清缓存后设置照常生效。\n\n「保存任务历史」关闭时同步清空该用户服务端托管的对话记录（ADR-0016），\n与前端清 localStorage 对话记录的既有行为对齐；此后新轮只在内存托管。",
         "operationId": "update_privacy_settings_api_account_privacy_settings_put",
         "requestBody": {
           "content": {
@@ -5872,6 +6085,310 @@
         ]
       }
     },
+    "/api/chat/scopes/{scope_id}": {
+      "delete": {
+        "description": "清空 scope 下的对话记录（删除首页对话 / 清除任务对话）；进行中的轮先停。",
+        "operationId": "delete_chat_turns_api_chat_scopes__scope_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Chat Turns",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/scopes/{scope_id}/turns": {
+      "get": {
+        "description": "scope 下全部轮（升序）：页面重进时重建对话并找出仍在生成的轮续接。",
+        "operationId": "list_chat_turns_api_chat_scopes__scope_id__turns_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Chat Turns",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/turns": {
+      "post": {
+        "description": "发起一轮托管对话：立即返回轮视图，生成在后台进行，页面随后附着直播。\n\n接口配置 / 预算 / 指定接口的校验同步完成并原样报错（400/404/429）；Auto 难度\n判定与上游调用都在后台线程里，页面此刻关掉也不影响。同一 scope 同时只允许\n一轮在生成（409）。",
+        "operationId": "start_chat_turn_api_chat_turns_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatTurnStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Chat Turn",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/turns/{turn_id}": {
+      "get": {
+        "operationId": "get_chat_turn_api_chat_turns__turn_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Chat Turn",
+        "tags": [
+          "chat"
+        ]
+      },
+      "patch": {
+        "description": "补写页面侧回复轨迹行（附件解析、难度判定、生成耗时……），重进时照样回放。",
+        "operationId": "patch_chat_turn_api_chat_turns__turn_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatTurnTraceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Chat Turn",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/turns/{turn_id}/events": {
+      "get": {
+        "description": "附着直播：回放 after 之后的事件并跟随到终态；每个事件带 seq 供再次附着。\n\n轮已不在内存（缓冲过期 / 进程重启过）时只发一个按定格状态合成的终态事件，\n正文以 GET /turns/{id} 视图为准。",
+        "operationId": "stream_chat_turn_api_chat_turns__turn_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Chat Turn",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/turns/{turn_id}/stop": {
+      "post": {
+        "description": "「暂停生成」：定格已生成的部分，观众立刻收到终态事件，上游连接随后关闭。",
+        "operationId": "stop_chat_turn_api_chat_turns__turn_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Chat Turn",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/health": {
       "get": {
         "operationId": "api_health_api_health_get",
@@ -5894,6 +6411,46 @@
         "summary": "Api Health",
         "tags": [
           "ops"
+        ]
+      }
+    },
+    "/api/llm/catalog": {
+      "get": {
+        "description": "厂商在售型号目录（ADR-0017）：设置中心「模型厂商」卡片与模型 ID 补全的数据源。\n\n永不阻塞在出网上：返回当前已有的同步结果（或内置快照），``synced_at`` /\n``stale`` / ``error`` 让页面如实标注新鲜度。",
+        "operationId": "get_model_catalog_api_llm_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Model Catalog",
+        "tags": [
+          "llm"
+        ]
+      }
+    },
+    "/api/llm/catalog/refresh": {
+      "post": {
+        "description": "「立即同步」：同步拉一次公共目录后返回新视图；拉不到抛 502，旧数据保留。",
+        "operationId": "refresh_model_catalog_api_llm_catalog_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Model Catalog",
+        "tags": [
+          "llm"
         ]
       }
     },
@@ -7214,7 +7771,7 @@
     },
     "/api/v1/task-runs/{run_id}/notes": {
       "post": {
-        "description": "运行中追加补充要求（§11.3 方案 A）：落行 + run.log 回执，不打断当前执行。\n\n备注在下一次节点执行时注入提示词（EngineLlmPort 构建时读取本表）；scope\n指向已完成阶段时回执附带回退引导——重做由人显式操作，绝不由备注文本触发。",
+        "description": "运行中追加补充要求（§11.3 方案 A）：落行 + run.log 回执，不打断当前执行。\n\n备注在下一次节点执行时注入提示词（EngineLlmPort 构建时读取本表）；scope\n指向已完成阶段时回执附带回退引导。本端点只落备注、不触发动作；对话里\n的「重试 / 重做」由托管轮的控制步骤识别并执行（ADR-0018，run_control）。",
         "operationId": "post_run_note_api_v1_task_runs__run_id__notes_post",
         "parameters": [
           {

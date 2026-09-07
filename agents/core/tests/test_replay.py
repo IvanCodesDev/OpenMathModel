@@ -5,6 +5,7 @@ from omm_agent_core import (
     EventType,
     NodeResult,
     SequenceError,
+    StepStatus,
     TaskState,
     replay_events,
 )
@@ -95,6 +96,38 @@ def test_replay_equals_live_snapshot_after_a_revision_round(harness):
 
     assert snapshot.state is TaskState.COMPLETED
     assert snapshot.revision_round == 1
+    assert replay_of(sink, snapshot).to_dict() == snapshot.to_dict()
+
+
+def test_replay_equals_live_snapshot_after_a_redo_from_failed_and_from_review(harness):
+    """从阶段重做（ADR-0019）后回放仍等于快照：force_rerun 置位 / 清位两边都要对。"""
+    flaky = ScriptedNode(
+        state=TaskState.EXPERIMENTING,
+        results=[NodeResult.failed("solver blew up"), NodeResult.succeeded()],
+    )
+    gated = ScriptedNode(
+        state=TaskState.VALIDATING,
+        results=[
+            NodeResult.needs_review(reason="check", outputs={"ok": False}),
+            NodeResult.succeeded(outputs={"ok": True}),
+        ],
+    )
+    engine, sink, _ = harness({TaskState.EXPERIMENTING: flaky, TaskState.VALIDATING: gated})
+    snapshot, _ = engine.create_run("proj_1")
+    engine.run_until_blocked(snapshot)
+    assert snapshot.state is TaskState.FAILED
+    engine.redo(snapshot, TaskState.MODEL_PLANNING, reason="换模型", note_id="note_1")
+    engine.run_until_blocked(snapshot)
+    assert snapshot.state is TaskState.NEEDS_REVIEW
+    engine.redo(snapshot, TaskState.VALIDATING, reason="验证口径改一下")
+    engine.run_until_blocked(snapshot)
+
+    assert snapshot.state is TaskState.COMPLETED
+    assert snapshot.review is None
+    assert [step.status for step in snapshot.steps if step.state is TaskState.VALIDATING] == [
+        StepStatus.SUCCEEDED,
+        StepStatus.SUCCEEDED,
+    ]
     assert replay_of(sink, snapshot).to_dict() == snapshot.to_dict()
 
 

@@ -258,6 +258,85 @@ sequenceDiagram
 - `popstate` 在工作台路径之间换面板，路径离开工作台时整页导航兜底；
 - 顶部返回箭头统一指向任务执行页；成果面板例外指向首页。
 
+### 5.6 对话轮：服务端托管生成与记录（2026-09-05，ADR-0016）
+
+有归属（任务运行 `run_…` / 首页对话 `chat_…`）的对话不再走无状态的 `/api/chat`，而是**服务端托管轮**：一轮 = `chat_turns` 表的一条记录 + API 进程内的一个后台生成线程（`omm_api/chat_turns.py` `ChatTurnHub`）。页面只是观众——建轮即返回，经 SSE 附着直播，断了按序号续接；切任务、刷新、关标签页都不影响生成。
+
+接口（`routers/chat.py`，全部要求登录）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/chat/turns` | 建轮，202 `{turn}`。body = `ChatRequest` + `scope_id` / `text` / `opening` / `attachments`；同一归属已有 `running` 轮 → 409 `CHAT_TURN_IN_PROGRESS`；`run_…` 归属校验运行所有权 |
+| `GET` | `/api/chat/turns/{id}/events?after=N` | SSE：`id: <seq>` / `data: {...,"seq"}`；事件与 `/api/chat` 同形（`meta → delta*/reasoning* → done | error`），`: ping` 心跳；非直播中的轮只回一个合成终态事件 |
+| `POST` | `/api/chat/turns/{id}/stop` | 停止生成，半截正文保留（`stopped`） |
+| `GET` / `PATCH` | `/api/chat/turns/{id}` | 轮视图 / 补写页面侧执行轨迹行 `{trace}` |
+| `GET` | `/api/chat/scopes/{scope}/turns` | 该归属全部轮（按时间；`running` 的带半截 `reply/reasoning` 与 `last_seq`） |
+| `DELETE` | `/api/chat/scopes/{scope}` | 删该归属全部轮，运行中的先停 |
+
+轮视图字段：`id, scope_id, status(running|completed|failed|stopped|interrupted), opening, text, attachments, reply, reasoning, meta{host,model,route,usage,elapsed_ms,error?}, error{code,message}?, trace, last_seq, live, persisted, created_at, updated_at, ended_at`。
+
+服务端行为：正文/思考每秒批量回写库；终态后事件缓冲保留 10 分钟供续接；`stop` 立即定格并关闭上游连接；进程启动时把遗留的 `running` 标成 `interrupted`（服务重启是唯一会中断生成的情形）；用量记账只在正常完成时发生。
+
+「保存任务历史」：开启 → 落库；关闭 → 只在内存托管（同样的直播窗口，重启即无）；由开到关 → 服务端删该用户全部轮。删除项目级联删其运行的轮；删除首页对话前端先 `DELETE /scopes/{chat}`。
+
+页面侧（`integration/agent-chat.ts` / `chat-turns-api.ts`）：
+
+- `sendConversationTurn` 有归属时 `startChatTurn` → `onTurnStarted(turn)` → 附着 `events`；`AbortSignal` 触发服务端 `stop`（暂停键真的停生成）；SSE 断线按 `after=seq` 重连（最多 5 次），失败则拉一次轮视图补齐正文；
+- 重进：`modeling-workspace-controller` 在首次 `renderWorkspace` **之前** `hydrateConversation(run)` 并广播 `omm:conversation-restore{runId, goal, turns}`（保证规划阶段的 `omm:run-planning` 不重复发起开场分析）；页面层先渲染本机旧记录（只读兜底），再按时间重建服务端的轮，`running` 的那一轮原位续接直播（`attachConversationTurn`：半截先上屏、随后接实时增量、暂停键照常生效）。首页 `restoreHomeChat` 同理；
+- 模型看到的上下文（history）仍由页面维护并随每次发起携带：托管轮只托管「这一轮」的生成与记录；`running` 的与无正文的轮不进上下文（保住 user/assistant 严格交替）；
+- 本机 localStorage 记录（`tasks/conversation-log.ts`）降级为只读兜底，不再写入；上一轮的「在途轮」（`chatPending`）与 `pagehide` 落定机制已移除。
+
+没有归属的页面（演示态）仍走无状态 `POST /api/chat`，行为不变。非目标：不把整页导航改成软路由（界面基线不动）。
+
+### 5.7 模型目录：厂商在售型号与单价由服务端同步（2026-09-06，ADR-0017）
+
+设置中心「模型厂商」卡片的型号、「配置」一键填入的默认模型、「默认模型 ID」补全与「用量监控」的单价，不再写死在前端 / 后端代码里，而是服务端 `omm_api/model_catalog.py` `ModelCatalog` 从公共目录 [models.dev](https://models.dev)（`api.json`，无需密钥）按 TTL（默认 6 h）同步、裁剪、落文件缓存（`data/model-catalog.json`）后提供：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/llm/catalog` | 目录视图，永不阻塞在出网上：`source(catalog|builtin)`, `enabled`, `catalog_url`, `synced_at`, `stale`, `refreshing`, `error`, `providers[]` |
+| `POST` | `/api/llm/catalog/refresh` | 立即同步后返回新视图；拉不到 502 `MODEL_CATALOG_UNREACHABLE`（旧数据保留）；服务端关闭同步 409 `MODEL_CATALOG_DISABLED`；两次强制刷新至少间隔 60 s |
+
+`providers[]` 按厂商预设顺序（openai / anthropic / google / deepseek / qwen / kimi / zhipu / xai / ollama）：`id, label, logo, protocol, base_url, alt_hosts, subtitle, source(catalog|builtin|none), highlights[]（最新三款正式版）, models[]{id, name, release_date, reasoning, vision, context, status("" | beta | preview), input_usd, output_usd, alias}`。裁剪规则与配置项见 ADR-0017。
+
+页面侧：`integration/model-catalog.ts`（一次会话拉一次，refresh 后替换缓存）、`integration/model-catalog-view.ts`（纯函数：按厂商取亮点 / 型号、新鲜度文案、目录模态）。`legacy/openmathmodel-ui.ts` 打开设置时填卡片副标题与「型号目录同步于 … 来源 models.dev」状态行，新增「同步型号」按钮；「配置」默认模型取亮点首位；「默认模型 ID」补全先铺目录再合并接口自报清单。`integration/llm-providers.ts` 只保留品牌骨架（名字 / 图标 / 协议 / 地址 / 备用域名），不再含模型名。`model-modality.ts` 的模态判定先查目录 `vision`，未收录再回落命名规则。后端 `usage.model_pricing` 先按模型 ID 精确命中目录单价 × `OMM_USD_CNY_RATE`，未收录再走手写 `PRICING` 前缀表。
+
+### 5.8 对话即控制面：任务页一句话真正驱动运行（2026-09-06，ADR-0018）
+
+任务归属（`run_…`）的托管轮在调用模型**之前**先经运行控制步骤（`omm_api/run_control.py` `run_control_step`）：读运行状态 → 按状态机算出**合法动作集**（与按钮同一套规则：FAILED→retry；WAITING_APPROVAL→approve / reject / cancel；PAUSED→resume / cancel；RUNNING / QUEUED→pause / cancel；COMPLETED 且修订未满 3 轮→revision；CANCELLED→无）→ 两级意图判定（本地词表规则先判；拿不准、≤200 字且带与合法动作相关的命令气味时，用接口池里**最弱**的模型做一次 10 s 限时 JSON 判定；判定异常 / 结果不在合法集内一律回落为普通对话，**绝不误执行**）→ 走既有路径执行（`actions.execute_action` / `engine_glue.accept_revision` / 运行备注）→ 产出 `action` 事件并把【当前运行状态】【本轮已执行的操作】注入系统提示词，再生成回复。
+
+分级：retry（同事务把这句话落成 global 备注注入重跑阶段）/ resume / pause / approve（点名选项：判别性标签片段、「方案 B」、「第二个」、已知别名；不点名的「同意 / 确认 / 继续」≤12 字且非问句时选**预选项**——唯一 recommended 或唯一正向）/ reject / revision（已完成运行上**点名阶段 + 修改动词**本地直判，否则交判定；受理后照开 ADR-0013 修订门，点名阶段标 recommended 预选，下一句「确认」即重跑）直接执行；**cancel 先发提案**（`status:"proposed"`），只对紧接着的下一轮有效：「确认 / 好 / 取消吧」执行，「算了 / 不要 / 不取消」→ `dismissed`，其它文本作废提案按新意图处理。问句（为什么 / 吗 / ？…）不算命令；带命令词的客气问句（「能不能修复一下？」）按命令。无动作且运行非终态、非问句的文本照旧静默落成备注（不发事件）。`chat_…` 归属与开场轮不经控制步骤。
+
+SSE / 轮视图新增：
+
+```text
+{"type":"action","seq":1,"kind":"retry","status":"executed","stage":"EXPERIMENTING","stage_label":"实验运行","note_id":"note_…","message":"已重试「实验运行」阶段，并把你的要求作为备注注入该阶段的执行提示词"}
+{"type":"action","seq":1,"kind":"cancel","status":"proposed","message":"要取消这个任务吗？…","confirm_hint":"回复「确认」或点下方按钮执行；回复其它内容则不取消"}
+{"type":"action","seq":1,"kind":"approve","status":"executed","approval_id":"appr_…","approval_title":"确认建模方案","option_id":"adopt:plan_b","option_label":"…"}
+{"type":"action","seq":1,"kind":"revision","status":"executed","round":1,"approval_id":"appr_…","note_id":"note_…","stage":"DATA_PREPARATION","stage_label":"数据准备"}
+{"type":"action","seq":1,"kind":"cancel","status":"rejected","code":"INVALID_ACTION","message":"…"}
+```
+
+`action` 事件先于 `meta` / 正文；同时并入轮视图 `meta.actions[]` 随轮落库。`status ∈ executed | proposed | rejected | dismissed`。判定模型的用量按 `source="route"` 记账。
+
+页面侧：`chat-turns-api.ts` `RunControlAction` / `ChatMeta.actions`；`agent-chat.ts` `ChatHandlers.onAction`（`applyEvent` 处理 `action`，重进续接时按视图 `meta.actions` 逐条重放；`entryFromTurn` 在轮没来得及补写 `trace` 时由回执重建轨迹行）；`integration/run-control-view.ts` 纯函数把回执变成轨迹行（静态标题「已重试阶段」「已选定审批选项」「已受理修改要求」「等待你确认操作」「当前状态不允许该操作」「已放弃提案」…，阶段 / 选项名进后缀，服务端说明进详情）；`legacy/openmathmodel-ui.ts` 的回复呈现器渲染回执行、`proposed` 行下挂「确认执行」按钮（等价于发一句「确认」）、`executed` 后广播 `omm:run-reopened` 让工作台控制器立即重拉快照并重接事件流；恢复态最后一轮仍留待确认提案时按钮照挂。**页面不再**在发送前 `POST /notes`，也撤下了「任务已结束，本条按问答处理 / 按这条要求继续修改」那条死路轨迹行；`/notes` 与 `/revisions` HTTP 端点保留（与控制面共用 `record_run_note` / `accept_revision`）。
+
+**动作生效后运行事件的落点（2026-09-07 补）**：`executed` 回执让控制器重接事件流后，重跑阶段的 `run.node_changed / run.log / step.*` 紧跟着到达，此刻对话末尾正是这条（往往还在生成中的）回复块。控制器 `tailTraceHost` 的三条规则：尾部是轨迹块 → 续写；**尾部是对话回复块 → 在该回复块内部**（正文与复制按钮之后）挂「收起执行步骤」折叠头 + `.agent-stream.run-trace` 继续写，不另起带署名的 Agent 块；尾部是用户消息等其它元素 → 另起一个与首条 Agent 消息同构的轨迹块。回复与它触发的执行步骤是同一轮的两半，页面上是同一条 Agent 消息；用户再发消息时后续事件按时间顺序落到新的尾部。配套：回复的复制按钮改为紧跟 `.analysis-copy` 插入（步骤常比回复先到）；`toggle-activity` 折叠头优先折叠紧随其后的列表（回复块里同时有 `.reply-trace` 与 `.run-trace`）。**回复口径**随之分三档（`run_control.reply_rules`）：本轮有 retry / resume / redo / approve / reject / revision 已执行 → 交接口径（两三句告知已做什么、运行接下来做什么、进度看执行步骤，**不在对话里替运行算题 / 建模 / 写论文**）；有待确认提案 → 说明代价请用户确认；其余（无动作 / rejected / dismissed / pause / cancel）→ 原口径「告知操作再回答问题」。`run.log{kind:"user_note"}` 在活动流里改为叙述行（原先落进原始 JSON 兜底）。
+
+非目标（见 ADR-0018 §5）：不给对话模型开工具调用；~~不改引擎状态机（失败运行仍只能重试当前阶段，「失败运行选起点重做」留待下一刀）~~——已由 §5.9 / ADR-0019 修订。
+
+### 5.9 任意状态下从选定阶段重做；判定以模型为主、规则只做快路径（2026-09-06，ADR-0019）
+
+用户追问（上一刀之后）：「你现在只是通过固定的关键词来识别判断吗？agent 自己没有相关的意图识别吗？我希望不管说什么，只要是需要执行的，都会出现真正的修改，而且这个修改显示的进度，也不一定要接着上一次的显示」。拍板：气味词只做第一层门槛，模型识别必须有；修改要求落成**同一运行从选定阶段重做**（上游成果保留、进度接原时间线）；重做先发提案、确认后执行。
+
+**判定顺序（替换 §5.8 的两级判定）**：① 上一轮留有提案 → 只看确认 / 放弃词；② 本地规则命中且原文 ≤12 字 → 直判（省一次调用）；③ 其余一律送判定模型（≤800 字；不再有气味词 / 问句门槛），提示词带运行状态、六阶段进度（已完成 / 失败于此 / 等待确认 / 暂停于此 / 正在执行 / 未开始）、失败原因、待确认选项、合法动作、**最近三轮对话**（用户 / 助手各截断）与这句原话；④ 模型答 none 或异常 → 回落规则结果（长句里的「继续想办法」仍是 retry）；>800 字只落备注。判定的 `redo` 若点名尚未开始的阶段 → 视为 none（没有东西可重做，静默落备注，该阶段执行时读到）；点名的正是 FAILED 的失败阶段 → 折成 retry（直接执行）。代价如实说明：任务页每句非短句对话前多一次弱模型调用（10 s 限时，`source="route"` 记账）。
+
+**redo 动作**：合法状态 RUNNING / PAUSED / WAITING_APPROVAL（节点自提的闸门；ADR-0013 修订门上六个起点已是选项，不开 redo）/ FAILED；COMPLETED 仍走 revision；QUEUED / CANCELLED 不开。流程：提案 `{"type":"action","kind":"redo","status":"proposed","stage":"MODEL_PLANNING","stage_label":"建模方案","text":"<用户原话>","message":"要从「建模方案」重做吗？…","confirm_hint":"…"}` → 下一句「确认」/ 点按钮 → `engine_glue.redo_run`：原话落 global 备注 → 引擎 `RUN_REDO` 事件（reducer 关掉在途 RUNNING 步骤为 CANCELLED、清 review / failure / paused、状态回到目标阶段并 `force_rerun`、丢弃目标及下游旧产出）→ 投影：待审批门 CANCELLED（契约 `resolution` 留空，作废原因记内部 `evidence.superseded_by`）、在途步骤行 CANCELLED（detail「已被「从「X」重做」取代」）、清 `failure_*` / `paused_from_status` / `ended_at`、`current_node` 回目标阶段、状态 RUNNING → 回执 `{"kind":"redo","status":"executed","stage","stage_label","note_id","message"}`，run.log 记 `redo_requested`。「不 / 算了」→ `dismissed`（「已放弃从「X」重做，运行状态不变。」）。
+
+**在途让位**：RUNNING 下确认重做时，正在执行的节点不会被打断（单推进线程、无协作式中断），其收尾写事件会撞 `run_domain_events(run_id, seq)` 唯一约束——推进器 `WorkflowAdvancer.advance` 只把**这一种**完整性错误当作让位契约（warning「in-flight step superseded by a control action」并丢弃结果），其它 IntegrityError 照常抛出；下一 tick 重放日志从目标阶段起跑，被取代的步骤不会再被 `heal_interrupted` 判成 executor lost。
+
+页面侧只加文案：`run-control-view.ts` 新增 `redo` 的标题「已从阶段重做」与类别「从阶段重做」（提案 / 放弃行后缀带回到的阶段名），`RunControlAction.text` 字段；提案按钮沿用 `status:"proposed"` 通道，无 DOM 结构变化。
+
 ## 6. SSE 规则
 
 当前事件类型：
@@ -279,6 +358,7 @@ artifact.published
 - 显式 `after` 优先于 `Last-Event-ID`。
 - heartbeat 是注释 `: ping`，不进入历史。
 - 终态无增量时发送 `stream.end`；Web 最后刷新一次并关闭连接。
+- 终态之后运行再次离开终态（`retry` 把 FAILED 置回 RUNNING、修订受理把 COMPLETED 置回 WAITING_APPROVAL），Web 必须重新连接（`after=` 最后序号只接增量）：控制器在任何一次快照刷新看到非终态而流已收尾时重连，不依赖是哪个动作触发的。
 - 事件只作为“快照可能变化”的通知，不直接把 payload 注入页面正文。
 
 未来增加 `stage.output.updated` 时，payload 只带 `stage/version/content_hash`，完整对象仍从读接口获取。
@@ -727,6 +807,144 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 当日执行并通过：`pytest backend/api/tests`（完整套件）、`npm run check --workspace @openmathmodel/web`（typecheck + eslint）、Web 生产构建（140 个模块）。
 
 尚未验收：真实浏览器中的三项视觉走查——发送后过场遮罩的完整节奏（含无附件/出错/未登录分支）、带附件任务的开场分析首条回复内容、执行计划面板各条目长度。
+
+### 2026-09-05 智能路由候选改为已保存接口；GPT-6 Astra 适配
+
+产品反馈：设置中心 → 模型厂商 → 智能路由的四个下拉「问题不是写不写死，而是要看用户自己配了什么」，并且要能即时更新；OpenAI 新旗舰 GPT-6 Astra 需要适配。不动页面结构、路由与接口契约（ADR-0014 决策 11）：
+
+- 智能路由下拉（`openmathmodel-ui.ts`）：删掉四组写死的厂商型号，改为 `routingSelectOptions(config)` 生成——`自动选择` + 每条已保存接口（取值 `endpoint-<id>`，与输入框模型选择器同一套标识；显示「模型 · 接口名」，主接口再标一下）。新增 `renderLlmConfigViews` 把服务端接口配置的三处投影（已保存接口列表、厂商卡片状态、智能路由候选）一起刷，`hydrateLlmPanel` 打开面板、「保存为新接口」「保存修改」、菜单里的设为主接口/删除/调整权重之后都走它，用户不必关掉设置再打开。刷新保留当前选择，接口被删回落 `自动选择`；首次打开时选择从本机设置表读取（那时原生 select 只有 Auto 一项，`restoreSettings` 写不进去）。池子为空/未登录时四个下拉只剩 `自动选择`，下方 `[data-routing-note]` 一行说明指向「自定义 API」或登录（新增 `.settings-field-note`，revision 37）。
+- 自定义下拉增强（`enhanceSettingsSelect`）从 `openSettingsCenter` 闭包提为可重复调用的模块级函数：重建前先拆掉旧的 `.settings-custom-select`，选项集合动态变化时原生 `select` 与自定义下拉不再分叉。
+- 边界如实标注：这四项在本轮只随整张设置表落本机 `localStorage`，服务端不读取它们；服务端链路由同日的下一条记录（ADR-0015）补上。
+- 明确保留：设置中心「自定义 API」表单的预填示例（`api.example.com` / 示例密钥 / `gpt-5.6-sol`），`endpointFromForm` 对 `example.com` 直接判为未配置。
+- GPT-6 Astra（2026-09-03 分批 GA，API id `gpt-6-astra`，1.05M 上下文、文本+图像输入，标准价 $10/$50，>272K 输入整笔 2×/1.5×）：厂商预设（`llm-providers.ts`）OpenAI 首位改为 `gpt-6-astra`，「配置」一键填入即为它；模态表（`model-modality.ts`）`/^gpt-5/` 放宽为 `/^gpt-[5-9]/`，Astra 判为视觉；Auto 路由能力推断（`llm.py`）强档记号新增 `-astra`（否则旗舰按中位 5 使用）；费用估算表（`usage.py`）新增 `gpt-6-astra` / `gpt-6` 70/350 元（此前会落到 4/12 元的兜底价，预算闸门对旗舰放行十几倍）。
+- 词典：删「根据任务类型、速度与费用自动选择模型。」，增智能路由说明与两条空态提示。
+
+当日执行并通过：`npm run check --workspace @openmathmodel/web`、`npm run build --workspace @openmathmodel/web`、`node --test src/i18n/en-US.test.mjs`（5 项）、`pytest backend/api/tests/test_llm_chat.py test_usage.py test_budget_guard.py`（79 个用例，含新增 `test_endpoint_strength_recognizes_current_flagships`、`test_model_pricing_covers_gpt6_astra`）。
+
+尚未验收（需浏览器）：登录后在「自定义 API」保存/删除接口时切到「模型厂商」看四个下拉是否即时跟随；未登录与零接口两种空态提示；OpenAI 卡片副标题与「配置」默认模型为 `gpt-6-astra`。
+
+### 2026-09-05 智能路由做实：按任务类型把模型调用定向到指定接口（ADR-0015）
+
+业主确认要让四个下拉真正生效。契约与语义见 [ADR-0015](../adr/0015-task-kind-endpoint-routing.md)，落点：
+
+- **契约**（`schemas.py` / `routers/account.py`）：`LlmConfigUpdateRequest` 增 `smart_routing: bool = True` 与 `task_routes: TaskRoutesModel`（`coding` / `research` / `writing` / `vision` 四个可空 id）；`PUT` 用 `normalize_task_routes` 只存指向本次保存里现存接口的项，`GET`（`llm_config_payload`）永远回四键齐全、指向已删除接口的项读出为 `null`。OpenAPI 基线已重导出（`export_openapi.py --check` 通过）。
+- **解析与取链**（`llm.py`）：`LlmConfig` 增 `smart_routing` / `task_routes`，`route_for(kind)`（开关关闭、未定向、接口不存在 → None）与 `chain_for(kind)`（有定向 → `chain_from(定向接口)`，否则 `chain()`）；预算硬限制把付费接口过滤掉后指向它们的定向自然失效（`find` 找不到）。
+- **任务执行**（`engine_glue.py` / `EngineLlmPort`）：新增 `_PROMPT_TASK_KINDS`（与 `_PROMPT_NODE_IDS` 同键：题意解析 / 数据准备方案 / 方案设计四条 → `research`；清洗沙盒 / 实验代码 / 检验 → `coding`；论文四条 → `writing`），端口按 `prompt_id` 取 `chain_for(kind)` 传给 `stream_complete_with_fallback` / `complete_with_fallback`；`llm_call` 过程事件附 `task_kind` 与 `pinned`，工作台执行轨迹与 evals 可核对「这一步打给了谁」。接待判定与 Auto 难度判定不受影响。
+- **对话**（`routers/chat.py`）：携图且未显式 `endpoint_id` 时优先走 `route_for("vision")`，meta `route = {mode: "task", kind: "vision", endpoint_id}`；用户显式钉接口不改。顺手修掉 `route_meta["difficulty"]` 的硬取键（非 Auto 路由的 meta 没有该键会 KeyError）。
+- **前端**：新增 `integration/task-routes.ts`（下拉值 ↔ 接口 id、`taskRoutesFromForm`、`normalizeTaskRoutes`、`resolveTaskRoute`，纯函数，`task-routes.test.mjs` 5 项）；`auth/api.ts` `LlmConfig` 增可选 `smart_routing` / `task_routes`；`llm-settings.ts` 新增 `routingFromForm`，「保存更改」「保存为新接口」与三个行为开关同一纪律一并携带（否则整体替换式 PUT 会把服务端已存的定向抹成缺省）；`model-modality.ts` 的 `resolveSelectedModality("auto")` 先看 `vision` 定向再看主接口，并暴露 `invalidateModalityConfig()`，`hydrateModelPickers` 每次接口/路由变更都作废缓存；设置面板 `renderRoutingSelects(backdrop, config, { fromServer })`——打开面板以服务端 `task_routes` 回填、面板内刷新保留未保存选择，`hydrateLlmPanel` 同时回填 `smartRouting` 开关；开关文案改为如实描述（「开启后按下方任务类型把调用定向到指定接口；关闭则全部走主接口链」），区块说明补一句「保存后任务的对应阶段与携图对话按此定向」。
+- 新增 `backend/api/tests/test_task_routes.py`（10 个用例：规范化与解析、`chain_for`、提示词全覆盖归类、llm-config 往返与删接口清理、端口按任务类型选链与开关关闭、携图对话的 vision 定向 / 显式接口优先 / 流式 meta）。
+
+当日执行并通过：`pytest backend/api/tests`（320 通过、2 跳过；4 个失败全部位于 `test_stage_outputs` / `test_task_runs_llm_nodes` 的稳健性复跑与 G3 结果闸门，属于工作树里另一路在进行中的 H3 验证节点改动——`test_task_runs_llm_nodes.py`、`stage_outputs.py`、`validating.*.prompt.md` 均处于修改态——与路由无关）、`export_openapi.py --check`、`npm run check`、`npm run build`、`node --test src/i18n/en-US.test.mjs src/integration/task-routes.test.mjs`（10 项）。
+
+尚未验收（需浏览器）：ADR-0015 验收 4（打开面板以服务端为准回填、保存后重开仍是改后值、删除被定向接口后回落自动）；验收 2/3 需要两条真实接口（可用两个本地 Ollama 模型）跑一次任务与一次携图对话，看 run.log 的 `llm_call.pinned` 与对话 meta 的 `route.mode`。
+
+### 2026-09-05 报障修复：「重试当前阶段」后页面冻结；中转站自身故障一次判死
+
+用户报障：题意解析失败后点「重试当前阶段」，页面停在「进行中 + 正在思考并规划…」再无变化。直接查本地库对账（`run_e761cc88`）：22:03:05 FAILED → 22:03:23 `RUN_RETRIED` → 22:03:25 attempt 2 → 22:03:53 再次 FAILED，服务端整个过程正常，页面一条都没收到。
+
+- **前端（`modeling-workspace-controller.ts`）**：运行到终态时服务端发 `stream.end`，控制器置 `streamEnded` 并关闭 EventSource、不再重连；`retry` 成功后 `refresh()` 拿到 RUNNING 却没有重接事件流，attempt 2 的 `step.started / llm_call_* / 再次 FAILED` 全部丢失。ADR-0013 修订重开已为同一问题修过一次（`omm:run-reopened`），retry 这条路漏了。修法：抽出 `reopenStream()`，`refresh()` 在快照为非终态且流已收尾时重连（`after=lastSequence` 只接增量，`replayThrough` 不变所以新事件按实时落位），`onRunReopened` 复用同一函数。§6 SSE 规则补了这一条。顺带修 `.todo-count[hidden]`（`display:inline-flex` 压过 UA 的 `[hidden]`，思考态下旧的「0/6」一直挂着）。
+- **后端（`llm.py` / `engine_glue.py`）**：这次两轮失败的正文分别是 HTTP 401「鉴权服务请求失败: … context deadline exceeded (Client.Timeout …)」与 HTTP 500「failed to connect to `user=postgres …`: FATAL: sorry, too many clients already」——中转站自家鉴权微服务超时、数据库连接池打满，与密钥、模型、请求内容无关。旧逻辑把非 402/429 的上游 4xx/5xx 一律归 `LLM_UPSTREAM_ERROR`（确定性）：不切备用接口、引擎整次调用不退避重试，题意解析一次就把任务判死，指引还让用户「检查接口配置」。现在 `_upstream_error` 按状态码 502/503/504 或正文命中网关故障特征词（`_UPSTREAM_TRANSIENT_HINTS`：deadline exceeded / client.timeout / timed out / timeout / too many clients|connections / connection refused|reset / temporarily unavailable / service unavailable / overloaded / server is busy / 鉴权服务请求失败 / 请求超时 / 服务繁忙 / 系统繁忙）归为新码 **`LLM_UPSTREAM_UNAVAILABLE`**（HTTP 502，文案「接口 X 暂时不可用（HTTP 原状态码）：正文」），同时进 `_FALLBACK_CODES`（对话与任务都会切备用接口）与 `_TRANSIENT_CODES`（引擎整次调用 2s/5s 退避重试）；`_API_ERROR_GUIDANCE` 新增对症指引（与余额、密钥无关，已自动重试仍失败→稍后再试或加备用接口），`_FAILURE_CLASS_RULES` 补「暂时不可用」。「invalid key」式 401、「boom」式 500、404/400 仍是确定性失败，既有测试语义不变；普通 500 只有正文命中特征词才按瞬态处理。
+- 新增 `backend/api/tests/test_llm_upstream_transient.py`（19 项：两组参数化分类、402 独立码、失败归类与指引、非流式/流式链内回退、密钥错不烧备用接口、单接口配置下引擎退避重试恢复）。
+
+当日执行并通过：`pytest` 新文件 19/19；`test_llm_chat.py`、`test_llm_engine_retry.py`、`test_llm_config.py`、`test_task_routes.py`、`test_budget_guard.py`、`test_task_intake.py` 共 104 通过；`test_task_runs_llm_nodes.py -k "failure or failed or retry"` 5 通过；`npm run check`、`npm run build`（index 723.91 kB）。浏览器复现验收（失败 → 点重试 → 页面出现第二次尝试行与最终状态）待用户；后端进程需重启才会加载新的瞬态判定（`npm run dev` 启动的 uvicorn 不带 `--reload`）。
+
+### 2026-09-05 报障修复：生成中切页，提问与半截回复整轮消失
+
+用户报障：在任务页追问后没点暂停就切到别的页面（或从有历史的任务切到另一条记录再回来），那一轮的提问、已生成/已思考的部分全部不见；没完成过一次对话的任务页上只剩阶段失败摘要，看起来像"凭空冒出一句话"。
+
+- **根因**：站内除工作台五个阶段面板之间是软切换外，所有跳转（`go()` → `window.location.href`、侧栏「最近任务」的裸 `<a href>`）都是整页导航，浏览器直接掐断在途的 `POST /api/chat` 流并销毁内存；而本机对话记录（`tasks/conversation-log.ts`）只在一轮回复**完整收到后**才成对写入，`agent-chat` 的在途登记（`pendingTurns` + `omm:chat-turn-committed/failed`）又是纯内存的，只救得了软切换。失败的一轮（接口报错 / 后台失败）同样不落盘。
+- **修法（不改导航方式）**：在途轮做成可恢复的持久状态。
+  - `conversation-log.ts`：新增按归属隔离的**在途轮记录** `openmathmodel.chatPending.v1.<scope>`（`PendingTurnRecord`：owner 标签页 id、用户消息、附件名、半截 reply/reasoning、时间戳），`save/load/clearPendingTurn`；`settleInterruptedTurn()` 把它落定为正式条目：用户消息 + 一条 **`interrupted: true`** 的回复（保留半截正文与思考，`note` 记原因，≤300 字）。`parseConversationLog` 只对 interrupted 回复放行空正文。`clearConversationLog / clearAllConversationLogs` 一并清在途记录。
+  - `agent-chat.ts`：`sendConversationTurn` 发起即写在途记录（「保存任务历史」开启时），delta/reasoning 节流 500ms 回写；**`pagehide`** 那一刻把所有在途轮同步落定为「回复在离开页面时中断，以上为离开前已生成的部分…」/「…尚未收到内容；请重新发送。」；成功清除；失败落定（note=「回复生成中断：<错误>」，用户暂停且一字未收 =「已暂停生成。」）。`configureConversation` 绑定归属时 `settleStalePendingTurn()`：同标签页留下的或超过 15 分钟无心跳的在途记录落定（软切换回来仍活着的、别的标签页正在生成的不碰）。history 重建：被打断且无正文的一对不进模型上下文（保住 user/assistant 严格交替），有半截正文的照常进入。开场分析被打断只清记录不留条目（规划阶段重进会按既有防重逻辑重发）。
+  - 页面层：任务页 `appendRestoredReply` 与首页 `restoreHomeChat` 识别 `interrupted` 条目——半截正文照渲染、思考照回看盒、下方一行 `.muted.reply-interrupted` 灰字说明（`workflow-refresh.css`：有正文时虚线隔开），无正文不挂复制按钮；`restoreHomeChat` 读记录前先 `settleStalePendingTurn`。en-US 词典补两句。
+- 契约与后端不动：`/api/chat` 依旧无状态，服务端不知道也不需要知道这轮被掐断。
+
+当日执行并通过：`node --test src/tasks/conversation-log.test.mjs`（15 项，新增 interrupted 解析、在途记录往返、落定追问/开场、清理联动）与 `src/i18n/en-US.test.mjs`；`npm run check`；`npm run build`（index 728.06 kB）。浏览器复现验收待用户：任务页追问 → 思考/生成中点侧栏另一个任务 → 回来应看到自己的提问 + 半截回复（或空回复）+ 灰字说明；首页对话同理。
+
+> 用户驳回（同日）：「不能光靠一句子来解决。你数据没有存好也没有做到持续性。」——上面这套「留痕」方案已被下一条整体替换；`chatPending` 在途记录与 `pagehide` 落定机制已移除，本机记录降级为只读兜底。
+
+### 2026-09-05 用户驳回后重做：对话生成改为服务端托管的后台作业，记录落库（ADR-0016）
+
+用户要求的是**持续性**（切走再回来，回复应该完整或仍在生成）与**数据存好**（不是浏览器内存/localStorage），不是一句中断说明。根因是「浏览器是生成的宿主」：`/api/chat` 无状态转发，页面一卸载生成就死。重做为：
+
+- **后端**
+  - `orm.ChatTurnRow` / 迁移 `0019_chat_turns`：`chat_turns(id, user_id, scope_id, status, opening, text, attachments, reply, reasoning, meta, error_code, error_message, trace, created_at, updated_at, ended_at)`，索引 `(scope_id, created_at)`；`test_migrations` 的 ORM↔迁移一致性照常约束。
+  - `omm_api/chat_turns.py` **`ChatTurnHub`**（`app.state.chat_turns`，进程内单例）：`start` 建行后在守护线程里跑 `llm.stream_events`，事件按 `seq` 缓冲、正文/思考每秒批量回写库、终态后缓冲保留 10 分钟；`stream_live(after)` 用条件变量推事件 + `: ping` 心跳；`stop` 立即定格为 `stopped`（工作线程丢弃上游迟到事件并关连接）；`recover_interrupted()` 在 lifespan 启动时把遗留 `running` 标 `interrupted`（文案「服务重启，本轮生成中断；需要完整回答请重新发送」）；`persist=False` 时只在内存托管（「保存任务历史」关闭）；`delete_scope(s)` / `delete_user_turns` 供删除与隐私联动；用量只在正常完成时记一次（partial/stopped 不记）。
+  - `routers/chat.py`：把配置/预算/视觉/端点校验抽成 `_prepare_call`，Auto 路由判定延后到后台线程里（`_resolve_chain`），用量记账钩子 `_usage_hooks` 用独立会话——旧 `POST /api/chat` 复用同一套、行为不变（67 项既有测试通过）。新增 `POST /turns`（202）、`GET /scopes/{scope}/turns`、`DELETE /scopes/{scope}`、`GET /turns/{id}`、`GET /turns/{id}/events?after=`、`POST /turns/{id}/stop`、`PATCH /turns/{id}`（trace）。`schemas.ChatTurnStartRequest`（`scope_id` 形如 `^(run|chat)_[A-Za-z0-9]{6,40}$`）与 `ChatTurnTraceRequest`。SSE 生成器不再触碰请求作用域的 DB 会话（FastAPI 在流式开始前就会关闭依赖会话）。
+  - 联动：`privacy._delete_runs` 先删 `chat_turns`（项目删除级联）；`PUT /api/account/privacy-settings` 由开到关时 `delete_user_turns`。
+  - 新增 `backend/api/tests/test_chat_turns.py`（17 项：后台完成落库 + 单条用量、无观众照常完成、`after=` 续播、停止冻结半截并关上游、停止且一字未收 → `GENERATION_STOPPED`、上游 500 → failed、409 并发、开场轮空 text、trace 往返、非本人运行 404、`chat_` 归属按用户隔离、非法归属 422、历史关闭 → 只在内存、关闭历史删库、删归属停生成、删项目级联、重启标 interrupted）。
+- **前端**
+  - 新增 `integration/chat-turns-api.ts`（类型化客户端 + SSE 解析 `readChatTurnEvents`）；`agent-chat.ts` 重写为托管轮路径：`sendConversationTurn` 有归属 → `runHostedTurn`（建轮 → `onTurnStarted` → `followTurn`：附着、`AbortSignal` → 服务端 `stop`、断线按 `after=seq` 重连 ≤5 次、失败拉视图补正文、`settleTurn` 统一收口），无归属 → 旧无状态路径；新增 `hydrateConversation(scope)`（拉全部轮，已定格的进 history）、`attachConversationTurn(turn, handlers, signal)`（续接 running 轮）、`entryFromTurn`（轮 → 页面条目：stopped/failed/interrupted/中途出错 → `interrupted + note`）。移除 `pendingTurns` / `pagehide` / localStorage 写入 / `omm:chat-turn-committed|failed`。
+  - `modeling-workspace-controller.ts`：首个快照到手 → `configureConversation` → **`await hydrateConversation(run)`** → 广播 `omm:conversation-restore{runId, goal, turns}` → 才 `renderWorkspace`；并发刷新同样等这一步（`conversationReady` Promise），规划阶段不会重复发起开场分析。
+  - `legacy/openmathmodel-ui.ts`：`omm:conversation-restore` 先渲染本机旧记录，再按时间重建服务端的轮（开场轮 → `restoreOpeningReply`；running 开场轮 → `resumeOpeningTurn` 原位续播并落防重标记；追问轮 → 用户气泡 + `appendRestoredReply(entryFromTurn)`；running 追问轮 → `resumeFollowUpTurn`）；抽出 `createReplyPresenter`（思考块 + 流式 Markdown + 域名透明行 + Auto 难度行）、`settleGeneratingRow`、`presentReplyFailure` 供首发 `streamAssistantReply` 与续接 `attachAssistantReply` 共用；轨迹行改为回复完成后 `PATCH /turns/{id}`（不再写 localStorage）；`appendReplyTraceRow` 支持 `startedAt`（续接的生成计时从服务端建轮时刻起算）；`omm:run-planning` 不再读在途记录，只看防重标记与页面上是否已有开场块。
+  - `home-chat.ts`：`restoreHomeChat` 改为 async（本机旧记录 + `hydrateConversation(chat)`，running 轮续接直播），首发与续接共用 `presentReply`；`task-start-controller.ts` 相应改为 `.then(ok => !ok && resetHomeChat())`。`recent-tasks.ts` 删除首页对话时先 `DELETE /api/chat/scopes/{chat}`（文案改为「全部消息将被清除」）。
+  - `tasks/conversation-log.ts` 精简为只读兜底（`parse/load/clear*`，导出 `sanitizeTrace`），删除 `PendingTurnRecord` 全家；测试 8 项。en-US 词典：删两句已废文案、补「已暂停生成，以上为暂停前已生成的部分。」「回复在生成中出错，以上为出错前已生成的部分。」「服务重启，本轮生成中断；需要完整回答请重新发送」「回复仍在服务端生成中，正在续接…」。
+
+当日执行并通过：`pytest backend/api/tests` 全量 360 通过 / 2 跳过（含新文件 17/17、`test_migrations`、`test_llm_chat`）；`npm run check`；`npm run build`；`node --test "src/**/*.test.mjs"` 107/107。受保护的 React 入口未改。**后端进程需重启**（`npm run dev` 的 uvicorn 不带 `--reload`；开发库由 `create_all` 自动建 `chat_turns`，部署环境跑 `alembic upgrade head`）。浏览器验收待用户：任务页追问 → 思考中点侧栏另一个任务 → 点回来应看到完整回复或仍在直播的半截 + 后续增量；刷新同理；暂停键应真正停止服务端生成（`GET /turns/{id}` 状态 `stopped`）。
+
+同日实机联调（对本机 `uvicorn --reload` 的开发后端 + PostgreSQL，用本机模拟 OpenAI 协议 SSE 服务和一次性用户，不入库的临时脚本）23/23 通过：观众 1.6s 后断开 → 无观众继续生成 → `after=seq` 续接只补尾段、拼起来等于完整回复 → 落库行一致；`stop` 保留半截且 ~1s 内关掉上游连接；运行中再建轮 409；touch `main.py` 触发 uvicorn 重载后遗留轮变 `interrupted`（半截保留、事件流只回 `GENERATION_INTERRUPTED`）；用量只记完成轮；`DELETE /scopes/{id}` 级联清空。开发库 `alembic_version` 由 0018 手动 `stamp` 到 0019（表已由 `create_all` 建出）。踩坑：Windows 系统代理会让 `httpx` 默认把 127.0.0.1 也走代理（502 空响应），测试客户端需 `trust_env=False`；后端 `llm._direct_mounts` 早已对本机目标绕过代理。
+
+### 2026-09-06 模型厂商型号与单价改为服务端同步的模型目录（ADR-0017）
+
+用户看到「模型厂商」卡片仍是 `claude-fable-5 / gemini-3.6-flash`，而 Claude、Gemini 都已上新：「难道每次都得重新写前端吗？不能实时同步上吗」。此前型号（`llm-providers.ts` `PROVIDER_PRESETS[].models`）与单价（`usage.py` `PRICING`）都是代码里的快照，上一次手工更新是 09-03。改为服务端从公共目录同步（数据源、裁剪规则与取舍见 ADR-0017，接口与字段见 §5.7）：
+
+- **后端**
+  - 新增 `omm_api/model_catalog.py`：厂商预设 `PROVIDERS`（唯一的型号事实来源，含内置兜底快照）、`reduce_catalog`（models.dev `api.json` → 8 家厂商的可对话型号 + 全目录单价索引）、`highlights_of`（最新三款正式版，读取时现算）、`ModelCatalog`（文件缓存 `data/model-catalog.json` + 后台线程按 TTL 刷新 + `view()` / `pricing_cny()` / `vision()`；失败保留旧数据并记 `error`，强制刷新最小间隔 60 s，`CACHE_VERSION` 变化即作废旧缓存）、进程级访问点 `set_current/current`。
+  - `config.py` 新增 `model_catalog_enabled / model_catalog_url / model_catalog_ttl_seconds / model_catalog_timeout_seconds / model_catalog_cache_path / usd_cny_rate`；`main.py` 在 `create_app` 建目录并 `set_current`，lifespan 启停后台线程。
+  - `routers/chat.py` `llm_router`：`GET /catalog`、`POST /catalog/refresh`（要求登录；关闭同步 409 `MODEL_CATALOG_DISABLED`；拉不到 502 `MODEL_CATALOG_UNREACHABLE`）。
+  - `usage.model_pricing`：先按模型 ID 精确命中目录单价 × 汇率，再走手写前缀表，再兜底价；手写表降级为「目录没有时的兜底」。
+  - 新增 `tests/test_model_catalog.py`（16 项：非对话 / 已下线过滤与新在前排序、Gemini 卡片只收 gemini 家族、亮点正式版优先 + 测试版垫后 + 别名不进亮点、DashScope 只收 qwen 家族、智谱备用键、单价索引官方优先 + 别的平台补缺 + 不过滤已下线、空 / 无关目录拒收、刷新写缓存 + 重启读缓存不出网、旧版本 / 损坏缓存忽略、失败保留旧快照并报错、TTL 与强制刷新间隔、单价换汇与大小写、`usage.model_pricing` 目录优先、接口未登录 401、关闭同步时内置快照 + 409、refresh 返回新视图）。`conftest` 夹具 `model_catalog_enabled=False` 且缓存路径指向 `tmp_path`。
+- **前端**
+  - `auth/api.ts` 新增 `CatalogModel / CatalogProvider / ModelCatalogView` 与 `getModelCatalog / refreshModelCatalog`；新增 `integration/model-catalog.ts`（会话内缓存、refresh 替换缓存、`currentModelCatalog` 同步读）与 `integration/model-catalog-view.ts`（纯函数：`providerHighlights / providerModels / catalogVision / catalogFreshnessText`）+ `model-catalog-view.test.mjs`（4 项）。
+  - `integration/llm-providers.ts` 去掉全部模型名，只留品牌骨架；`legacy/openmathmodel-ui.ts`：卡片副标题占位「正在同步型号…」→ 打开设置时 `loadModelCatalog` 填亮点；区块标题下 `[data-catalog-status]` 新鲜度行；标题右侧「同步型号」按钮（`refresh-catalog`，`withBusyButton`，失败 toast 并保留上一份）；「配置」默认模型 = 亮点首位；`catalogModelsForHost` 取代 `seedModelOptions`，`refreshModelOptions` 合并接口自报清单；`hydrateLlmPanel` 回填时目录晚到会补一次补全。`styles.css` 新增 `.settings-heading-actions` 与状态行换行样式。
+  - `integration/model-modality.ts`：`resolveSelectedModality` 两条分支先查目录 `vision`（`classifyModel`），未收录再回落命名规则。en-US 词典补 13 条。
+- 不动：`App.tsx` / `screens.tsx` / `OpenMathModelScreen.tsx`；页面结构、路由、DOM 槽位；Auto 路由能力推断 `endpoint_strength`。
+
+当日执行并通过：`pytest backend/api/tests` 全量 377 通过 / 2 跳过；`npm run check`；`npm run build`（index 735.61 kB）；`node --test "src/**/*.test.mjs"` 117/117。实机（本机 `uvicorn --reload` 开发后端自动重载）：启动后约 1 s 完成首次同步并落 `data/model-catalog.json`（≈156 KB，8 家厂商、3170 条单价）；一次性用户 `GET /api/llm/catalog` 显示 Anthropic `claude-fable-5-1 / claude-opus-5 / claude-sonnet-5`、Google `gemini-3.8-flash / gemini-3.7-flash / gemini-3.5-flash-lite`、通义 `qwen3.8-flash / qwen3.8-max / qwen3.7-plus`、智谱 `glm-5.3-flash / glm-5.3 / glm-5.2`、xAI `grok-4.6 / grok-4.5 / grok-4.3`；`POST /catalog/refresh` 200 并更新 `synced_at`；未登录两条都 401。踩坑：第一版按 `family` 取「每家族最新」在真实数据上把 `gemma-4-26b` / `qvq-max` / `glm-4.7-flash` 顶进卡片，改为按时间取最新 + Google 只收 `gemini` 前缀；亮点改为读取时现算，缓存文件版本升到 2 强制重拉。浏览器验收待用户（本环境无浏览器）：卡片副标题与状态行、「同步型号」按钮、「配置」默认模型、模型 ID 补全。
+
+### 2026-09-06 报障修复：任务出问题后对话里说「继续 / 重做」只是普通聊天（ADR-0018）
+
+截图现场：「机器人竞技攻击策略优化」实验运行阶段 FAILED，用户在聊天框说「怎么又失败了，快继续想办法」「继续啊」——前端只把消息 `POST /notes`（终态 409）、标「任务已结束，本条按问答处理」并挂一个对失败运行必死（`RUN_NOT_COMPLETED`）的「按这条要求继续修改」按钮，模型也不知道运行状态。根因：对话通道只有被动的备注注入、没有执行权，且 §11.3 旧决策明文「重做由人显式操作，绝不由备注文本触发」。用户拍板：分级执行（retry / resume / pause / 审批选项直接做；取消先确认）、已完成运行仍开修订门但点名阶段预选、失败运行的「选起点重做」留下一刀。改动（接口与页面行为见 §5.8，决策见 ADR-0018，设计文档 §11.3 已回写 v3.34）：
+
+- **后端**
+  - 新增 `omm_api/run_control.py`：`legal_actions`（与状态机 / ADR-0013 同判据）、`load_context`（待审批门选项、修订轮数、上一轮待确认提案）、`decide_locally`（词表规则：重试 / 恢复 / 暂停 / 取消 / 退回 / 点名选项 `match_option` / 点名阶段 `explicit_stage`；否定词、「继续说」类对话延续、问句标记）、`judge_intent`（池里最弱接口 `complete_once`，10 s / 200 token，只认合法集内结果）、`decide`（本地 → 出网门槛：≤200 字、带合法动作的气味词、非问句）、`execute`（走 `execute_action` / `accept_revision` / `record_run_note`；`ApiError` → `rejected` 回执）、`prompt_block`（状态块 + 「不得声称执行了未列出的操作」）、`run_control_step`（独立 session、一个事务；任何异常回落为无动作）。
+  - `engine_glue.py` 抽出 `accept_revision(session, run, text, stage=None)`（`request_revision` 可点名推荐起点），`routers/task_runs.py` 的 `/revisions` 与 `/notes` 改为委托（`record_run_note` 落到 `run_control`）。
+  - `routers/chat.py` `start_chat_turn`：`run_…` 归属且非开场的轮，producer 先跑控制步骤、`yield` `action` 事件、把状态块追到 system 提示词后再 `_resolve_chain` + `stream_events`；上一轮 `meta.actions` 作为 `previous_actions` 传入。`chat_turns.py` `_run` 把 `action` 事件累进 `live.meta["actions"]` 随轮落库。
+  - 新增 `tests/test_run_control.py` 23 项（合法动作集；失败 / 暂停 / 执行中 / 审批门 / 修订门 / 已完成的本地规则与反例；字母 / 序数 / 别名选项点名；提案确认 / 放弃 / 作废；判定回复解析只认合法结果；出网门槛；提示词块；e2e：「怎么又失败了，快继续想办法」→ 运行 RUNNING + 备注落库 + 首事件 `action` + `meta.actions` 持久化 + 系统提示词带执行后状态且未出网判定；问句只聊不动；取消两轮确认 / 放弃 / 提案过期；「同意，按这个方案做」选定 G1；已完成运行「从数据准备重做，…」开门并预选 → 「确认」重跑；弱模型判定生效；判定 500 回落对话；`chat_` 归属不经控制）。e2e 钉 `OMM_AGENT_NODES=sim` 让引擎仍走模拟链、mock 只服务对话与判定。
+- **前端**
+  - `chat-turns-api.ts` `RunControlAction` / `ChatMeta.actions`；`agent-chat.ts` `ChatHandlers.onAction`、`applyEvent` 处理 `action`、续接重放 `meta.actions`、`entryFromTurn` 回执兜底重建轨迹；新增 `integration/run-control-view.ts`（纯函数）+ `run-control-view.test.mjs`（4 项，含「所有标题静态且有英文词条」）。
+  - `legacy/openmathmodel-ui.ts`：`presentRunControlAction`（回执 → 轨迹行，插在生成行之前；`proposed` 挂「确认执行」= 发一句「确认」；`executed` 广播 `omm:run-reopened`）；恢复态最后一轮的待确认提案照挂按钮（按落盘轨迹下标定位，不比文本——语言切换会翻标题）；删除发送前 `postRunNote` 与 `offerRevisionCta` 死路行；en-US 补 13 条。
+- 不动：`App.tsx` / `screens.tsx` / `OpenMathModelScreen.tsx`；页面结构、路由、DOM 槽位；引擎状态机与 `/actions` 端点形状（OpenAPI 未变）。
+
+当日执行并通过：`pytest backend/api/tests`（见下方全量结果）；`npm run check`；`npm run build`；`node --test "src/**/*.test.mjs"` 125/125。浏览器验收待用户（本环境无浏览器）：失败态说「继续」后轨迹行「已重试阶段 · 实验运行」+ 工作台状态即时变为执行中；「取消任务」→「等待你确认操作」行带按钮 → 点按钮或回「确认」→ 已取消；已完成态「从数据准备重做…」→ 待确认事项里数据准备预选。
+
+### 2026-09-06（追加）用户追问：不能只靠关键词；任何要执行的修改都要真正回退重做（ADR-0019）
+
+用户原话：「你现在只是通过固定的关键词来识别判断吗？agent 自己没有相关的意图识别吗？我希望不管说什么，只要是需要执行的，都会出现真正的修改，而且这个修改显示的进度，也不一定要接着上一次的显示啊」。如实答复的现状：规则先判、弱模型判定被 ≤200 字 / 气味词 / 非问句三道门槛拦住、判定看不到上文、动作被状态机锁死（FAILED 只能 retry，RUNNING 下的修改要求只静默落备注）。用户拍板：规则只做第一层门槛、模型识别必须有；同一运行从选定阶段重做（不另起新运行）；重做先提案再确认。改动（接口与行为见 §5.9，决策见 ADR-0019，ADR-0018 §1 / §2 / §5 标注已修订）：
+
+- **引擎**（`agents/core`）：新增 `EventType.RUN_REDO`；reducer `_on_run_redo`（合法源 = 工作态 / FAILED / NEEDS_REVIEW；在途 RUNNING 步骤 → CANCELLED `superseded: redo from <target>`；清 review / failure / paused / cancel_requested；`state = target` + `force_rerun` + `_discard_from(target)`）；`TaskRunEngine.redo(snapshot, target_state, reason, note_id)`（COMPLETED / CREATED 拒绝）；`can_transition` 前向矩阵不放宽（`states.py` 注明回退边只在 RUN_REDO reducer 里）。`agents/evals` `CONTROL_FLOW_FIELDS` 登记 `RUN_REDO(target_state, from_state)`。测试：`test_engine.py` +3（FAILED 回退更早阶段、在途步骤被取代且丢弃评审、拒绝边界），`test_replay.py` +1（两次 redo 后重放 == 实时快照）；core 130 / evals 48 通过。
+- **后端**：`engine_glue.py` `RUN_REDO` 投影 + `REDO_STATUSES` + `redo_run(session, run, stage, text)`（409 `RUN_NOT_REDOABLE` / 422 `INVALID_STAGE` / 422 `EMPTY_TEXT`；备注先 flush 再发事件；run.log `redo_requested`）；`runner.py` `_superseded_in_flight` + `WorkflowAdvancer.advance` 只吞 `run_domain_events` seq 唯一约束冲突并 warning，其它 IntegrityError 照抛；`run_control.py`：`ACTION_KINDS` + `redo`、`CONFIRM_REQUIRED = {cancel, redo}`、`legal_actions(..., revision_gate=)`（FAILED→{retry, redo}；RUNNING / PAUSED / 节点闸门 + redo；修订门不开）、本地规则「点名阶段 + 修改 / 重试词」→ redo（点名失败阶段折 retry）、`decide` 改为「提案回应 → ≤12 字规则直判 → 模型（≤800 字，带最近三轮对话）→ none 回落规则」、`_judge_prompt` 带阶段进度 / 最近对话、`_parse_judge_reply(user_text=)` 阶段缺失按正文推断 / 未开始阶段 → none、redo 提案 / 执行 / 放弃回执；`routers/chat.py` 从 `hub.list_scope` 取最近三轮 `{text, reply}` 传 `history`。
+- **后端测试**：`test_run_control.py` 28 项（重写出网门槛用例为「快路径 + 全覆盖 + none 回落」；新增本地 redo 规则、判定 redo 解析边界、e2e：FAILED 上一句无词表词的「换成随机森林…」经模型判 redo → 提案（状态不变、不落备注）→ 确认 → RUNNING@建模方案、备注正文 = 原话、tick 后 attempt 2 到 G1；G1 门上「从数据准备重做」→ 确认 → 门 CANCELLED、数据准备 attempt 2；未开始阶段的要求静默落备注；「算了」放弃；判定提示词带「最近对话」）；新增 `test_run_redo.py` 5 项（`redo_run` 回退 + 备注 + run.log；状态 / 输入边界；`_superseded_in_flight` 两种方言；**真在途让位**：模拟节点执行中途从另一会话 `redo_run` → 本 tick 返回 None + warning、步骤行 CANCELLED、下一 tick 从目标阶段 attempt 2 起跑、不触发 executor lost；无关 IntegrityError 照抛）；`test_chat_turns.py` 的上游 mock 统一把判定请求答 none（判定不再被门槛拦后，阻塞流会被判定调用吃掉前几段）。全量 `pytest backend/api/tests` 419 通过 / 2 跳过（PG 专属）。
+- **前端**：`run-control-view.ts` `redo` 标题「已从阶段重做」/ 类别「从阶段重做」，提案与放弃行后缀带阶段名；`chat-turns-api.ts` `RunControlAction.text`；`run-control-view.test.mjs` +1（5 项）；en-US +1。`npm run check` / `npm run build` / `node --test` 129/129 通过。
+- 不动：受保护入口、页面结构与 DOM 槽位、`/actions` 端点形状（无新 HTTP 端点，重做只经对话确认触发）、契约 `Resolution` 形状。
+
+浏览器验收待用户：失败态说一句不带任何固定词的修改要求（如「换成随机森林比较靠谱」）→ 轨迹行「等待你确认操作 · 从阶段重做 · 建模方案」带按钮 → 确认 → 「已从阶段重做 · 建模方案」+ 工作台进度回到建模方案继续、上游两段保留；执行中说「从题意解析重做」→ 确认 → 当前步骤标已取代、下一步从题意解析起。
+
+### 2026-09-07 报障修复：对话触发重试后页面同时出现两个 Agent 气泡
+
+用户实机走查 ADR-0018 路径的截图：实验运行 FAILED → 回「按典型参数继续」→ 上面一个 Agent 气泡「已重试阶段 · 实验运行 ✓ / 正在生成回复 / 思考中…」，下面又一个 Agent 气泡「收起执行步骤 / 重试失败阶段。/ 已记录补充要求…（JSON 行）/ ws_list / env_probe / 深度思考 · 实验执行」，两个同时在转；第二张截图里上面那个气泡的思考正文在逐项算分。读码根因：
+
+1. 渲染：`tailTraceHost` 只认「尾部是轨迹块才续写，否则另起带署名的新块」。对话即控制面之后，动作由对话轮自己触发，`executed` 回执 → `omm:run-reopened` → 控制器重接 SSE，第二次尝试的事件到达时尾部正是还在生成的回复块，于是另起一块。
+2. 内容：`prompt_block` 的回复要求「先告知已执行的操作，再回答用户的问题」把「按典型参数继续」当成了问题，模型在对话里替运行去算典型参数下的结果——聊天模型与运行里的实验节点并行解同一道题。
+3. 顺带：`run.log{kind:"user_note"}` 没有专门分支，落进「其他 run.log 原样 JSON」兜底（terminal 图标 + 可展开的原始 JSON，含备注全文与 note_id）。
+
+改动（用户拍板：三项一起做）：
+
+- **前端** `integration/modeling-workspace-controller.ts`：抽 `activityHeader()`；新增 `replyRunTraceHost(replyBlock)`（回复块内只建一次的折叠头 + `.agent-stream.run-trace`）；`tailTraceHost` 加第二条规则「尾部是 `.follow-up-reply` → 写进该回复块」；`user_note` 并入「有现成人话 message 的运营事件 → 叙述行」分支。`legacy/openmathmodel-ui.ts`：`appendReplyActions` 改为紧跟 `.analysis-copy` 插入；`toggle-activity` 优先折叠折叠头紧随其后的列表。`workflow-refresh.css` revision 38：折叠头贴正文时 4px 上间距。
+- **后端** `run_control.py`：`_HANDOFF_KINDS` / `reply_rules(actions)` 三档回复口径（交接 / 提案待确认 / 默认），`prompt_block` 末行改用它；导出 `reply_rules`。`tests/test_run_control.py` +1（`test_reply_rules_hand_off_to_the_run_after_executed_actions`：六种交接动作同一口径、提案口径、rejected / dismissed / pause / cancel 与无动作走默认、`prompt_block` 末行一致）。
+- 不动：受保护入口、路由、DOM 槽位类名、`/actions` 与轮视图契约（`action` 事件形状不变）、刷新重进路径（历史事件仍回放到首气泡、对话轮在其后重建）。
+
+当日执行并通过：`pytest backend/api/tests/test_run_control.py` 29 项；`npm run check`；`npm run build`（index 745.58 kB）；`node --test "src/**/*.test.mjs"` 137/137。浏览器验收待用户（本环境无浏览器）：失败态回一句让运行继续的话 → 只有**一个** Agent 气泡：轨迹行「已重试阶段 · 实验运行」→ 简短交接回复（不再自己算题）→ 复制按钮 → 「收起执行步骤」+ 第二次尝试的步骤在同一气泡里往下走；点折叠头只收起步骤区、回复轨迹行不受影响；「已记录补充要求…」为一行叙述、无 JSON 展开；再发一条消息后新的步骤落到新回复块里。已知但未动：首气泡封口后（题意解析完成）没有对话时，后续阶段的步骤仍按既有设计另起一个「收起执行步骤」轨迹块，与首气泡相邻——属 2026-08-21 起的既有形态，如需一并合并再议。
 
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 

@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from typing import Iterator, Optional
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError, PendingRollbackError
 
 from omm_contracts import TaskRunStatus
 
@@ -58,6 +59,18 @@ def runner_tick_mutex(db: Database) -> Iterator[bool]:
         session.close()
 
 
+def _superseded_in_flight(error: Exception) -> bool:
+    """是不是「在途步骤被控制事件取代」那种 seq 冲突，而不是别的完整性错误。
+
+    SQLite 报 ``UNIQUE constraint failed: run_domain_events.run_id, run_domain_events.seq``，
+    PostgreSQL 报 ``violates unique constraint "uq_run_domain_events_run_seq"``；节点中途
+    的工具事件先撞上时，后续操作抛的 PendingRollbackError 正文里也带着原始报错。
+    只认这一种，其余完整性错误照常抛出，不许被这条让位契约吞掉。
+    """
+    text = str(error)
+    return "run_domain_events" in text and ("seq" in text or "uq_run_domain_events_run_seq" in text)
+
+
 class WorkflowAdvancer:
     """对单个 run 执行一次最小推进（tick）。线程与测试共用。"""
 
@@ -80,6 +93,20 @@ class WorkflowAdvancer:
             advance_run(session, run)
             session.commit()
             return run.status
+        except (IntegrityError, PendingRollbackError) as error:
+            session.rollback()
+            if not _superseded_in_flight(error):
+                raise
+            # 节点执行期间控制面往同一条日志追加了事件（暂停 / 取消 / 从阶段重做，
+            # ADR-0019）：这个 tick 的快照已经过期，收尾写 (run_id, seq) 撞唯一约束。
+            # 这是契约内的让位而不是故障——控制事件已经把在途步骤关掉，这里丢弃
+            # 迟到的结果即可；下个 tick 重放最新日志接着推进。
+            logger.warning(
+                "run %s: in-flight step superseded by a control action; discarding its result (%s)",
+                run_id,
+                type(error).__name__,
+            )
+            return None
         except Exception:
             session.rollback()
             raise

@@ -87,6 +87,18 @@ class Settings(BaseSettings):
     retention_sweep_enabled: bool = True
     retention_sweep_seconds: float = 900.0
 
+    # ── 模型目录同步（ADR-0017）────────────────────────────────────
+    # 厂商在售型号与单价由服务端从公共目录 models.dev 定时拉取，前端不再写死。
+    # 关闭 = 不出网、只用内置快照 / 已有缓存文件（测试夹具关闭）。目录站不可达
+    # 的部署可把 url 指向自建镜像（同一 JSON 格式）。
+    model_catalog_enabled: bool = True
+    model_catalog_url: str = "https://models.dev/api.json"
+    model_catalog_ttl_seconds: float = 6 * 3600.0
+    model_catalog_timeout_seconds: float = 20.0
+    model_catalog_cache_path: Path = SERVICE_ROOT / "data" / "model-catalog.json"
+    # 目录单价是美元；用量监控按此汇率折成人民币展示（估算值）。
+    usd_cny_rate: float = 7.0
+
     # 用户头像内容存储根：与运行产物同一存储协议但目录独立，
     # 二者生命周期和归属边界不同（产物按项目回收，头像随账户长期存在）。
     avatars_dir: Path = SERVICE_ROOT / "data" / "avatars"

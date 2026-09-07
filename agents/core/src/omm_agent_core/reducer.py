@@ -253,6 +253,44 @@ def _on_run_retried(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     snapshot.force_rerun = True
 
 
+def _on_run_redo(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
+    """从选定阶段重做（ADR-0019）：任意非完成状态直接回退到目标工作态。
+
+    不走 ``assert_transition``：前向矩阵故意不放宽（STATE_CHANGED 的校验要继续
+    拦住调度器的 bug），回退只允许经这条显式事件发生，源 / 目标在这里自行校验。
+    源可以是工作态（执行中或暂停）、FAILED、NEEDS_REVIEW；COMPLETED 走修订门
+    （ADR-0013），CREATED 没有可重做的东西。
+
+    在途的 RUNNING 步骤按 CANCELLED 关掉：它的执行器随后写事件会撞 seq 唯一
+    约束、结果被丢弃（engine_glue 的推进器把这当作已知契约），留在日志里的这条
+    步骤要有一个诚实的终态，而不是等下个 tick 被 heal 判成「executor lost」。
+    """
+    payload = event.payload
+    target = TaskState(payload["target_state"])
+    if target not in WORK_STATES:
+        raise ReduceError(f"{target.value} is not a work state")
+    source = snapshot.state
+    if source not in WORK_STATES and source not in (TaskState.FAILED, TaskState.NEEDS_REVIEW):
+        raise ReduceError(f"redo is not allowed from {source.value}")
+    recorded_from = payload.get("from_state")
+    if recorded_from is not None and TaskState(recorded_from) is not source:
+        raise ReduceError(
+            f"redo recorded from {recorded_from} but the run is in {source.value}"
+        )
+    for step in snapshot.steps:
+        if step.status is StepStatus.RUNNING:
+            step.status = StepStatus.CANCELLED
+            step.ended_at = event.created_at
+            step.error = f"superseded: redo from {target.value}"
+    snapshot.review = None
+    snapshot.failure = None
+    snapshot.paused = False
+    snapshot.cancel_requested = False
+    snapshot.state = target
+    snapshot.force_rerun = True
+    _discard_from(snapshot, target)
+
+
 def _on_run_completed(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     assert_transition(snapshot.state, TaskState.COMPLETED)
     snapshot.state = TaskState.COMPLETED
@@ -287,6 +325,7 @@ _HANDLERS = {
     EventType.RUN_CANCELLED: _on_run_cancelled,
     EventType.RUN_RETRIED: _on_run_retried,
     EventType.REVISION_REQUESTED: _on_revision_requested,
+    EventType.RUN_REDO: _on_run_redo,
     EventType.RUN_COMPLETED: _on_run_completed,
     EventType.RUN_FAILED: _on_run_failed,
     EventType.TOOL_CALLED: _on_tool_called,

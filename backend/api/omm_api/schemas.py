@@ -12,6 +12,7 @@ from .config import (
     PASSWORD_MAX_BYTES,
     PASSWORD_MIN_LENGTH,
 )
+from .llm import normalize_task_routes
 from .models import AuthSession, User
 
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -194,6 +195,18 @@ class LlmEndpointModel(BaseModel):
         return prefix
 
 
+class TaskRoutesModel(BaseModel):
+    """设置中心「智能路由」四个任务类型 → 已保存接口 id（ADR-0015）。
+
+    None = 自动（沿用主接口链）。指向不存在接口的值在保存时丢成 None。
+    """
+
+    coding: Optional[str] = Field(default=None, max_length=64)
+    research: Optional[str] = Field(default=None, max_length=64)
+    writing: Optional[str] = Field(default=None, max_length=64)
+    vision: Optional[str] = Field(default=None, max_length=64)
+
+
 class LlmConfigUpdateRequest(BaseModel):
     """整体替换式保存：与设置面板「保存更改」语义一致。"""
 
@@ -202,6 +215,9 @@ class LlmConfigUpdateRequest(BaseModel):
     allow_proxy: bool = True
     stream: bool = True
     fallback: bool = True
+    #: 「启用模型智能路由」总开关：关闭后 task_routes 保留但不生效。
+    smart_routing: bool = True
+    task_routes: TaskRoutesModel = Field(default_factory=TaskRoutesModel)
 
 
 class LlmTestRequest(LlmEndpointModel):
@@ -305,6 +321,35 @@ class ChatRequest(BaseModel):
     images: list[ChatImageModel] = Field(default_factory=list, max_length=CHAT_IMAGE_MAX_COUNT)
 
 
+#: 托管对话轮的归属：任务页 run_…，首页对话 chat_…（契约 Id 格式）。
+CHAT_SCOPE_PATTERN = r"^(run|chat)_[A-Za-z0-9]{6,40}$"
+
+
+class ChatTurnStartRequest(ChatRequest):
+    """POST /api/chat/turns：在 /api/chat 请求体之上带记录字段（ADR-0016）。
+
+    messages 仍由前端携带（模型看到的上下文），text / opening / attachments 是
+    落库的展示字段：text 为用户原话（不含前端注入的任务/附件/模式块），opening
+    为系统自动发起的开场分析（无用户气泡）。stream 字段忽略——托管轮永远流式。
+    """
+
+    scope_id: str = Field(pattern=CHAT_SCOPE_PATTERN, max_length=64)
+    text: str = Field(default="", max_length=100_000)
+    opening: bool = False
+    attachments: list[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("attachments")
+    @classmethod
+    def trim_attachments(cls, value: list[str]) -> list[str]:
+        return [name.strip()[:255] for name in value if name and name.strip()]
+
+
+class ChatTurnTraceRequest(BaseModel):
+    """PATCH /api/chat/turns/{id}：页面侧回复轨迹行（附件解析、难度判定、耗时……）。"""
+
+    trace: list[dict] = Field(default_factory=list, max_length=50)
+
+
 # ── 响应体构造 ───────────────────────────────────────────────────
 
 
@@ -324,6 +369,11 @@ def llm_config_payload(user: User) -> dict:
         "allow_proxy": bool(raw.get("allow_proxy", True)),
         "stream": bool(raw.get("stream", True)),
         "fallback": bool(raw.get("fallback", True)),
+        "smart_routing": bool(raw.get("smart_routing", True)),
+        # 四个键永远齐全；指向已删除接口的定向读出来就是 None（ADR-0015）
+        "task_routes": normalize_task_routes(
+            raw.get("task_routes"), [str(e.get("id") or "") for e in endpoints]
+        ),
     }
 
 

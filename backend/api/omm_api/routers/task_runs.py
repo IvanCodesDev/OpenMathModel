@@ -8,9 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from omm_contracts import (
-    AgentEventType,
     CreateTaskRunInput,
-    StepRunStatus,
     TaskRun,
     TaskRunActionInput,
     TaskRunStatus,
@@ -30,18 +28,12 @@ from ..api_models import (
 from ..config import DEFAULT_MAX_CONCURRENT_RUNS
 from ..db import get_session
 from ..deps import AuthContext, get_auth_context
-from ..engine_glue import (
-    MAX_REVISION_ROUNDS,
-    create_run_events,
-    request_revision,
-    revision_rounds,
-    suggest_revision_stage,
-)
+from ..engine_glue import accept_revision, create_run_events
 from ..errors import ApiError, NotFoundError
-from ..events import append_event, lock_run
 from ..idempotency import with_idempotency
 from ..ids import new_id
-from ..orm import ApprovalRequestRow, ProjectRow, RunNoteRow, StepRunRow, TaskRunRow
+from ..orm import ApprovalRequestRow, ProjectRow, StepRunRow, TaskRunRow
+from ..run_control import record_run_note
 from ..serialize import (
     approval_to_contract,
     iso_z,
@@ -49,7 +41,7 @@ from ..serialize import (
     task_run_to_contract,
     utcnow,
 )
-from ..workflow import NODE_CREATED, STAGE_LABELS
+from ..workflow import NODE_CREATED
 
 router = APIRouter(prefix="/v1/task-runs", tags=["task-runs"])
 
@@ -230,7 +222,8 @@ def post_run_note(
     """运行中追加补充要求（§11.3 方案 A）：落行 + run.log 回执，不打断当前执行。
 
     备注在下一次节点执行时注入提示词（EngineLlmPort 构建时读取本表）；scope
-    指向已完成阶段时回执附带回退引导——重做由人显式操作，绝不由备注文本触发。
+    指向已完成阶段时回执附带回退引导。本端点只落备注、不触发动作；对话里
+    的「重试 / 重做」由托管轮的控制步骤识别并执行（ADR-0018，run_control）。
     """
     run = get_owned_run(session, ctx, run_id)
     if run.status in _TERMINAL_STATUSES:
@@ -239,44 +232,7 @@ def post_run_note(
     if not text:
         raise ApiError(422, "EMPTY_TEXT", "补充要求不能为空")
 
-    note = RunNoteRow(
-        id=new_id("note"),
-        run_id=run.id,
-        text=text,
-        scope=payload.scope,
-        created_at=utcnow(),
-    )
-    session.add(note)
-
-    if payload.scope == "global":
-        message = "已记录补充要求，将在后续每次节点执行时提供给智能体"
-    else:
-        label = STAGE_LABELS.get(payload.scope, payload.scope)
-        message = f"已记录补充要求，将在「{label}」阶段的节点执行时提供给智能体"
-        stage_done = session.execute(
-            select(StepRunRow).where(
-                StepRunRow.run_id == run.id,
-                StepRunRow.node == payload.scope,
-                StepRunRow.status == StepRunStatus.SUCCEEDED.value,
-            )
-        ).scalars().first()
-        if stage_done is not None:
-            message += (
-                "；该阶段已完成，备注不会自动触发重做——"
-                "如需按新要求重做，请在时间线对相应阶段发起重试或回退"
-            )
-    append_event(
-        session,
-        run.id,
-        AgentEventType.run_log.value,
-        {
-            "kind": "user_note",
-            "note_id": note.id,
-            "scope": payload.scope,
-            "text": text[:500],
-            "message": message,
-        },
-    )
+    note = record_run_note(session, run, text, payload.scope)
     return RunNote(
         id=note.id,
         run_id=run.id,
@@ -300,62 +256,7 @@ def post_run_revision(
     （本接口只受理，不推进）。
     """
     run = get_owned_run(session, ctx, run_id)
-    locked = lock_run(session, run.id)
-    run = locked if locked is not None else run
-    if run.status != TaskRunStatus.COMPLETED.value:
-        raise ApiError(
-            409,
-            "RUN_NOT_COMPLETED",
-            f"状态 {run.status} 不支持提出修改要求；仅已完成的运行可以发起修订",
-        )
-    rounds = revision_rounds(session, run.id)
-    if rounds >= MAX_REVISION_ROUNDS:
-        raise ApiError(
-            409,
-            "REVISION_LIMIT_REACHED",
-            f"本次运行的修改轮数已达上限（{MAX_REVISION_ROUNDS} 轮）；"
-            "如仍需调整，请基于当前结果新建任务",
-        )
-    text = payload.text.strip()
-    if not text:
-        raise ApiError(422, "EMPTY_TEXT", "修改要求不能为空")
-
-    note = RunNoteRow(
-        id=new_id("note"),
-        run_id=run.id,
-        text=text,
-        scope="global",
-        created_at=utcnow(),
-    )
-    session.add(note)
-    session.flush()  # 备注行先于领域事件落库：重做的节点按 run_id 读它
-
-    round_no, approval_id = request_revision(session, run, text, note.id)
-    suggested = suggest_revision_stage(text)
-    append_event(
-        session,
-        run.id,
-        AgentEventType.run_log.value,
-        {
-            "kind": "revision_requested",
-            "note_id": note.id,
-            "round": round_no,
-            "suggested_stage": suggested,
-            "text": text[:500],
-            "message": (
-                f"已受理第 {round_no} 轮修改要求，建议从「"
-                f"{STAGE_LABELS.get(suggested, suggested)}」重做；"
-                "请在待确认事项中选定重做起点后生效"
-            ),
-        },
-    )
-    return RunRevision(
-        run_id=run.id,
-        round=round_no,
-        approval_id=approval_id,
-        suggested_stage=suggested,
-        note_id=note.id,
-    )
+    return RunRevision(**accept_revision(session, run, payload.text))
 
 
 @router.post("/{run_id}/actions", response_model=TaskRun)

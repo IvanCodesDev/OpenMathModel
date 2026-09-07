@@ -46,6 +46,9 @@ def app(tmp_path: Path):
         ocr_api_key="",
         # 编译线程同理关闭，改由用例手动 process 驱动
         paper_export_worker_enabled=False,
+        # 模型目录不出网：接口用内置快照，用例用注入的 fetcher 驱动同步
+        model_catalog_enabled=False,
+        model_catalog_cache_path=tmp_path / "model-catalog.json",
         sse_poll_seconds=0.01,
         sse_heartbeat_seconds=60.0,
         # 与本地 backend/api/.env 隔离：测试永远走开发模式验证码，绝不真实发信

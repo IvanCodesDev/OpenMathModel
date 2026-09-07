@@ -16,8 +16,11 @@ import { ApiError, authApi } from "../auth/api";
 import { attachmentsOf } from "../attachments/composer-attachments";
 import { collectConversationAttachments } from "../attachments/conversation-context";
 import { encodePassthroughImages, planImagePassthrough } from "../attachments/image-passthrough";
-import { resolveSelectedModality } from "../integration/model-modality";
-import { OPENING_ANALYSIS_PROMPT, conversationSnapshot, pendingTurnFor, sendConversationTurn } from "../integration/agent-chat";
+import { invalidateModalityConfig, resolveSelectedModality } from "../integration/model-modality";
+import { ROUTING_FIELDS, normalizeTaskRoutes, routingValueFromEndpointId } from "../integration/task-routes";
+import { OPENING_ANALYSIS_PROMPT, attachConversationTurn, conversationSnapshot, entryFromTurn, sendConversationTurn } from "../integration/agent-chat";
+import { CONFIRM_REPLY_TEXT, actionTraceRow, actionTraceTitle, isExecutedAction, lastPendingProposal } from "../integration/run-control-view";
+import { patchChatTurnTrace } from "../integration/chat-turns-api";
 import { CHAT_MODES, currentChatMode, saveChatMode } from "../integration/chat-mode";
 import {
   addComposerReference,
@@ -31,13 +34,23 @@ import {
   resetComposerReferences,
   restorePendingTaskReferences,
 } from "../integration/composer-references";
-import { attachTraceToLastReply, loadConversationLog } from "../tasks/conversation-log";
+import { loadConversationLog } from "../tasks/conversation-log";
 import {
   endpointHost,
   presetMatchesHost,
   PROVIDER_PRESETS,
   providerPreset,
 } from "../integration/llm-providers";
+import {
+  currentModelCatalog,
+  loadModelCatalog,
+  refreshModelCatalog,
+} from "../integration/model-catalog";
+import {
+  catalogFreshnessText,
+  providerHighlights,
+  providerModels,
+} from "../integration/model-catalog-view";
 import {
   endpointFromForm,
   fetchEndpointModels,
@@ -65,11 +78,11 @@ import {
 import {
   hydratePrivacyPane,
   persistPrivacySettings,
-  saveHistoryEnabled,
   syncPrivacyGatesOnce,
 } from "../preferences/privacy-preferences";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
-import { RUN_REVISION_TEXT_LIMIT, WorkspaceApiError, modelingWorkspaceApi } from "../integration/modeling-workspace-api";
+import { demoMode } from "../integration/demo-mode";
+import { guardRunBoundRoute } from "../integration/auth-guard";
 import { mountSidebarSearch } from "../integration/sidebar-search";
 import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { hydrateProjectsPage } from "../integration/projects-page";
@@ -95,6 +108,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
   const icon = (name, extra = "") => `<i class="ph ph-${name} ${extra}" aria-hidden="true"></i>`;
+  /** 空态占位：保留骨架尺寸，说明这里等待真实数据，而不是留一片空白。 */
+  const emptyState = (text, extra = "") =>
+    `<p class="stage-empty-state ${extra}" data-stage-empty>${text}</p>`;
   const projectLogo = (extra = "") =>
     `<img class="project-logo ${extra}" src="/assets/OpenMathModel_IP_Crop.png" alt="" aria-hidden="true">`;
   const providerLogoSources = {
@@ -183,9 +199,19 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     };
   };
 
+  const DEMO_MODEL_OPTIONS = [
+    { id: "qwen3.8-max", label: "Qwen3.8-Max", detail: "通义千问 · 官方服务", provider: "qwen" },
+    { id: "deepseek-v4-pro", label: "DeepSeek-V4-Pro", detail: "DeepSeek · 官方服务", provider: "deepseek" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", detail: "OpenAI · 官方服务", provider: "openai" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", detail: "Anthropic · 官方服务", provider: "anthropic" },
+  ];
+
   /**
    * 模型选择器的选项列表。已保存接口即模型池：Auto 在首位（难度判定 +
-   * 权重路由），其后是每条接口。未登录/未配置时保持演示期的静态选项。
+   * 权重路由），其后是每条接口。
+   * 没有已保存接口时只列 Auto 与本机设置里真填过的自定义 API：那四条「官方服务」
+   * 是演示夹具，选中后请求并不携带任何路由参数（见 agent-chat.ts 的 routeSelection），
+   * 摆在默认态里等于让用户挑一个不生效的模型，因此只在 `?demo=1` 下出现。
    */
   const composerModelOptions = (config = null) => {
     if (config && config.endpoints.length) {
@@ -199,15 +225,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     try {
       settings = JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}");
     } catch {}
-    const customModel = settings.apiModel || "gpt-5.6-sol";
-    const customProfile = settings.apiProfileName || "OpenAI 兼容中转站";
+    const demo = demoMode();
+    const customModel = (settings.apiModel || "").trim() || (demo ? "gpt-5.6-sol" : "");
+    const customProfile = (settings.apiProfileName || "").trim() || "OpenAI 兼容中转站";
     return [
       AUTO_MODEL_OPTION,
-      { id: "qwen3.8-max", label: "Qwen3.8-Max", detail: "通义千问 · 官方服务", provider: "qwen" },
-      { id: "deepseek-v4-pro", label: "DeepSeek-V4-Pro", detail: "DeepSeek · 官方服务", provider: "deepseek" },
-      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", detail: "OpenAI · 官方服务", provider: "openai" },
-      { id: "claude-sonnet-5", label: "Claude Sonnet 5", detail: "Anthropic · 官方服务", provider: "anthropic" },
-      { id: `custom-${customModel}`, label: customModel, detail: `${customProfile} · 自定义 API`, provider: "custom" }
+      ...(demo ? DEMO_MODEL_OPTIONS : []),
+      ...(customModel
+        ? [{ id: `custom-${customModel}`, label: customModel, detail: `${customProfile} · 自定义 API`, provider: "custom" }]
+        : []),
     ];
   };
 
@@ -230,9 +256,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    * 旧选择指向已删除接口时重置为 Auto，避免请求携带失效的 endpoint_id。
    */
   async function hydrateModelPickers() {
+    // 每次接口/路由变更都会走到这里：顺手作废携图判定的配置缓存，让「视觉理解」
+    // 定向与新接口在下一条携图消息就生效，不必刷新页面。
+    invalidateModalityConfig();
     if (!$$("[data-model-picker]").length) return;
     const config = await fetchLlmConfig();
-    if (!config || !config.endpoints.length) return; // 保持演示选项
+    // 配置拉不到（离线/未登录）时不动现有菜单，免得把已选接口重置成 Auto。
+    // 拉到了但接口池是空的，仍要重渲染：设置里刚填的自定义 API 要能立刻出现。
+    if (!config) return;
     const options = composerModelOptions(config);
     let saved = "auto";
     try { saved = localStorage.getItem("openmathmodelSelectedModel") || "auto"; } catch {}
@@ -314,11 +345,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         <nav class="sidebar-nav">${navSection(resourceItems, active)}</nav>
         <div class="recent">
           <div class="recent-title">最近任务</div>
-          ${recentTasks.slice(0, 3).map((task, i) => `<a class="recent-link" href="${routes.running}">${icon(i === 0 ? "circle-half" : "check")}<span>${task}</span>${i === 0 ? '<b class="unread-dot"></b>' : ""}</a>`).join("")}
+          ${demoMode()
+            ? recentTasks.slice(0, 3).map((task, i) => `<a class="recent-link" href="${routes.running}">${icon(i === 0 ? "circle-half" : "check")}<span>${task}</span>${i === 0 ? '<b class="unread-dot"></b>' : ""}</a>`).join("")
+            : `<div class="recent-empty">暂无最近任务</div>`}
         </div>
         <div class="profile-row">
-          <span class="avatar">I</span>
-          <div><strong>Ivan</strong><small>个人工作区</small></div>
+          <span class="avatar">?</span>
+          <div><strong>未登录</strong><small>点击登录账户</small></div>
           <button class="settings" data-action="settings" style="border:0;background:transparent">${icon("gear")}<span>设置</span></button>
         </div>`;
   }
@@ -387,30 +420,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       </section>`, "chat");
   }
 
+  /**
+   * 确认页只渲染真实草稿：项目名、描述与文件列表都由 task-start-controller 按
+   * 首页草稿回填。原先的四个假附件与「任务目标 / 输出要求 / 执行方式」三组静态
+   * 清单已删除——它们没有任何数据源，永远不会被真实内容替换。
+   */
   function confirmScreen() {
     return shell(`
       <section class="confirm-wrap" data-task-start-root data-task-start-screen="confirm">
         <h1>确认任务</h1>
         <p class="muted">检查题目、文件和输出要求，确认后开始执行。</p>
-        <div class="headline" data-task-project-name>2026全国大学生数学建模竞赛A题</div>
-        <p class="muted" data-task-description-preview>请完成题目解析、建模、实验与论文交付。</p>
+        <div class="headline" data-task-project-name></div>
+        <p class="muted" data-task-description-preview></p>
         <h3>文件</h3>
-        <div class="file-read-list" data-task-file-list>
-          ${[
-            ["file-pdf", "A题.pdf", "1.28 MB"],
-            ["file-xls", "附件一.xlsx", "86.7 KB"],
-            ["file-csv", "站点数据.csv", "512.4 KB"],
-            ["file-csv", "天气数据.csv", "248.9 KB"]
-          ].map(([ico, name, size]) => `<div class="file-read-row">
-            <span class="file-name">${icon(ico)}${name}</span><span class="size">${size}</span><span class="read">已读取</span>
-          </div>`).join("")}
-        </div>
-        <h3>任务目标</h3>
-        <ul class="compact-list"><li>分析题目并拆解子问题</li><li>建立候选模型并运行实验</li><li>生成完整论文与代码</li></ul>
-        <h3>输出要求</h3>
-        <ul class="compact-list"><li>中文论文</li><li>Python代码</li><li>Word与PDF</li><li>包含敏感性分析</li></ul>
-        <h3>执行方式</h3>
-        <ul class="compact-list"><li>关键步骤需要确认</li><li>自动运行实验</li><li>保留失败实验记录</li></ul>
+        <div class="file-read-list" data-task-file-list></div>
         <div class="confirm-actions">
           <button data-go="new">返回修改</button>
           <button class="primary" data-go="running" data-task-start-submit>开始任务</button>
@@ -426,81 +449,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     </div><div class="step-details">${details}</div>`;
   }
 
-  const stageAgentCopy = {
-    running: ["正在分析题目", "正在基于题目与附件梳理研究边界、子问题、已知条件与建模难点。"],
-    data: ["正在准备数据", "正在检查字段质量、时间粒度、缺失记录，并生成可复现的数据清洗方案。"],
-    model: ["正在优化模型方案", "已完成候选路线比较，正在输出优化后的模型方案，并给出建议。"],
-    experiments: ["正在评估实验", "正在输出优化实验结果，已完成验证检查并生成结论。"],
-    editor: ["正在协助论文撰写", "正在检查章节结构、公式编号、图表引用与结论一致性。"],
-    complete: ["建模任务已完成", "论文、数据、代码与实验记录已经整理完成，可继续优化或下载全部文件。"]
-  };
-
-  function modelingHeader(active) {
-    const completed = active === "complete";
-    if (active === "editor") {
-      return `<header class="modeling-topbar editor-topbar">
-        <a class="modeling-home-link" href="${routes.experiments}" aria-label="返回实验结果" title="返回实验结果">${icon("arrow-left")}</a>
-        <a class="modeling-project-title" href="${routes.editor}">
-          <strong>论文撰写</strong>
-          <span>第 3 章　·　需求预测模型构建　 <b class="saved-state">${icon("check-circle")} 已保存</b>　v4 ${icon("caret-down")}</span>
-        </a>
-        <div class="modeling-topbar-actions editor-topbar-actions">
-          <button class="header-action-button" type="button" data-action="editor-check">${icon("shield-check")} 检查</button>
-          <button class="header-action-button primary" type="button" data-action="continue-paper">继续生成</button>
-          <button class="header-text-action" type="button" data-action="export-paper">导出 ${icon("caret-down")}</button>
-          <span class="modeling-toolbar-divider"></span>
-          <button type="button" data-action="history" aria-label="任务历史" title="任务历史">${icon("clock-counter-clockwise")}</button>
-          <button type="button" data-action="task-doc" aria-label="任务文档" title="任务文档">${icon("file-text")}</button>
-          <button type="button" data-action="settings" aria-label="设置" title="设置">${icon("gear")}</button>
-        </div>
-      </header>`;
-    }
-    const projectName = active === "data" ? "OpenMathModel" : "城市共享单车调度优化";
-    return `<header class="modeling-topbar">
-      <a class="modeling-home-link" href="${routes.new}" aria-label="返回首页" title="返回首页">${icon("arrow-left")}</a>
-      <a class="modeling-project-title" href="${routes.running}">
-        <strong data-bind="project-name">${projectName}</strong>
-        <span>2026 国赛 A 题　·　自动模式</span>
-      </a>
-      <div class="modeling-topbar-actions">
-        <span class="run-status ${completed ? "complete" : ""}"><b></b> ${completed ? "已完成" : "进行中"}</span>
-        <span class="modeling-toolbar-divider"></span>
-        <button type="button" data-action="history" aria-label="任务历史" title="任务历史">${icon("clock-counter-clockwise")}</button>
-        <button type="button" data-action="task-doc" aria-label="任务文档" title="任务文档">${icon("file-text")}</button>
-        <button type="button" data-action="settings" aria-label="设置" title="设置">${icon("gear")}</button>
-      </div>
-    </header>`;
-  }
-
-  function modelingAgentPane(active) {
-    const copy = stageAgentCopy[active] || stageAgentCopy.running;
-    const activeIndex = ["running", "data", "model", "experiments", "editor", "complete"].indexOf(active);
-    const steps = [
-      ["已读取题目与附件", "00:03", "已识别题面、订单、站点与天气数据。"],
-      ["已完成问题拆解", "00:06", "任务拆解为需求预测、区域划分与调度优化。"],
-      ["已完成数据结构分析", "00:12", "已检查字段完整性、时间粒度与异常记录。"],
-      ["已完成候选模型比较", "00:18", "已比较 XGBoost、LightGBM 与 LSTM 的适配度。"]
-    ];
-    return `<section class="chat-pane modeling-chat-pane">
-      <div class="modeling-agent-head">
-        <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-      </div>
-      <div class="chat-scroll">
-        <div class="assistant-block modeling-assistant-block">
-          <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 ${icon("caret-up")}</button>
-          <div class="activity-list">
-            ${steps.map(step => progressStep(true, step[0], step[1], step[2])).join("")}
-            ${progressStep(active === "complete", active === "complete" ? "全部成果已交付" : copy[0], active === "complete" ? "完成" : "··:··", copy[1])}
-          </div>
-          <div class="analysis-copy modeling-agent-copy"><p>${copy[1]}</p></div>
-        </div>
-      </div>
-      ${composer(active === "complete" ? "继续描述任务，快速问问，@ 添加上下文" : "继续描述任务，/ 快速调用，@ 添加上下文", true)}
-    </section>`;
-  }
-
-  const focusedStages = new Set(["data", "model", "experiments", "editor", "complete"]);
-
   function focusedModelingHeader(active) {
     // 统一导航模型：顶部返回箭头一律回“任务执行”总览页（hub）；
     // 阶段之间的横向跳转由左栏六阶段时间线承担，不再用返回键模拟线性浏览历史。
@@ -512,7 +460,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return `<header class="focused-modeling-topbar">
       <div class="focused-topbar-context">
         <a class="focused-back" href="${backRoute}" data-back-from="${active}" aria-label="${backLabel}" title="${backLabel}">${icon("arrow-left")}</a>
-        <span class="focused-task-name"><span data-bind="project-name">城市共享单车调度优化</span></span>
+        <span class="focused-task-name"><span data-bind="project-name">${demoMode() ? "城市共享单车调度优化" : ""}</span></span>
       </div>
     </header>`;
   }
@@ -551,11 +499,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
   };
 
+  /**
+   * 阶段页左栏。默认只留控制器要用的两个槽位（摘要 data-agent-summary、
+   * 主操作 data-agent-cta），执行步骤由控制器按真实事件流写入摘要之后；
+   * 演示夹具（步骤时间线、阶段文案、样例附件）只在 `?demo=1` 下渲染。
+   */
   function focusedAgentPane(active) {
     const stage = FOCUSED_STAGE_DEMO[active];
-    // 与 runningScreen 同一判定：真实运行不预渲染演示步骤/摘要/附件，
-    // 步骤区以 boot 思考态占位等控制器接管，避免假内容闪现后被清换。
-    const isRealRun = /^run_[0-9a-f]{32}$/.test(new URL(window.location.href).searchParams.get("run_id") ?? "");
+    const demo = demoMode();
     const steps = [
       ["已读取题目与附件", "00:03"],
       ["已完成问题拆解", "00:06"],
@@ -569,8 +520,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     </section>`;
     const demoSteps = `${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
           <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>`;
-    // 真实运行：步骤时间线与演示附件不再渲染（阶段计划归输入框上方的执行计划
-    // 面板），只保留摘要与 CTA 槽位给控制器填充。
     const demoTimeline = `<button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
         <div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
           ${demoSteps}
@@ -578,17 +527,18 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return `<section class="chat-pane focused-agent-chat">
       <div class="focused-agent-head"><div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div></div>
       <div class="focused-agent-scroll">
-        ${isRealRun ? "" : demoTimeline}
-        <div class="focused-agent-copy" data-agent-summary>${isRealRun ? "" : stage.copy}</div>
-        ${isRealRun ? "" : attachments}
-        <button class="focused-stage-cta" type="button" data-go="${stage.next}" data-agent-cta${isRealRun ? " hidden" : ""}>${isRealRun ? "" : stage.button}</button>
+        ${demo ? demoTimeline : ""}
+        <div class="focused-agent-copy" data-agent-summary>${demo ? stage.copy : ""}</div>
+        ${demo ? attachments : ""}
+        <button class="focused-stage-cta" type="button"${demo ? ` data-go="${stage.next}"` : ""} data-agent-cta${demo ? "" : " hidden"}>${demo ? stage.button : ""}</button>
       </div>
       ${composer("继续描述任务，/ 快速调用，@ 添加上下文", true)}
     </section>`;
   }
 
+  // 第四项 hidden：入口先藏起，等 stage-content 填进真实内容后再 revealWorkspaceTab 放出。
   function workspaceTabs(tabs, activeTab) {
-    return `<div class="focused-workspace-tabs" role="tablist">${tabs.map(([key, label, iconName]) => `<button type="button" class="${key === activeTab ? "active" : ""}" data-workspace-tab="${key}" role="tab" aria-selected="${key === activeTab}">${icon(iconName)}<span>${label}</span></button>`).join("")}</div>`;
+    return `<div class="focused-workspace-tabs" role="tablist">${tabs.map(([key, label, iconName, hidden]) => `<button type="button" class="${key === activeTab ? "active" : ""}" data-workspace-tab="${key}" role="tab" aria-selected="${key === activeTab}"${hidden ? " hidden" : ""}>${icon(iconName)}<span>${label}</span></button>`).join("")}</div>`;
   }
 
   /**
@@ -602,49 +552,38 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     </div>`;
   }
 
-  function modelingShell(content, active, auxiliary = "") {
-    if (focusedStages.has(active)) {
-      return `<div class="modeling-shell modeling-clone-shell" data-modeling-shell data-focused-stage="${active}" data-workspace-page="${active}">
-        ${focusedModelingHeader(active)}
-        <div class="focused-modeling-split" data-modeling-split data-mobile-pane="stage">
-          ${modelingPaneSwitch()}
-          <aside class="focused-agent-pane">${focusedAgentPane(active)}</aside>
-          <div class="modeling-resizer focused-modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 与建模内容的宽度" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="58" aria-valuenow="27" tabindex="0"></div>
-          <main class="focused-stage-pane" data-stage-view>${content}</main>
-        </div>
-      </div>`;
-    }
-    return `<div class="modeling-shell" data-modeling-shell>
-      ${modelingHeader(active)}
-      <div class="modeling-split" data-modeling-split data-mobile-pane="stage">
+  // 五个阶段一律走聚焦工作台；旧的非聚焦分支已随合并工作台（ADR-0009）退役。
+  function modelingShell(content, active) {
+    return `<div class="modeling-shell modeling-clone-shell" data-modeling-shell data-focused-stage="${active}" data-workspace-page="${active}">
+      ${focusedModelingHeader(active)}
+      <div class="focused-modeling-split" data-modeling-split data-mobile-pane="stage">
         ${modelingPaneSwitch()}
-        <aside class="modeling-agent-pane">${modelingAgentPane(active)}</aside>
-        <div class="modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 对话与建模流程的显示比例" aria-orientation="vertical" aria-valuemin="24" aria-valuemax="62" aria-valuenow="32" tabindex="0"></div>
-        <main class="modeling-stage-pane">
-          <div class="modeling-stage-scroll">${content}</div>
-        </main>
+        <aside class="focused-agent-pane">${focusedAgentPane(active)}</aside>
+        <div class="modeling-resizer focused-modeling-resizer" data-modeling-resizer role="separator" aria-label="调整 Agent 与建模内容的宽度" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="58" aria-valuenow="27" tabindex="0"></div>
+        <main class="focused-stage-pane" data-stage-view>${content}</main>
       </div>
-      ${auxiliary}
     </div>`;
   }
 
   function runningScreen() {
-    // 首屏气泡按运行隔离：优先读本运行的题面（发送链路按 run_id 写入）；真实
-    // 运行没有记录时留空，等控制器用工作台快照的 goal 回填——绝不回落到同标签
-    // 页里别的任务写下的全局 openmathmodelPrompt（数据隔离）。演示态维持原状。
+    // 首屏气泡按运行隔离：优先读本运行的题面（发送链路按 run_id 写入）；没有记录
+    // 时留空，等控制器用工作台快照的 goal 回填——绝不回落到同标签页里别的任务写下
+    // 的全局 openmathmodelPrompt（数据隔离）。只有 `?demo=1` 才用样例题面兜底。
     const runIdParam = new URL(window.location.href).searchParams.get("run_id") ?? "";
-    const isRealRun = /^run_[0-9a-f]{32}$/.test(runIdParam);
-    const prompt = isRealRun
-      ? sessionStorage.getItem(`openmathmodel.taskGoal.${runIdParam}`) ?? ""
-      : sessionStorage.getItem("openmathmodelPrompt") || "请结合共享单车订单、站点与天气数据，完成需求预测、区域划分和调度优化。";
+    const demo = demoMode();
+    const prompt = demo
+      ? sessionStorage.getItem("openmathmodelPrompt") || "请结合共享单车订单、站点与天气数据，完成需求预测、区域划分和调度优化。"
+      : sessionStorage.getItem(`openmathmodel.taskGoal.${runIdParam}`) ?? "";
     const steps = [
       ["已读取题目与附件", "00:03", "已识别题面、订单、站点和天气数据。"],
       ["已完成问题拆解", "00:06", "任务拆解为需求预测、区域划分和调度优化。"],
       ["已完成数据结构分析", "00:12", "已检查字段完整性、时间粒度与异常值。"],
       ["已完成候选模型比较", "00:18", "已比较 XGBoost、Prophet 和 LSTM 的适配度。"]
     ];
-    // 真实运行不预渲染任何演示内容：阶段计划由输入框上方的「执行计划」面板
+    // 默认不预渲染任何演示内容：阶段计划由输入框上方的「执行计划」面板
     // （task-todo-panel）承载，气泡里只保留摘要槽位，由控制器填充真实数据。
+    // 首气泡整块默认 hidden——没有真实运行时不摆一个只剩「Agent」头像的空壳；
+    // 控制器渲染真实运行（renderStatus）或需要报错（renderError）时再放出。
     const demoAssistantBlock = `
               <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
               <div class="activity-list" data-agent-steps>
@@ -668,18 +607,18 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         <section class="chat-pane running-chat-pane">
           <header class="task-toolbar">
             <a class="back" href="${routes.new}" aria-label="返回首页" title="返回首页">${icon("arrow-left")}</a>
-            <div><h2 data-bind="project-name">${isRealRun ? "" : "城市共享单车调度优化"}</h2><p${isRealRun ? " hidden" : ""}>2026 国赛 A 题　·　自动模式</p></div>
+            <div><h2 data-bind="project-name">${demo ? "城市共享单车调度优化" : ""}</h2><p${demo ? "" : " hidden"}>2026 国赛 A 题　·　自动模式</p></div>
             <div class="task-toolbar-actions">
-              <span class="run-status${isRealRun ? "" : " complete"}"><b></b> ${isRealRun ? "加载中…" : "规划完成"}</span>
-              <button type="button" data-action="files" aria-label="查看 3 个附件"${isRealRun ? ' style="display:none"' : ""}>${icon("paperclip")} 3</button>
+              <span class="run-status${demo ? " complete" : ""}"${demo ? "" : " hidden"}><b></b>${demo ? " 规划完成" : ""}</span>
+              <button type="button" data-action="files" aria-label="查看 3 个附件"${demo ? "" : ' style="display:none"'}>${icon("paperclip")} 3</button>
               <button type="button" data-action="more" aria-label="更多操作">${icon("dots-three")}</button>
             </div>
           </header>
           <div class="chat-scroll">
-            <div class="user-message"><div class="user-bubble">${escapeHtml(prompt)}</div></div>
-            <div class="assistant-block">
+            <div class="user-message"${prompt ? "" : " hidden"}><div class="user-bubble">${escapeHtml(prompt)}</div></div>
+            <div class="assistant-block"${demo ? "" : " hidden"}>
               <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-              ${isRealRun ? liveAssistantBlock : demoAssistantBlock}
+              ${demo ? demoAssistantBlock : liveAssistantBlock}
               <button type="button" class="running-live-cta" data-agent-cta data-live-only>Agent 正在执行</button>
             </div>
           </div>
@@ -698,7 +637,19 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     ["股票趋势预测", "LSTM深度学习模型", "数据处理", "2025-05-16 21:14", 17, 8, 0]
   ];
 
+  /**
+   * 项目页。真实清单由 projects-page.ts 拉 GET /v1/projects 重建 tbody 与页脚；
+   * 默认（未登录 / 请求失败）留空态行，不再拿七条假项目冒充「我的项目」。
+   */
   function projectsScreen() {
+    const demo = demoMode();
+    const rows = demo
+      ? projectRows.map(r => `<tr data-project="${r[0]}">
+                <td class="project-name"><strong>${r[0]}</strong><span>${r[1]}</span></td>
+                <td><span class="stage-pill" data-stage="${r[2]}">${r[2]}</span></td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td>
+                <td><button type="button" class="row-menu-button" data-action="row-menu" aria-label="更多操作">${icon("dots-three")}</button></td>
+              </tr>`).join("")
+      : `<tr class="projects-empty-row"><td colspan="7">还没有项目，去首页发起第一个建模任务</td></tr>`;
     return shell(`
       <section class="main-pad">
         <h1 class="page-title">项目</h1>
@@ -711,15 +662,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           <table class="project-table">
             <thead><tr><th>项目名称</th><th>当前阶段</th><th>最近更新　⌃</th><th>文件</th><th>实验</th><th>论文</th><th>操作</th></tr></thead>
             <tbody>
-              ${projectRows.map(r => `<tr data-project="${r[0]}">
-                <td class="project-name"><strong>${r[0]}</strong><span>${r[1]}</span></td>
-                <td><span class="stage-pill" data-stage="${r[2]}">${r[2]}</span></td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td>
-                <td><button type="button" class="row-menu-button" data-action="row-menu" aria-label="更多操作">${icon("dots-three")}</button></td>
-              </tr>`).join("")}
+              ${rows}
             </tbody>
           </table>
         </div>
-        <div class="project-footer"><span>共 7 项</span><div class="pagination"><button class="page-button" disabled>‹</button><button class="page-button active">1</button><button class="page-button">›</button>
+        <div class="project-footer"><span>${demo ? "共 7 项" : "共 0 项"}</span><div class="pagination"><button class="page-button" disabled>‹</button><button class="page-button active">1</button><button class="page-button">›</button>
           <div class="settings-custom-select page-size-select" data-page-size-select data-select-menu>
             <button type="button" class="settings-select-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="每页条数"><span data-select-label>20 条/页</span>${icon("caret-down")}</button>
             <div class="settings-select-menu" role="listbox" aria-label="每页条数">
@@ -730,49 +677,25 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       </section>`, "projects");
   }
 
-  function taskDetailsDrawer() {
-    return `<aside class="task-detail-drawer" data-task-detail-drawer aria-label="查看详情" aria-hidden="true">
-      <div class="drawer-heading"><h2>查看详情</h2><button type="button" data-action="close-details" aria-label="关闭详情">${icon("x")}</button></div>
-      <div class="drawer-tabs" role="tablist">
-        ${["当前信息", "历史版本", "运行记录", "相关产物"].map((tab, index) => `<button class="${index === 0 ? "active" : ""}" data-drawer-tab="${tab}" role="tab">${tab}</button>`).join("")}
-      </div>
-      <div class="drawer-content">
-        <section class="drawer-card">
-          <div class="drawer-section-title">${icon("flow-arrow")}<strong>任务图（概览）</strong></div>
-          <p>数据准备 → 模型设定 → 求解与验证 → 结果输出</p>
-          <p>当前步骤：数据准备（第 2 轮 · 输入检查完成）</p>
-        </section>
-        <section class="drawer-card">
-          <div class="drawer-section-title">${icon("clock")}<strong>循环记录</strong></div>
-          <ul class="drawer-timeline"><li><span>2025-05-10 10:21</span>第 2 轮　输入检查完成（输入 v2）</li><li><span>2025-05-10 09:47</span>第 1 轮　输入初检完成（输入 v1）</li><li><span>2025-05-10 09:12</span>第 0 轮　任务创建</li></ul>
-        </section>
-        <section class="drawer-card">
-          <div class="drawer-section-title">${icon("table")}<strong>输入来源</strong></div>
-          <ul><li>需求表：历史供需数据_2024Q4.xlsx（Sheet: demand）</li><li>参数：用户提供（12 项）</li><li>附件：无</li></ul>
-        </section>
-        <section class="drawer-card">
-          <div class="drawer-section-title">${icon("seal")}<strong>模型假设</strong></div>
-          <ul><li>需求在 15 分钟粒度内近似平稳</li><li>车辆服务时间服从正态分布</li><li>所有区域可独立调度</li></ul>
-        </section>
-        <button class="drawer-card drawer-validation" type="button" data-action="validation-details">
-          <span class="drawer-section-title">${icon("check-circle")}<strong>完整验证结果</strong></span>${icon("caret-right")}
-          <small>通过（6/6）<br>数据完整性、范围校验、逻辑一致性、异常检测、单位一致性、可解性</small>
-        </button>
-        <section class="drawer-card">
-          <div class="drawer-section-title">${icon("record")}<strong>运行环境</strong></div>
-          <p>求解器：Gurobi 11.0.1<br>运行时长：00:01:48<br>机器：8 vCPU / 32 GB RAM<br>时间：2025-05-10 10:21<br>运行者：Agent</p>
-        </section>
-      </div>
-    </aside>`;
-  }
-
+  /**
+   * 数据准备页。骨架（结论条 / 指标 / 数据清单表 / 准备步骤区）必须原样保留：
+   * stage-content.ts 的 renderDataPanel 按 .focused-conclusion-strip、.focused-metrics、
+   * .focused-section.compact 里的 table 与 .raw-preview-section 定位填真实画像。
+   * 「原始数据 / 清洗数据」两个分页当前契约下没有任何真实数据源，只在 `?demo=1` 存在。
+   */
   function dataStageContent() {
+    const demo = demoMode();
+    const tabs = [["data-report", "数据报告", "file-text"]];
+    if (demo) tabs.push(["raw-data", "原始数据", "table"], ["clean-data", "清洗数据", "sliders-horizontal"]);
+    // 字段说明有真实来源（DatasetProfile.datasets[].fields），先藏起，填好由渲染器放出
+    tabs.push(["field-guide", "字段说明", "files", !demo]);
     return `
       <section class="focused-workspace data-report-workspace">
-        ${workspaceTabs([["data-report","数据报告","file-text"],["raw-data","原始数据","table"],["clean-data","清洗数据","sliders-horizontal"],["field-guide","字段说明","files"]], "data-report")}
+        ${workspaceTabs(tabs, "data-report")}
         <div class="focused-workspace-panel active" data-workspace-panel="data-report">
           <header class="focused-document-heading"><div><h1>数据报告</h1><p>数据质量检查与处理建议</p></div><div><button type="button" data-action="refresh-report" aria-label="刷新报告">${icon("arrow-clockwise")}</button><button type="button" data-action="download-data" aria-label="下载报告">${icon("download-simple")}</button></div></header>
-          <div class="focused-conclusion-strip">${icon("check-circle")}<strong>核心结论：</strong><span>完成以下 3 项清洗后，数据可进入建模阶段。</span></div>
+          ${demo
+            ? `<div class="focused-conclusion-strip">${icon("check-circle")}<strong>核心结论：</strong><span>完成以下 3 项清洗后，数据可进入建模阶段。</span></div>
           <section class="focused-metrics three"><article><span>记录数</span><strong>12,480</strong></article><article><span>字段数</span><strong>18</strong></article><article><span>缺失比例</span><strong>2.7%</strong></article></section>
           <section class="focused-section compact"><h2>数据问题与处理建议</h2><div class="focused-table-wrap"><table class="focused-table issue-table"><thead><tr><th></th><th>问题描述</th><th>处理方法</th><th>应用</th></tr></thead><tbody>
             <tr><td>1</td><td>时间粒度不一致（5min / 15min / 30min 混杂）</td><td>统一重采样为 15 分钟粒度，采用均值/求和汇总</td><td><button class="focused-toggle is-on" data-action="suggestion-toggle" aria-pressed="true"><span></span></button></td></tr>
@@ -785,9 +708,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <tr><td>2024-10-01 00:15</td><td>中心城区</td><td>128</td><td>312</td><td>–</td><td>···</td></tr>
             <tr><td>2024-10-01 00:30</td><td>中心城区</td><td>128</td><td>298</td><td>8.1</td><td>···</td></tr>
             <tr><td>2024-10-01 00:45</td><td>中心城区</td><td>128</td><td>410</td><td>7.5</td><td>···</td></tr>
-          </tbody></table></div><footer class="focused-table-footer"><span>显示前 5 行，共 12,480 条记录</span><nav aria-label="数据分页"><button disabled>${icon("caret-left")}</button><button class="active">1</button><button>2</button><button>3</button><span>···</span><button>104</button><button>${icon("caret-right")}</button></nav></footer></section>
+          </tbody></table></div><footer class="focused-table-footer"><span>显示前 5 行，共 12,480 条记录</span><nav aria-label="数据分页"><button disabled>${icon("caret-left")}</button><button class="active">1</button><button>2</button><button>3</button><span>···</span><button>104</button><button>${icon("caret-right")}</button></nav></footer></section>`
+            : `<div class="focused-conclusion-strip">${emptyState("数据画像将在数据准备阶段完成后显示。")}</div>
+          <section class="focused-metrics three" hidden></section>
+          <section class="focused-section compact" hidden><h2>数据清单与质量风险</h2><div class="focused-table-wrap"><table class="focused-table issue-table"></table></div></section>
+          <section class="focused-section compact raw-preview-section" hidden></section>`}
         </div>
-        <div class="focused-workspace-panel" data-workspace-panel="raw-data"><section class="focused-template">
+        ${demo ? `<div class="focused-workspace-panel" data-workspace-panel="raw-data"><section class="focused-template">
           <header class="focused-template-heading"><div><h1>原始数据</h1><p>历史供需数据 · 只读预览</p></div><button type="button" data-action="download-data">${icon("download-simple")} 导出</button></header>
           <section class="focused-metrics three focused-template-metrics"><article><span>记录数</span><strong>12,480</strong><small>2024 Q4</small></article><article><span>数据表</span><strong>2</strong><small>订单 / 站点</small></article><article><span>更新时间</span><strong>10:32</strong><small>今天</small></article></section>
           <section class="focused-template-section"><div class="focused-template-section-title"><h2>历史供需数据</h2><span>前 8 行</span></div><div class="focused-table-wrap"><table class="focused-table focused-template-table"><thead><tr><th>时间</th><th>区域</th><th>投放点数</th><th>可用车辆</th><th>平均等待</th><th>订单量</th></tr></thead><tbody>
@@ -801,21 +728,33 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <article><b>01</b><div><strong>统一时间粒度</strong><span>重采样为 15 分钟</span></div><em>已应用</em></article><article><b>02</b><div><strong>补全车辆缺失</strong><span>区域内前向填充</span></div><em>已应用</em></article><article><b>03</b><div><strong>校正等待单位</strong><span>统一转换为分钟</span></div><em>已应用</em></article>
           </div></section>
           <section class="focused-template-section"><div class="focused-template-section-title"><h2>清洗后预览</h2><span>数据版本 v2</span></div><div class="focused-table-wrap"><table class="focused-table focused-template-table"><thead><tr><th>时间</th><th>区域</th><th>可用车辆</th><th>平均等待</th><th>质量标记</th></tr></thead><tbody><tr><td>2024-10-01 00:00</td><td>中心城区</td><td>356</td><td>7.2 min</td><td>原始</td></tr><tr><td>2024-10-01 00:15</td><td>中心城区</td><td>312</td><td>6.9 min</td><td>汇总</td></tr><tr><td>2024-10-01 00:30</td><td>中心城区</td><td>298</td><td>8.1 min</td><td>原始</td></tr><tr><td>2024-10-01 00:45</td><td>中心城区</td><td>410</td><td>7.5 min</td><td>原始</td></tr></tbody></table></div></section>
-        </section></div>
-        <div class="focused-workspace-panel" data-workspace-panel="field-guide"><section class="focused-template">
+        </section></div>` : ""}
+        <div class="focused-workspace-panel" data-workspace-panel="field-guide">${demo ? `<section class="focused-template">
           <header class="focused-template-heading"><div><h1>字段说明</h1><p>字段、类型、单位与质量状态</p></div><span class="focused-template-status neutral">18 个字段</span></header>
           <div class="focused-conclusion-strip focused-template-notice">${icon("check-circle")}<span>核心建模字段已完成类型和单位校验。</span></div>
           <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table field-table"><thead><tr><th>字段</th><th>含义</th><th>类型</th><th>单位</th><th>来源</th><th>状态</th></tr></thead><tbody><tr><td><strong>timestamp</strong></td><td>统计时刻</td><td>datetime</td><td>—</td><td>订单表</td><td>已校验</td></tr><tr><td><strong>region_id</strong></td><td>运营区域</td><td>string</td><td>—</td><td>站点表</td><td>已校验</td></tr><tr><td><strong>dock_count</strong></td><td>投放点数</td><td>integer</td><td>个</td><td>站点表</td><td>已校验</td></tr><tr><td><strong>available_bikes</strong></td><td>可用车辆数</td><td>integer</td><td>辆</td><td>状态表</td><td>已清洗</td></tr><tr><td><strong>avg_wait</strong></td><td>平均等待时间</td><td>float</td><td>分钟</td><td>订单表</td><td>已校正</td></tr><tr><td><strong>order_count</strong></td><td>订单数量</td><td>integer</td><td>单</td><td>订单表</td><td>已校验</td></tr><tr><td><strong>temperature</strong></td><td>气温</td><td>float</td><td>℃</td><td>天气表</td><td>已校验</td></tr><tr><td><strong>is_holiday</strong></td><td>节假日标记</td><td>boolean</td><td>—</td><td>日历表</td><td>已校验</td></tr></tbody></table></div><footer class="focused-template-footer"><span>显示核心字段 8 / 18</span><span>最后校验 10:36</span></footer></section>
-        </section></div>
+        </section>` : ""}</div>
       </section>`;
   }
 
+  /**
+   * 模型方案页。renderModelPanel 按 .focused-conclusion-strip / .focused-plan-list /
+   * .focused-plan-detail 三个槽位填真实候选方案，三处骨架必须保留。
+   * 「模型假设 / 符号表 / 实现计划」三个子分页在真实运行里先藏起入口，等
+   * stage-content 用方案契约（assumptions / symbols / 推荐方案步骤）填好后放出；
+   * 演示内容只在 `?demo=1` 存在。
+   */
   function modelStageContent() {
+    const demo = demoMode();
+    const tabs = [["model-plan", "模型方案", "file-text"]];
+    tabs.push(["assumptions", "模型假设", "table", !demo], ["symbols", "符号表", "list-dashes", !demo]);
+    tabs.push(["implementation", "实现计划", "chart-line", !demo]);
     return `
       <section class="focused-workspace model-plan-workspace">
-        ${workspaceTabs([["model-plan","模型方案","file-text"],["assumptions","模型假设","table"],["symbols","符号表","list-dashes"],["implementation","实现计划","chart-line"]], "model-plan")}
+        ${workspaceTabs(tabs, "model-plan")}
         <div class="focused-workspace-panel active" data-workspace-panel="model-plan">
-          <div class="focused-conclusion-strip model-recommendation">${icon("check-circle")}<span>建议采用方案 A 作为主方案，方案 B 作为可运行基线，方案 C 作为条件备用方案。</span></div>
+          ${demo
+            ? `<div class="focused-conclusion-strip model-recommendation">${icon("check-circle")}<span>建议采用方案 A 作为主方案，方案 B 作为可运行基线，方案 C 作为条件备用方案。</span></div>
           <div class="focused-plan-list">
             <button class="focused-plan-row selected" data-plan-option="0" type="button"><span class="plan-radio"></span><strong>方案 A <small>（推荐主方案）</small></strong><span>核心方法：需求预测 + 混合整数优化</span><span>计划角色：主方案</span><span>主要风险：需求预测不确定性</span>${icon("caret-up")}</button>
             <button class="focused-plan-row" data-plan-option="1" type="button"><span class="plan-radio"></span><strong>方案 B <small>（可运行基线）</small></strong><span>核心方法：分区聚类 + 分阶段调度</span><span>计划角色：基线</span><span>主要风险：边界效应可能影响结果</span>${icon("caret-down")}</button>
@@ -826,35 +765,29 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <div><h2>主要输入</h2><ul><li>共享单车历史订单数据、站点分布与容量信息</li><li>时间区间、车辆总量与调度成本参数</li><li>运营约束：车辆调拨、站点容量、调度策略规则等</li></ul></div>
             <div><h2>预期输出</h2><ul><li>各时间段各区域车辆投放与回收数量</li><li>跨区域调度路径与车辆流转计划</li><li>目标函数值（总调度成本）与关键指标（满足率、平衡度等）</li></ul></div>
             <div><h2>验证方式</h2><ul><li>在历史数据上进行回测，比较方案指标（满足率、成本、平衡度）</li><li>与基线方案对比分析提升幅度</li><li>鲁棒性测试：参数扰动与需求波动下的稳定性评估</li></ul></div>
-          </section>
+          </section>`
+            : `<div class="focused-conclusion-strip model-recommendation">${emptyState("候选建模方案将在方案生成后显示。")}</div>
+          <div class="focused-plan-list"></div>
+          <section class="focused-plan-detail selected-plan-overview"></section>`}
         </div>
-        <div class="focused-workspace-panel" data-workspace-panel="assumptions"><section class="focused-template">
+        <div class="focused-workspace-panel" data-workspace-panel="assumptions">${demo ? `<section class="focused-template">
           <header class="focused-template-heading"><div><h1>模型假设</h1><p>全局假设与方案 A 特定假设</p></div><span class="focused-template-status neutral">6 项</span></header>
           <div class="focused-conclusion-strip focused-template-notice">${icon("check-circle")}<span>当前假设均可由数据或运营规则支撑。</span></div>
           <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table assumption-table"><thead><tr><th>#</th><th>假设</th><th>适用范围</th><th>依据</th><th>影响</th><th>状态</th></tr></thead><tbody><tr><td>A1</td><td>15 分钟内需求保持平稳</td><td>全局</td><td>时间粒度</td><td>低</td><td>已确认</td></tr><tr><td>A2</td><td>站点容量短期内固定</td><td>全局</td><td>运营规则</td><td>中</td><td>已确认</td></tr><tr><td>A3</td><td>调度车辆速度近似恒定</td><td>全局</td><td>历史均值</td><td>中</td><td>待检验</td></tr><tr><td>A4</td><td>天气信息可提前获得</td><td>全局</td><td>数据接口</td><td>低</td><td>已确认</td></tr><tr><td>M1</td><td>区域需求可独立预测</td><td>方案 A</td><td>分区结果</td><td>中</td><td>待检验</td></tr><tr><td>M2</td><td>调度成本近似线性</td><td>方案 A</td><td>成本规则</td><td>高</td><td>重点验证</td></tr></tbody></table></div></section>
           <footer class="focused-template-callout"><strong>验证重点</strong><span>围绕 A3、M1、M2 进行敏感性和鲁棒性测试。</span></footer>
-        </section></div>
-        <div class="focused-workspace-panel" data-workspace-panel="symbols"><section class="focused-template">
+        </section>` : ""}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="symbols">${demo ? `<section class="focused-template">
           <header class="focused-template-heading"><div><h1>符号表</h1><p>集合、参数与决策变量</p></div><span class="focused-template-status neutral">统一单位</span></header>
           <section class="focused-template-section"><div class="focused-table-wrap"><table class="focused-table focused-template-table symbol-table"><thead><tr><th>符号</th><th>类型</th><th>定义</th><th>单位</th><th>范围</th></tr></thead><tbody><tr><td><strong>i ∈ I</strong></td><td>集合</td><td>运营区域索引</td><td>—</td><td>1…R</td></tr><tr><td><strong>t ∈ T</strong></td><td>集合</td><td>15 分钟时间段</td><td>—</td><td>1…96</td></tr><tr><td><strong>dᵢₜ</strong></td><td>参数</td><td>区域 i 在时段 t 的预测需求</td><td>单</td><td>≥ 0</td></tr><tr><td><strong>cᵢⱼ</strong></td><td>参数</td><td>区域 i 到 j 的单位调度成本</td><td>元/辆</td><td>≥ 0</td></tr><tr><td><strong>Kᵢ</strong></td><td>参数</td><td>区域 i 的容量上限</td><td>辆</td><td>正整数</td></tr><tr><td><strong>xᵢⱼₜ</strong></td><td>变量</td><td>时段 t 从 i 调往 j 的车辆数</td><td>辆</td><td>非负整数</td></tr><tr><td><strong>sᵢₜ</strong></td><td>变量</td><td>时段 t 区域 i 的可用车辆</td><td>辆</td><td>0…Kᵢ</td></tr><tr><td><strong>z</strong></td><td>目标</td><td>总调度成本</td><td>元</td><td>最小化</td></tr></tbody></table></div><footer class="focused-template-footer"><span>8 个核心符号</span><span>符号版本 v1</span></footer></section>
-        </section></div>
-        <div class="focused-workspace-panel" data-workspace-panel="implementation"><section class="focused-template">
+        </section>` : ""}</div>
+        <div class="focused-workspace-panel" data-workspace-panel="implementation">${demo ? `<section class="focused-template">
           <header class="focused-template-heading"><div><h1>实现计划</h1><p>数据、算法、求解与验证</p></div><span class="focused-template-status">准备就绪</span></header>
           <section class="focused-template-steps"><article><b>01</b><div><strong>特征构建</strong><span>时间、空间、天气</span></div><em>输入 v2</em></article><article><b>02</b><div><strong>需求预测</strong><span>滚动窗口回测</span></div><em>Python</em></article><article><b>03</b><div><strong>调度求解</strong><span>混合整数规划</span></div><em>求解器</em></article><article><b>04</b><div><strong>结果验证</strong><span>基线与鲁棒性</span></div><em>5 组实验</em></article></section>
           <section class="focused-template-grid"><article class="focused-template-card"><h2>运行环境</h2><dl><div><dt>语言</dt><dd>Python 3.11</dd></div><div><dt>求解器</dt><dd>HiGHS 1.7</dd></div><div><dt>随机种子</dt><dd>42</dd></div></dl></article><article class="focused-template-card"><h2>输出产物</h2><ul><li>需求预测结果</li><li>调度决策表</li><li>实验对比报告</li></ul></article></section>
           <footer class="focused-template-callout"><strong>预计耗时</strong><span>约 12–18 分钟，可在沙盒中复现。</span></footer>
-        </section></div>
+        </section>` : ""}</div>
       </section>`;
   }
-
-  const experiments = [
-    ["#12 最优参数探索", "已完成", "MAE 2.31 / RMSE 3.12"],
-    ["#11 学习率调整", "已完成", "MAE 2.58 / RMSE 3.47"],
-    ["#10 特征增强", "已完成", "MAE 2.85 / RMSE 3.91"],
-    ["#9 基线模型", "已完成", "MAE 3.42 / RMSE 4.78"],
-    ["#8 特征选择", "运行中 45%", ""],
-    ["#7 数据预处理", "失败", ""]
-  ];
 
   const experimentResultPages = {
     charts: {
@@ -935,18 +868,27 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     ["下载全部", 'data-action="download-all"', true]
   ];
 
+  /**
+   * 产物分页的文档骨架。文件表 .deliverables 由控制器 renderArtifacts 按产物类型
+   * 填真实文件，必须保留；上方的 kicker / 项目名 / 摘要行没有真实数据源，
+   * 只在 `?demo=1` 下渲染，默认给一句空态说明。
+   */
   function resultDocument(page, key, extraClass = "") {
     const actions = page.actions || defaultResultActions;
+    const demo = demoMode();
     return `<section class="stage-document complete-wrap result-detail-document ${extraClass}" data-result-document="${key}">
       <h1>${page.title}</h1>
-      <div class="complete-kicker">${icon("check-circle")} ${page.kicker}</div>
+      ${demo ? `<div class="complete-kicker">${icon("check-circle")} ${page.kicker}</div>
       <h2 class="complete-project-name">${page.project}</h2>
       <div class="result-summary">
         ${page.summary.map(([label, content]) => `<div class="summary-row"><span>${label}</span>${content.startsWith("<") ? content : `<span>${content}</span>`}</div>`).join("")}
-      </div>
+      </div>`
+        : `<div class="complete-kicker" hidden></div>
+      <h2 class="complete-project-name"></h2>
+      <div class="result-summary"></div>`}
       <section class="deliverable-section result-detail-deliverables"><h2>${page.section}</h2>
         <div class="deliverables"><div class="deliverable-head"><span>文件名称</span><span>类型</span><span>大小</span><span>操作</span></div>
-          ${page.files.map(item => `<div class="deliverable"><span class="deliverable-name">${icon(item[0])}${item[1]}</span><span>${item[2]}</span><span>${item[3]}</span><button class="open-file" data-file="${item[1]}" aria-label="下载 ${item[1]}">${icon("download-simple")}</button></div>`).join("")}
+          ${demo ? page.files.map(item => `<div class="deliverable"><span class="deliverable-name">${icon(item[0])}${item[1]}</span><span>${item[2]}</span><span>${item[3]}</span><button class="open-file" data-file="${item[1]}" aria-label="下载 ${item[1]}">${icon("download-simple")}</button></div>`).join("") : `<div class="deliverable" data-artifact-empty="true"><span class="deliverable-name">该阶段尚未发布产物</span><span>—</span><span>—</span><span></span></div>`}
         </div>
       </section>
       <div class="stage-actions complete-actions result-detail-actions">${actions.map(([label, attributes, primary]) => `<button ${primary ? 'class="primary"' : ""} ${attributes}>${label}</button>`).join("")}</div>
@@ -957,18 +899,29 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return resultDocument(experimentResultPages[key], key);
   }
 
+  /**
+   * 实验结果页。renderExperimentsPanel 依赖 .focused-report-conclusion、
+   * .focused-metrics 与 .focused-experiment-notes 下的两个 article（顺序敏感：
+   * [0] 稳健性、[1] 实现思路），renderArtifacts 依赖 .focused-run-meta。
+   * 对比柱状图只有演示夹具有数据序列，默认整块不渲染。
+   */
   function experimentsStageContent() {
+    const demo = demoMode();
     return `
       <section class="focused-workspace experiment-report-workspace">
         ${workspaceTabs([["experiment-report","实验报告","file-text"],["charts","结果图表","chart-bar"],["results-table","结果表","clipboard-text"],["run-log","运行日志","terminal-window"],["model-code","模型代码","code"]], "experiment-report")}
         <div class="focused-workspace-panel active" data-workspace-panel="experiment-report">
           <section class="focused-report-card">
             <h1>实验结论</h1>
-            <div class="focused-report-conclusion">${icon("check-circle")}<strong>结果通过：</strong><span>模型在关键指标上较基线有所提升，满足题目要求。</span></div>
+            ${demo
+              ? `<div class="focused-report-conclusion">${icon("check-circle")}<strong>结果通过：</strong><span>模型在关键指标上较基线有所提升，满足题目要求。</span></div>
             <section class="focused-metrics three experiment-metrics"><article><span>当前结果</span><strong>1,842,596</strong><small>总行程时间（秒）</small></article><article><span>基线结果</span><strong>2,033,414</strong><small>总行程时间（秒）</small></article><article><span>改进幅度</span><strong>-9.38%</strong><small>越低越好</small></article></section>
             <section class="focused-experiment-chart"><div class="focused-chart-heading"><h2>核心对比：总行程时间（秒）</h2><div><span><b class="legend-dot baseline"></b>基线结果</span><span><b class="legend-dot current"></b>当前结果</span></div></div><div class="cost-chart-wrap"><canvas id="costChart" aria-label="基线结果与当前结果总行程时间对比柱状图"></canvas></div></section>
-            <section class="focused-experiment-notes"><article><h2>稳健性与风险结论</h2><ul><li>${icon("check-circle")} 在 5 个不同随机种子下波动较小，最大标准差 1.52%。</li><li>${icon("check-circle")} 跨时段与区域验证均优于基线，整体性能稳定。</li><li>${icon("check-circle")} 高峰极端工况下模型仍具有良好鲁棒性，建议上线试运行观察。</li></ul></article><article><h2>Agent 最终采用建议</h2><p>建议采用该模型作为当前候选方案，进入提交准备阶段。</p><p>后续可在业务场景验证基础上，持续监控并优化。</p></article></section>
-            <footer class="focused-run-meta">运行 ID: run_20261001_104233　|　完成时间：2026-10-01 10:42:33　|　耗时：15 分 28 秒</footer>
+            <section class="focused-experiment-notes"><article><h2>稳健性与风险结论</h2><ul><li>${icon("check-circle")} 在 5 个不同随机种子下波动较小，最大标准差 1.52%。</li><li>${icon("check-circle")} 跨时段与区域验证均优于基线，整体性能稳定。</li><li>${icon("check-circle")} 高峰极端工况下模型仍具有良好鲁棒性，建议上线试运行观察。</li></ul></article><article><h2>Agent 最终采用建议</h2><p>建议采用该模型作为当前候选方案，进入提交准备阶段。</p><p>后续可在业务场景验证基础上，持续监控并优化。</p></article></section>`
+              : `<div class="focused-report-conclusion">${emptyState("实验结论将在实验执行完成后显示。")}</div>
+            <section class="focused-metrics three experiment-metrics" hidden></section>
+            <section class="focused-experiment-notes"><article hidden></article><article hidden></article></section>`}
+            <footer class="focused-run-meta">${demo ? "运行 ID: run_20261001_104233　|　完成时间：2026-10-01 10:42:33　|　耗时：15 分 28 秒" : ""}</footer>
           </section>
         </div>
         <div class="focused-workspace-panel" data-workspace-panel="charts">${experimentResultDocument("charts")}</div>
@@ -978,13 +931,21 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       </section>`;
   }
 
+  /**
+   * 论文编辑页。renderEditorPanel 会用真实 DocumentDraft 重建大纲与正文；
+   * 默认给空大纲与空正文（编辑器仍可写），演示正文只在 `?demo=1` 下出现。
+   */
   function editorStageContent() {
+    const demo = demoMode();
+    const outlineSections = demo
+      ? ["摘要", "1 引言", "2 相关工作", "3 需求预测模型构建", "4 实证分析", "5 结果与讨论", "6 结论与展望"]
+      : [];
     return `
       <section class="focused-workspace paper-editor-workspace paper-only-workspace">
         <div class="focused-workspace-panel active paper-only-panel">
           <section class="editor-main workflow-editor paper-only-editor">
             <div class="editor-layout">
-              <aside class="outline"><div class="outline-heading"><h3>论文大纲</h3>${icon("dots-three-vertical")}</div>${["摘要","1 引言","2 相关工作","3 需求预测模型构建","4 实证分析","5 结果与讨论","6 结论与展望"].map((x,i)=>`<a href="#section-${i}" class="${i===3?"active":""}"><span class="outline-status ${i<3?"done":""}">${i<3?icon("check"):""}</span>${x}</a>`).join("")}</aside>
+              <aside class="outline"><div class="outline-heading"><h3>论文大纲</h3>${icon("dots-three-vertical")}</div>${outlineSections.length ? outlineSections.map((x,i)=>`<a href="#section-${i}" class="${i===3?"active":""}"><span class="outline-status ${i<3?"done":""}">${i<3?icon("check"):""}</span>${x}</a>`).join("") : emptyState("论文大纲将在论文生成后显示。", "outline-empty")}</aside>
               <article class="paper-editor">
                 <div class="editor-toolbar">
                   <div class="editor-format-tools">
@@ -996,14 +957,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                   <div class="paper-editor-inline-actions"><button data-action="editor-check">检查</button><button data-action="export-paper">导出</button><button class="primary" data-action="continue-paper">完成交付</button></div>
                 </div>
                 <div class="editor-page" contenteditable="true" spellcheck="false">
-                  <h1>城市共享单车需求预测与调度优化研究</h1>
+                  ${demo ? `<h1>城市共享单车需求预测与调度优化研究</h1>
                   <h2 id="section-3">3 需求预测模型构建</h2>
                   <h3>3.1 问题定义</h3><p>在给定研究区域与时间范围内，基于历史数据与相关影响因素，预测各区域在未来时段的共享单车需求，并制定车辆调度方案，使得调度总成本最小，同时满足各区域的需求平衡约束。</p>
                   <h3>3.2 特征设计</h3><p>本文从时间、空间、天气和社会活动四个维度构建特征体系。时间维度包括小时、星期、节假日等；<mark>空间维度包括区域类型、POI 密度、周边地铁站距离等；</mark>天气维度包括温度、降水、风速等；社会活动维度包括大型活动、演出、赛事等。</p>
                   <button class="source-chip" contenteditable="false" data-action="source-detail" title="点击引用到左侧对话，直接提问或要求修改">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
                   <h3>3.3 模型设定</h3><p>采用基于图卷积网络（GCN）的时空预测模型，结合区域间拓扑关系与动态特征，捕捉需求的时空相关性。</p><p>模型目标函数如下：</p>
                   <div class="editor-formula" data-tex="\\min\\;\\sum_{i=1}^{N}\\sum_{t=1}^{T}\\left(y_{it}-\\hat{y}_{it}\\right)^{2}+\\lambda\\lVert\\Theta\\rVert_{2}^{2}" contenteditable="false" title="点击编辑公式"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
-                  <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>
+                  <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>` : `<p class="editor-placeholder">论文正文将在写作阶段生成，也可以直接在这里开始撰写。</p>`}
                 </div>
                 <input type="file" accept="image/*" hidden data-editor-image-input>
                 <footer class="editor-statusbar">
@@ -1899,8 +1860,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         back.setAttribute("title", backLabel);
         back.dataset.backFrom = stageKey;
       }
-      // 演示态由模板更新左栏文案；真实运行的左栏由工作台控制器渲染，这里不碰。
-      if (shell.dataset.workspaceSource !== "api") updateFocusedDemoRail(stageKey, shell);
+      // 仅演示态（?demo=1）由模板更新左栏文案；真实运行的左栏归工作台控制器。
+      if (demoMode() && shell.dataset.workspaceSource !== "api") updateFocusedDemoRail(stageKey, shell);
     }
     document.body.dataset.screen = stageKey;
     document.title = `OpenMathModel · ${t(WORKSPACE_STAGE_TITLES[stageKey])}`;
@@ -2085,8 +2046,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
             <button data-settings-nav="advanced" data-title="高级设置" data-subtitle="代理、并发、超时与开发选项">${icon("terminal-window")}<span>高级设置</span></button>
           </nav>
           <div class="settings-account-card">
-            <span class="avatar">I</span>
-            <div><strong>Ivan</strong><span>个人工作区</span></div>
+            <span class="avatar">?</span>
+            <div><strong>未登录</strong><span>登录后同步账户</span></div>
           </div>
         </aside>
 
@@ -2162,25 +2123,23 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
             <div class="settings-pane" data-settings-pane="providers">
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>模型厂商</h3><p>点「配置」自动填入官方接口参数，连接状态来自已保存的接口。</p></div><button type="button" class="primary-small" data-settings-jump="api">${icon("plus")} 添加厂商</button></div>
+                <div class="settings-section-heading"><div><h3>模型厂商</h3><p>点「配置」自动填入官方接口参数，连接状态来自已保存的接口。<span data-catalog-status>正在读取型号目录…</span></p></div><div class="settings-heading-actions"><button type="button" class="secondary-small" data-settings-action="refresh-catalog">${icon("arrows-clockwise")} 同步型号</button><button type="button" class="primary-small" data-settings-jump="api">${icon("plus")} 添加厂商</button></div></div>
                 <div class="provider-list">
                   ${PROVIDER_PRESETS.map(preset => `<div class="provider-card" data-provider-card="${escapeHtml(preset.id)}">
                     <div class="provider-logo">${providerLogo(preset.logo, preset.label)}</div>
-                    <div><strong>${escapeHtml(preset.label)}</strong><span>${escapeHtml(preset.subtitle || preset.models.slice(0, 3).join(" / "))}</span></div>
+                    <div><strong>${escapeHtml(preset.label)}</strong><span data-provider-models>${escapeHtml(preset.subtitle || "正在同步型号…")}</span></div>
                     <span class="provider-status idle" data-provider-status>未配置</span>
                     <button type="button" data-settings-action="configure-provider" data-provider-id="${escapeHtml(preset.id)}">配置</button>
                   </div>`).join("")}
                 </div>
               </div>
               <div class="settings-section">
-                <div class="settings-section-heading"><div><h3>智能路由</h3><p>根据任务类型、速度与费用自动选择模型。</p></div></div>
-                ${settingsToggle("smartRouting", "启用模型智能路由", "优先满足质量要求，并在同等能力下选择成本更低的模型", true)}
+                <div class="settings-section-heading"><div><h3>智能路由</h3><p>候选接口即「自定义 API」里已保存的接口，增删接口后这里即时更新；保存后任务的对应阶段与携图对话按此定向。</p></div></div>
+                ${settingsToggle("smartRouting", "启用模型智能路由", "开启后按下方任务类型把调用定向到指定接口；关闭则全部走主接口链", true)}
                 <div class="settings-grid two">
-                  <label class="settings-field"><span>编程与 Agent</span><select name="codingModel"><option>自动选择</option><option>GPT-5.6 Sol</option><option>Claude Opus 5</option><option>GLM-5.3</option><option>DeepSeek-V4-Pro</option></select></label>
-                  <label class="settings-field"><span>深度研究</span><select name="researchModel"><option>自动选择</option><option>Qwen3.8-Max</option><option>DeepSeek-V4-Pro</option><option>Claude Fable 5</option><option>GPT-5.6 Sol</option></select></label>
-                  <label class="settings-field"><span>长文写作</span><select name="writingModel"><option>自动选择</option><option>Claude Sonnet 5</option><option>Qwen3.8-Max</option><option>Kimi K3</option></select></label>
-                  <label class="settings-field"><span>视觉理解</span><select name="visionModel"><option>自动选择</option><option>Gemini 3.6 Flash</option><option>GPT-5.6 Sol</option><option>Qwen3.8-Max</option></select></label>
+                  ${ROUTING_FIELDS.map(([name, kind, label]) => `<label class="settings-field"><span>${label}</span><select name="${name}" data-routing-select data-routing-kind="${kind}">${routingSelectOptions(null)}</select></label>`).join("")}
                 </div>
+                <p class="settings-field-note" data-routing-note hidden></p>
               </div>
             </div>
 
@@ -2309,14 +2268,26 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const saveSettings = () => {
       const values = collectSettingsValues();
       localStorage.setItem("openmathmodelSettings", JSON.stringify(values));
+      const apiModel = (values.apiModel || "").trim() || (demoMode() ? "gpt-5.6-sol" : "");
       $$('[data-model-choice^="custom-"]', document).forEach(option => {
         const picker = option.closest("[data-model-picker]");
         const wasSelected = option.getAttribute("aria-selected") === "true";
-        option.dataset.modelChoice = `custom-${values.apiModel || "gpt-5.6-sol"}`;
-        $(".model-choice-copy strong", option).textContent = values.apiModel || "gpt-5.6-sol";
+        // 自定义模型名被清空：默认态不拿 gpt-5.6-sol 这类演示名兜底，直接撤掉这条并退回 Auto
+        if (!apiModel) {
+          option.remove();
+          if (wasSelected && picker) {
+            $("[data-model-picker-label]", picker).textContent = AUTO_MODEL_OPTION.label;
+            $("[data-model-picker-icon]", picker).innerHTML = composerModelLogo(AUTO_MODEL_OPTION);
+            $('[data-model-choice="auto"]', picker)?.setAttribute("aria-selected", "true");
+            localStorage.setItem("openmathmodelSelectedModel", "auto");
+          }
+          return;
+        }
+        option.dataset.modelChoice = `custom-${apiModel}`;
+        $(".model-choice-copy strong", option).textContent = apiModel;
         $(".model-choice-copy small", option).textContent = `${values.apiProfileName || "OpenAI 兼容中转站"} · 自定义 API`;
         if (wasSelected && picker) {
-          $("[data-model-picker-label]", picker).textContent = values.apiModel || "gpt-5.6-sol";
+          $("[data-model-picker-label]", picker).textContent = apiModel;
           localStorage.setItem("openmathmodelSelectedModel", option.dataset.modelChoice);
         }
       });
@@ -2368,28 +2339,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       if (fontControl && fontOutput) fontOutput.textContent = `${fontControl.value} px`;
     };
     const enhanceSettingsSelects = () => {
-      $$("select", backdrop).forEach((select, selectIndex) => {
-        const options = [...select.options];
-        const selected = options.find(option => option.selected) || options[0];
-        const fieldLabel = select.closest(".settings-field")?.querySelector(":scope > span")?.textContent?.trim() || "选择选项";
-        select.classList.add("settings-native-select");
-        select.hidden = true;
-        select.tabIndex = -1;
-        select.setAttribute("aria-hidden", "true");
-        const custom = document.createElement("div");
-        custom.className = "settings-custom-select";
-        custom.dataset.customSelect = select.name || String(selectIndex);
-        custom.innerHTML = `
-          <button type="button" class="settings-select-trigger" data-custom-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="${escapeHtml(fieldLabel)}">
-            <span>${escapeHtml(selected?.textContent || "")}</span>${icon("caret-down")}
-          </button>
-          <div class="settings-select-menu" role="listbox" aria-label="${escapeHtml(fieldLabel)}">
-            ${options.map(option => `<button type="button" role="option" data-custom-select-option="${escapeHtml(option.value)}" aria-selected="${option.selected}">
-              <span>${escapeHtml(option.textContent)}</span>${icon("check")}
-            </button>`).join("")}
-          </div>`;
-        select.insertAdjacentElement("afterend", custom);
-      });
+      $$("select", backdrop).forEach((select, selectIndex) => enhanceSettingsSelect(select, String(selectIndex)));
     };
     const onSettingsKeydown = event => {
       if (event.key !== "Escape") return;
@@ -2490,10 +2440,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           if (editingId) {
             const { config, message } = await updateEndpoint(editingId, values);
             toast(t(message));
-            if (config) {
-              renderEndpointItems(backdrop, config);
-              renderProviderStatus(backdrop, config);
-            }
+            if (config) renderLlmConfigViews(backdrop, config);
             return Boolean(config);
           }
           const message = await saveEndpointAsNew(values);
@@ -2523,16 +2470,34 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         const assign = (name, value) => { const control = $(`[name="${name}"]`, backdrop); if (control) control.value = value; };
         assign("apiProfileName", `${preset.label} 官方 API`);
         assign("apiBaseUrl", preset.baseUrl);
-        assign("apiModel", preset.models[0] || "");
         assign("apiOrganization", "");
         assign("apiPathPrefix", "");
         assign("apiKey", "");
         setProtocolSelect(backdrop, preset.protocol);
-        renderModelOptions(backdrop, preset.models);
+        // 默认模型取目录里该厂商最新的正式版（ADR-0017）；目录通常已随面板打开
+        // 拉到，这里的 await 只在首次未就绪时才真正等待。
+        void (async () => {
+          const catalog = currentModelCatalog() ?? await loadModelCatalog();
+          const models = providerModels(catalog, preset.id);
+          assign("apiModel", providerHighlights(catalog, preset.id)[0] || models[0] || "");
+          renderModelOptions(backdrop, models);
+        })();
         $('[name="apiKey"]', backdrop)?.focus();
         toast(t(preset.id === "ollama"
           ? "已填入本地 Ollama 参数，无需密钥，模型 ID 填你已安装的模型"
           : "已填入官方接口参数，补上 API Key 后点「测试连接」"));
+      }
+      if (action === "refresh-catalog") {
+        void withBusyButton(actionButton, t("同步中…"), async () => {
+          try {
+            const view = await refreshModelCatalog();
+            renderProviderCatalog(backdrop, view);
+            toast(t("型号目录已同步到最新"));
+          } catch (error) {
+            renderProviderCatalog(backdrop, currentModelCatalog());
+            toast(error instanceof Error ? error.message : t("型号目录同步失败"));
+          }
+        });
       }
       if (action === "reset-defaults") {
         localStorage.removeItem("openmathmodelSettings");
@@ -2579,7 +2544,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                 const config = await setEndpointWeight(endpointId, weight);
                 if (!config) { toast(t("操作失败，请确认已登录")); return; }
                 toast(t(weight ? "权重已更新" : "已恢复自动推断"));
-                renderEndpointItems(backdrop, config);
+                renderLlmConfigViews(backdrop, config);
                 void hydrateModelPickers();
               })();
             });
@@ -2591,8 +2556,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
               : await removeEndpoint(endpointId);
             if (!config) { toast(t("操作失败，请确认已登录")); return; }
             toast(t(choice === "设为主接口" ? "已设为主接口" : "接口已删除"));
-            renderEndpointItems(backdrop, config);
-            renderProviderStatus(backdrop, config);
+            renderLlmConfigViews(backdrop, config);
             void hydrateModelPickers();
           })();
         });
@@ -2621,6 +2585,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     void hydrateMaxConcurrency(backdrop);
     // 自定义 API 同理：表单、开关与已保存接口列表都以服务端为准回填。
     void hydrateLlmPanel(backdrop);
+    // 模型厂商卡片的在售型号来自服务端同步的目录（ADR-0017），不再写死在页面里。
+    void loadModelCatalog().then(view => renderProviderCatalog(backdrop, view));
     // 用量监控：统计卡、柱状图、模型分布与预算表单都来自服务端记录。
     void hydrateUsagePane(backdrop);
     // 数据与隐私：开关与保留策略以服务端为准回填（未登录保持本机显示）。
@@ -2770,8 +2736,92 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }).join("");
   }
 
+  /**
+   * 原生 select → 同款自定义下拉（原生的藏起来只负责取值与 change 事件）。
+   * 可重复调用：选项集合变了就再调一次，旧的自定义下拉会先拆掉，显示才不会分叉。
+   */
+  function enhanceSettingsSelect(select, key) {
+    const stale = select.nextElementSibling;
+    if (stale instanceof HTMLElement && stale.classList.contains("settings-custom-select")) stale.remove();
+    const options = [...select.options];
+    const selected = options.find(option => option.selected) || options[0];
+    const fieldLabel = select.closest(".settings-field")?.querySelector(":scope > span")?.textContent?.trim() || "选择选项";
+    select.classList.add("settings-native-select");
+    select.hidden = true;
+    select.tabIndex = -1;
+    select.setAttribute("aria-hidden", "true");
+    const custom = document.createElement("div");
+    custom.className = "settings-custom-select";
+    custom.dataset.customSelect = select.name || key;
+    custom.innerHTML = `
+      <button type="button" class="settings-select-trigger" data-custom-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="${escapeHtml(fieldLabel)}">
+        <span>${escapeHtml(selected?.textContent || "")}</span>${icon("caret-down")}
+      </button>
+      <div class="settings-select-menu" role="listbox" aria-label="${escapeHtml(fieldLabel)}">
+        ${options.map(option => `<button type="button" role="option" data-custom-select-option="${escapeHtml(option.value)}" aria-selected="${option.selected}">
+          <span>${escapeHtml(option.textContent)}</span>${icon("check")}
+        </button>`).join("")}
+      </div>`;
+    select.insertAdjacentElement("afterend", custom);
+  }
+
+  /**
+   * 智能路由下拉的候选项：Auto + 每条已保存接口。取值 `endpoint-<id>` 与输入框
+   * 模型选择器同一套标识；显示「模型 · 接口名」，主接口再标一下。
+   * 这里不再内置任何厂商型号——能选的只能是用户自己配好、真能被调到的接口，
+   * 新型号（如 gpt-6-astra）配成接口的那一刻就会出现在这里，不用等预设表更新。
+   */
+  function routingSelectOptions(config) {
+    const rows = [["auto", "自动选择"]];
+    (config?.endpoints ?? []).forEach(endpoint => {
+      if (!endpoint.id) return;
+      const primary = endpoint.id === config.active_endpoint_id;
+      const text = `${endpoint.model || endpoint.name}${endpoint.model ? ` · ${endpoint.name}` : ""}${primary ? " · 主接口" : ""}`;
+      rows.push([`endpoint-${endpoint.id}`, text]);
+    });
+    return rows.map(([value, text]) => `<option value="${escapeHtml(value)}">${escapeHtml(text)}</option>`).join("");
+  }
+
+  /**
+   * 把已保存接口刷进四个智能路由下拉。接口增删改、设主接口、改权重之后都会调，
+   * 让这里的候选与「已保存接口」列表始终一致。
+   *
+   * 选中项的来源分两种（ADR-0015 决策 5）：打开面板时（fromServer）以服务端
+   * `task_routes` 为准，覆盖本机残留；面板内增删接口触发的刷新保留用户尚未保存的
+   * 当前选择。两种情况下，指向已不存在接口的值都退回「自动选择」。未登录拿不到
+   * 配置时回落本机设置表（那时原生 select 只有 Auto 一项，restoreSettings 写不进去）。
+   */
+  function renderRoutingSelects(backdrop, config, { fromServer = false } = {}) {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}"); } catch {}
+    const serverRoutes = config ? normalizeTaskRoutes(config.task_routes) : null;
+    const markup = routingSelectOptions(config);
+    $$("select[data-routing-select]", backdrop).forEach(select => {
+      const preferred = fromServer && serverRoutes
+        ? routingValueFromEndpointId(serverRoutes[select.dataset.routingKind])
+        : select.value || saved[select.name] || "auto";
+      select.innerHTML = markup;
+      select.value = [...select.options].some(option => option.value === preferred) ? preferred : "auto";
+      enhanceSettingsSelect(select, select.name);
+    });
+    const note = $("[data-routing-note]", backdrop);
+    if (!note) return;
+    const count = config?.endpoints.length ?? 0;
+    note.hidden = count > 0;
+    note.textContent = config
+      ? "还没有已保存接口：先在「自定义 API」保存接口，这里才有可选项。"
+      : "登录后可按任务类型指定已保存的接口。";
+  }
+
+  /** 服务端接口配置的三处投影一起刷：已保存接口列表、厂商卡片状态、智能路由候选。 */
+  function renderLlmConfigViews(backdrop, config, options = {}) {
+    renderEndpointItems(backdrop, config);
+    renderProviderStatus(backdrop, config);
+    renderRoutingSelects(backdrop, config, options);
+  }
+
   async function renderEndpointList(backdrop) {
-    renderEndpointItems(backdrop, await fetchLlmConfig());
+    renderLlmConfigViews(backdrop, await fetchLlmConfig());
   }
 
   /** 接口用量记录列表：随「允许使用第三方中转站」开关变化（关闭即停记）。 */
@@ -2853,9 +2903,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   }
 
   /**
-   * 「默认模型 ID」的补全列表。两级来源：先按 Base URL 域名秒填厂商预设里的
-   * 型号（离线、立即可用），再向接口本身要一次真实清单合并进来——预设表是
-   * 快照会过期，接口自报的才跟得上厂商上新。拉不到就只留预设，不打断填写。
+   * 「默认模型 ID」的补全列表。两级来源：先按 Base URL 域名秒填服务端目录里
+   * 该厂商的型号（页面打开时已拉到，立即可用；ADR-0017），再向接口本身要一次
+   * 真实清单合并进来——目录是公共站的同步结果，接口自报的才是这个账号真能用
+   * 的。拉不到就只留目录，不打断填写。
    */
   function renderModelOptions(backdrop, names) {
     const list = $("#apiModelOptions", backdrop);
@@ -2863,19 +2914,35 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     list.innerHTML = names.map(name => `<option value="${escapeHtml(name)}"></option>`).join("");
   }
 
-  function seedModelOptions(backdrop, baseUrl) {
+  function catalogModelsForHost(baseUrl) {
     const host = endpointHost(String(baseUrl || "").trim());
     const preset = PROVIDER_PRESETS.find(item => presetMatchesHost(item, host));
-    renderModelOptions(backdrop, preset?.models || []);
-    return preset;
+    return preset ? providerModels(currentModelCatalog(), preset.id) : [];
   }
 
   async function refreshModelOptions(backdrop, values) {
-    const preset = seedModelOptions(backdrop, values.apiBaseUrl);
+    const fromCatalog = catalogModelsForHost(values.apiBaseUrl);
+    renderModelOptions(backdrop, fromCatalog);
     const live = await fetchEndpointModels(values);
     if (!live.length) return;
-    // 接口自报的排前面（通常新型号在前），预设里有而接口没报的仍然保留
-    renderModelOptions(backdrop, [...new Set([...live, ...(preset?.models || [])])]);
+    // 接口自报的排前面（通常新型号在前），目录里有而接口没报的仍然保留
+    renderModelOptions(backdrop, [...new Set([...live, ...fromCatalog])]);
+  }
+
+  /** 厂商卡片副标题 = 目录里该厂商最新的几款；标题下如实标注目录新鲜度。 */
+  function renderProviderCatalog(backdrop, view) {
+    if (!backdrop.isConnected) return;
+    $$("[data-provider-card]", backdrop).forEach(card => {
+      const preset = providerPreset(card.dataset.providerCard);
+      const target = $("[data-provider-models]", card);
+      if (!preset || !target || preset.subtitle) return;
+      const highlights = providerHighlights(view, preset.id);
+      target.textContent = highlights.length
+        ? highlights.join(" / ")
+        : (view ? "目录暂未收录该厂商型号，可手填模型 ID" : "型号目录暂不可用");
+    });
+    const status = $("[data-catalog-status]", backdrop);
+    if (status) status.textContent = catalogFreshnessText(view);
   }
 
   /** 厂商卡片状态：已保存接口中存在同域名的即视为已连接。 */
@@ -2902,8 +2969,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     exitEndpointEditing(backdrop);
     renderLlmUsageList(backdrop);
     const config = await fetchLlmConfig();
-    renderEndpointItems(backdrop, config);
-    renderProviderStatus(backdrop, config);
+    renderLlmConfigViews(backdrop, config, { fromServer: true });
     if (!config) return;
     const setToggle = (name, on) => {
       const toggle = $(`[name="${name}"]`, backdrop);
@@ -2914,6 +2980,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     setToggle("allowProxyApi", config.allow_proxy);
     setToggle("streamResponse", config.stream);
     setToggle("fallbackApi", config.fallback);
+    // 智能路由总开关（ADR-0015）：旧后端不返回该字段，缺省视为开启
+    setToggle("smartRouting", config.smart_routing !== false);
     const active = config.endpoints.find(item => item.id === config.active_endpoint_id) || config.endpoints[0];
     if (!active) return;
     const assign = (name, value) => {
@@ -2929,116 +2997,95 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     assign("apiPathPrefix", active.path_prefix);
     assign("apiWeight", active.weight || "");
     setProtocolSelect(backdrop, active.protocol);
-    // 只按预设铺底，真实清单等用户聚焦模型 ID 时再拉：开设置面板不该顺带出网。
-    seedModelOptions(backdrop, active.base_url);
+    // 只按目录铺底，真实清单等用户聚焦模型 ID 时再拉：开设置面板不该顺带出网。
+    // 目录与配置并行拉取，谁后到都不该丢补全：目录晚到时由它这边补一次。
+    renderModelOptions(backdrop, catalogModelsForHost(active.base_url));
+    void loadModelCatalog().then(() => {
+      if (!backdrop.isConnected) return;
+      const current = $('[name="apiBaseUrl"]', backdrop)?.value;
+      if (current === active.base_url) renderModelOptions(backdrop, catalogModelsForHost(current));
+    });
   }
 
   /**
-   * Chart.js 只有数据页和实验页用得到，动态载入避免让其他页面为它买单。
+   * Chart.js 只有演示态实验页用得到，动态载入避免让其他页面为它买单。
    * 原实现依赖 CDN 注入的 window.Chart，加载失败会静默返回、图表区直接空白；
    * 现在改为本地依赖并显式报错。
    */
   let chartLoader = null;
   function initCharts(screen) {
-    const mergedWorkspace = Boolean(workspaceStageContent[screen]);
-    if (!mergedWorkspace && screen !== "data" && screen !== "experiments") return;
+    if (!demoMode() || !workspaceStageContent[screen]) return;
     chartLoader = chartLoader || import("chart.js/auto").then(module => module.default);
     chartLoader
-      .then(Chart => {
-        // 合并工作台里五个面板同存，一次把数据页与实验页的图都建好；
-        // 隐藏面板的画布在首次显示时靠 resize 自适应到正确尺寸。
-        if (mergedWorkspace) {
-          renderCharts(Chart, "data");
-          renderCharts(Chart, "experiments");
-        } else {
-          renderCharts(Chart, screen);
-        }
-      })
+      .then(renderCostChart)
       .catch(error => console.error("图表库加载失败，数据可视化不可用", error));
   }
 
-  function renderCharts(Chart, screen) {
+  /**
+   * 唯一存活的图表：演示态实验页的基线对比柱状图。数据序列是演示夹具的一部分，
+   * 真实运行没有可画的序列（控制器把 .focused-experiment-chart 整块隐藏，指标走
+   * 上方卡片），所以这里只在 `?demo=1` 且画布存在时才建图。
+   */
+  function renderCostChart(Chart) {
+    const costCanvas = $("#costChart");
+    if (!costCanvas) return;
     const dark = document.documentElement.dataset.theme === "dark";
     const chartInk = dark ? "#ecece8" : "#171717";
-    const chartMuted = dark ? "#9f9f99" : "#8a8a86";
-    const chartSurface = dark ? "#20201f" : "#fff";
     Chart.defaults.color = dark ? "#b8b7b1" : "#5f5f5f";
     Chart.defaults.borderColor = dark ? "#3b3b38" : "rgba(0,0,0,.1)";
     Chart.defaults.font.family = 'Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif';
     Chart.defaults.animation = false;
-    if (screen === "data") {
-      const dailyCanvas = $("#dailyChart");
-      const hourCanvas = $("#hourChart");
-      if (!dailyCanvas || !hourCanvas) return;
-      const daily = Array.from({ length: 90 }, (_, i) => Math.max(350, 420 + i * 28 + Math.sin(i * .82) * 360 + (i % 7 === 0 ? 850 : 0)));
-      new Chart(dailyCanvas, {
-        type: "line",
-        data: { labels: daily.map((_, i) => i % 15 === 0 ? ["01-01","01-31","03-02","04-01","05-01","05-31"][i/15] || "06-30" : ""), datasets: [{ data: daily, borderColor: chartInk, borderWidth: 1.6, pointRadius: 0, tension: .08 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { min: 0, max: 5000, ticks: { stepSize: 1000 } } } }
-      });
-      const hour = [350,260,160,90,80,140,410,890,1450,1760,1580,1170,850,790,760,810,950,1210,1530,1880,2080,2020,1680,1250];
-      new Chart(hourCanvas, {
-        type: "line",
-        data: { labels: hour.map((_, i) => i), datasets: [{ data: hour, borderColor: chartInk, borderWidth: 1.6, pointBackgroundColor: chartSurface, pointBorderColor: chartInk, pointRadius: 2.3, tension: .26 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, title: { display: true, text: "小时" } }, y: { min: 0, max: 2200 } } }
-      });
-    }
-    if (screen === "experiments") {
-      const costCanvas = $("#costChart");
-      if (costCanvas) new Chart(costCanvas, {
-        type: "bar",
-        data: {
-          labels: ["基线结果", "当前结果"],
-          datasets: [{
-            data: [2033414, 1842596],
-            backgroundColor: [dark ? "#6d6d69" : "#c7c7c7", dark ? "#ecece8" : "#171717"],
-            borderRadius: 1,
-            barThickness: 132,
-            maxBarThickness: 132
-          }]
-        },
-        plugins: [{
-          id: "costLabels",
-          afterDatasetsDraw(chart) {
-            const { ctx } = chart;
-            ctx.save();
-            ctx.textAlign = "center";
-            ctx.font = '500 13px Inter, "Microsoft YaHei", sans-serif';
-            ctx.fillStyle = chartInk;
-            chart.getDatasetMeta(0).data.forEach((bar, index) => ctx.fillText(["2,033,414", "1,842,596"][index], bar.x, bar.y - 10));
-            ctx.restore();
-          }
-        }],
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          layout: { padding: { top: 24, right: 12, left: 4 } },
-          plugins: { legend: { display: false }, tooltip: { enabled: true } },
-          scales: {
-            x: { grid: { display: false }, ticks: { font: { size: 12 } } },
-            y: { min: 0, max: 3000000, ticks: { stepSize: 500000, callback: value => value === 0 ? "0" : `${value / 1000}k` } }
-          }
+    new Chart(costCanvas, {
+      type: "bar",
+      data: {
+        labels: ["基线结果", "当前结果"],
+        datasets: [{
+          data: [2033414, 1842596],
+          backgroundColor: [dark ? "#6d6d69" : "#c7c7c7", dark ? "#ecece8" : "#171717"],
+          borderRadius: 1,
+          barThickness: 132,
+          maxBarThickness: 132
+        }]
+      },
+      plugins: [{
+        id: "costLabels",
+        afterDatasetsDraw(chart) {
+          const { ctx } = chart;
+          ctx.save();
+          ctx.textAlign = "center";
+          ctx.font = '500 13px Inter, "Microsoft YaHei", sans-serif';
+          ctx.fillStyle = chartInk;
+          chart.getDatasetMeta(0).data.forEach((bar, index) => ctx.fillText(["2,033,414", "1,842,596"][index], bar.x, bar.y - 10));
+          ctx.restore();
         }
-      });
-      const resultMetricCanvas = $("#resultMetricChart");
-      if (resultMetricCanvas) new Chart(resultMetricCanvas, {
-        type: "bar",
-        data: {
-          labels: ["总行程时间", "满足率", "平衡度"],
-          datasets: [
-            { label: "基线", data: [100, 86.4, 78.1], backgroundColor: dark ? "#62625e" : "#d0d0cc", borderRadius: 3 },
-            { label: "当前", data: [90.62, 92.8, 84.6], backgroundColor: chartInk, borderRadius: 3 }
-          ]
-        },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10 } } }, scales: { x: { grid: { display: false } }, y: { min: 0, max: 110, ticks: { callback: value => `${value}%` } } } }
-      });
-      const stabilityCanvas = $("#stabilityChart");
-      if (stabilityCanvas) new Chart(stabilityCanvas, {
-        type: "line",
-        data: { labels: ["7", "21", "42", "73", "99"], datasets: [{ data: [1854208, 1839675, 1842596, 1861034, 1838147], borderColor: chartInk, backgroundColor: chartSurface, borderWidth: 1.8, pointRadius: 3, pointBackgroundColor: chartSurface, pointBorderColor: chartInk, tension: .25 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, title: { display: true, text: "随机种子" } }, y: { min: 1800000, max: 1900000, ticks: { callback: value => `${Math.round(value / 1000)}k` } } } }
-      });
-    }
+      }],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 24, right: 12, left: 4 } },
+        plugins: { legend: { display: false }, tooltip: { enabled: true } },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 12 } } },
+          y: { min: 0, max: 3000000, ticks: { stepSize: 500000, callback: value => value === 0 ? "0" : `${value / 1000}k` } }
+        }
+      }
+    });
+  }
+
+  /** 开场分析宿主：挂进首条 Agent 消息（步骤块）头部之后，思考 → 正文 → 计划同气泡接续。 */
+  function mountOpeningHost(scroll, replyId) {
+    const stepsBlock = $(".assistant-block:not(.follow-up-reply)", scroll);
+    const host = document.createElement("div");
+    host.className = "opening-analysis opening-reply";
+    if (replyId) host.id = replyId;
+    host.innerHTML = `<div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>`;
+    const anchor = stepsBlock?.querySelector(".assistant-id");
+    if (anchor) anchor.insertAdjacentElement("afterend", host);
+    else if (stepsBlock) stepsBlock.prepend(host);
+    else scroll.append(host);
+    // 开场分析结束前，计划部分（折叠开关/步骤/摘要/CTA）一律不出现
+    if (stepsBlock) stepsBlock.dataset.openingState = "pending";
+    return { host, stepsBlock };
   }
 
   /**
@@ -3046,6 +3093,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    * 聊天消息一样先「思考」再给出对任务的开场分析——真实模型调用，思考块
    * 与流式 Markdown 均与手动对话同构；未配置接口/未登录时整块静默消失，
    * 每个运行只发起一次（sessionStorage 防重，刷新页面不重复扣费）。
+   * 服务端已有这个运行的开场轮（完成或仍在生成）时由 omm:conversation-restore
+   * 一侧重建/续接并落防重标记——控制器保证它先于本事件到达。
    */
   document.addEventListener("omm:run-planning", event => {
     const runId = event.detail?.runId;
@@ -3059,35 +3108,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     } catch {
       return;
     }
-    // 上一次进入本页发起的开场分析还在后台生成（用户中途退出过）：不再重复
-    // 发起（防双份调用扣费），挂「思考中」占位，完成事件到达时原地补录正文。
-    if (pendingTurnFor(runId)?.opening) {
-      const stepsBlock = $(".chat-scroll .assistant-block:not(.follow-up-reply)");
-      const host = document.createElement("div");
-      host.className = "opening-analysis opening-reply";
-      host.dataset.pendingOpening = runId;
-      host.innerHTML = `<div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>`;
-      const anchor = stepsBlock?.querySelector(".assistant-id");
-      if (anchor) anchor.insertAdjacentElement("afterend", host);
-      else if (stepsBlock) stepsBlock.prepend(host);
-      else scroll.append(host);
-      if (stepsBlock) stepsBlock.dataset.openingState = "pending";
-      return;
-    }
+    if ($(".opening-reply", scroll)) return;
     const replyId = `reply-opening-${Date.now()}`;
-    // 开场分析与执行步骤同属一条 Agent 消息：注入步骤块头部之后，
-    // 思考完成 → 分析正文 → 计划在同一气泡内接续展开，不拆成两条对话。
-    const stepsBlock = $(".chat-scroll .assistant-block:not(.follow-up-reply)");
-    const host = document.createElement("div");
-    host.className = "opening-analysis opening-reply";
-    host.id = replyId;
-    host.innerHTML = `<div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("思考中…")}</span></p></div>`;
-    const anchor = stepsBlock?.querySelector(".assistant-id");
-    if (anchor) anchor.insertAdjacentElement("afterend", host);
-    else if (stepsBlock) stepsBlock.prepend(host);
-    else scroll.append(host);
-    // 开场分析结束前，计划部分（折叠开关/步骤/摘要/CTA）一律不出现
-    if (stepsBlock) stepsBlock.dataset.openingState = "pending";
+    const { stepsBlock } = mountOpeningHost(scroll, replyId);
     scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
     void streamAssistantReply(
       OPENING_ANALYSIS_PROMPT,
@@ -3106,15 +3129,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     });
   });
 
-  /**
-   * 重新进入任务（点最近任务、刷新、换标签页打开）：控制器拿到工作台快照后
-   * 广播运行身份与题面。这里做两件事，都只针对当前 run，不碰别的任务数据：
-   * 1. 首条用户气泡换成该运行的真实题面——模板兜底文案与同标签页上一个任务
-   *    留下的 openmathmodelPrompt 都不再出现（数据隔离）；
-   * 2. 按本机对话记录（「保存任务历史」管辖，按 run_id 隔离）重建开场分析与
-   *    此前的对话气泡，恢复离开前的对话现场。
-   */
-  /** 重建一条用户气泡（历史记录恢复 / 后台在途轮占位共用）。 */
+  /** 重建一条用户气泡（历史记录恢复 / 续接服务端在途轮共用）。 */
   function appendRestoredUserBubble(scroll, text, attachments = []) {
     const chips = attachments.length
       ? `<div class="user-attachment-chips">${attachments.map(name =>
@@ -3137,7 +3152,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     replyBlock.innerHTML = `
       <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
       ${traceMarkup}
-      <div class="analysis-copy">${renderMarkdown(entry.text)}</div>`;
+      <div class="analysis-copy">${entry.text ? renderMarkdown(entry.text) : ""}</div>`;
     // 思考过程随记录回来：与活体同位（轨迹之后、正文之前）重建回看盒
     if (entry.reasoning) {
       replyBlock.insertBefore(createRestoredThinkingBlock(entry.reasoning), $(".analysis-copy", replyBlock));
@@ -3150,9 +3165,18 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       elapsed: row.elapsed ?? "",
       animate: false,
     }));
+    // 被打断的回复（整页导航掐断 / 接口报错 / 暂停）：半截正文照渲染，下方一行
+    // 灰字说明原因——与活体失败态同一形态（.analysis-copy 里的 .muted）。
+    if (entry.interrupted) {
+      $(".analysis-copy", replyBlock).insertAdjacentHTML(
+        "beforeend",
+        `<p class="muted reply-interrupted">${escapeHtml(t(entry.note || "回复生成中断，请重新发送。"))}</p>`,
+      );
+    }
     scroll.append(replyBlock);
     renderFormulas($(".analysis-copy", replyBlock));
-    appendReplyActions(replyBlock, entry.text);
+    // 一字未收的中断回复没有可复制的内容，不挂复制按钮
+    if (entry.text) appendReplyActions(replyBlock, entry.text);
     return replyBlock;
   }
 
@@ -3176,14 +3200,55 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return true;
   }
 
+  /** 服务端仍在生成的开场轮：原地挂宿主并续接直播；结束后与首发路径同样收口。 */
+  function resumeOpeningTurn(scroll, turn, runId) {
+    if ($(".opening-reply", scroll)) return;
+    const replyId = `reply-opening-${Date.now()}`;
+    const { stepsBlock } = mountOpeningHost(scroll, replyId);
+    // 服务端已在生成：本页不再另发一次（防双份调用扣费）
+    try { sessionStorage.setItem(`openmathmodelOpeningReply.${runId}`, "1"); } catch {}
+    void attachAssistantReply(turn, replyId, scroll, { opening: true, removeOnUnavailable: true }).finally(() => {
+      if (stepsBlock) stepsBlock.dataset.openingState = "done";
+      document.dispatchEvent(new CustomEvent("omm:opening-analysis-done"));
+    });
+  }
+
+  /** 服务端仍在生成的追问轮：用户气泡 + 与首发同构的回复块，原地续接直播。 */
+  function resumeFollowUpTurn(scroll, turn) {
+    appendRestoredUserBubble(scroll, turn.text, turn.attachments ?? []);
+    const replyId = `reply-${turn.id}`;
+    scroll.insertAdjacentHTML("beforeend", `
+      <div class="assistant-block follow-up-reply" id="${replyId}">
+        <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
+        <div class="agent-stream reply-trace"></div>
+        <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("回复仍在服务端生成中，正在续接…")}</span></p></div>
+      </div>`);
+    void attachAssistantReply(turn, replyId, scroll, {});
+  }
+
+  /**
+   * 重新进入任务（点最近任务、刷新、换标签页打开、生成中途切走再回来）：控制器
+   * 拿到工作台快照并从服务端拉到这个运行的全部对话轮后广播。这里做三件事，都只
+   * 针对当前 run，不碰别的任务数据：
+   * 1. 首条用户气泡换成该运行的真实题面——模板兜底文案与同标签页上一个任务
+   *    留下的 openmathmodelPrompt 都不再出现（数据隔离）；
+   * 2. 本机旧记录（托管轮上线前的 localStorage 条目，只读）在前、服务端的轮在后，
+   *    按时间顺序重建开场分析与此前的对话气泡；
+   * 3. 服务端仍在生成的那一轮原地续接直播（生成在服务端从未中断，页面只是回来
+   *    接着看），不再是一句「已中断」。
+   */
   document.addEventListener("omm:conversation-restore", event => {
-    const { runId, goal } = event.detail ?? {};
+    const { runId, goal, turns = [] } = event.detail ?? {};
     // 聚焦阶段页的对话区是 .focused-agent-scroll：那里发出的消息同属本运行的
     // 对话记录，重进/刷新时也要在原地重建，不能只在总览页恢复。
     const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
     if (!runId || !scroll) return;
     const firstBubble = $(".user-message .user-bubble", scroll);
-    if (firstBubble && goal) firstBubble.textContent = goal;
+    if (firstBubble && goal) {
+      firstBubble.textContent = goal;
+      // 首屏没有本机题面记录时气泡是空的、整块隐藏着，拿到真实 goal 才放出来
+      firstBubble.closest(".user-message")?.removeAttribute("hidden");
+    }
     if (scroll.dataset.conversationRestored === runId) return;
     scroll.dataset.conversationRestored = runId;
     // 首页随任务创建交接过来的引用：挂回输入框上方的 chips，随首条消息进入上下文。
@@ -3200,64 +3265,39 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       }
       appendRestoredReply(scroll, entry);
     }
-    // 离开页面时仍在后台生成的追问轮（生成中退出不再中断，见 agent-chat）：
-    // 先补出用户气泡 + 「生成中」占位，完成/失败事件到达时替换或落定。
-    // 在途的开场分析没有用户气泡，由 omm:run-planning 一侧挂占位。
-    const pending = pendingTurnFor(runId);
-    if (pending && !pending.opening) {
-      appendRestoredUserBubble(scroll, pending.text);
-      scroll.insertAdjacentHTML("beforeend", `
-        <div class="assistant-block follow-up-reply" data-pending-turn="${runId}">
-          <div class="assistant-id">${projectLogo("assistant-logo")}<span>Agent</span></div>
-          <div class="analysis-copy"><p class="thinking-plain"><span class="thinking-label thinking-shimmer">${t("回复仍在生成中…")}</span></p></div>
-        </div>`);
+    for (const turn of turns) {
+      if (turn.opening) {
+        if (turn.status === "running") resumeOpeningTurn(scroll, turn, runId);
+        // 有正文的开场轮（完成 / 半截）照常重建；一字未收就失败的不留痕——
+        // 还在规划阶段的话 omm:run-planning 会再发起一次
+        else if (turn.reply) restoreOpeningReply(scroll, { text: turn.reply, reasoning: turn.reasoning }, runId);
+        continue;
+      }
+      if (turn.status === "running") {
+        resumeFollowUpTurn(scroll, turn);
+        continue;
+      }
+      appendRestoredUserBubble(scroll, turn.text, turn.attachments ?? []);
+      const entry = entryFromTurn(turn);
+      const replyBlock = appendRestoredReply(scroll, entry);
+      // 最后一轮留下的待确认提案（ADR-0018）在重进时仍可一键确认：提案只对紧接着的
+      // 下一轮有效，更早的轮即便有 proposed 行也只是历史
+      const proposal = turn === turns[turns.length - 1] ? lastPendingProposal(turn.meta?.actions) : null;
+      if (proposal) offerProposalCta(findRestoredTraceRow(replyBlock, entry, actionTraceTitle(proposal)));
     }
     scroll.scrollTop = scroll.scrollHeight;
   });
 
   /**
-   * 后台完成的对话轮补录：用户在生成中途退出了页面，该轮已按发起时的归属
-   * 落盘（agent-chat）。此刻若正看着该任务的对话区，把「生成中」占位替换成
-   * 真实回复；不在页面则忽略——记录已在，下次进入自然恢复。
+   * 恢复态里按标题定位轨迹行元素（给提案行补按钮）。按落盘轨迹的下标找，而不是比
+   * 文本：语言切换会把行标题翻成英文，文本对不上。
    */
-  document.addEventListener("omm:chat-turn-committed", event => {
-    const { scopeId, opening, text, reply, reasoning, attachments } = event.detail ?? {};
-    if (!scopeId || conversationSnapshot().runId !== scopeId) return;
-    const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
-    if (!scroll) return;
-    if (opening) {
-      $(`[data-pending-opening="${scopeId}"]`)?.remove();
-      restoreOpeningReply(scroll, { text: reply, reasoning }, scopeId);
-      document.dispatchEvent(new CustomEvent("omm:opening-analysis-done"));
-    } else {
-      // 等待期间用户可能又发了新消息：补录的回复要落回占位原位，不是队尾
-      const placeholder = $(`[data-pending-turn="${scopeId}"]`, scroll);
-      if (!placeholder) appendRestoredUserBubble(scroll, text, attachments ?? []);
-      const block = appendRestoredReply(scroll, { text: reply, reasoning });
-      if (placeholder) placeholder.replaceWith(block);
-    }
-    scroll.scrollTop = scroll.scrollHeight;
-  });
-
-  /** 后台对话轮失败：占位落定为中断态（这轮没有落盘，如实告知，不装成功）。 */
-  document.addEventListener("omm:chat-turn-failed", event => {
-    const { scopeId, opening, message } = event.detail ?? {};
-    if (!scopeId || conversationSnapshot().runId !== scopeId) return;
-    const scroll = $(".chat-scroll") || $(".focused-agent-scroll");
-    if (!scroll) return;
-    if (opening) {
-      $(`[data-pending-opening="${scopeId}"]`)?.remove();
-      const stepsBlock = $(".assistant-block:not(.follow-up-reply)", scroll);
-      if (stepsBlock) stepsBlock.dataset.openingState = "done";
-      document.dispatchEvent(new CustomEvent("omm:opening-analysis-done"));
-      return;
-    }
-    const placeholder = $(`[data-pending-turn="${scopeId}"]`, scroll);
-    if (!placeholder) return;
-    const copy = $(".analysis-copy", placeholder);
-    if (copy) copy.innerHTML = `<p class="muted">${escapeHtml(message || t("回复生成中断，请重新发送。"))}</p>`;
-    placeholder.removeAttribute("data-pending-turn");
-  });
+  function findRestoredTraceRow(replyBlock, entry, title) {
+    const rows = (entry.trace ?? []).filter(row => !RETIRED_TRACE_TITLES.has(row.title));
+    const index = rows.map(row => row.title).lastIndexOf(title);
+    if (index < 0) return null;
+    return replyBlock.querySelectorAll(".reply-trace .stream-item")[index] ?? null;
+  }
 
   function appendConversationTurn(text, composer) {
     // 任务执行总览页是 .chat-scroll；数据/建模/实验/论文/交付五个聚焦页的对话区
@@ -3381,8 +3421,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    * waiting=true 时本地走秒，settle() 落定图标与最终耗时；before 指定插入
    * 位置以保持与服务端实际发生顺序一致。返回 {element, settle}。
    * animate=false 用于恢复历史（重进对话时轨迹应当「本来就在」，不重演入场）。
+   * startedAt 让续接的轮从服务端建轮时刻起走秒，而不是从重进页面那一刻。
    */
-  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", waiting = false, before = null, animate = true }) {
+  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", waiting = false, before = null, animate = true, startedAt = Date.now() }) {
     const trace = $(".reply-trace", replyBlock);
     if (!trace) return null;
     const item = document.createElement("div");
@@ -3424,9 +3465,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const timeCell = $(".stream-elapsed", item);
     const titleLabel = $(".stream-title > span", item);
     let ticker = null;
-    const startedAt = Date.now();
     if (waiting) {
-      timeCell.textContent = formatTraceElapsed(0);
+      timeCell.textContent = formatTraceElapsed(Date.now() - startedAt);
       ticker = window.setInterval(() => {
         timeCell.textContent = formatTraceElapsed(Date.now() - startedAt);
       }, 1000);
@@ -3447,67 +3487,57 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     };
   }
 
-  /** 已完成的运行撞上 409 时挂一个「按这条要求继续修改」的按钮（ADR-0013 第 12 项）。
-   *
-   *  点它只是**受理**：服务端重开运行、落一条 global 备注、挂起审批门等用户选定重做
-   *  起点——真正的重跑与花费要等审批门里那一下，所以这个按钮本身不会偷偷扣钱。
-   *  三种 409 分别给话：非正常完成的运行（失败/取消）没有修订入口，三轮用尽要另起新任务。
+  /**
+   * 对话即控制面（ADR-0018 / ADR-0019）：服务端对不可逆或要重新计费的动作（取消任务、
+   * 从阶段重做）先发提案，这里在那一行轨迹下挂「确认执行」按钮。按钮等价于用户回一句「确认」——走同一条发送路径，
+   * 服务端按上一轮提案执行，页面照常收到 action 回执与回复；提案只对紧接着的下一轮
+   * 有效，所以用户先说了别的，这个按钮就失效（服务端会把提案作废）。
    */
-  function offerRevisionCta(handle, runId, text) {
-    if (!handle?.element) return;
+  function offerProposalCta(rowElement) {
+    if (!rowElement || rowElement.querySelector(".stream-cta")) return;
     const host = document.createElement("div");
     host.className = "stream-detail stream-cta";
-    handle.element.append(host);
-
-    const settleAs = message => {
-      host.replaceChildren(Object.assign(document.createElement("span"), { textContent: message }));
-    };
-
-    // 服务端 RunRevisionInput.text 卡 2000 字。超长就不给按钮：与其让用户点一下
-    // 换回一个 422，不如当场说清为什么点不了、要怎么办。
-    if (text.length > RUN_REVISION_TEXT_LIMIT) {
-      settleAs(`这条消息有 ${text.length} 字，超过修改要求的 ${RUN_REVISION_TEXT_LIMIT} 字上限；请精简成一条明确的修改要求后重新发送。`);
-      return;
-    }
-
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = "按这条要求继续修改";
+    button.textContent = t("确认执行");
     host.append(button);
-
-    button.addEventListener("click", async () => {
+    rowElement.append(host);
+    button.addEventListener("click", () => {
       if (button.disabled) return;
       button.disabled = true;
-      button.textContent = "正在受理…";
-      try {
-        const receipt = await modelingWorkspaceApi.postRunRevision(runId, text);
-        // 重做起点由审批门里的选项说了算，这里不重复报建议值（免得两处措辞打架）。
-        // 审批门不会「经 SSE 自己出现」：运行到终态时事件流已经收尾（stream.end），
-        // 控制器不再重连——必须告诉它运行被重新打开，让它拉快照并重接事件流；
-        // 否则修订门、状态徽标与「需要你确认」提醒都要等用户手动刷新（走查实测）。
-        document.dispatchEvent(new CustomEvent("omm:run-reopened", { detail: { runId } }));
-        settleAs(`已受理第 ${receipt.round} 轮修改：请在待确认事项中选定重做起点后生效。`);
-      } catch (error) {
-        const code = error instanceof WorkspaceApiError ? error.code : "";
-        if (code === "RUN_NOT_COMPLETED") {
-          settleAs("这次运行不是正常完成的（失败或已取消），没有修改入口；请基于当前结果新建任务。");
-        } else if (code === "REVISION_LIMIT_REACHED") {
-          settleAs("本次运行的修改轮数已用完（上限 3 轮）；如仍需调整，请基于当前结果新建任务。");
-        } else {
-          button.disabled = false;
-          button.textContent = "按这条要求继续修改";
-          toast(t("发起修改失败，请稍后重试"));
-        }
-      }
+      host.replaceChildren(Object.assign(document.createElement("span"), { textContent: t("已发送确认") }));
+      appendConversationTurn(CONFIRM_REPLY_TEXT, null);
     });
   }
 
-  /** 回复右下角操作区：复制原始回复文本（Markdown 源码，便于粘贴到论文与笔记）。 */
+  /**
+   * 运行控制回执 → 轨迹行（含提案的确认按钮；已生效的动作让工作台立刻重拉快照
+   * 并重接事件流——运行到终态时事件流已收尾，控制器不再自己重连）。
+   * 首发、续接与历史恢复三条路径共用；traceLog 为 null 表示恢复态（行已落盘，不再记）。
+   */
+  function presentRunControlAction(replyBlock, action, { before = null, traceLog = null, animate = true } = {}) {
+    const row = actionTraceRow(action);
+    const handle = appendReplyTraceRow(replyBlock, { ...row, before, animate });
+    traceLog?.push(row);
+    if (action.status === "proposed") offerProposalCta(handle?.element);
+    if (isExecutedAction(action)) {
+      const runId = conversationSnapshot().runId;
+      if (runId) document.dispatchEvent(new CustomEvent("omm:run-reopened", { detail: { runId } }));
+    }
+    return handle;
+  }
+
+  /** 回复右下角操作区：复制原始回复文本（Markdown 源码，便于粘贴到论文与笔记）。
+   *  紧跟正文插入而不是追加到块尾：对话触发的运行动作（ADR-0018）会让工作台控制器
+   *  在这条回复块内部续写执行步骤，步骤往往比回复先到——按钮要贴着正文，不能掉到
+   *  步骤区下面。 */
   function appendReplyActions(replyBlock, replyText) {
     const actions = document.createElement("div");
     actions.className = "reply-actions";
     actions.innerHTML = `<button type="button" class="reply-action-button" data-reply-copy title="复制回复" aria-label="复制回复">${icon("copy")}</button>`;
-    replyBlock.appendChild(actions);
+    const copy = $(".analysis-copy", replyBlock);
+    if (copy) copy.insertAdjacentElement("afterend", actions);
+    else replyBlock.appendChild(actions);
     const button = $("[data-reply-copy]", actions);
     let resetTimer = null;
     button.addEventListener("click", async () => {
@@ -3560,27 +3590,23 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     });
   }
 
-  /** 真实模型回复：思考块 + Markdown 正文流式渲染到回复气泡。
-   *  对话页不暴露模型名；接口域名随「允许使用第三方中转站」开关：开启时在
-   *  发送前显示本次请求的实际域名（含中转/备用标记）并把用量写入本机记录
-   *  （设置中心可查），关闭时域名与记录都不留。
-   *  options.removeOnUnavailable：未配置接口/未登录时整块静默移除
-   *  （用于系统自动发起的开场分析，不该向用户弹配置提示）。
-   *  返回是否真的拿到了回复：调用方据此决定要不要落防重标记。 */
-  async function streamAssistantReply(text, replyId, scroll, options = {}) {
-    const replyBlock = document.getElementById(replyId);
-    const copy = replyBlock?.querySelector(".analysis-copy");
-    if (!replyBlock || !copy) return false;
-    // 本轮归属在发起时定格：用户生成中途退出页面会解绑/换绑对话归属，
-    // 完成后的轨迹落盘必须跟着发起时的运行走（正文落盘同理，见 agent-chat）。
-    const boundRunId = conversationSnapshot().runId;
+  /**
+   * 回复气泡的呈现器：思考块 + 流式 Markdown 正文 + 域名透明行 + Auto 难度行。
+   * 首发（streamAssistantReply）与重进续接（attachAssistantReply）共用同一套，
+   * 半截续上的回复与从头看着生成的回复长得一样。
+   * 对话页不暴露模型名；接口域名随「允许使用第三方中转站」开关：开启时在
+   * 发送前显示本次请求的预期域名，meta 到达后以实际为准（含中转/备用标记）。
+   */
+  function createReplyPresenter(replyBlock, copy, scroll, { generatingRow = null, traceLog = null } = {}) {
     const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
     // 流式正文渲染：节流 + 块级增量上屏（stream-render），公式排版随之削峰。
     // 旧写法逐增量整段重建 innerHTML + 全量排版，长回复（尤其多公式）明显卡顿。
     const renderer = createStreamingMarkdownRenderer(copy, { stickTo: scroll });
     const transparency = proxyTransparencyEnabled();
-    // 「发送请求前显示实际域名」：开关开启时先显示预期目标，meta 到达后以实际为准
     let transparencySettled = false;
+    let difficultyShown = false;
+    let thinking = null;
+    let answerStarted = false;
     const renderTransparency = html => {
       let line = replyBlock.querySelector(".chat-transparency");
       if (!line) {
@@ -3600,11 +3626,152 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         );
       });
     }
-    let thinking = null;
-    let answerStarted = false;
-    // 生成计时行提升到 try 外：失败路径也要把它落定为中断态
+    return {
+      handlers: {
+        // 行⓪：服务端在生成前执行 / 提议的运行控制动作（ADR-0018）——「继续」真的
+        // 重试了阶段、「用方案 B」真的选了选项。发生在模型调用之前，插在生成行之前。
+        onAction: action => {
+          presentRunControlAction(replyBlock, action, { before: generatingRow?.element ?? null, traceLog });
+        },
+        onMeta: current => {
+          // 行②：Auto 路由真实发生的难度判定（详情 = 判定理由；继承/短路轮
+          // judged=false 不出现，不制造噪音）。服务端先判定后生成，插在生成行之前。
+          if (!difficultyShown && current.route?.judged && typeof current.route.difficulty === "number") {
+            difficultyShown = true;
+            const row = {
+              icon: "gauge",
+              title: "已判定问题难度",
+              suffix: ` ${current.route.difficulty}/5`,
+              detail: current.route.reason || "",
+            };
+            appendReplyTraceRow(replyBlock, { ...row, before: generatingRow?.element ?? null });
+            traceLog?.push(row);
+          }
+          // 实际域名以服务端 meta 为准：Auto 路由结果、备用切换都在这里如实反映
+          if (!transparency || !current.host) return;
+          transparencySettled = true;
+          const badges = [
+            current.third_party ? t("第三方中转站") : "",
+            current.fallback_used ? t("已切换备用接口") : "",
+          ].filter(Boolean).map(tag => ` · ${escapeHtml(tag)}`).join("");
+          renderTransparency(`${t("请求发送至")} ${escapeHtml(current.host)}${badges}`);
+        },
+        onReasoning: (_piece, full) => {
+          const stick = nearBottom();
+          if (!thinking) {
+            thinking = createThinkingBlock(replyBlock);
+            // 思考块自带「思考中…」标签，回答区占位不必重复
+            if (!answerStarted) copy.innerHTML = "";
+          }
+          thinking.append(full);
+          if (stick) scroll.scrollTo({ top: scroll.scrollHeight });
+        },
+        onDelta: (_piece, full) => {
+          answerStarted = true;
+          thinking?.finish();
+          renderer.update(full);
+        },
+      },
+      finish(reply) {
+        thinking?.finish();
+        renderer.finish(reply);
+      },
+      cancel() {
+        renderer.cancel();
+        thinking?.finish();
+      },
+    };
+  }
+
+  /** 生成计时行落定 + 轨迹落定行：首发与续接共用。 */
+  function settleGeneratingRow(generatingRow, meta, startedAt, traceLog) {
+    if (!generatingRow) return;
+    // 优先用服务端整程耗时（meta.elapsed_ms），本地走秒兜底
+    const generateElapsedMs = typeof meta.elapsed_ms === "number" ? meta.elapsed_ms : Date.now() - startedAt;
+    const settledTitle = meta.stopped ? "已暂停（保留部分回复）" : "已生成回复";
+    generatingRow.settle({ title: settledTitle, elapsedMs: generateElapsedMs });
+    traceLog.push({ icon: "check-circle", title: settledTitle, elapsed: formatTraceElapsed(generateElapsedMs) });
+  }
+
+  /** 回复失败态的统一收口：暂停安静收尾；不可用且允许移除则整块消失；否则如实说明。 */
+  function presentReplyFailure(error, { replyBlock, copy, scroll, generatingRow, removeOnUnavailable }) {
+    // 用户主动暂停且一字未收：安静收尾，不按错误渲染
+    if (error?.code === "GENERATION_STOPPED") {
+      generatingRow?.settle({ title: "已暂停生成" });
+      copy.innerHTML = `<p class="muted">${t("已暂停生成。")}</p>`;
+      return;
+    }
+    // 失败也要把生成行落定为中断态，不留走秒残影
+    generatingRow?.settle({ title: "回复生成中断", failed: true });
+    const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
+    if (removeOnUnavailable && unavailable) {
+      replyBlock.remove();
+      return;
+    }
+    const message = error instanceof Error ? error.message : "对话请求失败，请稍后再试";
+    copy.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    if (error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED") {
+      copy.insertAdjacentHTML(
+        "beforeend",
+        `<p class="muted"><button type="button" class="reply-configure-link" data-action="open-api-settings">${t("前往设置中心配置模型接口")}</button></p>`,
+      );
+    }
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+  }
+
+  /**
+   * 重进页面时续接一轮服务端仍在生成的托管轮（ADR-0016）：生成从未中断，这里只是
+   * 从视图里的半截正文/思考接着看。附件解析等过程行发生在发起那一页，不重演；
+   * 轨迹只剩生成计时一行，耗时从服务端建轮时刻起算。
+   * 返回是否拿到了完整回复。
+   */
+  async function attachAssistantReply(turn, replyId, scroll, options = {}) {
+    const replyBlock = document.getElementById(replyId);
+    const copy = replyBlock?.querySelector(".analysis-copy");
+    if (!replyBlock || !copy) return false;
+    const traceLog = [];
+    const startedAt = Date.parse(turn.created_at) || Date.now();
+    const generatingRow = options.opening
+      ? null
+      : appendReplyTraceRow(replyBlock, { icon: "circle-notch", title: "正在生成回复", waiting: true, startedAt });
+    const presenter = createReplyPresenter(replyBlock, copy, scroll, { generatingRow, traceLog });
+    // 暂停键对续接的轮同样生效：让服务端停，不是不看了
+    const abortController = new AbortController();
+    setComposerGenerating(abortController);
+    try {
+      const { text: reply, meta } = await attachConversationTurn(turn, presenter.handlers, abortController.signal);
+      presenter.finish(reply);
+      settleGeneratingRow(generatingRow, meta, startedAt, traceLog);
+      appendReplyActions(replyBlock, reply);
+      if (!options.opening && traceLog.length) void patchChatTurnTrace(turn.id, traceLog).catch(() => undefined);
+      return true;
+    } catch (error) {
+      presenter.cancel();
+      presentReplyFailure(error, { replyBlock, copy, scroll, generatingRow, removeOnUnavailable: options.removeOnUnavailable });
+      return false;
+    } finally {
+      if (activeChatAbort === abortController) setComposerGenerating(null);
+    }
+  }
+
+  /** 真实模型回复：思考块 + Markdown 正文流式渲染到回复气泡。
+   *  有归属的页面走服务端托管轮（agent-chat）：生成在服务端后台进行，本页只是
+   *  观众——中途切页/刷新不中断，回来时由 omm:conversation-restore 续接。
+   *  「记录接口用量」随「允许使用第三方中转站」开关开启才写入本机记录（设置中心可查）。
+   *  options.removeOnUnavailable：未配置接口/未登录时整块静默移除
+   *  （用于系统自动发起的开场分析，不该向用户弹配置提示）。
+   *  返回是否真的拿到了回复：调用方据此决定要不要落防重标记。 */
+  async function streamAssistantReply(text, replyId, scroll, options = {}) {
+    const replyBlock = document.getElementById(replyId);
+    const copy = replyBlock?.querySelector(".analysis-copy");
+    if (!replyBlock || !copy) return false;
+    // 生成计时行与轨迹提升到 try 外：失败路径也要把它落定为中断态
     let generatingRow = null;
     let startedGeneratingAt = Date.now();
+    const traceLog = [];
+    // 服务端轮 id：建轮即回调，回复完成后把页面侧轨迹行补写到这一轮
+    let turnId = null;
+    let presenter = null;
     // 暂停生成：本轮的中止句柄挂到发送键（生成期间它就是暂停键）
     const abortController = new AbortController();
     setComposerGenerating(abortController);
@@ -3642,10 +3809,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       }
       const contextBlocks = [referenceBlock, attachmentContext].filter(Boolean).join("\n\n");
       // ── 执行轨迹：每条回复都由真实过程行组成（与首条 Agent 消息同构）。
-      //    traceLog 收集落定后的行，回复完成后随对话记录落盘，恢复时原样重建。
+      //    traceLog 收集落定后的行，回复完成后补写到服务端这一轮，恢复时原样重建。
       //    「已读取任务与对话上下文」「已同步给执行中的智能体」两条样板行已按
       //    用户要求撤下（每轮内容雷同、无增量信息）；动作本身照常发生。
-      const traceLog = [];
       // 行①：附件/引用解析完成并注入上下文（真实动作，解析在上面刚发生）
       if (attachmentNames.length || references.length) {
         const contextNames = [...attachmentNames, ...references.map(reference => `@${reference.title}`)];
@@ -3669,74 +3835,18 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         appendReplyTraceRow(replyBlock, row);
         traceLog.push(row);
       }
-      // 行①''：绑定真实运行的追问先同步给执行中的智能体（§11.3 运行备注）：
-      // 落库后后续每次节点执行的提示词都会带上这条要求——对话不再只是旁观问答。
-      // 成功路径不再渲染样板行（用户要求）；运行已结束时服务端 409，仍如实
-      // 告知本条按问答处理（这条有真实信息量）；其余失败静默（对话照常）。
-      const noteScope = conversationSnapshot();
-      if (!options.opening && /^run_[0-9a-f]{32}$/.test(noteScope.runId ?? "")) {
-        try {
-          await modelingWorkspaceApi.postRunNote(noteScope.runId, text);
-        } catch (error) {
-          if (error instanceof WorkspaceApiError && error.code === "RUN_FINISHED") {
-            // 终态不再是死路（ADR-0013）：已完成的运行可以按这条要求真正返工。
-            // 落盘的这行只写「本轮发生了什么」——按钮是活的 DOM，重开页面点不了，
-            // 所以历史里不留会骗人的按钮，只留一句仍然成立的说明。
-            const row = {
-              icon: "info",
-              title: "任务已结束，本条按问答处理",
-              detail: "运行已到终态，这条消息不再影响执行与成果；若这次运行是正常完成的，可以按这条要求发起一轮修改——重开运行后需要你选定从哪个阶段重做。",
-            };
-            const handle = appendReplyTraceRow(replyBlock, row);
-            traceLog.push(row);
-            offerRevisionCta(handle, noteScope.runId, text);
-          }
-          // 网络抖动等其它失败不打断对话本身，也不渲染误导性的成功行
-        }
-      }
-      // 生成回复行实时走秒；难度判定行到达时插到它前面（服务端先判定后生成）
+      // 绑定真实运行的追问不再由页面先 POST 一条备注：服务端托管轮在生成前经
+      // 运行控制步骤（ADR-0018）——识别「重试 / 用方案 B / 从数据准备重做」并真正
+      // 执行，普通补充要求照旧落成备注注入后续节点，页面只负责渲染 action 回执。
+      // 生成回复行实时走秒；action / 难度判定行到达时插到它前面（服务端先判定后生成）
       generatingRow = options.opening
         ? null
         : appendReplyTraceRow(replyBlock, { icon: "circle-notch", title: "正在生成回复", waiting: true });
       startedGeneratingAt = Date.now();
-      const { text: reply, meta } = await sendConversationTurn(text, {
-        onMeta: current => {
-          // 行②：Auto 路由真实发生的难度判定（详情 = 判定理由；继承/短路轮
-          // judged=false 不出现，不制造噪音）。服务端先判定后生成，插在生成行之前。
-          if (current.route?.judged && typeof current.route.difficulty === "number") {
-            const row = {
-              icon: "gauge",
-              title: "已判定问题难度",
-              suffix: ` ${current.route.difficulty}/5`,
-              detail: current.route.reason || "",
-            };
-            appendReplyTraceRow(replyBlock, { ...row, before: generatingRow?.element ?? null });
-            traceLog.push(row);
-          }
-          // 实际域名以服务端 meta 为准：Auto 路由结果、备用切换都在这里如实反映
-          if (!transparency || !current.host) return;
-          transparencySettled = true;
-          const badges = [
-            current.third_party ? t("第三方中转站") : "",
-            current.fallback_used ? t("已切换备用接口") : "",
-          ].filter(Boolean).map(tag => ` · ${escapeHtml(tag)}`).join("");
-          renderTransparency(`${t("请求发送至")} ${escapeHtml(current.host)}${badges}`);
-        },
-        onReasoning: (_piece, full) => {
-          const stick = nearBottom();
-          if (!thinking) {
-            thinking = createThinkingBlock(replyBlock);
-            // 思考块自带「思考中…」标签，回答区占位不必重复
-            if (!answerStarted) copy.innerHTML = "";
-          }
-          thinking.append(full);
-          if (stick) scroll.scrollTo({ top: scroll.scrollHeight });
-        },
-        onDelta: (_piece, full) => {
-          answerStarted = true;
-          thinking?.finish();
-          renderer.update(full);
-        },
+      presenter = createReplyPresenter(replyBlock, copy, scroll, { generatingRow, traceLog });
+      const { text: reply, meta, turnId: startedTurnId } = await sendConversationTurn(text, {
+        ...presenter.handlers,
+        onTurnStarted: turn => { turnId = turn.id; },
       }, {
         attachmentContext: contextBlocks,
         openingAnalysis: options.opening === true,
@@ -3744,23 +3854,15 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         ...(passthroughImages.length ? { images: passthroughImages, pinEndpointId } : {}),
         signal: abortController.signal,
       });
+      turnId = startedTurnId ?? turnId;
       // 附件与引用内容已随本条消息进入上下文；成功后清空托盘与引用 chips，
       // 失败路径保留以便重试。
       store?.clear();
       if (references.length) clearComposerReferences();
-      thinking?.finish();
-      // 生成行落定：优先用服务端整程耗时（meta.elapsed_ms），本地走秒兜底
-      if (generatingRow) {
-        const generateElapsedMs = typeof meta.elapsed_ms === "number"
-          ? meta.elapsed_ms
-          : Date.now() - startedGeneratingAt;
-        const settledTitle = meta.stopped ? "已暂停（保留部分回复）" : "已生成回复";
-        generatingRow.settle({ title: settledTitle, elapsedMs: generateElapsedMs });
-        traceLog.push({ icon: "check-circle", title: settledTitle, elapsed: formatTraceElapsed(generateElapsedMs) });
-      }
-      renderer.finish(reply);
+      presenter.finish(reply);
+      settleGeneratingRow(generatingRow, meta, startedGeneratingAt, traceLog);
       // 对话页不显示模型名；「记录接口用量」随开关开启才落本机记录
-      if (transparency && (meta.host || meta.endpoint)) {
+      if (proxyTransparencyEnabled() && (meta.host || meta.endpoint)) {
         recordLlmUsage({
           ts: Date.now(),
           endpoint: meta.endpoint ?? "",
@@ -3775,39 +3877,16 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         });
       }
       appendReplyActions(replyBlock, reply);
-      // 轨迹随本机对话记录落盘（「保存任务历史」开启且绑定真实运行）：恢复对话时
-      // 原样重建。归属用发起时定格的 boundRunId——用户中途退出页面后这里才完成时，
-      // 当前绑定可能已是首页或别的任务。
-      if (!options.opening && boundRunId && saveHistoryEnabled() && traceLog.length) {
-        attachTraceToLastReply(boundRunId, reply, traceLog);
+      // 页面侧轨迹行补写到服务端这一轮（记录本身已由服务端落库）：重进时原样重建。
+      // 「保存任务历史」关闭时服务端只在内存里保留这一轮，PATCH 同样只改内存视图。
+      if (!options.opening && turnId && traceLog.length) {
+        void patchChatTurnTrace(turnId, traceLog).catch(() => undefined);
       }
       scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
       return true;
     } catch (error) {
-      renderer.cancel();
-      // 用户主动暂停且一字未收：安静收尾，不按错误渲染
-      if (error?.code === "GENERATION_STOPPED") {
-        thinking?.finish();
-        generatingRow?.settle({ title: "已暂停生成" });
-        copy.innerHTML = `<p class="muted">${t("已暂停生成。")}</p>`;
-        return false;
-      }
-      // 失败也要把生成行落定为中断态，不留走秒残影
-      generatingRow?.settle({ title: "回复生成中断", failed: true });
-      const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
-      if (options.removeOnUnavailable && unavailable) {
-        replyBlock.remove();
-        return false;
-      }
-      const message = error instanceof Error ? error.message : "对话请求失败，请稍后再试";
-      copy.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
-      if (error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED") {
-        copy.insertAdjacentHTML(
-          "beforeend",
-          `<p class="muted"><button type="button" class="reply-configure-link" data-action="open-api-settings">${t("前往设置中心配置模型接口")}</button></p>`,
-        );
-      }
-      scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+      presenter?.cancel();
+      presentReplyFailure(error, { replyBlock, copy, scroll, generatingRow, removeOnUnavailable: options.removeOnUnavailable });
       return false;
     } finally {
       if (activeChatAbort === abortController) setComposerGenerating(null);
@@ -4002,7 +4081,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   const PAPER_SIZES = { "三号": "21px", "四号": "19px", "小四": "16px", "五号": "14px", "小五": "12px" };
   const PAPER_COLORS = { "正文黑": "#171717", "深灰": "#525252", "强调红": "#a50c25", "批注绿": "#007004" };
   const PAPER_ALIGNS = { "左对齐": "justifyLeft", "居中": "justifyCenter", "右对齐": "justifyRight", "两端对齐": "justifyFull" };
-  const PAPER_SOURCES = ["Run #04 · 结果表 2", "Run #04 · 核心指标对比图", "清洗数据 v2 · 字段说明"];
+  const DEMO_PAPER_SOURCES = ["Run #04 · 结果表 2", "Run #04 · 核心指标对比图", "清洗数据 v2 · 字段说明"];
+
+  /**
+   * 可引用来源 = 本次运行真实发布的产物（控制器写进产物表的行带 data-artifact-id）。
+   * 合并工作台里五个面板同存于 DOM，实验页与完成页的产物行在论文页也取得到。
+   * 没有真实产物时返回空数组：宁可提示「暂无可引用产物」，也不摆三条假来源。
+   */
+  function paperSourceOptions() {
+    if (demoMode()) return DEMO_PAPER_SOURCES;
+    const names = $$(".deliverable[data-artifact-id] .deliverable-name")
+      .map(node => node.textContent.trim())
+      .filter(Boolean);
+    return [...new Set(names)];
+  }
 
   const paperPage = () => $(".workflow-editor .editor-page");
 
@@ -4153,7 +4245,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
   function insertPaperCitation(anchor) {
     if (!paperPage()) { toast("请先进入论文编辑页"); return; }
-    popupMenu(anchor, PAPER_SOURCES, choice => {
+    const sources = paperSourceOptions();
+    if (!sources.length) { toast("暂无可引用的产物，等实验或交付产物生成后再试"); return; }
+    popupMenu(anchor, sources, choice => {
       insertPaperHtml(`<button class="source-chip" contenteditable="false" data-action="source-detail" title="点击引用到左侧对话，直接提问或要求修改">来源：${escapeHtml(choice)}　${icon("arrow-square-out")}</button>`);
       toast("已插入来源引用");
     });
@@ -4571,27 +4665,17 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         else document.documentElement.requestFullscreen?.();
       }
       if (action === "refresh-report") toast("数据报告已刷新");
-      if (action === "open-details") {
-        const shell = $("[data-modeling-shell]");
-        shell?.classList.add("drawer-open");
-        $("[data-task-detail-drawer]")?.setAttribute("aria-hidden", "false");
-      }
-      if (action === "close-details") {
-        const shell = $("[data-modeling-shell]");
-        shell?.classList.remove("drawer-open");
-        $("[data-task-detail-drawer]")?.setAttribute("aria-hidden", "true");
-      }
-      if (action === "understanding-details") modal("题目理解", "<p>任务已拆分为需求预测、区域划分和调度优化三个子问题。待确认项为缺失车辆字段的填充策略。</p>");
-      if (action === "validation-details") modal("完整验证结果", "<p>6 项检查全部通过：数据完整性、范围校验、逻辑一致性、异常检测、单位一致性和可解性。</p>");
-      if (action === "model-details") modal("方案详情", "<p>方案 v2 已完成精度、效率、可解释性和风险四个维度的综合比较。</p>");
-      if (action === "experiment-details") modal("Run #04 详情", "<p>本轮运行耗时 87.6 秒，验证状态通过，总调度成本较基线降低 9.38%。</p>");
       if (action === "suggestion-toggle") {
         const next = target.getAttribute("aria-pressed") !== "true";
         target.setAttribute("aria-pressed", String(next));
         target.classList.toggle("is-on", next);
       }
-      if (action === "download-data") toast("历史供需数据_2024Q4.xlsx 已加入下载队列");
-      if (action === "continue-paper") { toast("正在生成第 4 章实证分析"); setTimeout(() => go("complete"), 520); }
+      if (action === "download-data") toast(demoMode() ? "历史供需数据_2024Q4.xlsx 已加入下载队列" : "暂无可下载的数据文件");
+      // 真实运行由工作台控制器接管；演示态才走「生成下一章 → 跳交付页」的脚本
+      if (action === "continue-paper") {
+        if (!demoMode()) toast("请先创建任务，论文正文由运行生成");
+        else { toast("正在生成第 4 章实证分析"); setTimeout(() => go("complete"), 520); }
+      }
       if (action === "export-paper") popupMenu(target, ["导出 Word (.doc)", "导出 LaTeX (.tex)", "导出 HTML", "打印 / PDF"], exportPaper);
       if (action === "source-detail") quotePaperSourceToComposer(target);
       if (action === "fake-close") toast("这是演示界面，窗口保持打开");
@@ -4666,12 +4750,21 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         }
       }
       if (action === "open-api-settings") openSettingsCenter("api");
-      if (action === "files") modal("附件", '<div class="attachment-chip">2026国赛A题题目.pdf</div><div class="attachment-chip">共享单车数据集.csv</div><div class="attachment-chip">城市区域划分示意图.png</div>');
+      // 真实运行的附件由 task-header-actions 用运行快照重建这个按钮与弹层
+      if (action === "files") {
+        modal("附件", demoMode()
+          ? '<div class="attachment-chip">2026国赛A题题目.pdf</div><div class="attachment-chip">共享单车数据集.csv</div><div class="attachment-chip">城市区域划分示意图.png</div>'
+          : "<p>本次任务还没有附件。</p>");
+      }
       if (action === "more" || action === "row-menu") popupMenu(target, ["重命名", "复制", "归档"]);
       if (action === "toggle-activity") {
         const activityHost = target.closest(".focused-agent-chat, .assistant-block");
-        // 对话尾部的执行轨迹块没有步骤时间线，折叠对象是块内的活动流（.agent-stream）
-        const list = activityHost?.querySelector(".focused-activity-list, .activity-list, .agent-stream") || $(".focused-activity-list") || $(".activity-list");
+        // 折叠对象优先取折叠头紧随其后的那个列表：对话回复块里同时有回复自身的过程区
+        // （.reply-trace）与控制器续写的运行步骤区（.run-trace），按块内首个 .agent-stream
+        // 找会折错。对话尾部的执行轨迹块没有步骤时间线，折叠对象是块内的活动流。
+        const next = target.nextElementSibling;
+        const adjacent = next?.matches(".focused-activity-list, .activity-list, .agent-stream") ? next : null;
+        const list = adjacent || activityHost?.querySelector(".focused-activity-list, .activity-list, .agent-stream") || $(".focused-activity-list") || $(".activity-list");
         list?.classList.toggle("collapsed");
         const collapsed = list?.classList.contains("collapsed") ?? false;
         target.setAttribute("aria-expanded", String(!collapsed));
@@ -4804,8 +4897,14 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       }
       if (action === "read-paper") modal("论文预览", "<p>正文预览已加载。演示版本保留目录、翻页、收藏与引用入口。</p>");
       if (action === "download-all") {
-        const blob = new Blob(["OpenMathModel 交付文件清单\n" + deliverables.map(d => d[1]).join("\n")], { type: "text/plain;charset=utf-8" });
-        const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "OpenMathModel-交付文件清单.txt"; link.click(); URL.revokeObjectURL(link.href); toast("已开始下载全部文件");
+        // 真实运行由工作台控制器接管这个按钮（逐个产物走签名下载）；
+        // 这里只剩演示态的清单导出，没有演示夹具时不生成空清单。
+        if (!demoMode()) {
+          toast("暂无可下载的交付文件");
+        } else {
+          const blob = new Blob(["OpenMathModel 交付文件清单\n" + deliverables.map(d => d[1]).join("\n")], { type: "text/plain;charset=utf-8" });
+          const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "OpenMathModel-交付文件清单.txt"; link.click(); URL.revokeObjectURL(link.href); toast("已开始下载全部文件");
+        }
       }
       if (action === "copy-task") { sessionStorage.setItem("copiedTask", "1"); toast("已复制为新任务"); setTimeout(() => go("new"), 450); }
     });
@@ -5066,23 +5165,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
     // 合并工作台：五个阶段面板同存于 DOM，四个有交互的阶段绑定块一起生效。
     const mergedWorkspace = Boolean(workspaceStageContent[screen]);
-    if (screen === "data" || mergedWorkspace) {
-      $$("[data-data-tab]").forEach(button => button.addEventListener("click", () => {
-        $$("[data-data-tab]").forEach(item => item.classList.remove("active"));
-        button.classList.add("active");
-        toast(`已切换到${button.dataset.dataTab}`);
-      }));
-      $$("[data-data-file]").forEach((file, i) => file.addEventListener("click", () => {
-        $$("[data-data-file]").forEach(f => f.classList.remove("active")); file.classList.add("active");
-        const titles = ["共享单车订单数据", "站点基础信息", "天气观测数据", "清洗后建模数据"];
-        $("[data-data-title]").textContent = titles[i];
-      }));
-      $$("[data-drawer-tab]").forEach(button => button.addEventListener("click", () => {
-        $$("[data-drawer-tab]").forEach(item => item.classList.remove("active"));
-        button.classList.add("active");
-        toast(`已切换到${button.dataset.drawerTab}`);
-      }));
-    }
     if (screen === "model" || mergedWorkspace) {
       $$("[data-plan-option]").forEach(button => button.addEventListener("click", () => {
         $$("[data-plan-option]").forEach(item => item.classList.remove("selected"));
@@ -5090,16 +5172,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         $$("[data-plan-option] > i").forEach(item => item.className = "ph ph-caret-down");
         const caret = $("i", button);
         if (caret) caret.className = "ph ph-caret-up";
-      }));
-    }
-    if (screen === "experiments" || mergedWorkspace) {
-      $$(".experiment-item").forEach(item => item.addEventListener("click", () => {
-        $$(".experiment-item").forEach(i => i.classList.remove("active")); item.classList.add("active");
-        $(".experiment-titlebar h2").textContent = experiments[+item.dataset.experiment][0];
-      }));
-      $$("[data-experiment-tab]").forEach(button => button.addEventListener("click", () => {
-        $$("[data-experiment-tab]").forEach(b => b.classList.remove("active")); button.classList.add("active");
-        toast(`已切换到${button.dataset.experimentTab}`);
       }));
     }
     if (screen === "editor" || mergedWorkspace) {
@@ -5355,6 +5427,9 @@ export function getScreenMarkup(screen: ScreenId): string {
 }
 
 export function activateScreen(screen: ScreenId): void {
+  // 最先跑：运行态路由未登录时直接跳登录页，后面的挂载都不必发生。
+  // 这里在 useLayoutEffect 里同步执行，浏览器还没绘制，用户看不到残页。
+  guardRunBoundRoute(screen);
   document.body.dataset.screen = screen;
   bindCommon(screen);
   bindScreen(screen);
@@ -5362,9 +5437,9 @@ export function activateScreen(screen: ScreenId): void {
   initCharts(screen);
   if (screen === "paperDetail") void initPaperPdfReader();
   void hydrateAccountUi();
-  // 侧栏「最近任务」换成真实任务记录；未登录保持模板演示条目。
+  // 侧栏「最近任务」换成真实任务记录；未登录时模板本身就是空态（ADR-0014）。
   void hydrateRecentTasks();
-  // 「我的项目」页换成全量真实项目清单；未登录保持模板演示表格。
+  // 「我的项目」页换成全量真实项目清单；未登录时模板本身就是空表（ADR-0014）。
   void hydrateProjectsPage();
   // 隐私开关并入本机（每会话一次），换浏览器后通知/历史闸门立即正确。
   void syncPrivacyGatesOnce();

@@ -462,6 +462,101 @@ def test_revision_payload_omits_note_id_when_absent(harness):
     assert set(requested.payload) == {"target_state", "reason", "round"}
 
 
+# -- 任意状态从阶段重做（ADR-0019） ------------------------------------------
+
+
+def _attempts(snapshot):
+    attempts = {}
+    for step in snapshot.steps:
+        attempts.setdefault(step.state, []).append(step.attempt)
+    return attempts
+
+
+def test_redo_from_failed_run_restarts_an_earlier_stage(harness):
+    """失败在实验阶段，用户要求从建模方案重做：上游保留、方案及下游重跑。"""
+    flaky = ScriptedNode(
+        state=TaskState.EXPERIMENTING,
+        results=[NodeResult.failed("solver blew up"), NodeResult.succeeded()],
+    )
+    engine, sink, _ = harness({TaskState.EXPERIMENTING: flaky})
+    snapshot, _ = engine.create_run("proj_1")
+    engine.run_until_blocked(snapshot)
+    assert snapshot.state is TaskState.FAILED
+
+    engine.redo(snapshot, TaskState.MODEL_PLANNING, reason="换成随机森林重新做", note_id="note_1")
+    assert snapshot.state is TaskState.MODEL_PLANNING
+    assert snapshot.failure is None
+    assert snapshot.force_rerun is True
+    # 目标阶段及下游的旧产出已丢弃，上游成果留着。
+    assert "MODEL_PLANNING" not in snapshot.outputs
+    assert snapshot.outputs["DATA_PREPARATION"] == {"echo": "DATA_PREPARATION"}
+    redo = [event for event in sink.events if event.event_type is EventType.RUN_REDO][-1]
+    assert redo.payload == {
+        "target_state": "MODEL_PLANNING",
+        "from_state": "FAILED",
+        "reason": "换成随机森林重新做",
+        "note_id": "note_1",
+    }
+
+    outcome = engine.run_until_blocked(snapshot)
+    assert outcome.status == AdvanceOutcome.COMPLETED
+    attempts = _attempts(snapshot)
+    assert attempts[TaskState.PROBLEM_ANALYSIS] == [1]
+    assert attempts[TaskState.DATA_PREPARATION] == [1]
+    assert attempts[TaskState.MODEL_PLANNING] == [1, 2]
+    assert attempts[TaskState.EXPERIMENTING] == [1, 2]
+
+
+def test_redo_from_a_running_step_cancels_it_and_drops_the_review(harness):
+    """执行中 / 等待确认时重做：在途步骤按 CANCELLED 关掉，待审批门作废。"""
+    gated = ScriptedNode(
+        state=TaskState.MODEL_PLANNING,
+        results=[NodeResult.needs_review(reason="confirm", outputs={"plan": "A"})],
+    )
+    engine, _, _ = harness({TaskState.MODEL_PLANNING: gated})
+    snapshot, _ = engine.create_run("proj_1")
+    engine.run_until_blocked(snapshot)
+    assert snapshot.state is TaskState.NEEDS_REVIEW
+
+    engine.redo(snapshot, TaskState.DATA_PREPARATION, reason="数据口径不对")
+    assert snapshot.state is TaskState.DATA_PREPARATION
+    assert snapshot.review is None
+    # 门开着时引擎是 IDLE 的；重做后立刻可推进，而且先跑的是目标阶段本身。
+    outcome = engine.advance(snapshot)
+    assert outcome.status == AdvanceOutcome.ADVANCED
+    assert snapshot.steps[-1].state is TaskState.DATA_PREPARATION
+    assert snapshot.steps[-1].attempt == 2
+
+    # 模拟一个仍在 RUNNING 的在途步骤（执行器还没收尾）再重做：它必须被诚实关掉。
+    dangling = snapshot.steps[-1]
+    dangling.status = StepStatus.RUNNING
+    engine.request_pause(snapshot)
+    engine.redo(snapshot, TaskState.PROBLEM_ANALYSIS, reason="题意理解错了")
+    assert dangling.status is StepStatus.CANCELLED
+    assert dangling.error == "superseded: redo from PROBLEM_ANALYSIS"
+    assert snapshot.paused is False  # 重做隐含恢复执行
+    assert snapshot.state is TaskState.PROBLEM_ANALYSIS
+    assert snapshot.outputs == {}
+
+
+def test_redo_is_refused_for_completed_or_fresh_runs_and_non_work_targets(harness):
+    engine, _, _ = harness()
+    snapshot, _ = engine.create_run("proj_1")
+    with pytest.raises(ValueError):
+        engine.redo(snapshot, TaskState.PROBLEM_ANALYSIS, reason="还没开始")
+    engine.advance(snapshot)
+    with pytest.raises(ValueError):
+        engine.redo(snapshot, TaskState.COMPLETED, reason="不是工作状态")
+    engine.run_until_blocked(snapshot)
+    with pytest.raises(ValueError):
+        engine.redo(snapshot, TaskState.PAPER_WRITING, reason="已完成走修订门")
+    # 前向矩阵没有被放宽：工作态之间仍不能借 STATE_CHANGED 互跳。
+    from omm_agent_core import TransitionError, assert_transition
+
+    with pytest.raises(TransitionError):
+        assert_transition(TaskState.EXPERIMENTING, TaskState.MODEL_PLANNING)
+
+
 def test_pause_blocks_scheduling_and_resume_continues(harness):
     engine, _, _ = harness()
     snapshot, _ = engine.create_run("proj_1")

@@ -9,6 +9,7 @@ from ..config import RECOVERY_CODE_COUNT
 from ..db import get_db
 from ..deps import AuthContext, get_auth_context
 from ..errors import ApiError
+from ..llm import normalize_task_routes
 from ..models import AuthSession, RecoveryCode, User, new_id, utcnow
 from ..privacy import privacy_settings_of
 from ..schemas import (
@@ -123,12 +124,19 @@ def get_privacy_settings(ctx: AuthContext = Depends(get_auth_context)):
 @router.put("/privacy-settings")
 def update_privacy_settings(
     body: PrivacySettingsUpdateRequest,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
     """整体替换保存九个面板项。设置存服务端而不是浏览器：任务保留与文件
-    缓存清理由服务端后台清扫按此执行，换浏览器/清缓存后设置照常生效。"""
+    缓存清理由服务端后台清扫按此执行，换浏览器/清缓存后设置照常生效。
+
+    「保存任务历史」关闭时同步清空该用户服务端托管的对话记录（ADR-0016），
+    与前端清 localStorage 对话记录的既有行为对齐；此后新轮只在内存托管。"""
+    was_saving = bool(privacy_settings_of(ctx.user).get("save_history", True))
     ctx.user.privacy_settings = body.model_dump()
+    if was_saving and not body.save_history:
+        request.app.state.chat_turns.delete_user_turns(db, ctx.user.id)
     db.commit()
     return {"settings": privacy_settings_of(ctx.user)}
 
@@ -162,6 +170,9 @@ def update_llm_config(
         "allow_proxy": body.allow_proxy,
         "stream": body.stream,
         "fallback": body.fallback,
+        "smart_routing": body.smart_routing,
+        # 任务类型定向（ADR-0015）：只存指向本次保存里现存接口的项
+        "task_routes": normalize_task_routes(body.task_routes.model_dump(), sorted(known_ids)),
     }
     db.commit()
     return {"config": llm_config_payload(ctx.user)}

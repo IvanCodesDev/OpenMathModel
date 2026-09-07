@@ -1172,6 +1172,26 @@ def test_difficulty_parse_only_accepts_standalone_digits():
     assert parse("完全没有数字") is None
 
 
+def test_endpoint_strength_recognizes_current_flagships():
+    """新一代旗舰的档位记号必须入表，否则 Auto 路由会把旗舰当中位模型使用。"""
+    strength = llm_module.endpoint_strength
+    assert strength(_endpoint(model="gpt-6-astra")) == 8, "GPT-6 Astra（2026-09-03）是 OpenAI 当前旗舰"
+    assert strength(_endpoint(model="gpt-5.6-sol")) == 8
+    assert strength(_endpoint(model="gpt-5.6-luna")) == 2
+    assert strength(_endpoint(model="claude-fable-5")) == 8
+    assert strength(_endpoint(model="some-unknown-model")) == 5, "命中不了的型号按中位处理"
+    assert strength(_endpoint(model="gpt-6-astra", weight=3)) == 3, "用户填写的权重永远优先"
+
+
+def test_model_pricing_covers_gpt6_astra():
+    """旗舰若落到 4/12 元的兜底价，预算闸门会把实际 70/350 元的调用放行十几倍。"""
+    from omm_api.usage import model_pricing
+
+    assert model_pricing("gpt-6-astra") == (70.0, 350.0)
+    assert model_pricing("gpt-6") == (70.0, 350.0), "同代别名沿用旗舰价"
+    assert model_pricing("gpt-5.6-sol") == (35.0, 210.0), "5.6 档位不受影响"
+
+
 def test_pick_by_difficulty_uses_absolute_strength_targets():
     """映射与池构成解耦：全强池的简单题取相对最弱，弱多池的中档题不落到最弱。"""
     light = _endpoint(id="ep_l", weight=2)

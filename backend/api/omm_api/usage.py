@@ -4,8 +4,9 @@
 LLM 节点、Auto 路由的难度判定）在调用成功后各自把一条 LlmUsageRow 写进
 llm_usage_records；失败调用不记（用量监控回答"用了多少"，故障排查归日志）。
 
-费用是估算值：按模型名前缀匹配一张常见模型的人民币单价表（元 / 百万 token），
-未匹配的模型走 DEFAULT_PRICING。页面文案已声明"费用为本月预估值"。
+费用是估算值：先按模型 ID 精确命中服务端同步的模型目录单价（ADR-0017，美元
+× 汇率），未收录的再按模型名前缀匹配下面这张手写人民币单价表（元 / 百万
+token），都不匹配走 DEFAULT_PRICING。页面文案已声明"费用为本月预估值"。
 
 预算闸门：users.usage_settings 存月度预算三项（预算金额 / 提醒阈值 / 硬限制）。
 硬限制开启且本月估算费用达到预算时，enforce_budget 把付费接口从配置里筛掉，
@@ -24,6 +25,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import model_catalog
 from .errors import ApiError
 from .llm import ChatOutcome, LlmConfig, LlmEndpoint
 from .models import User, utcnow
@@ -42,12 +44,16 @@ PRICING: tuple[tuple[str, float, float], ...] = (
     ("ollama", 0.0, 0.0),
     ("llama", 0.0, 0.0),
     ("qwen3:", 0.0, 0.0),
-    # ── 当代模型（单价采集自各厂商定价页，2026-08-27）───────────────
+    # ── 当代模型（单价采集自各厂商定价页，2026-09-05）───────────────
     # DeepSeek：2026-08-16 起改峰谷两档，谷价为峰价一半；这里按峰价估，
     # 宁可高估也不要让预算硬限制在谷时放行、峰时超支。
     ("deepseek-v4-pro", 9.2, 27.7),
     ("deepseek-v4-flash", 3.1, 9.2),
-    # OpenAI（按 ≈7 元/美元折算）；gpt-5.6 别名当前指向 sol
+    # OpenAI（按 ≈7 元/美元折算）。GPT-6 Astra（2026-09-03）标准价 $10/$50，
+    # 单次提示超过 272K 输入 token 时整笔按 2×/1.5× 计（此处不建模）；
+    # "gpt-6" 兜底给日后的别名与同代其他档。gpt-5.6 别名当前指向 sol。
+    ("gpt-6-astra", 70.0, 350.0),
+    ("gpt-6", 70.0, 350.0),
     ("gpt-5.6-terra", 14.0, 84.0),
     ("gpt-5.6-luna", 1.4, 8.4),
     ("gpt-5.6", 35.0, 210.0),
@@ -118,7 +124,17 @@ _MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 
 def model_pricing(model: str) -> tuple[float, float]:
-    """模型名 → (输入单价, 输出单价)，元 / 百万 token；未知模型走兜底价。"""
+    """模型名 → (输入单价, 输出单价)，元 / 百万 token。
+
+    先按模型 ID 精确命中服务端同步的模型目录（ADR-0017，美元单价 × 汇率），
+    目录未收录（中转站自定义名、本地标签、目录未同步）才走上面的手写前缀表，
+    仍未命中走兜底价。
+    """
+    catalog = model_catalog.current()
+    if catalog is not None:
+        priced = catalog.pricing_cny(model)
+        if priced is not None:
+            return priced
     name = (model or "").lower()
     for prefix, prompt_price, completion_price in PRICING:
         if prefix in name:

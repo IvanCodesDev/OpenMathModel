@@ -8,6 +8,7 @@ import { persistTaskAttachmentExcerpts } from "../attachments/task-attachment-co
 import { uploadAttachments } from "../attachments/upload";
 import { fetchMe, invalidateMe } from "../auth/api";
 import { openAuthDialog } from "../auth/auth-dialog";
+import { t } from "../i18n/locale";
 import type { ScreenId } from "../types/screens";
 import {
   clearComposerReferences,
@@ -15,6 +16,7 @@ import {
   listComposerReferences,
   persistPendingTaskReferences,
 } from "./composer-references";
+import { demoMode } from "./demo-mode";
 import { resetHomeChat, restoreHomeChat, runHomeChatTurn, stopHomeChatGeneration } from "./home-chat";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
@@ -385,7 +387,14 @@ function mountNewTask(root: HTMLElement): () => void {
   // 侧栏「最近任务」点开的历史对话在这里重建现场；地址栏没带 ?chat= 就是
   // 新的一段对话，把上一段的归属与上下文解绑，别把两段聊到一起去。
   const requestedChat = new URL(window.location.href).searchParams.get("chat");
-  if (!requestedChat || !restoreHomeChat(root, requestedChat)) resetHomeChat();
+  if (!requestedChat) {
+    resetHomeChat();
+  } else {
+    // 记录在服务端（ADR-0016）：拉齐后重建现场，两边都没有记录才回到欢迎态
+    void restoreHomeChat(root, requestedChat).then(restored => {
+      if (!restored) resetHomeChat();
+    });
+  }
   const textarea = root.querySelector<HTMLTextAreaElement>('[data-task-description], textarea[aria-label="任务描述"]');
   const attachments = attachmentsWithin(root);
   const sendButton = root.querySelector<HTMLButtonElement>('[data-action="send"]');
@@ -618,8 +627,12 @@ function setStartBusy(button: HTMLButtonElement, busy: boolean): void {
 
 function mountConfirmTask(root: HTMLElement): () => void {
   const stored = readDraft();
-  const draft = stored && normalizeTaskDescription(stored.description) ? stored : DEMO_DRAFT;
-  const isDemo = draft === DEMO_DRAFT;
+  // 演示夹具只在显式 `?demo=1` 下启用；没有草稿又不是演示态时给空态，
+  // 不再拿「2026 国赛 A 题 + 四个假附件」冒充用户刚填的任务。
+  const isDemo = demoMode() && !(stored && normalizeTaskDescription(stored.description));
+  const draft = stored && normalizeTaskDescription(stored.description)
+    ? stored
+    : (isDemo ? DEMO_DRAFT : null);
   const abortController = new AbortController();
   let disposed = false;
   const startButton = root.querySelector<HTMLButtonElement>('[data-task-start-submit], [data-go="running"]');
@@ -632,15 +645,21 @@ function mountConfirmTask(root: HTMLElement): () => void {
     },
   });
 
-  root.dataset.taskStartSource = isDemo ? "demo" : "draft";
-  root.dataset.taskStartState = isDemo ? "demo" : "ready";
-  const projectName = deriveProjectName(draft.description);
+  root.dataset.taskStartSource = draft ? (isDemo ? "demo" : "draft") : "empty";
+  root.dataset.taskStartState = draft ? (isDemo ? "demo" : "ready") : "empty";
   const projectNameNode = root.querySelector<HTMLElement>("[data-task-project-name]");
   const descriptionNode = root.querySelector<HTMLElement>("[data-task-description-preview]");
-  if (projectNameNode) projectNameNode.textContent = projectName;
-  if (descriptionNode) descriptionNode.textContent = draft.description;
-  renderAttachments(root, draft.attachments);
-  if (isDemo) {
+  if (projectNameNode) projectNameNode.textContent = draft ? deriveProjectName(draft.description) : t("尚未创建任务");
+  if (descriptionNode) {
+    descriptionNode.textContent = draft
+      ? draft.description
+      : t("还没有任务草稿。回首页描述你要解决的问题，再回到这里确认。");
+  }
+  renderAttachments(root, draft?.attachments ?? []);
+  if (!draft) {
+    renderStatus(root, "回首页填写任务后再确认。", "status");
+    if (startButton) startButton.disabled = true;
+  } else if (isDemo) {
     renderStatus(root, "当前为示例任务；“开始任务”将进入演示工作台，不会创建项目。", "status");
     if (startButton) startButton.textContent = "查看演示任务";
   } else {
@@ -663,9 +682,15 @@ function mountConfirmTask(root: HTMLElement): () => void {
       navigate("/task/running?demo=1");
       return;
     }
+    // 空态（没有草稿）没有可提交的东西，按钮已禁用，这里再兜一层
+    const pending = readDraft() ?? draft;
+    if (!pending) {
+      navigate("/");
+      return;
+    }
     // 重试时以持久化草稿为准：失败前已写回的 project_id / run_request_token
     // 不能被挂载时的旧草稿覆盖，否则会重复创建项目或换幂等键重复起任务。
-    submitter.start(readDraft() ?? draft);
+    submitter.start(pending);
   };
 
   root.addEventListener("click", onClick);

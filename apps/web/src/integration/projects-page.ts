@@ -603,12 +603,12 @@ function ensureTakeover(): void {
 
 // ── 挂载 ─────────────────────────────────────────────────────────
 
-/** 进入「我的项目」页后调用：把演示表格换成真实项目清单；未登录保持演示。 */
+/** 进入「我的项目」页后调用：把模板表格换成真实项目清单；拿不到数据时保留模板（默认即空表）。 */
 export async function hydrateProjectsPage(): Promise<void> {
   if (!document.querySelector(".project-table")) return;
   const seq = ++fetchSeq;
   const fetched = await fetchPage();
-  // 快速切换或失败时不打扰当前页面（未登录/网络失败 = 保留演示表格）
+  // 快速切换或失败时不打扰当前页面（未登录/网络失败 = 保留模板表格）
   if (seq !== fetchSeq || fetched === null) return;
   items = fetched.items;
   totalCount = fetched.total;

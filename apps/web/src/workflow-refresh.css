@@ -5929,6 +5929,9 @@ html[data-theme="dark"] .editor-page .md-table td { border-color: #525252; }
 .todo-title { font-weight: 500; }
 .todo-title.thinking-shimmer { font-weight: 425; }
 .todo-count { margin-left: auto; color: #a1a1a1; font-variant-numeric: tabular-nums; display: inline-flex; align-items: baseline; }
+/* 上一行的 display 会压过 UA 的 [hidden]{display:none}：面板回到思考态（重试失败阶段后
+   题意解析重新开跑）时 count.hidden=true 曾不生效，「正在思考并规划…」右侧仍挂着旧的 0/6。 */
+.todo-count[hidden] { display: none; }
 .roll-digit { display: inline-block; overflow: hidden; height: 1em; line-height: 1em; }
 .roll-inner { display: flex; flex-direction: column; transition: transform 350ms cubic-bezier(0.4, 0, 0.2, 1); }
 .roll-inner span { height: 1em; line-height: 1em; }
@@ -6072,6 +6075,15 @@ html[data-theme="dark"] .todo-label::before { background: linear-gradient(90deg,
 .home-chat-error { color: #bd4840; font-size: 13px; }
 html[data-theme="dark"] .home-chat-error { color: #e2726a; }
 
+/* 被打断的回复（整页导航掐断 / 接口报错 / 暂停）恢复时的说明行：紧跟半截正文，
+   有正文时用一道虚线隔开，让人一眼看出下面这句不是模型说的 */
+.analysis-copy .reply-interrupted { font-size: 13px; margin: 6px 0 0; }
+.analysis-copy :not(.reply-interrupted) + .reply-interrupted {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
 /* 执行轨迹里的进度叙述正文（阶段完成时智能体的一段话，叙述与过程行交替） */
 .agent-stream .stream-note { margin: 10px 0 12px; line-height: 1.7; }
 .agent-stream .stream-note p { margin: 0 0 8px; }
@@ -6082,6 +6094,14 @@ html[data-theme="dark"] .home-chat-error { color: #e2726a; }
 .stage-strategy-list { margin: 12px 0 0; padding-left: 22px; line-height: 1.9; color: #555551; }
 .stage-strategy-list li + li { margin-top: 6px; }
 html[data-theme="dark"] .stage-strategy-list { color: #b3b3ae; }
+
+/* 建模方案页：G1 决策台账落地后，用户确认采用的那一行把角色标改成「（已采用）」
+   （仍是标题里那一枚 <small>，方案行的六个网格子项与行高都不动），用主色点亮 */
+.focused-plan-row strong small.stage-plan-adopted {
+  color: var(--ax-accent, #11110f);
+  font-weight: 600;
+}
+html[data-theme="dark"] .focused-plan-row strong small.stage-plan-adopted { color: var(--ax-accent, #e8e8e4); }
 
 /* ── 流程页真实产出的富文本（stage-content 的 richBlock/richInline）：
    模型正文里的 markdown（加粗/代码/列表/表格/公式）在面板里也要有排版，
@@ -6095,14 +6115,6 @@ html[data-theme="dark"] .stage-strategy-list { color: #b3b3ae; }
 .stage-rich-text li + li { margin-top: 5px; }
 
 /* 面板槽位有自己的标题层级：正文内的 markdown 标题一律降为加粗小节名 */
-/* 建模方案页：G1 决策台账落地后，用户确认采用的那一行把角色标改成「（已采用）」
-   （仍是标题里那一枚 <small>，方案行的六个网格子项与行高都不动），用主色点亮 */
-.focused-plan-row strong small.stage-plan-adopted {
-  color: var(--ax-accent, #11110f);
-  font-weight: 600;
-}
-html[data-theme="dark"] .focused-plan-row strong small.stage-plan-adopted { color: var(--ax-accent, #e8e8e4); }
-
 .stage-rich-text h1,
 .stage-rich-text h2,
 .stage-rich-text h3,
@@ -6422,3 +6434,45 @@ html[data-reduce-motion="on"] .task-launch-overlay[data-state="done"] .launch-vi
   .task-launch-overlay { opacity: 1; }
   .task-launch-overlay[data-state="done"] .launch-visual-tick { stroke-dashoffset: 0; }
 }
+
+/* revision 35 — 2026-09-05 默认空态（ADR-0014）：页面不再自带演示内容，
+   骨架里的槽位在真实数据到达前显示一句说明，而不是留一片说不清的空白。 */
+.stage-empty-state {
+  margin: 0;
+  color: #8a8a84;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.outline .stage-empty-state {
+  padding: 10px 4px;
+  font-size: 12.5px;
+}
+.editor-page .editor-placeholder {
+  margin: 0;
+  color: #a3a39c;
+  font-size: 15px;
+  line-height: 1.9;
+}
+html[data-theme="dark"] .stage-empty-state { color: #85857e; }
+html[data-theme="dark"] .editor-page .editor-placeholder { color: #6f6f69; }
+
+/* revision 36 — 2026-09-05 运行态路由的登录闸门（ADR-0014 决策 8）：校验登录状态
+   与跳转登录页这段时间里正文区不可见，避免「状态同步需要处理 · 请先登录」这类
+   残页闪一帧。用 visibility 而不是 display，布局不塌、跳转不抖。 */
+body[data-auth-gate] .main { visibility: hidden; }
+
+/* revision 37 — 2026-09-05 智能路由候选改为已保存接口（ADR-0014 决策 11）：
+   四个下拉下方的一行说明，只在池子为空或未登录时出现，告诉用户去哪里配。 */
+.settings-field-note {
+  margin: -4px 0 0;
+  color: #979792;
+  font-size: 12px;
+  line-height: 1.5;
+}
+html[data-theme="dark"] .settings-field-note { color: #85857e; }
+
+/* revision 38 — 2026-09-07 对话触发的运行动作（ADR-0018）之后，执行步骤续写在同一条
+   回复块内部（正文 / 复制按钮之后接「收起执行步骤」折叠头 + 活动流），不再另起一个
+   带署名的 Agent 块。折叠头贴着正文时补一点上间距；步骤区沿用 .agent-stream 的节奏。 */
+.follow-up-reply > .reply-actions + .activity-summary,
+.follow-up-reply > .analysis-copy + .activity-summary { margin-top: 4px; }

@@ -403,6 +403,38 @@ class TaskRunEngine:
         )
         return events
 
+    def redo(
+        self,
+        snapshot: TaskRunSnapshot,
+        target_state: TaskState,
+        reason: str,
+        note_id: str | None = None,
+    ) -> list[AgentEvent]:
+        """Send an unfinished run back to ``target_state`` and redo from there (ADR-0019).
+
+        Unlike ``request_revision`` this lands directly on the target: the
+        caller (the conversational control plane) has already obtained the
+        user's confirmation, so there is no gate to open. Valid from any work
+        state — running or paused — as well as FAILED and NEEDS_REVIEW; a
+        pending review is dropped and steps still RUNNING are closed as
+        CANCELLED (their executor's late writes are discarded downstream).
+        COMPLETED keeps going through the revision gate.
+        """
+        if snapshot.state is TaskState.COMPLETED or snapshot.state is TaskState.CREATED:
+            raise ValueError(f"redo is not valid for a run in {snapshot.state.value}")
+        if target_state not in WORK_STATES:
+            raise ValueError(f"{target_state.value} is not a work state")
+        payload: dict[str, Any] = {
+            "target_state": target_state.value,
+            "from_state": snapshot.state.value,
+            "reason": reason,
+        }
+        if note_id is not None:
+            payload["note_id"] = note_id
+        events: list[AgentEvent] = []
+        self._record(snapshot, EventType.RUN_REDO, payload, events)
+        return events
+
     # -- internals ----------------------------------------------------------
 
     def _run_node(

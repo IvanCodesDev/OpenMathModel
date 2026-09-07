@@ -8,9 +8,26 @@ const source = await readFile(new URL("./conversation-log.ts", import.meta.url),
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { parseConversationLog } = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`);
+// load/clear 走 localStorage：Node 里用 Map 充当同步存储，行为与浏览器一致
+const store = new Map();
+globalThis.localStorage = {
+  getItem: key => (store.has(key) ? store.get(key) : null),
+  setItem: (key, value) => { store.set(key, String(value)); },
+  removeItem: key => { store.delete(key); },
+  key: index => [...store.keys()][index] ?? null,
+  get length() { return store.size; },
+};
+
+const {
+  clearAllConversationLogs,
+  clearConversationLog,
+  loadConversationLog,
+  parseConversationLog,
+  sanitizeTrace,
+} = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`);
 
 const wrap = entries => JSON.stringify({ entries, saved_at: 1 });
+const RUN = "run_0123456789abcdef0123456789abcdef";
 
 test("accepts well-formed user/assistant entries in order", () => {
   assert.deepEqual(
@@ -75,4 +92,52 @@ test("keeps reply reasoning for the thought-review box and drops junk values", (
       { role: "assistant", text: "思考字段是杂质" },
     ],
   );
+});
+
+test("interrupted replies may be empty and keep their note; other empty entries still drop", () => {
+  assert.deepEqual(
+    parseConversationLog(wrap([
+      { role: "user", text: "问题" },
+      { role: "assistant", text: "", interrupted: true, note: "回复生成中断：接口超时" },
+      { role: "assistant", text: "半截", interrupted: true, reasoning: "想到一半", note: 42 },
+      { role: "assistant", text: "", interrupted: "yes" },
+      { role: "user", text: "", interrupted: true },
+      { role: "assistant", text: "完整回复", note: "非中断条目不带 note" },
+    ])),
+    [
+      { role: "user", text: "问题" },
+      { role: "assistant", text: "", interrupted: true, note: "回复生成中断：接口超时" },
+      { role: "assistant", text: "半截", reasoning: "想到一半", interrupted: true },
+      { role: "assistant", text: "完整回复" },
+    ],
+  );
+});
+
+test("trace rows are capped at 8 and junk rows dropped (shared with the server-side PATCH payload)", () => {
+  const rows = sanitizeTrace([
+    { icon: "paperclip", title: "已解析并注入附件", suffix: " ×2", detail: "a.pdf\nb.csv", elapsed: "1.2s" },
+    ...Array.from({ length: 10 }, (_, index) => ({ icon: "check-circle", title: `多余行 ${index}` })),
+  ]);
+  assert.equal(rows.length, 8, "最多 8 行");
+  assert.deepEqual(rows[0], { icon: "paperclip", title: "已解析并注入附件", suffix: " ×2", detail: "a.pdf\nb.csv", elapsed: "1.2s" });
+  assert.ok(rows.slice(1).every(row => row.title.startsWith("多余行")));
+  assert.deepEqual(
+    sanitizeTrace([{ icon: "gauge", title: "" }, { title: "缺 icon" }, "junk", { icon: "check-circle", title: "有效", suffix: 3 }]),
+    [{ icon: "check-circle", title: "有效" }],
+  );
+  assert.deepEqual(sanitizeTrace("not-a-list"), []);
+});
+
+test("clearing a scope or all logs also drops legacy pending records", () => {
+  store.clear();
+  store.set(`openmathmodel.chatLog.v1.${RUN}`, wrap([{ role: "user", text: "旧记录" }]));
+  store.set(`openmathmodel.chatPending.v1.${RUN}`, "{}");
+  assert.equal(loadConversationLog(RUN).length, 1);
+  clearConversationLog(RUN);
+  assert.equal(store.size, 0);
+  store.set(`openmathmodel.chatLog.v1.${RUN}`, wrap([{ role: "user", text: "旧记录" }]));
+  store.set("openmathmodel.chatPending.v1.chat_0123456789abcdef0123456789abcdef", "{}");
+  store.set("unrelated.key", "keep");
+  clearAllConversationLogs();
+  assert.deepEqual([...store.keys()], ["unrelated.key"]);
 });

@@ -96,8 +96,8 @@ const SHELL: Record<string, string> = {
   "已取消归档，对话回到最近任务": "Unarchived — the conversation is back in recent tasks",
   "删除对话": "Delete conversation",
   "对话已删除": "Conversation deleted",
-  "删除后，这段对话的全部消息将从本机清除，且无法恢复。仅想隐藏可改用「归档」。":
-    "Deleting removes every message in this conversation from this device permanently. Use Archive if you only want to hide it.",
+  "删除后，这段对话的全部消息将被清除，且无法恢复。仅想隐藏可改用「归档」。":
+    "Deleting removes every message in this conversation permanently. Use Archive if you only want to hide it.",
   "编辑": "Edit",
   "确认": "Confirm",
   "取消": "Cancel",
@@ -384,7 +384,25 @@ const TASK_RUNNING: Record<string, string> = {
   "回复生成中断": "Reply interrupted",
   "回复仍在生成中…": "Reply still generating…",
   "回复生成中断，请重新发送。": "Reply generation was interrupted; please send it again.",
+  "已暂停生成，以上为暂停前已生成的部分。": "Generation stopped; the part above is what had been generated.",
+  "回复在生成中出错，以上为出错前已生成的部分。": "An error occurred mid-reply; the part above is what had been generated.",
+  "服务重启，本轮生成中断；需要完整回答请重新发送": "The service restarted and this reply was cut off; send again for a complete answer",
+  "回复仍在服务端生成中，正在续接…": "The reply is still being generated on the server; reconnecting…",
   "发起修改失败，请稍后重试": "Could not start the revision; please try again",
+  "已重试阶段": "Retried the stage",
+  "已恢复任务": "Resumed the task",
+  "已暂停任务": "Paused the task",
+  "已取消任务": "Cancelled the task",
+  "已选定审批选项": "Selected the approval option",
+  "已退回待确认事项": "Sent the pending decision back",
+  "已受理修改要求": "Accepted the revision request",
+  "已从阶段重做": "Redoing from the stage",
+  "已执行运行操作": "Run action executed",
+  "等待你确认操作": "Waiting for your confirmation",
+  "当前状态不允许该操作": "That action is not allowed in the current state",
+  "已放弃提案": "Proposal dismissed",
+  "确认执行": "Confirm",
+  "已发送确认": "Confirmation sent",
   "暂停生成": "Stop generating",
   "已暂停生成": "Generation stopped",
   "已暂停生成。": "Generation stopped.",
@@ -763,10 +781,6 @@ const MODEL_STAGE: Record<string, string> = {
   "主要风险": "Main risks",
   "推荐理由": "Why recommended",
   "推荐理由与风险见下方方案详情": "see the plan details below for rationale and risks",
-  // 模型假设 / 符号表两分页（stage-content：PlanProposal.assumptions / symbols，H3 切片 2）
-  "项全局假设": "global assumptions",
-  "项方案特定假设": "plan-specific assumptions",
-  "全部假设均由题面或数据直接支持。": "Every assumption is directly supported by the problem statement or the data.",
   // G1 决策台账进方案页（stage-content：PlanProposal.decision / plans[].language，H3 切片 6）
   "已确认采用方案": "Confirmed plan",
   "即推荐方案": "the recommended plan",
@@ -776,6 +790,10 @@ const MODEL_STAGE: Record<string, string> = {
   "实现语言": "Implementation language",
   "确认备注": "Confirmation note",
   "来自已确认的方案": "From the confirmed plan",
+  // 模型假设 / 符号表两分页（stage-content：PlanProposal.assumptions / symbols，H3 切片 2）
+  "项全局假设": "global assumptions",
+  "项方案特定假设": "plan-specific assumptions",
+  "全部假设均由题面或数据直接支持。": "Every assumption is directly supported by the problem statement or the data.",
   "项假设待检验或需重点验证，实验阶段将据此安排敏感性与稳健性检验。":
     "assumptions still need checking or close verification; sensitivity and robustness checks in the experiment stage follow from them.",
   "建议围绕以下假设做敏感性与稳健性检验：": "Run sensitivity and robustness checks around these assumptions: ",
@@ -1429,6 +1447,20 @@ const SETTINGS: Record<string, string> = {
   "点「配置」自动填入官方接口参数，连接状态来自已保存的接口。":
     "Click Configure to autofill official endpoint settings; status reflects your saved endpoints.",
   "添加厂商": "Add provider",
+  "同步型号": "Sync models",
+  "同步中…": "Syncing…",
+  "正在读取型号目录…": "Loading the model catalog…",
+  "正在同步型号…": "Syncing models…",
+  "型号目录暂不可用": "Model catalog unavailable",
+  "目录暂未收录该厂商型号，可手填模型 ID": "No models listed for this provider yet — type a model ID",
+  "型号目录已同步到最新": "Model catalog is up to date",
+  "型号目录同步失败": "Model catalog sync failed",
+  "模型目录暂不可用，型号为内置快照，可能已过期。":
+    "Model catalog unavailable — showing the built-in snapshot, which may be out of date.",
+  "服务端已关闭模型目录同步，型号为内置快照。":
+    "Catalog sync is disabled on the server — showing the built-in snapshot.",
+  "模型目录尚未同步，型号为内置快照；后台正在拉取。":
+    "Catalog not synced yet — showing the built-in snapshot while it loads in the background.",
   "通义千问": "Qwen",
   "智谱 GLM": "Zhipu GLM",
   "Ollama · 本地已安装模型": "Ollama · locally installed models",
@@ -1439,11 +1471,15 @@ const SETTINGS: Record<string, string> = {
   "已填入本地 Ollama 参数，无需密钥，模型 ID 填你已安装的模型":
     "Local Ollama settings filled in — no key needed; set the model ID to one you have installed",
   "智能路由": "Smart routing",
-  "根据任务类型、速度与费用自动选择模型。":
-    "Pick a model automatically based on task type, speed and cost.",
+  "候选接口即「自定义 API」里已保存的接口，增删接口后这里即时更新；保存后任务的对应阶段与携图对话按此定向。":
+    "Candidates are the endpoints saved under Custom API and update as soon as you add or remove one; once saved, the matching task stages and image-bearing chat turns are routed accordingly.",
+  "还没有已保存接口：先在「自定义 API」保存接口，这里才有可选项。":
+    "No saved endpoints yet — save one under Custom API to get options here.",
+  "登录后可按任务类型指定已保存的接口。":
+    "Sign in to assign saved endpoints by task type.",
   "启用模型智能路由": "Enable smart model routing",
-  "优先满足质量要求，并在同等能力下选择成本更低的模型":
-    "Meet quality requirements first, then prefer the cheaper capable model",
+  "开启后按下方任务类型把调用定向到指定接口；关闭则全部走主接口链":
+    "When on, calls are routed to the endpoint chosen for each task type below; when off, everything uses the primary endpoint chain",
   "编程与 Agent": "Coding and agents",
   "长文写作": "Long-form writing",
   "视觉理解": "Vision",

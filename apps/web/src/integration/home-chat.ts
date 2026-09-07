@@ -8,10 +8,11 @@
  * 对话历史由 agent-chat 维护（走用户配置的模型与 Auto 路由）。
  * 对话中一旦出现完整题面（接待判定升级），交回任务创建链路跳转执行页。
  *
- * 这条链不建项目、不起运行，服务端因此没有可列的记录。首轮发送时向
- * tasks/chat-sessions 领一个 `chat_…` 身份并绑定给 agent-chat，正文就随
- * 任务对话同一套 localStorage 记录落盘，侧栏「最近任务」据此列出对话、
- * 点回来由 restoreHomeChat 重建现场（同受「保存任务历史」开关管辖）。
+ * 这条链不建项目、不起运行。首轮发送时向 tasks/chat-sessions 领一个 `chat_…`
+ * 身份并绑定给 agent-chat：这一轮起对话走服务端托管轮（ADR-0016），生成在
+ * 服务端后台进行、记录落服务端 chat_turns；侧栏「最近任务」按本机会话清单列出
+ * 对话，点回来由 restoreHomeChat 从服务端拉全部轮重建现场——仍在生成的那一轮
+ * 原地续接直播（同受「保存任务历史」开关管辖：关闭时不领身份、不落盘）。
  *
  * DOM 由本模块动态插入（与执行计划面板同模式），不改动页面模板与路由。
  */
@@ -26,7 +27,7 @@ import {
   newChatSessionId,
   touchChatSession,
 } from "../tasks/chat-sessions";
-import { loadConversationLog } from "../tasks/conversation-log";
+import { loadConversationLog, type ConversationLogEntry } from "../tasks/conversation-log";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
 import {
@@ -36,10 +37,15 @@ import {
 } from "../text/stream-render";
 import {
   ChatError,
+  attachConversationTurn,
   configureConversation,
   conversationSnapshot,
+  entryFromTurn,
+  hydrateConversation,
   resetConversation,
   sendConversationTurn,
+  type ChatHandlers,
+  type ChatTurnResult,
 } from "./agent-chat";
 import { hydrateRecentTasks } from "./recent-tasks";
 
@@ -200,32 +206,56 @@ export function resetHomeChat(): void {
   resetConversation();
 }
 
+/** 重建一条已定格的回复（本机旧记录与服务端已结束的轮同一形态）。 */
+function appendSettledReply(thread: HTMLElement, entry: ConversationLogEntry): void {
+  const block = appendAssistantBlock(thread);
+  const copy = block.querySelector<HTMLElement>(".analysis-copy")!;
+  // 思考过程随记录一起回来：正文上方重建折叠的「已思考」回看盒
+  if (entry.reasoning) block.insertBefore(createRestoredThinkingBlock(entry.reasoning), copy);
+  copy.innerHTML = entry.text ? renderMarkdown(entry.text) : "";
+  // 被打断的回复（暂停 / 接口报错 / 服务重启）：半截正文之下一行灰字说明原因
+  if (entry.interrupted) {
+    const note = document.createElement("p");
+    note.className = "muted reply-interrupted";
+    note.textContent = t(entry.note || "回复生成中断，请重新发送。");
+    copy.append(note);
+  }
+  typesetMath(copy);
+}
+
 /**
- * 从本机记录重建一段对话现场：侧栏「最近任务」点开对话条目时调用。
- * 记录已被清空（关过「保存任务历史」）时返回 false，页面留在欢迎态。
+ * 重建一段对话现场：侧栏「最近任务」点开对话条目时调用。服务端的轮（ADR-0016）
+ * 在本机旧记录之后按时间顺序重建；仍在生成的那一轮原地续接直播——生成在服务端
+ * 从未中断，页面只是回来接着看。两边都没有记录（关过「保存任务历史」）时返回
+ * false，页面留在欢迎态。
  */
-export function restoreHomeChat(root: HTMLElement, chatId: string): boolean {
+export async function restoreHomeChat(root: HTMLElement, chatId: string): Promise<boolean> {
   if (!findChatSession(chatId)) return false;
-  const entries = loadConversationLog(chatId);
-  if (entries.length === 0) return false;
+  activeChatId = chatId;
+  configureConversation(chatId);
+  const legacyEntries = loadConversationLog(chatId);
+  const turns = await hydrateConversation(chatId);
+  // 等待期间用户已切到别的对话 / 回到欢迎态：这批记录不再属于眼前的页面
+  if (activeChatId !== chatId) return false;
+  if (legacyEntries.length === 0 && turns.length === 0) return false;
   const thread = ensureThread(root);
   if (!thread) return false;
   thread.replaceChildren();
   root.dataset.homeChat = "on";
-  for (const entry of entries) {
-    if (entry.role === "user") {
-      appendUserBubble(thread, entry.text, entry.attachments ?? []);
+  for (const entry of legacyEntries) {
+    if (entry.role === "user") appendUserBubble(thread, entry.text, entry.attachments ?? []);
+    else appendSettledReply(thread, entry);
+  }
+  for (const turn of turns) {
+    appendUserBubble(thread, turn.text, turn.attachments);
+    if (turn.status === "running") {
+      const block = appendAssistantBlock(thread);
+      void presentReply(root, thread, block, (handlers, signal) => attachConversationTurn(turn, handlers, signal))
+        .then(ok => { if (ok && activeChatId) touchChatSession(activeChatId); });
       continue;
     }
-    const block = appendAssistantBlock(thread);
-    const copy = block.querySelector<HTMLElement>(".analysis-copy")!;
-    // 思考过程随记录一起回来：正文上方重建折叠的「已思考」回看盒
-    if (entry.reasoning) block.insertBefore(createRestoredThinkingBlock(entry.reasoning), copy);
-    copy.innerHTML = renderMarkdown(entry.text);
-    typesetMath(copy);
+    appendSettledReply(thread, entryFromTurn(turn));
   }
-  activeChatId = chatId;
-  configureConversation(chatId);
   thread.scrollTop = thread.scrollHeight;
   return true;
 }
@@ -265,23 +295,18 @@ export interface HomeChatTurnOptions {
 }
 
 /**
- * 渲染一轮首页对话：用户气泡 + 与执行页同构的流式回复（思考块 + Markdown 正文）。
- * 返回是否成功收到回复（登录失效时弹登录框并返回 false；调用方据此决定
- * 是否清空引用——失败保留以便重试，与执行页同语义）。
+ * 一轮回复从流式呈现到落定的公共骨架：首发（sendConversationTurn）与重进续接
+ * （attachConversationTurn）共用——半截续上的回复与从头看着生成的长得一样。
+ * 生成期间发送键变暂停键（中止 → 服务端真正停止生成，不是本页不看了）。
+ * 返回是否成功收到回复。
  */
-export async function runHomeChatTurn(
+async function presentReply(
   root: HTMLElement,
-  text: string,
-  options: HomeChatTurnOptions = {},
+  thread: HTMLElement,
+  block: HTMLElement,
+  run: (handlers: ChatHandlers, signal: AbortSignal) => Promise<ChatTurnResult>,
 ): Promise<boolean> {
-  const thread = ensureThread(root);
-  if (!thread) return false;
-  root.dataset.homeChat = "on";
-  appendUserBubble(thread, text, options.referenceTitles ?? []);
-  const block = appendAssistantBlock(thread);
   const copy = block.querySelector<HTMLElement>(".analysis-copy")!;
-  scrollIntoView(block);
-
   // 容器对象而非裸 let：闭包内的赋值不参与 TS 控制流收窄，避免外部读取被推成 never
   const state: {
     thinking: ReturnType<typeof createThinkingBlock> | null;
@@ -294,11 +319,8 @@ export async function runHomeChatTurn(
   const abort = new AbortController();
   activeAbort = abort;
   setSendButtonGenerating(root, true);
-  // 归属要在发送前定下：agent-chat 按它把这一轮往返写进本机对话记录。
-  const startedNewSession = await ensureChatSession(text);
   try {
-    const { text: reply } = await sendConversationTurn(
-      text,
+    const { text: reply } = await run(
       {
         onReasoning: (_delta, full) => {
           // 思考流入场也跟随滚动（与执行页同节奏）：用户已在底部才吸底，翻上去回看不打扰
@@ -321,21 +343,12 @@ export async function runHomeChatTurn(
           renderer.update(full);
         },
       },
-      {
-        ...(options.referenceContext ? { attachmentContext: options.referenceContext } : {}),
-        ...(options.referenceTitles?.length ? { attachmentNames: options.referenceTitles } : {}),
-        signal: abort.signal,
-      },
+      abort.signal,
     );
     state.thinking?.finish();
     // 收尾不再强制滚到底：跟随交给 stickTo 的近底吸附——用户翻上去回看时，
     // 回复完成不该把视口拽走（执行页同语义）。
     renderer.finish(reply);
-    if (activeChatId) {
-      touchChatSession(activeChatId);
-      // 新对话要立刻出现在侧栏；后续轮次只更新本机时间戳，不为每条消息重拉清单
-      if (startedNewSession) void hydrateRecentTasks();
-    }
     return true;
   } catch (error) {
     state.thinking?.finish();
@@ -357,7 +370,46 @@ export async function runHomeChatTurn(
     copy.append(failure);
     return false;
   } finally {
-    if (activeAbort === abort) activeAbort = null;
-    setSendButtonGenerating(root, false);
+    if (activeAbort === abort) {
+      activeAbort = null;
+      setSendButtonGenerating(root, false);
+    }
   }
+}
+
+/**
+ * 渲染一轮首页对话：用户气泡 + 与执行页同构的流式回复（思考块 + Markdown 正文）。
+ * 返回是否成功收到回复（登录失效时弹登录框并返回 false；调用方据此决定
+ * 是否清空引用——失败保留以便重试，与执行页同语义）。
+ */
+export async function runHomeChatTurn(
+  root: HTMLElement,
+  text: string,
+  options: HomeChatTurnOptions = {},
+): Promise<boolean> {
+  const thread = ensureThread(root);
+  if (!thread) return false;
+  root.dataset.homeChat = "on";
+  appendUserBubble(thread, text, options.referenceTitles ?? []);
+  const block = appendAssistantBlock(thread);
+  scrollIntoView(block);
+  // 领身份期间发送键就已是暂停键（与之前的节奏一致）
+  setSendButtonGenerating(root, true);
+  // 归属要在发送前定下：有归属这一轮才走服务端托管（生成与记录都在服务端）。
+  const startedNewSession = await ensureChatSession(text);
+  const delivered = await presentReply(root, thread, block, (handlers, signal) => sendConversationTurn(
+    text,
+    handlers,
+    {
+      ...(options.referenceContext ? { attachmentContext: options.referenceContext } : {}),
+      ...(options.referenceTitles?.length ? { attachmentNames: options.referenceTitles } : {}),
+      signal,
+    },
+  ));
+  if (delivered && activeChatId) {
+    touchChatSession(activeChatId);
+    // 新对话要立刻出现在侧栏；后续轮次只更新本机时间戳，不为每条消息重拉清单
+    if (startedNewSession) void hydrateRecentTasks();
+  }
+  return delivered;
 }

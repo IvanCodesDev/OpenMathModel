@@ -24,6 +24,7 @@ import {
 } from "../tasks/chat-sessions";
 import { clearConversationLog } from "../tasks/conversation-log";
 import { forgetLastTask } from "../tasks/last-task-record";
+import { deleteChatScope } from "./chat-turns-api";
 import { modelingWorkspaceApi } from "./modeling-workspace-api";
 import { buildChatUrl, buildRunningUrl } from "./task-start-state";
 
@@ -352,7 +353,7 @@ function openDeleteDialog(item: RecentItem): void {
     t(chat ? "删除对话" : "删除任务"),
     `
     <p class="dialog-note">${t(chat
-      ? "删除后，这段对话的全部消息将从本机清除，且无法恢复。仅想隐藏可改用「归档」。"
+      ? "删除后，这段对话的全部消息将被清除，且无法恢复。仅想隐藏可改用「归档」。"
       : "删除后，该任务的对话、执行步骤、审批记录和生成文件将全部清除，且无法恢复。仅想隐藏可改用「归档」。")}</p>
     <div class="dialog-error" data-dialog-error></div>
     <div class="modal-actions"><button type="button" data-dialog-cancel>${t("取消")}</button><button type="button" class="primary" data-dialog-submit>${t("永久删除")}</button></div>`,
@@ -362,7 +363,9 @@ function openDeleteDialog(item: RecentItem): void {
       // 是否正在浏览被删条目要在清身份之前判定（判定会读 sessionStorage）。
       const viewing = viewingItem(item);
       if (chat) {
-        // 对话只存在于本机：目录条目与正文记录一起清。
+        // 对话记录在服务端（ADR-0016）：先删服务端的轮（仍在生成的一并停掉），
+        // 再清本机目录条目与旧正文记录。
+        await deleteChatScope(item.id);
         deleteChatSession(item.id);
       } else {
         await modelingWorkspaceApi.deleteProject(item.id);
@@ -467,7 +470,7 @@ function bindHost(host: HTMLElement): void {
 
 let hydrateSeq = 0;
 
-/** 每次切屏后调用：把侧栏「最近任务」换成真实数据；未登录保持演示条目。 */
+/** 每次切屏后调用：把侧栏「最近任务」换成真实数据；拿不到数据时保留模板（默认即空态）。 */
 export async function hydrateRecentTasks(): Promise<void> {
   const host = document.querySelector<HTMLElement>(".sidebar .recent");
   if (!host) return;
@@ -478,7 +481,7 @@ export async function hydrateRecentTasks(): Promise<void> {
   const [tasks, chats] = await Promise.all([fetchTaskItems(), fetchChatItems()]);
   // 快速切换筛选时旧请求可能后到：只认最新一次
   if (seq !== hydrateSeq) return;
-  // 任务清单拿不到（未登录/后端不可用）且本机也没有对话：保留模板演示条目
+  // 任务清单拿不到（未登录/后端不可用）且本机也没有对话：保留模板（默认即空态）
   if (tasks === null && chats.length === 0) return;
   closeMenu();
   const items = [...(tasks ?? []), ...chats]
