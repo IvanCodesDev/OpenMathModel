@@ -96,6 +96,15 @@ from .review import (
     verdict_summary_text,
 )
 from .schema import validate
+from .static_checks import (
+    CLEANING_STATIC_PROFILE,
+    EXPERIMENT_STATIC_PROFILE,
+    VALIDATION_STATIC_PROFILE,
+    StaticCheckProfile,
+    major_static_feedback,
+    run_static_checks,
+    static_material,
+)
 from .symbols import check_symbols, symbol_check_material, symbol_check_warning
 
 _FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$", re.MULTILINE)
@@ -2115,6 +2124,7 @@ class DataPreparationNode(LlmSkillNode):
             focus=CLEANING_REVIEW_FOCUS,
             materials=materials,
             context_slice=context_slice,
+            static_profile=CLEANING_STATIC_PROFILE,
         )
 
     # -- G2 gate ----------------------------------------------------------------
@@ -2253,6 +2263,8 @@ class _ReviewSpec:
     ]
     #: (capture, rerun, round_no) → SpawnSpec.context_slice（审计里看得到审的是什么）
     context_slice: Callable[[_SandboxCapture, Mapping[str, Any], int], dict[str, Any]]
+    #: 静态检查口径（None = 不查）：阻断项不等审稿人、直接回沙盒修复；提示项进审稿材料。
+    static_profile: StaticCheckProfile | None = None
 
 
 def _rerun_check(
@@ -2324,6 +2336,15 @@ def _spawn_reviewer(
     template = registry.get(spec.prompt_id)
     files = _workspace_files(ctx, services)
     variables = spec.materials(capture, final_answer, rerun, files)
+    # 静态检查段（节点确定性事实，先于审稿人判读）：模板有 {{static_checks}} 占位就渲染进去，
+    # 没有口径的消费方如实写「未执行」
+    variables.setdefault(
+        "static_checks",
+        static_material(
+            run_static_checks(capture.code, spec.static_profile) if spec.static_profile else None,
+            spec.static_profile,
+        ),
+    )
     problems = validate(variables, template.input_schema)
     if problems:
         return None, 0, "审稿任务卡输入无效：" + "; ".join(problems)
@@ -2408,8 +2429,60 @@ def _run_review_loop(
     review: dict[str, Any] = {"executed": False, "reason": "", "llm_calls": 0}
     report, capture, final_answer = first
     rounds = 0
+    static_rounds = 0
     while True:
         rounds += 1
+        # 静态检查（不烧模型）：阻断项不等审稿人——直接作为一条确定性驳回意见回沙盒修复波，
+        # 修复后再查；提示项随材料给审稿人。修复额度与审稿轮次共用（REVIEW_MAX_ROUNDS / R2）。
+        static_findings: list[dict[str, Any]] | None = None
+        if spec.static_profile is not None:
+            static_findings = run_static_checks(capture.code, spec.static_profile)
+            review["static_findings"] = static_findings
+        static_feedback = major_static_feedback(static_findings or [])
+        if static_feedback is not None:
+            static_rounds += 1
+            review["static_rounds"] = static_rounds
+            majors = [item for item in static_findings or [] if item["severity"] == "major"]
+            _emit_progress(services, {
+                "kind": spec.progress_kind,
+                "round": rounds,
+                "verdict": "static_reject",
+                "blockers": len(majors),
+                "findings": len(static_findings or []),
+                "static_findings": len(static_findings or []),
+                "summary": "；".join(f"{item['rule']}（{item['detail']}）" for item in majors[:3]),
+            })
+            remaining_runs = max_runs - usage["runs"]
+            if rounds >= REVIEW_MAX_ROUNDS or remaining_runs < 1:
+                review.update({
+                    "rounds": rounds,
+                    "stalemate": True,
+                    "reason": (
+                        f"静态检查 {len(majors)} 项阻断性问题在 {rounds} 轮后仍未解决："
+                        + "；".join(f"{item['rule']}（{item['detail']}）" for item in majors[:3])
+                    ),
+                })
+                break
+            repair = sandbox_wave(static_feedback, remaining_runs)
+            if repair is None:
+                review.update({
+                    "rounds": rounds,
+                    "stalemate": True,
+                    "reason": "按静态检查意见的修复波未能派发，保留已验收结果",
+                })
+                break
+            repair_report, repair_capture, repair_final = repair
+            usage["runs"] += int(repair_report["usage"]["runs"])
+            usage["waves"] += int(repair_report["attempts"])
+            if repair_report["status"] != "passed":
+                review.update({
+                    "rounds": rounds,
+                    "stalemate": True,
+                    "reason": "按静态检查意见的修复波未通过验收，保留已验收结果",
+                })
+                break
+            report, capture, final_answer = repair_report, repair_capture, repair_final
+            continue
         rerun = _rerun_check(ctx, services, capture)
         verdict, calls, error = _spawn_reviewer(
             ctx, services, supervisor, registry, spec, capture, final_answer, rerun, rounds
@@ -2439,7 +2512,7 @@ def _run_review_loop(
             "stalemate": False,
             "reason": "",
         })
-        _emit_progress(services, {
+        progress: dict[str, Any] = {
             "kind": spec.progress_kind,
             "round": rounds,
             "verdict": verdict["verdict"],
@@ -2447,7 +2520,10 @@ def _run_review_loop(
             "findings": len(verdict["findings"]),
             "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
             "summary": verdict["summary"],
-        })
+        }
+        if static_findings is not None:
+            progress["static_findings"] = len(static_findings)
+        _emit_progress(services, progress)
         if verdict["verdict"] == "accept":
             break
         remaining_runs = max_runs - usage["runs"]
@@ -2828,6 +2904,7 @@ class ExperimentExecutionNode(LlmSkillNode):
             focus=EXPERIMENT_REVIEW_FOCUS,
             materials=materials,
             context_slice=context_slice,
+            static_profile=EXPERIMENT_STATIC_PROFILE,
         )
 
 
@@ -3456,6 +3533,7 @@ class ValidationNode(LlmSkillNode):
             focus=ROBUSTNESS_REVIEW_FOCUS,
             materials=materials,
             context_slice=context_slice,
+            static_profile=VALIDATION_STATIC_PROFILE,
         )
 
     # -- G3 gate ----------------------------------------------------------------

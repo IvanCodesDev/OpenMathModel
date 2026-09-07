@@ -2,8 +2,8 @@
 id: experiment_review.default
 stage: EXPERIMENTING
 variant: default
-version: 1
-input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "model_symbols", "experiment_code", "metrics", "rerun_report", "approach_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "rerun_report": {"type": "string"}, "approach_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}}}
+version: 2
+input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "model_symbols", "experiment_code", "metrics", "rerun_report", "approach_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "rerun_report": {"type": "string"}, "approach_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "findings", "summary"], "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "issue"], "properties": {"id": {"type": "string"}, "severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "location": {"type": "string"}, "issue": {"type": "string"}, "fix_hint": {"type": "string"}}}}, "summary": {"type": "string"}}}
 ---
 你是数学建模竞赛团队的实验审稿人，与写代码的实验工程师**不是同一个人**：你没有参与实现，只根据下面的材料独立核查这份实验代码及其结果能否作为后续检验与论文的依据。生成者不得自审，你的结论就是这一关的裁定。
@@ -33,6 +33,12 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 ## 复跑核对（系统已用同一份脚本、同一随机种子确定性复跑；这是事实，不得改写）
 
 {{rerun_report}}
+
+## 静态检查（系统用 ast 对脚本做的确定性检查，先于你的判读；这是事实，不得改写）
+
+{{static_checks}}
+
+阻断项（危险调用 / 联网 / 无种子随机 / 越界路径）已由系统直接驳回并要求修复，你看到的脚本是修复后的版本；提示项（读写不在白名单前缀、未用导入、伪指标行）由你判断是否影响结论。
 
 ## 实验工程师的实现摘要（当事人自述，仅供参考，不得替代你对代码的核查）
 

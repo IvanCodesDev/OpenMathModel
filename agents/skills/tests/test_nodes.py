@@ -1976,6 +1976,9 @@ def test_cleaning_review_reruns_deterministically_then_spawns_an_accepting_revie
     assert "核心指标与首跑逐键一致" in card
     assert "按方案清洗完成" in card
     assert "- cleaned/orders.csv" in card, "工作区清单里看得到清洗产物"
+    # Reviewer 静态检查：清洗消费方带自己的口径（读 data/、写 cleaned/），材料里有静态检查段
+    assert "## 静态检查（系统用 ast 对脚本做的确定性检查，先于你的判读；这是事实，不得改写）" in card
+    assert "静态检查（data_cleaning）：0 项发现" in card
     opening = user_prompt_of(review_call)
     assert "- ws_read：" in opening and "- ws_list：" in opening
     assert "python_run" not in opening and "knowledge_search" not in opening
@@ -2271,6 +2274,107 @@ def test_experiment_checks_script_symbols_against_plan_symbol_table(registry):
     assert "符号对照（代码侧核验，确定性）：符号表 4 条记号，脚本变量命中 3 条（精确 2 / 变体 1 / 仅主体 0）。" in card
     assert "- 未命中（脚本里找不到对应变量）：z" in card
     assert "- 脚本里未对应到符号表的变量：profit" in card
+
+
+UNSEEDED_CODE = (
+    "import json, random\n"
+    "noise = random.random()\n"
+    "print('OMM_METRICS_JSON: ' + json.dumps({'rmse': 0.12}))\n"
+)
+SEEDED_CODE = (
+    "import json, random\n"
+    "random.seed(42)\n"
+    "noise = random.random()\n"
+    "print('OMM_METRICS_JSON: ' + json.dumps({'rmse': 0.12}))\n"
+)
+
+
+def static_repair_sandbox_script(final, first_code, fixed_code, marker="静态检查有"):
+    """首波交一份有静态阻断项的脚本；收到带静态检查反馈的修复波任务卡后交修好的脚本。"""
+
+    def reply(messages):
+        text = "\n".join(str(m.get("content") or "") for m in messages)
+        code = fixed_code if marker in text else first_code
+        if _saw_observation(messages):
+            return stub_response(final)
+        return tool_envelope(PYTHON_TOOL_NAME, code=code)
+
+    return [reply]
+
+
+def test_experiment_static_check_rejects_before_reviewer_then_repair_wave_passes(registry):
+    """Reviewer 静态检查：首波脚本用了随机性没固定种子 → 不烧审稿人、直接以静态阻断意见开修复波；
+    修好后静态 0 项，再派审稿人（材料带「静态检查」段）→ accept。"""
+    llm = StubLlmPort(
+        {},
+        chat_scripts={
+            ExperimentExecutionNode.prompt_id: static_repair_sandbox_script(EXPERIMENT_FINAL, UNSEEDED_CODE, SEEDED_CODE),
+            ExperimentExecutionNode.review_prompt_id: [
+                stub_response({"verdict": "accept", "findings": [], "summary": "种子已固定，结果可复现"}),
+            ],
+        },
+    )
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    services = make_full_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+    events: list = []
+    services.extras["progress"] = events.append
+
+    result = ExperimentExecutionNode(registry).run(
+        make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning()), services
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    # 三次运行：首波（无种子）→ 静态驳回后的修复波（有种子）→ 审稿前的确定性复跑
+    assert [call[3]["code"] for call in tools.python_calls] == [UNSEEDED_CODE, SEEDED_CODE, SEEDED_CODE]
+    review = result.outputs["review"]
+    assert review["executed"] is True and review["verdict"] == "accept" and review["stalemate"] is False
+    assert review["rounds"] == 2 and review["static_rounds"] == 1
+    assert review["static_findings"] == [], "最终采用的脚本静态 0 项"
+    assert result.metrics == {"llm_attempts": 5, "code_rounds": 2, "waves": 2, "review_rounds": 2}
+    # 修复波任务卡带静态阻断意见（不是审稿人的）；审稿人只审修好的脚本，材料带静态检查段
+    repair_prompt = next(
+        user_prompt_of(call) for call in llm.chat_calls
+        if call.label == ExperimentExecutionNode.prompt_id and "静态检查有" in user_prompt_of(call)
+    )
+    assert "静态检查有 1 项阻断性问题，必须修正后重新运行：" in repair_prompt
+    assert "使用了随机性却没有固定种子（任务卡要求 random_seed）" in repair_prompt
+    review_call = next(call for call in llm.chat_calls if call.label == ExperimentExecutionNode.review_prompt_id)
+    card = system_prompt_of(review_call)
+    assert "## 静态检查（系统用 ast 对脚本做的确定性检查，先于你的判读；这是事实，不得改写）" in card
+    assert "静态检查（experiment）：0 项发现" in card
+    assert SEEDED_CODE.strip() in card and UNSEEDED_CODE.strip() not in card
+    # 进度事件：先一条 static_reject（不烧模型），再一条审稿 accept（带静态计数）
+    reviews = [e for e in events if e.get("kind") == "experiment_review"]
+    assert [(e["round"], e["verdict"], e.get("static_findings")) for e in reviews] == [
+        (1, "static_reject", 1), (2, "accept", 0),
+    ]
+    assert reviews[0]["blockers"] == 1 and "使用了随机性却没有固定种子" in reviews[0]["summary"]
+
+
+def test_experiment_static_block_persisting_two_rounds_is_a_stalemate_without_reviewer(registry):
+    """修复波仍带阻断项：REVIEW_MAX_ROUNDS 轮后按僵持处理（进闸门），审稿人一次都不派、不烧模型；
+    保留最后一波通过验收的结果。"""
+    llm = experiment_llm(code=UNSEEDED_CODE)  # 每波都交同一份无种子脚本
+    tools = SandboxToolInvoker(runs=[tool_success()])
+    services = make_full_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+
+    result = ExperimentExecutionNode(registry).run(
+        make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning()), services
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    review = result.outputs["review"]
+    assert review["executed"] is False and review["stalemate"] is True
+    assert review["rounds"] == 2 and review["static_rounds"] == 2
+    assert review["reason"].startswith("静态检查 1 项阻断性问题在 2 轮后仍未解决：使用了随机性却没有固定种子")
+    assert [item["id"] for item in review["static_findings"]] == ["no_seed"]
+    assert not [c for c in llm.chat_calls if c.label == ExperimentExecutionNode.review_prompt_id], "不派审稿人"
+    # 首波 + 一次修复波（都通过沙盒验收），没有复跑核对
+    assert len(tools.python_calls) == 2
+    assert result.metrics == {"llm_attempts": 4, "code_rounds": 2, "waves": 2, "review_rounds": 2}
+    assert result.outputs["metrics"] == {"rmse": 0.12}, "保留通过验收的指标"
 
 
 def test_experiment_without_symbol_table_reports_empty_symbol_check(registry):
@@ -3169,6 +3273,8 @@ def test_robustness_review_reruns_deterministically_then_spawns_an_accepting_rev
     assert ROBUSTNESS_CODE in card and EXPERIMENT_CODE in card, "检验脚本与实验脚本都进材料"
     assert '"id": "bootstrap_stability"' in card and '"threshold": 0.15' in card
     assert "核心指标与首跑逐键一致" in card
+    # Reviewer 静态检查：检验消费方带自己的口径（可读 experiment.py，写 validation/ 与图件）
+    assert "静态检查（validating）：0 项发现" in card
     assert ROBUSTNESS_FINAL["summary"] in card
     assert "规模过大时求解超时" in card, "风险点段一并给审稿人"
     assert "整数规划" in card

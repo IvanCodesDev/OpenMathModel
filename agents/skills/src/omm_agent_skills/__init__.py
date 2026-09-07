@@ -124,6 +124,16 @@ from .review import (
     reviewer_tool_brief,
 )
 from .schema import validate
+from .static_checks import (
+    CLEANING_STATIC_PROFILE,
+    EXPERIMENT_STATIC_PROFILE,
+    STATIC_RULES,
+    VALIDATION_STATIC_PROFILE,
+    StaticCheckProfile,
+    major_static_feedback,
+    run_static_checks,
+    static_material,
+)
 from .symbols import (
     check_symbols,
     script_identifiers,
@@ -135,9 +145,11 @@ from .symbols import (
 __all__ = [
     "ADOPT_OPTION_PREFIX",
     "CLEANING_PROMPT_ID",
+    "CLEANING_STATIC_PROFILE",
     "CLEANING_REVIEW_PROMPT_ID",
     "DEFAULT_AVAILABLE_PACKAGES",
     "DEFAULT_HARDWARE_NOTE",
+    "EXPERIMENT_STATIC_PROFILE",
     "DEFAULT_PROMPTS_DIR",
     "EXPERIMENT_SCRIPT_PATH",
     "FIGURE_NOTES_FINAL_KEY",
@@ -175,6 +187,9 @@ __all__ = [
     "ROBUSTNESS_PROMPT_ID",
     "ROBUSTNESS_REVIEW_PROMPT_ID",
     "SANDBOX_TOOL_NAMES",
+    "STATIC_RULES",
+    "VALIDATION_STATIC_PROFILE",
+    "StaticCheckProfile",
     "ChatCall",
     "DataPreparationNode",
     "ExperimentExecutionNode",
@@ -216,6 +231,7 @@ __all__ = [
     "knowledge_material",
     "knowledge_query",
     "load_default_registry",
+    "major_static_feedback",
     "mark_cited",
     "mark_inserted",
     "missing_symbols",
@@ -237,7 +253,9 @@ __all__ = [
     "render_reference_material",
     "renderable_data_files",
     "reviewer_tool_brief",
+    "run_static_checks",
     "script_identifiers",
+    "static_material",
     "stub_response",
     "summarize_kinds",
     "supports_chat",
