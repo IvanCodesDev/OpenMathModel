@@ -449,6 +449,18 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         assert "python_run" not in opening and "ws_write" not in opening, "审稿人只读"
         assert "- knowledge_search：" in opening, "API 装配把知识库两个只读工具接给了审稿人"
         return _llm_reply(REVIEW_OUTPUT)
+    if "补图审稿人" in system:
+        # 补图的独立审稿（§8.4 第四个消费方）：角色卡正文也提到「图表工程师」，必须先于工程师锚点判断
+        assert f"- {PAPER_FIGURE_FILE}｜实验指标柱状图｜3 模型检验｜results.csv｜" in system, "补图审稿任务卡应携带总编规划"
+        assert "- results.csv" in system, "补图审稿任务卡应携带数据文件白名单"
+        assert "RENDERED:" in system, "补图审稿任务卡应携带画图脚本正文"
+        assert f"- {PAPER_FIGURE_FILE}｜" in system.split("## 渲染出的图件", 1)[1], "补图审稿任务卡应列出采集到的图件"
+        assert "静态检查（paper_figures）：0 项发现" in system, "补图脚本先过静态检查"
+        assert "核心指标与首跑逐键一致" in system or "复跑" in system, "节点应先确定性复跑再派审稿人"
+        opening = messages[1]["content"]
+        assert messages[1]["role"] == "user" and "- ws_read：" in opening
+        assert "python_run" not in opening, "补图审稿人只读"
+        return _llm_reply(REVIEW_OUTPUT)
     if "图表工程师" in system:
         # 论文阶段补图子代理（figure_render 第二步）：任务卡只剩准入的规划项（数据来源不在
         # 白名单的 market.png 已被节点确定性剔除）、数据源白名单与「只准真实数据」纪律
@@ -891,12 +903,23 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert [(item["name"], item["caption"]) for item in rendered] == [(PAPER_FIGURE_FILE, "实验指标柱状图")]
     assert rendered[0]["artifact_id"] == by_file[PAPER_FIGURE_FILE]["id"]
     figure_events = [entry for entry in logs if entry.get("kind") == "paper_figures"]
-    assert figure_events == [{"kind": "paper_figures", "planned": 1, "rendered": 1, "missing": [], "runs": 1}]
+    assert figure_events == [{
+        "kind": "paper_figures", "planned": 1, "rendered": 1, "missing": [], "runs": 1,
+        # 补图的独立审稿（§8.4 第四个消费方）：桩审稿人一轮接受
+        "review": {"verdict": "accept", "rounds": 1, "stalemate": False, "findings": 1},
+    }]
+    figure_review_events = [entry for entry in logs if entry.get("kind") == "paper_figure_review"]
+    assert [(entry["round"], entry["verdict"], entry["static_findings"]) for entry in figure_review_events] == [(1, "accept", 0)]
     paper_figure_spawns = [
         entry for entry in logs
         if entry.get("phase") == "spawn" and "补画论文规划的 1 张图" in str(entry.get("goal") or "")
     ]
     assert paper_figure_spawns, "补图子代理经监督者派发，spawn 审计落 run.log"
+    figure_reviewer_spawns = [
+        entry for entry in logs
+        if entry.get("phase") == "spawn" and "独立核查论文补图" in str(entry.get("goal") or "")
+    ]
+    assert figure_reviewer_spawns, "补图审稿人经监督者派发，spawn 审计落 run.log"
     # DocumentDraft.figures：本链上游没画图，补图编为图 1、来源 PAPER_WRITING、检验章已插入
     draft = client.get(f"/api/v1/task-runs/{run['id']}/stage-outputs").json()["document_draft"]
     assert draft["figures"] == [{

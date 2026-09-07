@@ -78,6 +78,8 @@ from .review import (
     CLEANING_REVIEW_FOCUS,
     CLEANING_REVIEW_PROMPT_ID,
     EXPERIMENT_REVIEW_FOCUS,
+    PAPER_FIGURE_REVIEW_FOCUS,
+    PAPER_FIGURE_REVIEW_PROMPT_ID,
     REVIEW_MAX_ROUNDS,
     REVIEW_PROMPT_ID,
     REVIEWER_KNOWLEDGE_TOOL_NAMES,
@@ -99,6 +101,7 @@ from .schema import validate
 from .static_checks import (
     CLEANING_STATIC_PROFILE,
     EXPERIMENT_STATIC_PROFILE,
+    PAPER_FIGURE_STATIC_PROFILE,
     VALIDATION_STATIC_PROFILE,
     StaticCheckProfile,
     major_static_feedback,
@@ -3927,6 +3930,8 @@ class _PaperFigureResult:
     warnings: Sequence[str] = ()
     artifacts: tuple[Any, ...] = ()
     llm_calls: int = 0
+    #: 补图审稿僵持时未解决的阻断 / 重要意见（进 G4 卡片证据 impact.figure_review_unresolved）。
+    review_unresolved: tuple[str, ...] = ()
 
 
 def _rendered_figure_refs(expected: Sequence[str], capture: _SandboxCapture) -> list[Any]:
@@ -3942,11 +3947,13 @@ def _rendered_figure_refs(expected: Sequence[str], capture: _SandboxCapture) -> 
     return refs
 
 
-def _figures_rendered_check(expected: Sequence[str], capture: _SandboxCapture):
-    """断言：规划的每张图都在工作区 figures/ 下、被采集为非空 figure 产物。
+def _figures_rendered_check(
+    expected: Sequence[str], capture: _SandboxCapture, directory: str = _PAPER_FIGURE_DIR
+):
+    """断言：规划的每张图都在工作区 ``directory`` 下、被采集为非空 figure 产物。
 
-    看的是节点侧累计采集（沙盒只采集每次运行**新建**的文件：修复波重画同名文件不会
-    再次采集，只看最后一次运行会误判）。
+    看的是本波节点侧累计采集（沙盒只采集每次运行**新建**的文件：重画同名文件不会
+    再次采集，所以修复波换 ``figures/revN/`` 目录、只看最后一次运行会误判）。
     """
 
     def check(evidence) -> tuple[bool, str]:
@@ -3957,8 +3964,8 @@ def _figures_rendered_check(expected: Sequence[str], capture: _SandboxCapture):
         }
         problems: list[str] = []
         for name in expected:
-            if f"{_PAPER_FIGURE_DIR}{name}" not in files and name not in files:
-                problems.append(f"{name} 未保存到 {_PAPER_FIGURE_DIR}")
+            if f"{directory}{name}" not in files:
+                problems.append(f"{name} 未保存到 {directory}")
             elif name not in captured:
                 problems.append(f"{name} 未被采集为非空图件产物（须由本次 python_run 新建、≥ {_PAPER_FIGURE_MIN_BYTES} 字节）")
         if problems:
@@ -4107,6 +4114,7 @@ class PaperWritingNode(LlmSkillNode):
         #    续编号，材料在逐章写作前重建。续写路径从检查点原样取回、不重画。 ──
         figure_metrics: dict[str, Any] = {}
         figure_artifacts: tuple[Any, ...] = ()
+        figure_unresolved: tuple[str, ...] = ()
         if resume is not None:
             rendered = [
                 dict(item) for item in resume.get("figures_rendered") or [] if isinstance(item, Mapping)
@@ -4118,6 +4126,7 @@ class PaperWritingNode(LlmSkillNode):
             rendered = [dict(item) for item in figure_result.figures]
             figure_metrics = dict(figure_result.metrics)
             figure_artifacts = figure_result.artifacts
+            figure_unresolved = figure_result.review_unresolved
             attempts_total += figure_result.llm_calls
             warnings.extend(figure_result.warnings)
         if rendered:
@@ -4309,6 +4318,7 @@ class PaperWritingNode(LlmSkillNode):
             references,
             abstract_allowed,
             extra_artifacts=figure_artifacts,
+            extra_impact={"figure_review_unresolved": list(figure_unresolved)} if figure_unresolved else None,
         )
 
     # -- figure_render 第二步：图表规划 → 沙盒补图 → 渲染验证 ---------------------
@@ -4436,77 +4446,129 @@ class PaperWritingNode(LlmSkillNode):
             "available_packages": self._available_packages,
         })
         expected = tuple(item["file"] for item in plan)
-        capture = _SandboxCapture()
-        final_answer: dict[str, Any] = {}
         llm_calls = {"count": 0}
         chat = text_protocol_chat(
             services.llm,
             label=PAPER_FIGURES_PROMPT,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        task = SandboxTask(
-            task_id=f"{ctx.step_id}:paper_figures",
-            goal=f"只用本次运行的真实数据补画论文规划的 {len(plan)} 张图并保存到 {_PAPER_FIGURE_DIR}",
-            system_prompt=system_prompt,
-            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
-            assertions=(
-                SandboxAssertion(
-                    id="run_ok",
-                    description="画图脚本经 python_run 成功运行（退出码 0）",
-                    check=_experiment_run_ok_check,
-                ),
-                SandboxAssertion(
-                    id="figures_rendered",
-                    description=(
-                        f"规划的 {len(plan)} 张图都按原文件名保存到 {_PAPER_FIGURE_DIR} 并被采集为非空图件产物"
-                        f"（≥ {_PAPER_FIGURE_MIN_BYTES} 字节）：{planned}"
-                    ),
-                    check=_figures_rendered_check(expected, capture),
-                ),
-            ),
-            seeds=dict(SANDBOX_SEEDS),
-            max_runs=max(1, min(_PAPER_FIGURE_RUNS, budgets.max_sandbox_runs)),
-            max_waves=_PAPER_FIGURE_WAVES,
-            optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
-        )
-        executor = _sandbox_tool_executor(ctx, services, capture)
         fingerprint = _env_fingerprint(ctx, services)
+        total_runs = max(1, min(_PAPER_FIGURE_RUNS, budgets.max_sandbox_runs))
+        wave_no = {"count": 0}
+        last_envelope: dict[str, Any] = {}
 
-        def runner(_spec: SpawnSpec) -> ResultEnvelope:
-            report = run_sandbox_task(
-                task,
-                chat=chat,
-                execute_tools=executor,
-                workspace_files=lambda: _workspace_files(ctx, services),
-                read_text=_workspace_reader(ctx, services),
-                env_fingerprint=fingerprint,
-                publish_code=_publish_code_callback(ctx, services, capture, _PAPER_FIGURES_SCRIPT),
-                on_final_answer=final_answer.update,
+        def sandbox_wave(brief_suffix: str | None, max_runs: int) -> _SandboxWaveResult | None:
+            """一次经监督者派发的补图沙盒波（首波 / 按审稿或静态检查意见修复）。
+
+            修复波换目录 ``figures/rev<N>/``：沙盒只采集**新建**文件，重画同名文件不会再次
+            采集，也就没法把修好的图当产物登记；文件名不变、目录带轮次，清单仍按 basename 记。
+            """
+            wave_no["count"] += 1
+            directory = _PAPER_FIGURE_DIR if wave_no["count"] == 1 else f"{_PAPER_FIGURE_DIR}rev{wave_no['count']}/"
+            capture = _SandboxCapture()
+            final_answer: dict[str, Any] = {}
+            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            if wave_no["count"] > 1:
+                brief += (
+                    f"\n\n本波修复请把全部图保存到 `{directory}` 目录（文件名不变；"
+                    "沙盒只采集新建文件，覆盖旧文件不算重新渲染）。"
+                )
+            if brief_suffix:
+                brief += "\n\n" + brief_suffix
+            task = SandboxTask(
+                task_id=f"{ctx.step_id}:paper_figures",
+                goal=f"只用本次运行的真实数据补画论文规划的 {len(plan)} 张图并保存到 {directory}",
+                system_prompt=system_prompt,
+                task_brief=brief,
+                assertions=(
+                    SandboxAssertion(
+                        id="run_ok",
+                        description="画图脚本经 python_run 成功运行（退出码 0）",
+                        check=_experiment_run_ok_check,
+                    ),
+                    SandboxAssertion(
+                        id="figures_rendered",
+                        description=(
+                            f"规划的 {len(plan)} 张图都按原文件名保存到 {directory} 并被采集为非空图件产物"
+                            f"（≥ {_PAPER_FIGURE_MIN_BYTES} 字节）：{planned}"
+                        ),
+                        check=_figures_rendered_check(expected, capture, directory),
+                    ),
+                ),
+                seeds=dict(SANDBOX_SEEDS),
+                max_runs=max(1, max_runs),
+                max_waves=_PAPER_FIGURE_WAVES,
+                optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
             )
-            return ResultEnvelope(
-                status="done",
-                output=report,
-                usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+            executor = _sandbox_tool_executor(ctx, services, capture)
+
+            def runner(_spec: SpawnSpec) -> ResultEnvelope:
+                report = run_sandbox_task(
+                    task,
+                    chat=chat,
+                    execute_tools=executor,
+                    workspace_files=lambda: _workspace_files(ctx, services),
+                    read_text=_workspace_reader(ctx, services),
+                    env_fingerprint=fingerprint,
+                    publish_code=_publish_code_callback(ctx, services, capture, _PAPER_FIGURES_SCRIPT),
+                    on_final_answer=final_answer.update,
+                )
+                return ResultEnvelope(
+                    status="done",
+                    output=report,
+                    usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+                )
+
+            envelope = supervisor.spawn(
+                SpawnSpec(
+                    kind="sandbox",
+                    goal=task.goal,
+                    context_slice={"figures_wanted": plan, "data_files": list(data_files), "wave": wave_no["count"]},
+                    toolset=tuple(SANDBOX_TOOL_NAMES),
+                    tool_tier="execute",
+                    budgets=budgets,
+                    output_schema_id="sandbox-run-report.v1",
+                ),
+                runner,
+                parent_tier="execute",
+                output_validator=_report_shape_problems,
             )
+            last_envelope["value"] = envelope
+            if not envelope.ok or not isinstance(envelope.output, dict):
+                return None
+            return envelope.output, capture, final_answer
 
-        envelope = supervisor.spawn(
-            SpawnSpec(
-                kind="sandbox",
-                goal=task.goal,
-                context_slice={"figures_wanted": plan, "data_files": list(data_files)},
-                toolset=tuple(SANDBOX_TOOL_NAMES),
-                tool_tier="execute",
-                budgets=budgets,
-                output_schema_id="sandbox-run-report.v1",
-            ),
-            runner,
-            parent_tier="execute",
-            output_validator=_report_shape_problems,
-        )
-        report = envelope.output if envelope.ok and isinstance(envelope.output, dict) else {}
-        runs = int(((report.get("usage") or {}).get("runs") or 0)) if report else 0
+        first = sandbox_wave(None, total_runs)
+        envelope = last_envelope["value"]
+        if first is None:
+            report: dict[str, Any] = {}
+            capture = _SandboxCapture()
+            final_answer = {}
+        else:
+            report, capture, final_answer = first
+        usage = {"runs": int(((report.get("usage") or {}).get("runs") or 0)), "waves": int(report.get("attempts") or 0)}
 
-        # 渲染验证通过的图才进清单：规划表里的、真被采集到且非空的 figure 产物；
+        # 独立审稿（§8.4 第四个消费方）：渲染验证通过后才值得审——数据只来自白名单、规划图被承接、
+        # 标题轴标签与规划一致、数值原样；静态检查（无种子随机 / 越界路径）先于审稿人。驳回退沙盒修复
+        # （换 figures/revN/ 目录），僵持不阻断论文：意见记警告并进 G4 卡片证据。
+        review: dict[str, Any] = {"executed": False, "reason": "", "llm_calls": 0}
+        if first is not None and report.get("status") == "passed":
+            review, (report, capture, final_answer) = _run_review_loop(
+                ctx,
+                services,
+                supervisor,
+                self._registry,
+                self._figure_review_spec(title, plan, data_files),
+                first=(report, capture, final_answer),
+                sandbox_wave=sandbox_wave,
+                max_runs=total_runs,
+                usage=usage,
+            )
+        elif first is not None:
+            review["reason"] = "补图未通过沙盒验收，不派审稿人"
+        runs = usage["runs"]
+
+        # 渲染验证通过的图才进清单：规划表里的、真被采集到且非空的 figure 产物（最终采用的那一波）；
         # 图题优先总编规划的 title（画图的人没写说明也有题）
         rendered_refs = _rendered_figure_refs(expected, capture)
         titles = {item["file"]: item["title"] for item in plan}
@@ -4533,19 +4595,112 @@ class PaperWritingNode(LlmSkillNode):
             "figures_rendered": len(rendered),
             "figure_runs": runs,
         }
+        unresolved: list[str] = []
+        if review.get("executed"):
+            result_metrics["figure_review"] = {
+                "verdict": review.get("verdict"),
+                "rounds": review.get("rounds"),
+                "stalemate": bool(review.get("stalemate")),
+                "findings": len(review.get("findings") or []),
+            }
+            if review.get("stalemate"):
+                unresolved = [
+                    str(item.get("issue") or "")
+                    for item in review.get("findings") or []
+                    if item.get("severity") in ("blocker", "major") and item.get("issue")
+                ]
+                warnings.append(
+                    f"论文补图审稿僵持（{review.get('reason') or '阻断性意见未解决'}）："
+                    + ("；".join(unresolved[:3]) or str(review.get("summary") or ""))
+                )
+        elif rendered and review.get("reason"):
+            result_metrics["figure_review"] = {"verdict": None, "rounds": review.get("rounds") or 0,
+                                               "stalemate": bool(review.get("stalemate")), "findings": 0}
+            if review.get("stalemate"):
+                unresolved = [
+                    f"{item.get('rule')}（{item.get('detail')}）"
+                    for item in review.get("static_findings") or []
+                    if item.get("severity") == "major"
+                ]
+                warnings.append(f"论文补图审稿僵持（{review['reason']}）")
+            else:
+                warnings.append(f"论文补图未经独立审稿：{review['reason']}")
         _emit_progress(services, {
             "kind": "paper_figures",
             "planned": len(plan),
             "rendered": len(rendered),
             "missing": missing,
             "runs": runs,
+            "review": result_metrics.get("figure_review"),
         })
         return _PaperFigureResult(
             figures=rendered,
             metrics=result_metrics,
             warnings=warnings,
             artifacts=tuple(capture.artifacts),
-            llm_calls=llm_calls["count"],
+            llm_calls=llm_calls["count"] + int(review.get("llm_calls") or 0),
+            review_unresolved=tuple(unresolved),
+        )
+
+    def _figure_review_spec(
+        self, title: str, plan: Sequence[Mapping[str, str]], data_files: Sequence[str]
+    ) -> _ReviewSpec:
+        """补图审稿口径：材料 = 规划表 / 数据白名单 / 画图脚本 / 采集到的图件 / 复跑 / 工程师自述。"""
+        plan_rows = "\n".join(
+            f"- {item['file']}｜{item['title']}｜{item['chapter'] or '未指定'}｜{item['source']}｜{item['spec'] or '按图题自拟'}"
+            for item in plan
+        )
+        whitelist = "\n".join(f"- {path}" for path in data_files) or "无（只有实验指标与数字冻结清单）"
+
+        def materials(
+            capture: _SandboxCapture,
+            final_answer: Mapping[str, Any],
+            rerun: Mapping[str, Any],
+            files: Sequence[str],
+        ) -> dict[str, Any]:
+            rendered = [
+                f"- {str(ref.uri).replace(chr(92), '/').rsplit('/', 1)[-1]}｜{int(getattr(ref, 'size', 0) or 0)} B｜{ref.media_type}"
+                for ref in capture.artifacts
+                if str(getattr(ref, "kind", "") or "") == "figure"
+            ]
+            summary = str(final_answer.get("summary") or "无")
+            notes = str(final_answer.get("figure_notes") or "").strip()
+            return {
+                "title": title,
+                "figures_wanted": plan_rows,
+                "data_files": whitelist,
+                "figure_code": _clip_code(capture.code, _PAPER_FIGURES_SCRIPT),
+                "rendered_files": "\n".join(rendered) or "无（本波没有采集到图件产物）",
+                "rerun_report": rerun_material(rerun),
+                "figure_summary": summary + (f"\n图件说明：\n{notes}" if notes else ""),
+                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+            }
+
+        def context_slice(
+            capture: _SandboxCapture, rerun: Mapping[str, Any], round_no: int
+        ) -> dict[str, Any]:
+            return {
+                "figures_wanted": [dict(item) for item in plan],
+                "rendered": [
+                    str(ref.uri).replace(chr(92), "/").rsplit("/", 1)[-1]
+                    for ref in capture.artifacts
+                    if str(getattr(ref, "kind", "") or "") == "figure"
+                ],
+                "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
+                "round": round_no,
+            }
+
+        return _ReviewSpec(
+            prompt_id=PAPER_FIGURE_REVIEW_PROMPT_ID,
+            output_schema_id="paper-figure-review.v1",
+            goal="独立核查论文补图是否只画了真实数据、是否承接了总编规划",
+            progress_kind="paper_figure_review",
+            task_label="figure_review",
+            toolset=REVIEWER_TOOL_NAMES,
+            focus=PAPER_FIGURE_REVIEW_FOCUS,
+            materials=materials,
+            context_slice=context_slice,
+            static_profile=PAPER_FIGURE_STATIC_PROFILE,
         )
 
     # -- helpers -------------------------------------------------------------
@@ -4703,6 +4858,7 @@ class PaperWritingNode(LlmSkillNode):
         references: Sequence[Mapping[str, Any]] = (),
         abstract_allowed: set[str] | None = None,
         extra_artifacts: Sequence[Any] = (),
+        extra_impact: Mapping[str, Any] | None = None,
     ) -> NodeResult:
         """发布草稿产物 → 终稿审计链（数值 → 图表 → 引用）→ G4 必停。
 
@@ -4770,6 +4926,9 @@ class PaperWritingNode(LlmSkillNode):
         meta["impact"]["references_cited"] = sum(
             1 for item in outputs["references"] if item.get("cited")
         )
+        # 补图审稿僵持时未解决的意见：进卡片证据（人裁「图能不能用」时有据），只加键不改既有键
+        if extra_impact:
+            meta["impact"].update(dict(extra_impact))
         return NodeResult.needs_review(
             reason=reason,
             outputs=outputs,

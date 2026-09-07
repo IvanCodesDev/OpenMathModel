@@ -19,6 +19,7 @@ from typing import Any
 __all__ = [
     "CLEANING_STATIC_PROFILE",
     "EXPERIMENT_STATIC_PROFILE",
+    "PAPER_FIGURE_STATIC_PROFILE",
     "STATIC_RULES",
     "VALIDATION_STATIC_PROFILE",
     "StaticCheckProfile",
@@ -105,6 +106,12 @@ VALIDATION_STATIC_PROFILE = StaticCheckProfile(
     allowed_read_prefixes=("data/", "cleaned/", "results", "metrics", "figures/", "outputs/", "validation/"),
     allowed_write_prefixes=("validation/", "figures/", "results", "outputs/"),
     allowed_read_files=("experiment.py",),
+)
+#: 论文补图：只读上游数据 / 指标 / 检验表，只写 figures/（含修复波的 figures/rev*/）；画图不该有随机性。
+PAPER_FIGURE_STATIC_PROFILE = StaticCheckProfile(
+    name="paper_figures",
+    allowed_read_prefixes=("data/", "cleaned/", "results", "metrics", "validation/", "outputs/"),
+    allowed_write_prefixes=("figures/",),
 )
 
 

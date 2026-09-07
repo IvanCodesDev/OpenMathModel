@@ -4969,14 +4969,21 @@ def paper_figure_tools(runs, files_after_run=("figures/station_dispatch.png",)):
     )
 
 
-def paper_figure_llm(sections, outline=None, figure_final=PAPER_FIGURES_FINAL):
+FIGURE_REVIEW_ACCEPT = {"verdict": "accept", "findings": [], "summary": "数据只来自 results.csv，图与规划一致"}
+
+
+def paper_figure_llm(sections, outline=None, figure_final=PAPER_FIGURES_FINAL, sandbox=None, reviews=None):
     return ScriptedLlmPort(
         {
             "paper_outline.default": [stub_response(outline or paper_outline_with_figures_wanted())],
             "paper_section.default": [stub_response({"content": text, "digest": f"d{i}"}) for i, text in enumerate(sections, 1)],
             "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
         },
-        chat_scripts={"paper_figures.sandbox": sandbox_script(figure_final, code=PAPER_FIGURES_CODE)},
+        chat_scripts={
+            "paper_figures.sandbox": sandbox or sandbox_script(figure_final, code=PAPER_FIGURES_CODE),
+            # 补图审稿人（§8.4 第四个消费方）：缺省一轮接受
+            "paper_figures_review.default": reviews or [stub_response(FIGURE_REVIEW_ACCEPT)],
+        },
     )
 
 
@@ -5019,8 +5026,18 @@ def test_paper_writing_plans_renders_and_verifies_extra_figures(registry):
     assert "禁止构造、模拟或估计任何数据" in card
     brief = user_prompt_of(llm.chat_calls[0])
     assert "figures_rendered" in brief and "station_dispatch.png" in brief
-    assert [call[2] for call in tools.python_calls] == [PYTHON_TOOL_NAME]
+    # 两次运行：沙盒首波 + 审稿前的确定性复跑核对（§8.4 第四个消费方）
+    assert [call[2] for call in tools.python_calls] == [PYTHON_TOOL_NAME, PYTHON_TOOL_NAME]
     assert tools.python_calls[0][3]["code"] == PAPER_FIGURES_CODE
+    # 独立审稿：材料带规划表 / 白名单 / 脚本 / 采集到的图件 / 静态检查段；一轮接受
+    review_call = next(c for c in llm.chat_calls if c.label == "paper_figures_review.default")
+    review_card = system_prompt_of(review_call)
+    assert "补图审稿人" in review_card and PAPER_FIGURES_CODE.strip() in review_card
+    assert "- station_dispatch.png｜各站点调度量分布｜3 结果分析与检验｜results.csv｜" in review_card
+    assert "- results.csv" in review_card and "- station_dispatch.png｜4096 B｜image/png" in review_card
+    assert "静态检查（paper_figures）：0 项发现" in review_card
+    assert "核心指标与首跑逐键一致" in review_card or "复跑" in review_card
+    assert result.metrics["figure_review"] == {"verdict": "accept", "rounds": 1, "stalemate": False, "findings": 0}
     # 逐章材料在补图后重建：图 4 续编号、来源「论文阶段补图」、图题取总编规划而非画图工程师说明
     section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
     assert len(section_calls) == 3
@@ -5039,8 +5056,8 @@ def test_paper_writing_plans_renders_and_verifies_extra_figures(registry):
     assert result.artifacts[1].artifact_id == "art_fig_paper"
     assert result.artifacts[2].uri.endswith("paper_figures.py")
     assert services.artifacts.blobs[result.artifacts[2].uri].decode("utf-8") == PAPER_FIGURES_CODE
-    # 指标：补图的两次会话调用计入 llm_attempts（5 次模板调用 + 2）；规划 / 渲染 / 运行次数如实
-    assert result.metrics["llm_attempts"] == 7
+    # 指标：补图的两次会话调用 + 审稿人一次计入 llm_attempts（5 次模板调用 + 3）；规划 / 渲染 / 运行次数如实
+    assert result.metrics["llm_attempts"] == 8
     assert result.metrics["figures_planned"] == 1
     assert result.metrics["figures_rendered"] == 1
     assert result.metrics["figure_runs"] == 1
@@ -5059,9 +5076,123 @@ def test_paper_writing_plans_renders_and_verifies_extra_figures(registry):
         "caption": "各站点调度量分布",
     }]
     figure_event = next(e for e in events if e["kind"] == "paper_figures")
-    assert figure_event == {"kind": "paper_figures", "planned": 1, "rendered": 1, "missing": [], "runs": 1}
-    # 子代理经监督者派发（spawn 审计可见）
+    assert figure_event == {
+        "kind": "paper_figures", "planned": 1, "rendered": 1, "missing": [], "runs": 1,
+        "review": {"verdict": "accept", "rounds": 1, "stalemate": False, "findings": 0},
+    }
+    review_events = [e for e in events if e["kind"] == "paper_figure_review"]
+    assert [(e["round"], e["verdict"], e["static_findings"]) for e in review_events] == [(1, "accept", 0)]
+    # 沙盒与审稿人都经监督者派发（spawn 审计可见）
     assert any(record.get("goal", "").startswith("只用本次运行的真实数据补画论文规划的 1 张图") for record in audits)
+    assert any(record.get("tool") == "subagent:reviewer" and record.get("phase") == "spawn" for record in audits)
+
+
+PAPER_FIGURES_CODE_V2 = PAPER_FIGURES_CODE.replace("figures/station_dispatch.png", "figures/rev2/station_dispatch.png").replace(
+    "plt.bar(range(len(rows)), [float(r['dispatch']) for r in rows])",
+    "plt.bar(range(len(rows)), [float(r['dispatch']) for r in rows])\nplt.title('各站点调度量分布')\nplt.xlabel('站点编号')\nplt.ylabel('调度量')",
+)
+FIGURE_REVIEW_REJECT = {
+    "verdict": "reject",
+    "findings": [
+        {"id": "R1", "severity": "blocker", "location": "station_dispatch.png",
+         "issue": "图没有标题与坐标轴标签，与规划「横轴站点编号、纵轴调度量」不一致", "fix_hint": "加 title / xlabel / ylabel"},
+    ],
+    "summary": "数据来源合规，但图与规划不一致",
+}
+
+
+def figure_repair_sandbox_script(final, first_code, fixed_code):
+    """补图生成者：首波交 v1；看到审稿驳回意见的修复波按任务卡要求存到 figures/rev2/ 并交 v2。"""
+
+    def reply(messages):
+        if _saw_observation(messages):
+            return stub_response(final)
+        repairing = any("审稿驳回意见" in str(m.get("content") or "") for m in messages)
+        return tool_envelope(PYTHON_TOOL_NAME, code=fixed_code if repairing else first_code)
+
+    return [reply]
+
+
+def test_paper_figure_review_reject_repairs_into_revision_dir_then_accepts(registry):
+    """补图审稿驳回 → 修复波换 figures/rev2/ 目录（沙盒只采集新建文件）→ 复审接受：清单里是修好的那张图
+    （产物 id 换成修复波采集到的），文件名不变；两波产物都随草稿发布。"""
+    llm = paper_figure_llm(
+        _paper_sections_inserting_figure_4(),
+        sandbox=figure_repair_sandbox_script(PAPER_FIGURES_FINAL, PAPER_FIGURES_CODE, PAPER_FIGURES_CODE_V2),
+        reviews=[stub_response(FIGURE_REVIEW_REJECT), stub_response(FIGURE_REVIEW_ACCEPT)],
+    )
+    v1 = rendered_figure_artifact()
+    v2 = ArtifactRef(
+        artifact_id="art_fig_paper_v2", kind="figure", uri="local://feedface/figures/rev2/station_dispatch.png",
+        sha256="feedface", size=5120, media_type="image/png", producer_step="step_1",
+    )
+    tools = paper_figure_tools(
+        # 首波 → 复跑核对 → 修复波（采集到 rev2 下的新文件）→ 复跑核对
+        runs=[tool_success(artifacts=(v1,)), tool_success(), tool_success(artifacts=(v2,)), tool_success()],
+        files_after_run=("figures/station_dispatch.png", "figures/rev2/station_dispatch.png"),
+    )
+    services = make_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+    events: list = []
+    services.extras["progress"] = events.append
+
+    result = PaperWritingNode(registry).run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert [call[3]["code"] for call in tools.python_calls] == [
+        PAPER_FIGURES_CODE, PAPER_FIGURES_CODE, PAPER_FIGURES_CODE_V2, PAPER_FIGURES_CODE_V2,
+    ]
+    # 修复波任务卡：换目录的要求 + 审稿驳回意见
+    repair_brief = next(
+        user_prompt_of(c) for c in llm.chat_calls
+        if c.label == "paper_figures.sandbox" and "审稿驳回意见" in user_prompt_of(c)
+    )
+    assert "本波修复请把全部图保存到 `figures/rev2/` 目录" in repair_brief
+    assert "图没有标题与坐标轴标签" in repair_brief
+    # 清单：同名文件、产物换成修复波那张；图题仍取总编规划
+    assert result.outputs["figures"][3] == {
+        "number": 4, "name": "station_dispatch.png", "artifact_id": "art_fig_paper_v2",
+        "caption": "各站点调度量分布", "source_stage": "PAPER_WRITING", "inserted": True,
+    }
+    assert result.metrics["figure_review"] == {"verdict": "accept", "rounds": 2, "stalemate": False, "findings": 0}
+    assert result.metrics["figure_runs"] == 2 and result.metrics["figures_rendered"] == 1
+    assert not [w for w in result.metrics.get("quality_warnings", []) if "审稿" in w or "未渲染" in w]
+    assert "figure_review_unresolved" not in result.review_meta["impact"]
+    # 最终采用修复波的产物（图件 + 脚本）
+    assert [ref.artifact_id for ref in result.artifacts if ref.kind == "figure"] == ["art_fig_paper_v2"]
+    review_events = [e for e in events if e["kind"] == "paper_figure_review"]
+    assert [(e["round"], e["verdict"], e["blockers"]) for e in review_events] == [(1, "reject", 1), (2, "accept", 0)]
+
+
+def test_paper_figure_review_stalemate_warns_and_feeds_g4_without_blocking(registry):
+    """审稿两轮都驳回：僵持不阻断论文——图照样入清单（已过渲染验证），警告点名未解决意见，
+    G4 卡片 impact.figure_review_unresolved 带上阻断 / 重要意见。"""
+    llm = paper_figure_llm(
+        _paper_sections_inserting_figure_4(),
+        sandbox=figure_repair_sandbox_script(PAPER_FIGURES_FINAL, PAPER_FIGURES_CODE, PAPER_FIGURES_CODE_V2),
+        reviews=[stub_response(FIGURE_REVIEW_REJECT)],
+    )
+    v2 = ArtifactRef(
+        artifact_id="art_fig_paper_v2", kind="figure", uri="local://feedface/figures/rev2/station_dispatch.png",
+        sha256="feedface", size=5120, media_type="image/png", producer_step="step_1",
+    )
+    tools = paper_figure_tools(
+        runs=[tool_success(artifacts=(rendered_figure_artifact(),)), tool_success(), tool_success(artifacts=(v2,)), tool_success()],
+        files_after_run=("figures/station_dispatch.png", "figures/rev2/station_dispatch.png"),
+    )
+    services = make_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+
+    result = PaperWritingNode(registry).run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.metrics["figure_review"] == {"verdict": "reject", "rounds": 2, "stalemate": True, "findings": 1}
+    assert result.outputs["figures"][3]["artifact_id"] == "art_fig_paper_v2", "修复波的图仍入清单（已过渲染验证）"
+    warning = next(w for w in result.metrics["quality_warnings"] if w.startswith("论文补图审稿僵持"))
+    assert "审稿 2 轮后仍有阻断性意见未解决" in warning and "图没有标题与坐标轴标签" in warning
+    assert result.review_meta["impact"]["figure_review_unresolved"] == [
+        "图没有标题与坐标轴标签，与规划「横轴站点编号、纵轴调度量」不一致",
+    ]
 
 
 def test_paper_writing_records_unrendered_figures_without_blocking(registry):

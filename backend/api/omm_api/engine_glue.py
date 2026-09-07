@@ -497,6 +497,7 @@ _PROMPT_NODE_IDS = {
     "paper_finalize.default": TaskState.PAPER_WRITING.value,
     "paper_writing.default": TaskState.PAPER_WRITING.value,
     "paper_figures.sandbox": TaskState.PAPER_WRITING.value,
+    "paper_figures_review.default": TaskState.PAPER_WRITING.value,
 }
 
 #: 提示词 → 设置中心「智能路由」的任务类型（ADR-0015 决策 3）。数据准备阶段
@@ -521,8 +522,9 @@ _PROMPT_TASK_KINDS = {
     "paper_section.default": "writing",
     "paper_finalize.default": "writing",
     "paper_writing.default": "writing",
-    # 论文阶段补图是沙盒里写码画图：按编程任务路由
+    # 论文阶段补图是沙盒里写码画图：按编程任务路由（审稿人读的也是代码）
     "paper_figures.sandbox": "coding",
+    "paper_figures_review.default": "coding",
 }
 
 

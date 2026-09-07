@@ -76,6 +76,7 @@ def test_default_registry_loads_all_stage_prompts():
         "model_planning.proposer",
         "model_planning.reduce",
         "paper_figures.sandbox",
+        "paper_figures_review.default",
         "paper_finalize.default",
         "paper_outline.default",
         "paper_section.default",
@@ -139,6 +140,13 @@ def test_sandbox_prompts_are_agent_task_cards_not_single_shot_templates():
     assert {"figures_wanted", "data_files", "metrics", "frozen_numbers"} <= figures.placeholders()
     assert "禁止构造、模拟或估计任何数据" in figures.body
     assert "figures/" in figures.body
+
+    # 补图审稿人（§8.4 第四个消费方）：与其他三位审稿人同一套终答形状，材料带规划表 / 白名单 / 脚本 / 图件 / 静态检查
+    figure_review = registry.get("paper_figures_review.default")
+    assert figure_review.stage == "PAPER_WRITING"
+    assert figure_review.output_schema["required"] == ["verdict", "findings", "summary"]
+    assert {"figures_wanted", "data_files", "figure_code", "rendered_files", "rerun_report", "static_checks"} <= figure_review.placeholders()
+    assert "只准画真实计算结果" in figure_review.body
 
     outline = registry.get("paper_outline.default")
     assert outline.version >= 8

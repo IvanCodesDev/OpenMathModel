@@ -25,6 +25,8 @@ __all__ = [
     "CLEANING_REVIEW_FOCUS",
     "CLEANING_REVIEW_PROMPT_ID",
     "EXPERIMENT_REVIEW_FOCUS",
+    "PAPER_FIGURE_REVIEW_FOCUS",
+    "PAPER_FIGURE_REVIEW_PROMPT_ID",
     "RERUN_ABS_TOL",
     "RERUN_REL_TOL",
     "REVIEWER_KNOWLEDGE_TOOL_NAMES",
@@ -51,6 +53,8 @@ __all__ = [
 REVIEW_PROMPT_ID = "experiment_review.default"
 CLEANING_REVIEW_PROMPT_ID = "data_cleaning_review.default"
 ROBUSTNESS_REVIEW_PROMPT_ID = "validating_review.default"
+#: 第四个沙盒消费方：论文阶段补图（figure_render 第二步）的审稿人角色卡。
+PAPER_FIGURE_REVIEW_PROMPT_ID = "paper_figures_review.default"
 
 #: 审稿人的只读工作区工具（看产物表 / 数据文件是否真如脚本所言）；运行部分
 #: 由节点确定性完成，子代理拿不到 python_run / ws_write（§8.2 落地口径：
@@ -124,6 +128,11 @@ ROBUSTNESS_REVIEW_FOCUS = (
     "先对照实验脚本与须检验的假设静读检验脚本正文（每项检查是否真的扰动 / 重采样 / "
     "对比而非写死 passed、passed 与 value / threshold 的方向是否一致、阈值是否为了"
     "通过而调、检查是否复用了实验逻辑而不是无关的玩具、assumption_id 指向是否成立）；"
+)
+PAPER_FIGURE_REVIEW_FOCUS = (
+    "先对照总编的补图规划与数据文件白名单静读画图脚本正文（每张图的数据是否只来自白名单"
+    "文件 / 实验指标 / 冻结清单、有没有手写数组或随机数当数据、每张规划图是否被同名文件承接、"
+    "标题与坐标轴标签是否与规划一致、数值有没有被换算或舍入；可用 ws_read 读脚本与 csv 头几行核列名）；"
 )
 
 
