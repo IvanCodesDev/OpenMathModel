@@ -1150,7 +1150,14 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "数值": "Value",
   "出处": "Source",
   "实验运行": "Experiment run",
-  // （「含义」「数据准备」「建模方案」「结果验证」已在数据 / 方案阶段词典里）
+  // 真实图件（DocumentDraft.figures，figure_render 第一步）：条里的计数（N / M 占位由代码替换）与清单表；文件名 / 说明原样不译
+  "N 张真实图件，已插入 M 张": "N real figures, M inserted",
+  "真实图件": "Real figures",
+  "文件名": "File",
+  "图": "Figure",
+  "已插入": "inserted",
+  "未插入": "not inserted",
+  // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」已在其他阶段词典里）
 };
 
 /** 赛题库、论文库与方法库。 */

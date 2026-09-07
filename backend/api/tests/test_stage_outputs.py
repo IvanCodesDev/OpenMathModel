@@ -29,6 +29,7 @@ from omm_api.stage_outputs import (
     _cleaning_report,
     _dataset_profile,
     _document_draft,
+    _figures,
     _plan_proposal,
     _review_report,
     _robustness_report,
@@ -651,6 +652,43 @@ def test_audit_findings_projection_keeps_audit_chain_kinds_and_drops_unknown(val
     payload = _document_draft(_RUN_ID, state).model_dump(mode="json")
     validate_contract("document-draft.schema.json", payload)
     assert [f["kind"] for f in payload["audit_findings"]] == [f["kind"] for f in findings]
+    # 图件字段出现之前的运行：没有 figures 键 → null
+    assert payload["figures"] is None
+
+
+def test_figures_projection_whitelists_real_figures_and_drops_malformed(validate_contract):
+    """真实图件清单进契约：编号 / 文件名 / 来源阶段畸形的条目剔除，artifact_id 空串归 null，
+    inserted 强制布尔；缺键 → null、空数组原样（= 本次运行没有产出图件）。"""
+    raw = [
+        {"number": 1, "name": "fit_vs_baseline.png", "artifact_id": "art_fig1", "caption": "模型与基线的拟合对比",
+         "source_stage": "EXPERIMENTING", "inserted": True},
+        {"number": 2, "name": "convergence.svg", "artifact_id": "", "caption": "", "source_stage": "EXPERIMENTING",
+         "inserted": "yes"},
+        {"number": 3, "name": "sensitivity.png", "artifact_id": "art_fig3", "caption": "灵敏度",
+         "source_stage": "VALIDATING", "inserted": False},
+        {"number": 0, "name": "zero.png", "artifact_id": "a", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
+        {"number": True, "name": "bool.png", "artifact_id": "a", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
+        {"number": 4, "name": "  ", "artifact_id": "a", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
+        {"number": 5, "name": "eda.png", "artifact_id": "a", "caption": "清洗前后分布", "source_stage": "DATA_PREPARATION", "inserted": False},
+        "garbage",
+    ]
+    figures = _figures(raw)
+    assert figures == [
+        {"number": 1, "name": "fit_vs_baseline.png", "artifact_id": "art_fig1", "caption": "模型与基线的拟合对比",
+         "source_stage": "EXPERIMENTING", "inserted": True},
+        {"number": 2, "name": "convergence.svg", "artifact_id": None, "caption": "", "source_stage": "EXPERIMENTING",
+         "inserted": True},
+        {"number": 3, "name": "sensitivity.png", "artifact_id": "art_fig3", "caption": "灵敏度",
+         "source_stage": "VALIDATING", "inserted": False},
+    ]
+    assert _figures(None) is None and _figures("oops") is None and _figures([]) == []
+
+    state = StageState()
+    state.at = datetime(2026, 9, 7, 2, 0, tzinfo=timezone.utc)
+    state.outputs = {**PAPER_OUTPUT, "frozen_numbers": [], "audit_findings": [], "figures": raw}
+    payload = _document_draft(_RUN_ID, state).model_dump(mode="json")
+    validate_contract("document-draft.schema.json", payload)
+    assert payload["figures"] == figures
 
 
 def test_stage_outputs_carry_cleaning_and_its_review_after_real_cleaning(client, monkeypatch, validate_contract):

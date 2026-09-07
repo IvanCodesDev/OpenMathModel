@@ -2097,6 +2097,60 @@ def test_experiment_runs_code_in_sandbox_and_reports_real_metrics(registry):
     # 最终脚本同时落到工作区固定路径：验证阶段据此复跑
     assert tools.written == {EXPERIMENT_SCRIPT_PATH: EXPERIMENT_CODE}
     assert result.outputs["script_path"] == EXPERIMENT_SCRIPT_PATH
+    # 没有图件产物：图件清单如实为空（不是缺键——论文节点按键取）
+    assert result.outputs["figures"] == []
+
+
+def figure_artifact(name, artifact_id="art_fig1", media_type="image/png"):
+    return ArtifactRef(
+        artifact_id=artifact_id,
+        kind="figure",
+        uri=f"local://deadbeef/{name}",
+        sha256="deadbeef",
+        size=42,
+        media_type=media_type,
+        producer_step="step_1",
+    )
+
+
+def test_experiment_reports_real_figures_with_engineer_notes(registry):
+    """figure_render 第一步：沙盒采集到的图件产物进 outputs.figures；画图工程师的
+    figure_notes 只挂到真实文件上，声称画了却没落盘的说明丢弃；任务卡把 figure_notes
+    作为可选终答键写进提示。"""
+    final = {
+        **EXPERIMENT_FINAL,
+        "figure_notes": (
+            "fit_vs_baseline.png — 模型与随机基线的 rmse 对比\n"
+            "- `convergence.svg`: 贪心迭代的目标值收敛曲线\n"
+            "ghost.png — 这张图其实没画出来\n"
+        ),
+    }
+    llm = experiment_llm(final=final)
+    tools = SandboxToolInvoker(runs=[tool_success(artifacts=(
+        artifact(),
+        figure_artifact("fit_vs_baseline.png"),
+        figure_artifact("convergence.svg", "art_fig2", "image/svg+xml"),
+        figure_artifact("fit_vs_baseline.png", "art_fig1_dup"),  # 同名重复采集只算一次
+    ))])
+    node = ExperimentExecutionNode(registry)
+
+    result = node.run(
+        make_ctx(TaskState.EXPERIMENTING, prior=prior_through_planning()),
+        make_full_services(llm, tools),
+    )
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["figures"] == [
+        {"name": "fit_vs_baseline.png", "artifact_id": "art_fig1", "media_type": "image/png",
+         "caption": "模型与随机基线的 rmse 对比"},
+        {"name": "convergence.svg", "artifact_id": "art_fig2", "media_type": "image/svg+xml",
+         "caption": "贪心迭代的目标值收敛曲线"},
+    ]
+    # 表格 / 代码产物不进图件清单；产物并集本身不变
+    assert [ref.kind for ref in result.artifacts] == ["table", "figure", "figure", "code"]
+    # 任务卡：figure_notes 是可选终答键（缺它不触发结构修复）
+    card = user_prompt_of(llm.chat_calls[0])
+    assert '"figure_notes": "（可选）已保存的每张图表一行' in card
 
 
 def test_experiment_reports_empty_script_path_when_workspace_write_fails(registry):
@@ -2782,6 +2836,28 @@ def test_validation_reruns_experiment_in_sandbox_and_passes_without_gate(registr
     assert '"rmse": 0.12' in card
     # 实验脚本经 ws_read 从工作区读取，而不是从对话里转录
     assert ("ws_read", {"path": EXPERIMENT_SCRIPT_PATH}) in tools.calls
+    # 没画图：图件清单如实为空
+    assert robustness["figures"] == []
+
+
+def test_validation_reports_robustness_figures_with_notes(registry):
+    """检验沙盒的图件（灵敏度曲线）同样进 robustness.figures，说明只挂真实文件。"""
+    final = {**ROBUSTNESS_FINAL, "figure_notes": "sensitivity.png — 需求率 ±20% 扰动下的 rmse\n无"}
+    llm = validation_llm(final=final)
+    tools = validation_tools(runs=[tool_success(
+        stdout=robustness_stdout(True, True, True),
+        artifacts=(figure_artifact("sensitivity.png", "art_sens"), artifact("validation/checks.csv")),
+    )])
+    ctx = make_ctx(TaskState.VALIDATING, prior=validation_prior())
+
+    result = ValidationNode(registry).run(ctx, validation_services(llm, tools))
+
+    assert result.status == NodeResult.SUCCEEDED
+    assert result.outputs["robustness"]["figures"] == [
+        {"name": "sensitivity.png", "artifact_id": "art_sens", "media_type": "image/png",
+         "caption": "需求率 ±20% 扰动下的 rmse"},
+    ]
+    assert '"figure_notes": "（可选）' in user_prompt_of(llm.chat_calls[0])
 
 
 def test_g3_gate_triggers_when_a_check_fails_and_recommends_accept_for_minority(registry):
@@ -4465,3 +4541,124 @@ def test_paper_writing_g4_counts_phantom_figures_and_citations(registry):
     assert "终稿审计发现 2 处（图表引用不实 1 处、引用未经验证 1 处）：" in result.review_reason
     assert "引用了 1 处不存在的图（图 1）" in result.review_reason
     assert "1 处引用未经验证（[4]）" in result.review_reason
+    # 上游没有图件：清单如实「无」，DocumentDraft.figures 为空表，卡片计数为 0
+    assert result.outputs["figures"] == []
+    assert meta["impact"]["figures_total"] == 0 and meta["impact"]["figures_inserted"] == 0
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    assert outline_call.variables["available_figures"].startswith("无（本次运行没有产出图件")
+
+
+def paper_prior_with_figures():
+    """实验与检验阶段都采集到了图件：实验两张（一张有画图工程师的说明）、检验一张。"""
+    prior = paper_prior()
+    prior[TaskState.EXPERIMENTING.value]["figures"] = [
+        {"name": "fit_vs_baseline.png", "artifact_id": "art_fig1", "media_type": "image/png",
+         "caption": "模型与基线的拟合对比"},
+        {"name": "convergence.svg", "artifact_id": "art_fig2", "media_type": "image/svg+xml",
+         "caption": ""},
+    ]
+    prior[TaskState.VALIDATING.value] = {
+        **VALIDATION_OK,
+        "robustness": {
+            "executed": True,
+            "status": "passed",
+            "summary_text": "稳健性检验 3 项全部通过",
+            "figures": [
+                {"name": "sensitivity.png", "artifact_id": "art_fig3", "media_type": "image/png",
+                 "caption": "需求率 ±20% 扰动下的 rmse"},
+                # 与实验同名：先到先得，不重复编号
+                {"name": "fit_vs_baseline.png", "artifact_id": "art_dup", "media_type": "image/png",
+                 "caption": "重复"},
+            ],
+        },
+    }
+    return prior
+
+
+def test_paper_writing_feeds_real_figures_to_materials_audit_and_outputs(registry):
+    """figure_render 第一步：上游图件按 实验 → 检验 编号进每章材料；写手按清单插图后，
+    图表审计只记未插入的编号；DocumentDraft.figures 带 inserted，G4 卡片带图件计数。"""
+    pad = lambda text, target: text + "析" * (target - len(text))  # noqa: E731
+    ch1 = pad("背景。", 600)
+    # 按清单插图 1（alt 里定义编号）并引用；同时引用了没插的图 3 → 只有图 3 是幽灵
+    ch2 = pad(
+        "拟合效果见图 1。\n\n![图 1 模型与基线的拟合对比](fit_vs_baseline.png)\n\n"
+        "稳健性见图 3。rmse=0.12。",
+        1200,
+    )
+    ch3 = pad("结论。", 800)
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(PAPER_OUTLINE_OK)],
+        "paper_section.default": [
+            stub_response({"content": ch1, "digest": "d1"}),
+            stub_response({"content": ch2, "digest": "d2"}),
+            stub_response({"content": ch3, "digest": "d3"}),
+        ],
+        "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(
+        make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), make_services(llm)
+    )
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    # 材料：总编与每章都拿到同一张编号固定的清单（实验图先编号，检验图其后，同名去重）
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    material = outline_call.variables["available_figures"]
+    assert "| 图 1 | fit_vs_baseline.png | 实验阶段 | 模型与基线的拟合对比 |" in material
+    assert "| 图 2 | convergence.svg | 实验阶段 | （画图工程师未给说明，按文件名与实验摘要拟题） |" in material
+    assert "| 图 3 | sensitivity.png | 检验阶段 | 需求率 ±20% 扰动下的 rmse |" in material
+    assert "图 4" not in material, "与实验同名的检验图不重复编号"
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    for call in section_calls:
+        # 第一章的 source_keys 只路由了 problem_analysis，图件清单仍必带
+        assert "### 可用图件清单" in call.variables["materials"]
+        assert "fit_vs_baseline.png" in call.variables["materials"]
+    # 审计：插入的真实图件（图 1）通过；引用了未插入的图 3 记发现
+    findings = result.outputs["audit_findings"]
+    assert [(f["scope"], f["kind"], f["numbers"]) for f in findings] == [
+        ("第2章《2 模型建立与求解》", "phantom_figure", ["图 3"]),
+    ]
+    # DocumentDraft.figures：清单原样 + inserted
+    assert result.outputs["figures"] == [
+        {"number": 1, "name": "fit_vs_baseline.png", "artifact_id": "art_fig1",
+         "caption": "模型与基线的拟合对比", "source_stage": "EXPERIMENTING", "inserted": True},
+        {"number": 2, "name": "convergence.svg", "artifact_id": "art_fig2",
+         "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
+        {"number": 3, "name": "sensitivity.png", "artifact_id": "art_fig3",
+         "caption": "需求率 ±20% 扰动下的 rmse", "source_stage": "VALIDATING", "inserted": False},
+    ]
+    impact = result.review_meta["impact"]
+    assert impact["figures_total"] == 3 and impact["figures_inserted"] == 1
+    # 图件说明里的数字算有出处（±20% 与实验摘要同一先例）
+    assert not [f for f in findings if f["kind"] == "unsourced_number"]
+
+
+def test_paper_single_call_fallback_also_gets_figures(registry):
+    """回退整篇生成：同一张清单进材料，插图同样按真实集合审计，figures 同样进 outputs。"""
+    paper = {
+        **PAPER_OK,
+        "sections": [
+            {"heading": "问题重述", "content": "题目要求……"},
+            {"heading": "模型检验", "content": "见图 2。\n\n![图 2 收敛曲线](convergence.svg)\n"},
+        ],
+    }
+    llm = ScriptedLlmPort({
+        "paper_outline.default": ["不是 JSON", "还是不是 JSON"],
+        "paper_writing.default": [stub_response(paper)],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(
+        make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), make_services(llm)
+    )
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert result.metrics["fallback"] == "single_call"
+    writing_call = next(c for c in llm.calls if c.prompt_id == "paper_writing.default")
+    assert "| 图 2 | convergence.svg |" in writing_call.variables["available_figures"]
+    assert result.outputs["audit_findings"] == []
+    assert [(f["number"], f["inserted"]) for f in result.outputs["figures"]] == [
+        (1, False), (2, True), (3, False),
+    ]

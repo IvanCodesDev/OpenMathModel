@@ -5,10 +5,23 @@
  * 引用/表格/分隔线/段落）→ 行内标记（粗斜体/行内代码/链接）→ 回填占位。
  * 原始文本从不直接进 innerHTML；链接只放行 http(s)，其余一律当纯文本。
  *
+ * 图片默认不渲染（`![alt](url)` 原样当文字）：模型输出不可信，不给远端图片加载 /
+ * 追踪留口子。只有调用方显式传 `resolveImage`（论文页按 DocumentDraft.figures 把
+ * 文件名解析成本站产物下载链接）且解析器给出 URL 时，独占一行的图片才渲染成
+ * `<figure><img><figcaption>`；解析不到的仍是纯文本。
+ *
  * 公式输出为带 data-tex 的节点（行内加 data-tex-inline），由 text/math-typeset
  * 的 KaTeX 排版器排版；加载前节点内保留 LaTeX 源码作为可读回退，与方法库一致。
  * 本文件不做任何导入，方便按仓库惯例用 data URL 转译做单元测试。
  */
+
+export interface RenderMarkdownOptions {
+  /**
+   * 图片 url（Markdown 原文，未转义）→ 可加载的同源 URL；返回 null 表示不认这张图
+   * （保持纯文本）。缺省 = 一律不渲染图片。
+   */
+  resolveImage?: (url: string, alt: string) => string | null;
+}
 
 const HTML_ESCAPES: Record<string, string> = {
   "&": "&amp;",
@@ -32,14 +45,30 @@ function mathHtml(tex: string, display: boolean): string {
 /** 占位符用私有区字符 \uE000 包裹序号：正常文本不会出现，也不被转义碰到。 */
 const STASH_MARK = "\uE000";
 const STASH_TOKEN = /\uE000(\d+)\uE000/g;
+/** 整行只有一个占位符：块级占位（图）直接成块，不裹进 <p>。 */
+const SOLO_STASH_LINE = /^\uE000(\d+)\uE000$/;
 
 interface Stash {
   entries: string[];
+  /** 块级占位（figure）的序号：行级解析遇到独占一行的它们时直接作为块输出。 */
+  blocks: Set<number>;
 }
 
-function put(stash: Stash, html: string): string {
+function put(stash: Stash, html: string, block = false): string {
   stash.entries.push(html);
-  return `${STASH_MARK}${stash.entries.length - 1}${STASH_MARK}`;
+  const index = stash.entries.length - 1;
+  if (block) stash.blocks.add(index);
+  return `${STASH_MARK}${index}${STASH_MARK}`;
+}
+
+/** 独占一行的 Markdown 图片：`![alt](url)`，url 不含空白与右括号，可带 "title"。 */
+const IMAGE_LINE = /^[^\S\n]*!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"\n]*")?\)[^\S\n]*$/gm;
+
+function figureHtml(src: string, alt: string): string {
+  const caption = alt.trim();
+  return `<figure class="md-figure"><img src="${escapeHtml(src)}" alt="${escapeHtml(caption)}" loading="lazy">`
+    + (caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "")
+    + "</figure>";
 }
 
 function restore(stash: Stash, text: string): string {
@@ -70,13 +99,22 @@ function tableCells(line: string): string[] {
 }
 
 /** 把模型回复渲染成安全的 HTML 片段。 */
-export function renderMarkdown(source: string): string {
-  const stash: Stash = { entries: [] };
+export function renderMarkdown(source: string, options: RenderMarkdownOptions = {}): string {
+  const stash: Stash = { entries: [], blocks: new Set() };
   let text = String(source ?? "").replace(/\r\n?/g, "\n");
 
   // 1. 代码块（未闭合的按到文末处理，流式渲染时代码块随增量增长）
   text = text.replace(/```([\w+#.-]*)[^\S\n]*\n?([\s\S]*?)(?:```|$)/g, (_match, lang: string, code: string) =>
     put(stash, `<pre class="md-code"><code${lang ? ` data-lang="${escapeHtml(lang)}"` : ""}>${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`));
+
+  // 1b. 图片：只在调用方给了解析器、且解析器认这张图时成块；其余保持纯文本
+  const { resolveImage } = options;
+  if (resolveImage) {
+    text = text.replace(IMAGE_LINE, (match, alt: string, url: string) => {
+      const src = resolveImage(url, alt);
+      return src ? put(stash, figureHtml(src, alt), true) : match;
+    });
+  }
 
   // 2. 公式：块级（$$…$$、\[…\]）与行内（\(…\)、$…$）
   text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_match, tex: string) => put(stash, mathHtml(tex, true)));
@@ -126,6 +164,14 @@ export function renderMarkdown(source: string): string {
 
     if (!trimmed) {
       flushAll();
+      continue;
+    }
+
+    // 块级占位（图）独占一行：直接成块，不裹进段落
+    const solo = SOLO_STASH_LINE.exec(trimmed);
+    if (solo && stash.blocks.has(Number(solo[1]))) {
+      flushAll();
+      blocks.push(trimmed);
       continue;
     }
 

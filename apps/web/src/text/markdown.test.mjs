@@ -99,3 +99,47 @@ test("single newlines become line breaks inside a paragraph", () => {
   assert.ok(html.includes("<p>第一行<br>第二行</p>"));
   assert.ok(html.includes("<p>新段落</p>"));
 });
+
+test("images stay plain text unless a resolver vouches for them", () => {
+  const source = "拟合效果见图 1。\n\n![图 1 拟合曲线](fit.png)\n\n随后分析。";
+  const plain = renderMarkdown(source);
+  assert.ok(!plain.includes("<img"), "没有解析器：图片语法保持纯文本（聊天气泡逐字节不变）");
+  assert.ok(plain.includes("<p>![图 1 拟合曲线](fit.png)</p>"));
+
+  const refused = renderMarkdown(source, { resolveImage: () => null });
+  assert.equal(refused, plain, "解析器不认这张图：与无解析器完全一致");
+
+  const seen = [];
+  const html = renderMarkdown(source, {
+    resolveImage: (url, alt) => {
+      seen.push([url, alt]);
+      return url === "fit.png" ? "/api/v1/artifacts/art_1/download" : null;
+    },
+  });
+  assert.deepEqual(seen, [["fit.png", "图 1 拟合曲线"]]);
+  assert.ok(html.includes(
+    '<figure class="md-figure"><img src="/api/v1/artifacts/art_1/download" alt="图 1 拟合曲线" loading="lazy">'
+    + "<figcaption>图 1 拟合曲线</figcaption></figure>",
+  ));
+  assert.ok(!html.includes("<p><figure"), "图是块级：不裹进段落");
+  assert.ok(html.includes("<p>拟合效果见图 1。</p>") && html.includes("<p>随后分析。</p>"));
+});
+
+test("resolved image src and caption are escaped; inline images are not rendered", () => {
+  const html = renderMarkdown('![图 2 "a" & <b>](x.png)\n\n行内 ![图 3](y.png) 不成图', {
+    resolveImage: url => `/dl/${url}?x=1&y="2"`,
+  });
+  assert.ok(html.includes('src="/dl/x.png?x=1&amp;y=&quot;2&quot;"'), "src 转义");
+  assert.ok(html.includes("<figcaption>图 2 &quot;a&quot; &amp; &lt;b&gt;</figcaption>"), "图题转义");
+  assert.ok(!html.includes('src="/dl/y.png'), "行内图片语法不成图");
+  assert.ok(html.includes("![图 3](y.png)"), "行内图片保持纯文本");
+});
+
+test("images inside fenced code are never resolved", () => {
+  const calls = [];
+  const html = renderMarkdown("```md\n![图 1](fit.png)\n```", {
+    resolveImage: url => { calls.push(url); return "/dl/" + url; },
+  });
+  assert.deepEqual(calls, []);
+  assert.ok(html.includes("![图 1](fit.png)") && !html.includes("<img"));
+});

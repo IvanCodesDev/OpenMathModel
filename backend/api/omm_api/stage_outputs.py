@@ -687,6 +687,45 @@ _FROZEN_SOURCE_STAGES = frozenset(
 _AUDIT_FINDING_KINDS = frozenset(
     {"unsourced_number", "phantom_figure", "phantom_table", "unverified_citation"}
 )
+#: 真实图件的来源阶段（契约 enum）：只有实验 / 检验沙盒的图算论文图源。
+_FIGURE_SOURCE_STAGES = frozenset({"EXPERIMENTING", "VALIDATING"})
+
+
+def _figures(raw: Any) -> Optional[list[dict[str, Any]]]:
+    """节点 outputs.figures → 契约 paper_figure[]（缺键 → null；畸形条目逐条剔除）。
+
+    编号非正整数、文件名为空、来源阶段不在 enum 的条目剔除；artifact_id 空串归 null
+    （编辑页据此不解析成图，而不是拼出一个 404 的下载链接）。
+    """
+    if not isinstance(raw, list):
+        return None
+    figures: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        number = item.get("number")
+        name = str(item.get("name") or "").strip()
+        stage = str(item.get("source_stage") or "")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+            or not name
+            or stage not in _FIGURE_SOURCE_STAGES
+        ):
+            continue
+        artifact_id = str(item.get("artifact_id") or "").strip()
+        figures.append(
+            {
+                "number": number,
+                "name": name,
+                "artifact_id": artifact_id or None,
+                "caption": str(item.get("caption") or ""),
+                "source_stage": stage,
+                "inserted": bool(item.get("inserted")),
+            }
+        )
+    return figures
 
 
 def _frozen_numbers(raw: Any) -> Optional[list[dict[str, Any]]]:
@@ -772,6 +811,7 @@ def _document_draft(run_id: str, state: Optional[StageState]) -> Optional[Docume
         updated_at=iso_z(state.at),
         frozen_numbers=_frozen_numbers(outputs.get("frozen_numbers")),
         audit_findings=_audit_findings(outputs.get("audit_findings")),
+        figures=_figures(outputs.get("figures")),
     )
 
 

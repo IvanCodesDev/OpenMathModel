@@ -47,6 +47,13 @@ from omm_agent_harness import (
 )
 
 from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
+from .figures import (
+    available_figure_names,
+    figure_inventory,
+    figure_manifest,
+    mark_inserted,
+    render_figure_material,
+)
 from .frozen_numbers import (
     AUDIT_SAMPLE_LIMIT,
     allowed_number_tokens,
@@ -1550,6 +1557,13 @@ EXPERIMENT_SCRIPT_PATH = "experiment.py"
 #: 显式种子（§7.1 任务卡字段）：合成数据/抽样必须使用的固定种子。
 SANDBOX_SEEDS = {"random_seed": 42}
 
+#: 沙盒终答的可选叙事键：画图的人逐张说明图件（文件名 — 一句话）。可选——没画图
+#: 就没得说，做成必填会逼模型编一句凑数；节点只把说明挂到真正采集到的图件上。
+FIGURE_NOTES_FINAL_KEY = (
+    "figure_notes",
+    "已保存的每张图表一行「文件名 — 一句话说明该图展示什么」；没有图表写「无」",
+)
+
 
 class _SandboxCapture:
     """节点侧执行证据：最后一次 python_run 的 stdout/指标 + 全部产物 + 最终代码。
@@ -2592,6 +2606,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                         "两三句面向用户的进度汇报（实现了什么、对比基线看什么指标、下一步验证什么），口语化",
                     ),
                 ),
+                optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
             )
             report = run_sandbox_task(
                 task,
@@ -2670,6 +2685,8 @@ class ExperimentExecutionNode(LlmSkillNode):
         # 最终脚本落工作区固定路径：验证阶段据此复跑（steps/<id>/main.py 的
         # 即时副本下游拿不到 id）。
         script_path = _stage_final_script(ctx, services, capture.code)
+        # 所有波的产物并集：修复波重写同名结果文件时沙盒不再报新建，首波引用要留
+        artifacts = _union_artifacts(waves, capture)
 
         return NodeResult.succeeded(
             outputs={
@@ -2686,10 +2703,13 @@ class ExperimentExecutionNode(LlmSkillNode):
                 # 生成者-评审者环的结论（§8.4）：复跑核对 + 独立审稿意见；僵持时
                 # stalemate=true，验证阶段据此挂 G3
                 "review": review,
+                # 真实图件清单（figure_render 第一步）：沙盒真正采集到的图件产物 +
+                # 画图工程师的逐张说明（只挂到真实文件上）；论文节点据此给写手图源、
+                # 终稿审计据此核对「图 N」
+                "figures": figure_manifest(artifacts, final_answer.get(FIGURE_NOTES_FINAL_KEY[0])),
             },
             metrics=node_metrics,
-            # 所有波的产物并集：修复波重写同名结果文件时沙盒不再报新建，首波引用要留
-            artifacts=tuple(_union_artifacts(waves, capture)),
+            artifacts=tuple(artifacts),
         )
 
     # -- generator / reviewer loop (§8.4) ------------------------------------------
@@ -3213,6 +3233,7 @@ class ValidationNode(LlmSkillNode):
                 ),
                 seeds=dict(SANDBOX_SEEDS),
                 max_runs=max_runs,
+                optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
             )
             executor = _sandbox_tool_executor(ctx, services, capture)
 
@@ -3311,7 +3332,12 @@ class ValidationNode(LlmSkillNode):
         }
         if review is not None:
             robustness["review"] = review
-        return robustness, _union_artifacts(waves, capture)
+        artifacts = _union_artifacts(waves, capture)
+        # 检验阶段的图件（灵敏度 / 扰动图）同样是论文的合法图源，与实验图一起编号
+        robustness["figures"] = figure_manifest(
+            artifacts, final_answer.get(FIGURE_NOTES_FINAL_KEY[0])
+        )
+        return robustness, artifacts
 
     def _review_spec(
         self,
@@ -3519,11 +3545,14 @@ _MATERIAL_LABELS = {
     "experiment_summary": "实验过程摘要",
     "validation_summary": "检验结论",
     "frozen_numbers": "数字冻结清单（正文数值只准引用此表与上述材料中的数字）",
+    "available_figures": "可用图件清单（本次运行真实产出的图；插图只准从此表选、编号固定）",
 }
-#: 冻结清单不受总编的 source_keys 路由影响：每章都必须看到它（§9 硬规则）。
-_ALWAYS_MATERIAL_KEYS = ("frozen_numbers",)
+#: 冻结清单与图件清单不受总编的 source_keys 路由影响：每章都必须看到它们（§9 硬规则：
+#: 数字只准引冻结值、图只准引真实图件——漏发给某一章，那章就会凭空写）。
+_ALWAYS_MATERIAL_KEYS = ("frozen_numbers", "available_figures")
 #: 叙述材料（审计允许集的文本来源；冻结清单本身按值进允许集）。两表也算：
-#: 假设文本与符号取值里的数字（「删行 ≤ 5%」「{0,1}」）是有出处的。
+#: 假设文本与符号取值里的数字（「删行 ≤ 5%」「{0,1}」）是有出处的；图件说明里的
+#: 数字（「RMSE 0.12 vs 基线 0.30」）与实验摘要同一先例——画图的人写的、随图进材料。
 _NARRATIVE_MATERIAL_KEYS = (
     "problem_analysis",
     "data_preparation",
@@ -3532,6 +3561,7 @@ _NARRATIVE_MATERIAL_KEYS = (
     "model_symbols",
     "experiment_summary",
     "validation_summary",
+    "available_figures",
 )
 
 # ── G4 定稿交付闸门（§11.1「必停」）────────────────────────────────────────
@@ -3772,6 +3802,9 @@ class PaperWritingNode(LlmSkillNode):
             "experiment_summary": _experiment_material(experiment),
             "validation_summary": _validation_material(validation, ctx.review_decisions),
             "frozen_numbers": render_frozen_numbers(build_frozen_numbers(ctx.prior_outputs)),
+            # 真实图件清单（figure_render 第一步）：实验 / 检验沙盒采集到的图件按序编号，
+            # 写手只准插这张表里的图、按表上编号引用（§9.1「图表 id 真实」）。
+            "available_figures": render_figure_material(figure_inventory(ctx.prior_outputs)),
         }
 
     @staticmethod
@@ -3805,6 +3838,8 @@ class PaperWritingNode(LlmSkillNode):
         allowed = allowed_number_tokens(
             frozen, *(variables[key] for key in _NARRATIVE_MATERIAL_KEYS)
         )
+        # 真实图件清单：与材料同一份（编号一致），终稿审计据此核对「图 N」与插图。
+        figures = figure_inventory(ctx.prior_outputs)
 
         attempts_total = 0
         inputs_hash = _inputs_hash(variables)
@@ -3821,7 +3856,7 @@ class PaperWritingNode(LlmSkillNode):
                 outline, error = None, structural
             if outline is None:
                 return self._run_single_call(
-                    ctx, services, variables, attempts_total, str(error), frozen, allowed
+                    ctx, services, variables, attempts_total, str(error), frozen, allowed, figures
                 )
 
         chapters: list[Mapping[str, Any]] = outline["chapters"]
@@ -4008,7 +4043,7 @@ class PaperWritingNode(LlmSkillNode):
         if warnings:
             metrics_payload["quality_warnings"] = warnings
         return self._publish(
-            ctx, services, outputs, metrics_payload, frozen, allowed, abstract_allowed
+            ctx, services, outputs, metrics_payload, frozen, allowed, figures, abstract_allowed
         )
 
     # -- helpers -------------------------------------------------------------
@@ -4130,6 +4165,7 @@ class PaperWritingNode(LlmSkillNode):
         fallback_reason: str,
         frozen: list[dict[str, Any]],
         allowed: set[str],
+        figures: Sequence[Mapping[str, Any]] = (),
     ) -> NodeResult:
         """回退路径：总编规划失败时整篇单次生成（paper_writing.default，与总编同一套材料）。"""
         template = self._registry.get(self.prompt_id)
@@ -4144,7 +4180,7 @@ class PaperWritingNode(LlmSkillNode):
             "fallback": "single_call",
             "fallback_reason": fallback_reason,
         }
-        return self._publish(ctx, services, parsed, metrics_payload, frozen, allowed)
+        return self._publish(ctx, services, parsed, metrics_payload, frozen, allowed, figures)
 
     def _publish(
         self,
@@ -4154,6 +4190,7 @@ class PaperWritingNode(LlmSkillNode):
         metrics: dict[str, Any],
         frozen: list[dict[str, Any]],
         allowed: set[str],
+        figures: Sequence[Mapping[str, Any]] = (),
         abstract_allowed: set[str] | None = None,
     ) -> NodeResult:
         """发布草稿产物 → 终稿审计链（数值 → 图表 → 引用）→ G4 必停。
@@ -4161,8 +4198,9 @@ class PaperWritingNode(LlmSkillNode):
         审计在这里对**终稿**做（数值：分章路径已按章重写过一次，这里是最终对账；
         回退单次生成的路径没有章级重写，全靠这一道。图表 / 引用：定义可能在别的章，
         只能在终稿判），结果同时进 outputs（DocumentDraft 契约的 frozen_numbers /
-        audit_findings）与 G4 卡片。真实图件集合与已验证引用库今天都不存在
-        （figure_render / refs/ 未建），传空集——写手引用的图与文献一律无从核实、如实记发现。
+        audit_findings / figures）与 G4 卡片。真实图件集合 = 材料里那张图件清单（实验 /
+        检验沙盒真正采集到的图）；已验证引用库今天还不存在（refs/ 未建），传空集——写手
+        引用的文献一律无从核实、如实记发现。
         """
         sections = [
             section for section in outputs.get("sections") or [] if isinstance(section, Mapping)
@@ -4172,10 +4210,17 @@ class PaperWritingNode(LlmSkillNode):
             str(outputs.get("abstract") or ""),
             allowed=allowed,
             abstract_allowed=abstract_allowed,
-            available_figures=(),
+            available_figures=available_figure_names(figures),
             verified_refs=(),
         )
-        outputs = {**outputs, "frozen_numbers": list(frozen), "audit_findings": findings}
+        outputs = {
+            **outputs,
+            "frozen_numbers": list(frozen),
+            "audit_findings": findings,
+            # 图件清单原样进 DocumentDraft（编号 / 文件名 / 产物 id / 说明 / 来源），并按
+            # 正文插图确定性标「已插入」——论文页据此把 `![…](文件名)` 解析成产物下载链接
+            "figures": mark_inserted(figures, sections),
+        }
         markdown = render_paper_markdown(outputs)
         ref = services.artifacts.put(
             ctx.run_id,
@@ -4197,6 +4242,11 @@ class PaperWritingNode(LlmSkillNode):
         if not self._require_confirmation:
             return NodeResult.succeeded(outputs=outputs, metrics=metrics, artifacts=(ref,))
         reason, meta = self._g4_review(len(sections), chars, len(frozen), findings)
+        # 图件事实也进卡片证据：真实图件几张、正文插了几张（人裁「图太少 / 有图没用」时有据）
+        meta["impact"]["figures_total"] = len(outputs["figures"])
+        meta["impact"]["figures_inserted"] = sum(
+            1 for item in outputs["figures"] if item.get("inserted")
+        )
         return NodeResult.needs_review(
             reason=reason,
             outputs=outputs,

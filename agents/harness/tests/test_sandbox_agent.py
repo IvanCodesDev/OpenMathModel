@@ -197,6 +197,55 @@ def test_wave_prompt_lists_extra_final_keys() -> None:
     assert "面向用户的进度叙述" in joined
 
 
+def test_optional_final_keys_are_prompted_but_not_required() -> None:
+    """optional_final_keys：进终答示例（标「可选」）；终答缺它不触发 R1、给了原样回传。"""
+    from omm_agent_harness.sandbox_agent import _assemble_wave_prompt
+
+    task = make_task(
+        metrics_has_rmse(),
+        extra_final_keys=(("approach_summary", "两三句技术路线"),),
+        optional_final_keys=(("figure_notes", "每张图一行「文件名 — 说明」"),),
+    )
+    joined = "\n".join(m.content for m in _assemble_wave_prompt(task, None))
+    assert '"figure_notes": "（可选）每张图一行「文件名 — 说明」"' in joined
+
+    # 缺可选键：直接通过，不多烧一轮修复
+    without = json.dumps({"summary": "做完了", "approach_summary": "线性回归基线"})
+    chat = ScriptedChat([tool_reply(run_call("print(1)")), text_reply(without)])
+    captured: list[dict] = []
+    report = run_sandbox_task(
+        task,
+        chat=chat,
+        execute_tools=FakeSandbox([ok_run('OMM_METRICS_JSON: {"rmse": 0.5}')]),
+        workspace_files=lambda: [],
+        read_text=lambda p: "",
+        env_fingerprint=ENV,
+        on_final_answer=captured.append,
+    )
+    assert report["status"] == "passed"
+    assert chat.calls == 2
+    assert "figure_notes" not in captured[0]
+
+    # 给了可选键：原样经 on_final_answer 回传
+    with_notes = json.dumps({
+        "summary": "做完了",
+        "approach_summary": "线性回归基线",
+        "figure_notes": "fit.png — 拟合曲线",
+    })
+    chat = ScriptedChat([tool_reply(run_call("print(1)")), text_reply(with_notes)])
+    captured = []
+    run_sandbox_task(
+        task,
+        chat=chat,
+        execute_tools=FakeSandbox([ok_run('OMM_METRICS_JSON: {"rmse": 0.5}')]),
+        workspace_files=lambda: [],
+        read_text=lambda p: "",
+        env_fingerprint=ENV,
+        on_final_answer=captured.append,
+    )
+    assert captured[0]["figure_notes"] == "fit.png — 拟合曲线"
+
+
 # -- 模型自述成功不算数 -----------------------------------------------------------
 
 

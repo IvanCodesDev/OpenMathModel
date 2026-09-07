@@ -9,9 +9,11 @@
 - **引用审计**：正文引用标记（``[n]`` / ``\\cite{key}``）与「参考文献」章的条目必须来自
   已验证的引用库（refs/）。
 
-今天真实图件集合与引用库都还不存在（``figure_render`` / refs/ 未建），调用方传空集：
-写手引用的任何图与文献在今天都无从核实，如实记为发现——这正是 §9 硬规则「引用必须
-带出处 id」「模拟内容必须标明」在论文阶段的兜底。两处参数已为后续真实化留口。
+真实图件集合由 ``figures.figure_inventory`` 从实验 / 检验沙盒真正采集到的图件产物生成
+（文件名 + 产物 id），调用方按 ``available_figures`` 传入：写手只能插清单里的图，编号在
+alt 或图题里写明才算定义。引用库今天还不存在（refs/ 未建），``verified_refs`` 传空集：
+写手引用的任何文献在今天都无从核实，如实记为发现——这正是 §9 硬规则「引用必须带出处 id」
+「模拟内容必须标明」在论文阶段的兜底。
 
 ``numbers`` 字段沿用契约既有名字（删属性 = BREAKING），装的是取样后的违规 token：
 数值 / 图表编号 / 引用标记。
@@ -148,6 +150,11 @@ def _images(text: str) -> list[tuple[str, str, int]]:
         for match in _HTML_IMAGE.finditer(line):
             found.append(("", match.group(1), index))
     return found
+
+
+def image_urls(text: str) -> list[str]:
+    """正文里插图的 url（Markdown 图片与 ``<img>``），去重保序——图件清单据此标「已插入」。"""
+    return _unique(url for _alt, url, _index in _images(text))
 
 
 def _real_figures(text: str, available_figures: set[str]) -> set[str]:

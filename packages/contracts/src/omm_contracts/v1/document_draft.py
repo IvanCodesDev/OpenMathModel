@@ -69,6 +69,41 @@ class AuditFinding(BaseModel):
     detail: str = Field(..., description="人可读说明。")
 
 
+class SourceStage1(Enum):
+    """
+    产出该图件的阶段。
+    """
+
+    EXPERIMENTING = "EXPERIMENTING"
+    VALIDATING = "VALIDATING"
+
+
+class PaperFigure(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    number: conint(ge=1) = Field(
+        ...,
+        description="全文固定编号 N（「图 N」），按 实验 → 检验 顺序赋予，不因未插入而重编。",
+    )
+    name: constr(min_length=1) = Field(
+        ..., description="图件文件名（产物 name，仅 basename）；正文插图的 url 就是它。"
+    )
+    artifact_id: constr(min_length=1) | None = Field(
+        ...,
+        description="对应 Artifact 的 id（沿 /artifacts/{id}/download 取内容）；节点没拿到产物 id 时为 null，编辑页不解析成图。",
+    )
+    caption: str = Field(
+        ...,
+        description="画图工程师在终答里给的一句话说明（只挂到真实文件上）；没有说明为空串。",
+    )
+    source_stage: SourceStage1 = Field(..., description="产出该图件的阶段。")
+    inserted: bool = Field(
+        ...,
+        description="正文是否已插入该图（任一 `![…](url)` / `<img src>` 的 url 或其文件名命中 name），由节点确定性判定。",
+    )
+
+
 class RunId(RootModel[constr(pattern=r"^run_[0-9a-f]{32}$")]):
     root: constr(pattern=r"^run_[0-9a-f]{32}$")
 
@@ -114,4 +149,8 @@ class DocumentDraft(BaseModel):
     audit_findings: list[AuditFinding] | None = Field(
         None,
         description="终稿审计链的发现（G4 定稿闸门的证据）：数值审计（正文数值 ∈ 冻结清单 ∪ 材料）、图表审计（引用的图须是真实图件、引用的表须有带编号表题的表格）、引用审计（引用标记与参考文献条目须来自已验证的引用库）三条确定性审计顺序过终稿；空数组 = 审计过且 0 违规；未审计（旧运行、模拟节点）为 null。可选字段：旧消费者可忽略。",
+    )
+    figures: list[PaperFigure] | None = Field(
+        None,
+        description="真实图件清单（H5 figure_render 第一步）：本次运行实验 / 检验沙盒真正落盘并采集为 figure 产物的图，按 实验 → 检验 顺序编号（图 N），是正文插图 `![图 N 标题](文件名)` 的唯一合法来源；图表审计据此核对。编辑页用 name → artifact_id 把插图解析成产物下载链接。空数组 = 本次运行没有产出图件；论文节点未产出该字段（2026-09-07 之前的运行、模拟节点）时为 null。可选字段：旧消费者可忽略。",
     )

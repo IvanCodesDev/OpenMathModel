@@ -3448,6 +3448,10 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 
 .paper-only-editor .paper-audit-value { white-space: nowrap; }
 
+/* 真实图件表：已插入 / 未插入两态只用颜色区分，文字本身已说明状态 */
+.paper-only-editor .paper-audit-figure-inserted { color: #2f7d4f; white-space: nowrap; }
+.paper-only-editor .paper-audit-figure-unused { color: #8a8a85; white-space: nowrap; }
+
 .paper-only-editor .paper-audit-empty,
 .paper-only-editor .paper-audit-note {
   margin: 8px 0 0;
@@ -5722,6 +5726,26 @@ html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
   height: auto;
   margin: 0 auto 24px;
   border-radius: 6px;
+}
+
+/* 真实图件（renderMarkdown 按 DocumentDraft.figures 解析出的 <figure>）：图居中、
+   图题「图 N …」按论文惯例置于图下、居中、小一号；图与图题之间不留段距。 */
+.editor-page .md-figure {
+  margin: 8px 0 24px;
+  text-align: center;
+  text-indent: 0;
+}
+
+.editor-page .md-figure img {
+  margin: 0 auto 8px;
+  border: 1px solid #e5e5e5;
+}
+
+.editor-page .md-figure figcaption {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #555;
+  text-indent: 0;
 }
 
 /* 5. 检查结果清单（模态框内，脱离右栏令牌作用域，用字面色） */

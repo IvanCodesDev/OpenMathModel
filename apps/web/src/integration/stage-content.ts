@@ -23,7 +23,14 @@ import { typesetMath } from "../text/math-typeset";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
-import { FINDING_KIND_REASONS, describePaperAudit, paperAuditStamp, summarizeFindingKinds } from "./paper-audit";
+import {
+  FINDING_KIND_REASONS,
+  FROZEN_STAGE_LABELS,
+  describePaperAudit,
+  paperAuditStamp,
+  summarizeFindingKinds,
+} from "./paper-audit";
+import { figureImageResolver, summarizeFigures } from "./paper-figures";
 import type { PlanDecisionView } from "./plan-decision";
 import {
   describePlanDecision,
@@ -986,6 +993,9 @@ function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries
     keywords.append(el("strong", "", `${t("关键词")}：`), document.createTextNode(draft.keywords.join("；")));
     blocks.push({ element: keywords, outlineIndex: null });
   }
+  // 真实图件：正文 `![图 N 标题](文件名)` 只在文件名命中 DocumentDraft.figures（本次运行
+  // 采集到的图件、有产物 id）时解析成同源产物下载链接出图；其余图片语法保持纯文本
+  const resolveImage = figureImageResolver(draft.figures);
   draft.sections.forEach((section, index) => {
     const outlineIndex = entries.length;
     entries.push({ href: `#section-${index}`, label: section.heading });
@@ -993,7 +1003,7 @@ function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries
     heading.id = `section-${index}`;
     blocks.push({ element: heading, outlineIndex });
     const body = el("div");
-    body.innerHTML = renderMarkdown(section.content);
+    body.innerHTML = renderMarkdown(section.content, { resolveImage });
     [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
   });
   return { blocks, entries };
@@ -1376,10 +1386,15 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
     : section.kind === "clean"
       ? t("数值、图表与引用审计全部通过")
       : t("未做终稿审计");
+  // 真实图件计数（figure_render 第一步）：有图件的运行才多这一句，无图运行文案逐字不变
+  const figures = summarizeFigures(draft.figures);
+  const figureNote = figures
+    ? `，${t("N 张真实图件，已插入 M 张").replace("N", String(figures.total)).replace("M", String(figures.inserted))}`
+    : "";
   summary.append(
     icon(iconName),
     el("strong", "", `${t("终稿审计")}：`),
-    el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}`),
+    el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}${figureNote}`),
     el("span", "paper-audit-hint", t("展开查看清单与发现")),
   );
   details.append(summary);
@@ -1427,6 +1442,34 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
     table.append(thead, tbody);
     body.append(table);
   }
+
+  if (figures) {
+    // 真实图件清单：编号是正文「图 N」的唯一合法编号；未插入的图如实列出（人裁「有图没用」）
+    body.append(el("h4", "", t("真实图件")));
+    const table = el("table", "paper-audit-table paper-audit-figures");
+    const thead = el("thead");
+    const head = el("tr");
+    for (const label of ["编号", "文件名", "出处", "说明", "状态"]) head.append(el("th", "", t(label)));
+    thead.append(head);
+    const tbody = el("tbody");
+    for (const figure of draft.figures ?? []) {
+      const tr = el("tr");
+      const name = el("td", "paper-audit-value");
+      name.append(paperAuditChip(figure.name));
+      tr.append(
+        el("td", "paper-audit-id", `${t("图")} ${figure.number}`),
+        name,
+        el("td", "paper-audit-source", t(FROZEN_STAGE_LABELS[figure.source_stage] ?? figure.source_stage)),
+        el("td", "", figure.caption || "—"),
+        el("td", figure.inserted ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
+          t(figure.inserted ? "已插入" : "未插入")),
+      );
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    body.append(table);
+  }
+
   body.append(el("p", "paper-audit-note", t("口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行），一位数不计；引用的图须是本次运行产出的图件、引用的表须有带编号的表题；引用标记与参考文献须来自已验证的引用库。")));
   details.append(body);
 

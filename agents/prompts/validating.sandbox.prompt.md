@@ -2,7 +2,7 @@
 id: validating.sandbox
 stage: VALIDATING
 variant: sandbox
-version: 2
+version: 3
 input_schema: {"type": "object", "required": ["chosen_plan", "experiment_summary", "metrics", "experiment_code", "risk_points", "model_assumptions"], "properties": {"chosen_plan": {"type": "string"}, "experiment_summary": {"type": "string"}, "metrics": {"type": "string"}, "experiment_code": {"type": "string"}, "risk_points": {"type": "string"}, "model_assumptions": {"type": "string"}, "data_files": {"type": "string"}, "available_packages": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 ---
@@ -55,6 +55,6 @@ output_schema: {"type": "object", "required": ["summary"], "properties": {"summa
 6. 检查完成后必须原样打印一行检验结果（独占一行、不要拆行，数值为实际计算结果）：
    `OMM_METRICS_JSON: {"checks": [{"id": "sensitivity_demand", "name": "需求率 ±20% 扰动", "passed": true, "value": 0.05, "threshold": 0.2, "detail": "rmse 相对退化 5%", "assumption_id": "A1"}, ...]}`
    其中 `id` 为英文标识、`name` 为中文检查名、`value`/`threshold` 为数值、`detail` 一句话说明判定依据、`assumption_id` 为该检查针对的假设编号（通用检查省略）。
-7. 可选：把逐项结果另存为 `validation/checks.csv`（列：id,name,passed,value,threshold,assumption_id）供论文引用。
+7. 可选：把逐项结果另存为 `validation/checks.csv`（列：id,name,passed,value,threshold,assumption_id）供论文引用；可选再存 1-2 张检验图到当前目录（灵敏度曲线、扰动前后指标对比；matplotlib 可用时 `.png`，否则手写 SVG 存 `.svg`）——它们会作为论文的真实图件被引用：文件名用能说明内容的英文短语、带标题与坐标轴标签、只画真实计算结果；画图代码包在 try/except 里且放在标记行打印之后，画图失败不得让脚本非零退出。终答里的 `figure_notes` 逐张说明已保存的图（每行「文件名 — 一句话说明该图展示什么」，只写真正保存成功的文件；没有图写「无」）。
 
 运行失败或验收未通过时，根据反馈修复代码后重新运行；每次运行消耗预算，优先一次做对。

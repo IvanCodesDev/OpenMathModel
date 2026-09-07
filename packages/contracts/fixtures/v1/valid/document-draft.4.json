@@ -1,0 +1,22 @@
+{
+  "run_id": "run_3c4d5e6f708192a3b4c5d6e7f8091a2b",
+  "title": "基于整数规划的共享单车调度优化",
+  "abstract": "本文建立整数规划模型求解调度问题，贪心基线 rmse=0.12，稳健性复跑三项检查全部通过。",
+  "keywords": ["整数规划", "调度"],
+  "sections": [
+    { "heading": "1 问题重述", "content": "题目要求给出调度方案……" },
+    { "heading": "5 模型建立与求解", "content": "模型与基线的拟合对比见图 1。\n\n![图 1 模型与随机基线的 rmse 对比](fit_vs_baseline.png)\n\n贪心近似 rmse=0.12。" },
+    { "heading": "6 结果分析与检验", "content": "需求率 ±20% 扰动下 rmse 的变化见图 3。\n\n![图 3 需求率 ±20% 扰动下的 rmse](sensitivity.png)\n\n三项检查全部通过。" }
+  ],
+  "version": 1,
+  "updated_at": "2026-09-07T02:10:00.000000Z",
+  "frozen_numbers": [
+    { "id": "metrics.rmse", "label": "实验指标 rmse", "value": 0.12, "source_stage": "EXPERIMENTING", "source_path": "metrics.rmse" }
+  ],
+  "audit_findings": [],
+  "figures": [
+    { "number": 1, "name": "fit_vs_baseline.png", "artifact_id": "art_8f2a1c3d4e5b", "caption": "模型与随机基线的 rmse 对比", "source_stage": "EXPERIMENTING", "inserted": true },
+    { "number": 2, "name": "convergence.svg", "artifact_id": "art_9a3b2d4e5f6c", "caption": "", "source_stage": "EXPERIMENTING", "inserted": false },
+    { "number": 3, "name": "sensitivity.png", "artifact_id": null, "caption": "需求率 ±20% 扰动下的 rmse", "source_stage": "VALIDATING", "inserted": true }
+  ]
+}

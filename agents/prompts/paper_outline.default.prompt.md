@@ -2,8 +2,8 @@
 id: paper_outline.default
 stage: PAPER_WRITING
 variant: outline
-version: 5
-input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}}}
+version: 6
+input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "notation", "chapters"], "properties": {"title": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "notation": {"type": "string"}, "chapters": {"type": "array", "items": {"type": "object", "required": ["heading", "brief", "target_chars"], "properties": {"heading": {"type": "string"}, "brief": {"type": "string"}, "target_chars": {"type": "integer"}, "source_keys": {"type": "array", "items": {"type": "string"}}}}}}}
 ---
 你是数学建模竞赛论文的总编，写作范式对标国赛/研赛优秀论文与 MCM/ICM Outstanding 论文。现在只做规划不写正文：基于整条任务链的真实产出，产出论文的章节骨架、全文统一的符号约定与每章写作指令。后续每章会由独立调用按你的指令撰写，规划质量直接决定全文的结构与一致性。
@@ -40,6 +40,10 @@ output_schema: {"type": "object", "required": ["title", "notation", "chapters"],
 
 {{frozen_numbers}}
 
+## 可用图件清单（本次运行真实产出的图；正文插图的唯一来源，编号固定）
+
+{{available_figures}}
+
 ## 输出要求
 
 只输出一个 JSON 对象，不要任何解释文字或 Markdown 代码围栏，字段如下：
@@ -51,7 +55,8 @@ output_schema: {"type": "object", "required": ["title", "notation", "chapters"],
   - `heading`：带编号的章节标题（如「5 模型建立与求解」）。
   - `brief`：本章写作指令——要覆盖的要点、按小节的展开顺序，以及必须引用的具体数值/公式（数值优先从数字冻结清单里按编号摘取，其余只能来自输入材料，逐个写明）。「模型假设」章的 brief 必须要求按「模型假设表」逐条列出、保留编号，并把「重点验证 / 待检验」的条目与检验结论里的假设检验结果对应起来；「符号说明」章的 brief 必须要求按符号约定原样列表。
   - `target_chars`：本章目标字数；全部章节合计 8000-12000 字，「模型建立与求解」与「结果分析与检验」两章合计不少于总量一半。
-  - `source_keys`：本章写作需要的材料，取值只能是 `problem_analysis`、`data_preparation`、`chosen_plan`、`model_assumptions`、`model_symbols`、`experiment_summary`、`validation_summary`、`frozen_numbers` 的子集（数字冻结清单每章都会自动附上，不必重复列出）。
+  - `source_keys`：本章写作需要的材料，取值只能是 `problem_analysis`、`data_preparation`、`chosen_plan`、`model_assumptions`、`model_symbols`、`experiment_summary`、`validation_summary`、`frozen_numbers`、`available_figures` 的子集（数字冻结清单与可用图件清单每章都会自动附上，不必重复列出）。
 - 所有数值只能来自数字冻结清单与输入材料，禁止编造；检验结论中的保留意见必须规划进「结果分析与检验」章的 brief，不得淡化。
-- 图表与引用：输入材料没有提供真实图件时，brief 不得要求「配图」或引用「图 N」；材料没有已验证的文献条目时，不要规划「参考文献」章，brief 也不得要求引用文献——终稿会逐条核对图表引用与文献引用，虚构的一律记为审计发现。表格可以规划（写手用 Markdown 表格并配表题）。
+- 图件分配：「可用图件清单」里的每张图最多分配给一章，在该章 brief 里按清单写明「插入图 N（文件名）并在正文解读」——编号与文件名照抄清单，不得改编号；一张图不要分给两章；实验结果图归「模型建立与求解」或「结果分析与检验」，检验阶段的图归「结果分析与检验」。清单为「无」时，任何 brief 都不得要求「配图」或引用「图 N」。
+- 引用：材料没有已验证的文献条目时，不要规划「参考文献」章，brief 也不得要求引用文献——终稿会逐条核对图表引用与文献引用，虚构的一律记为审计发现。表格可以规划（写手用 Markdown 表格并配表题）。
 - 数据准备与清洗结论决定正文的样本口径：数据预处理小节按其中的清洗策略与执行结论描述（清洗未执行就写按原始数据建模，不得虚构清洗过程）；清洗脚本独立审稿未解决的意见、以及用户在数据确认闸门的决策所要求的说明，必须规划进相应章节的 brief，不得淡化。

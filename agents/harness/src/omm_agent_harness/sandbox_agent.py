@@ -93,6 +93,10 @@ class SandboxTask:
     #: 需要沙盒 Agent 的叙事产出（如实验节点的 approach_summary/progress_note）
     #: 时在此声明；校验与提示词由执行体统一生成，经 on_final_answer 回传。
     extra_final_keys: tuple[tuple[str, str], ...] = ()
+    #: 终答里**可选**的叙事键：同样写进终答示例让模型照着填，但缺席 / 留空不算
+    #: 结构问题（不触发 R1 修复）。用于只在特定情形才有内容的键——如实验节点的
+    #: figure_notes（没画图就没得说），做成必填会逼模型编一句凑数。
+    optional_final_keys: tuple[tuple[str, str], ...] = ()
 
 
 def _lenient_parse(raw: str) -> Any:
@@ -225,6 +229,7 @@ def _assemble_wave_prompt(
 def _final_answer_example(task: SandboxTask) -> str:
     pairs = ['"summary": "一句话说明做了什么与关键结果"']
     pairs += [f'"{key}": "{hint}"' for key, hint in task.extra_final_keys]
+    pairs += [f'"{key}": "（可选）{hint}"' for key, hint in task.optional_final_keys]
     return "{" + ", ".join(pairs) + "}"
 
 

@@ -2,7 +2,7 @@
 id: paper_section.default
 stage: PAPER_WRITING
 variant: section
-version: 3
+version: 4
 input_schema: {"type": "object", "required": ["title", "notation", "chapter_heading", "chapter_brief", "target_chars", "materials", "previous_digests"], "properties": {"title": {"type": "string"}, "notation": {"type": "string"}, "chapter_heading": {"type": "string"}, "chapter_brief": {"type": "string"}, "target_chars": {"type": "string"}, "materials": {"type": "string"}, "previous_digests": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["content", "digest"], "properties": {"content": {"type": "string"}, "digest": {"type": "string"}}}
 ---
@@ -34,7 +34,7 @@ output_schema: {"type": "object", "required": ["content", "digest"], "properties
   - 数学公式一律 LaTeX：行内 `$...$`，独立公式 `$$...$$`；涉及模型构建时必须给出目标函数与约束的公式化表述；
   - 符号只准使用上方符号约定中的记号；确需新符号时必须在正文中先行定义；
   - 数据表用 Markdown 表格，表格前一行单独写表题「表 N 标题」（N 为全文连续编号），正文引用时写「表 N」且编号必须与表题一致；不要引用本章与前文都没有的表；
-  - 图件：材料里没有提供真实图件（文件名）时，不得插入图片、不得写「如图 N 所示」之类的图引用——终稿会逐条核对，引用不存在的图会被记为审计发现；
+  - 图件：只准插入材料「可用图件清单」里、且本章写作指令分配给本章的图；插图独立成段写 `![图 N 标题](文件名)`——`图 N` 的编号与文件名逐字照抄清单（不得改编号、不得换文件名或加路径），标题按清单说明拟一句；正文解读时写「图 N」（编号必须与插图 alt 一致）。清单为「无」或本章未分配到图时，不得插入图片、不得写「如图 N 所示」之类的图引用——终稿会逐条核对，引用不存在的图或未插入的编号都会被记为审计发现；
   - 参考文献：材料里没有已验证的文献条目时，不得使用 `[1]`、`\cite{}` 等引用标记，也不得编写参考文献列表；不存在的文献一律不写；
   - 所有数值只能来自「可引用的真实材料」——优先引用其中「数字冻结清单」表里的数值并保持原样（不换算单位、不四舍五入、不改精度），其余数字只能是材料原文里已有的；禁止编造材料中不存在的数字，宁可不写数字也不要估一个；
   - 不复述前文已写内容，需要衔接时用一句话引用前文结论即可。
