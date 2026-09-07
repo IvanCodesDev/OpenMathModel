@@ -287,11 +287,11 @@ def test_graph_mode_comes_from_env_and_bad_values_fall_back_with_a_warning(tmp_p
     monkeypatch.setenv("OMM_GRAPH", "off")
     assert make_runtime(tmp_path / "b").graph_mode == "off"
 
-    monkeypatch.setenv("OMM_GRAPH", "modeling-v2")
+    monkeypatch.setenv("OMM_GRAPH", "modeling-v3")
     with caplog.at_level("WARNING", logger="omm_worker.runtime"):
         runtime = make_runtime(tmp_path / "c")
     assert runtime.graph_mode == DEFAULT_GRAPH_MODE
-    assert any("OMM_GRAPH='modeling-v2'" in record.getMessage() for record in caplog.records)
+    assert any("OMM_GRAPH='modeling-v3'" in record.getMessage() for record in caplog.records)
     # 显式参数优先于环境变量
     assert WorkerRuntime(
         WorkerConfig(root=tmp_path / "d"), nodes=echo_registry(), graph_mode="off"

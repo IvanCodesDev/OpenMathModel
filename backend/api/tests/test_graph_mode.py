@@ -81,10 +81,10 @@ def test_default_mode_is_graph_driven_and_records_no_divergence(client, monkeypa
 
 
 def test_invalid_mode_value_warns_and_behaves_as_default(client, monkeypatch, caplog) -> None:
-    monkeypatch.setenv("OMM_GRAPH", "modeling-v2")  # §4.9 留位、尚未落地的档位
+    monkeypatch.setenv("OMM_GRAPH", "modeling-v3")  # 不存在的档位（modeling-v2 已随 Graph v2 第一步成为合法值）
     with caplog.at_level(logging.WARNING, logger="omm.engine"):
         assert _graph_mode() == DEFAULT_GRAPH_MODE
-    assert any("OMM_GRAPH='modeling-v2'" in r.getMessage() for r in caplog.records)
+    assert any("OMM_GRAPH='modeling-v3'" in r.getMessage() for r in caplog.records)
 
     # 非法值不影响推进：整链照常跑完
     caplog.clear()

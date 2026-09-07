@@ -22,7 +22,9 @@ from omm_agent_core import (
     GraphSpec,
     InMemoryArtifactStore,
     InMemoryEventSink,
+    IterationRefused,
     LinearScheduler,
+    MODELING_V2_MAX_ITERS,
     NodeResult,
     NodeServices,
     Scheduler,
@@ -34,6 +36,7 @@ from omm_agent_core import (
     TaskRunSnapshot,
     TaskState,
     linear_v1,
+    modeling_v2,
     resolve_graph_mode,
     schedulers_for_mode,
     stage_output_schema_id,
@@ -266,7 +269,7 @@ def test_unsatisfied_reads_raise_e420_and_upstream_writes_satisfy_them():
     assert defect_code(graph) is ErrorCode.GRAPH_READS_UNSATISFIED
 
 
-def test_iter_edges_are_allowed_by_the_spec_but_not_by_the_v1_scheduler():
+def test_iter_edges_are_allowed_by_the_spec_and_the_scheduler_but_forks_are_not():
     graph = spec(
         [
             node("a", TaskState.PROBLEM_ANALYSIS),
@@ -276,10 +279,12 @@ def test_iter_edges_are_allowed_by_the_spec_but_not_by_the_v1_scheduler():
         [GraphEdge("a", "b"), GraphEdge("b", "c"), GraphEdge("c", "b", kind="iter", max_iters=2)],
     )
     graph.validate()  # 迭代边合法（v2 语义）……
-    with pytest.raises(AgentError) as info:
-        GraphScheduler(graph)  # ……但 v1 调度器装配期拒绝
-    assert info.value.code is ErrorCode.GRAPH_ILLEGAL_TRANSITION
-    assert "v1" in str(info.value)
+    scheduler = GraphScheduler(graph)  # ……调度器接受：迭代边不参与前进选择
+    assert scheduler.spec.iteration_edge(TaskState.MODEL_PLANNING, TaskState.DATA_PREPARATION) is not None
+    assert scheduler.spec.iteration_edge(TaskState.DATA_PREPARATION, TaskState.MODEL_PLANNING) is None
+    # 前进路径与没有迭代边时逐字相同
+    done_c = snapshot_in(TaskState.MODEL_PLANNING, steps=[step(TaskState.MODEL_PLANNING, StepStatus.SUCCEEDED)])
+    assert scheduler.select_target(done_c) is TaskState.COMPLETED
 
     forked = spec(
         [
@@ -537,7 +542,7 @@ def test_resolve_graph_mode_normalizes_valid_values(raw, expected):
     assert resolve_graph_mode(raw) == (expected, None)
 
 
-@pytest.mark.parametrize("raw", ["modeling-v2", "linear", "on", "graph"])
+@pytest.mark.parametrize("raw", ["modeling-v3", "linear", "on", "graph"])
 def test_resolve_graph_mode_falls_back_with_a_warning_on_unknown_values(raw):
     mode, warning = resolve_graph_mode(raw)
     assert mode == DEFAULT_GRAPH_MODE
@@ -552,8 +557,66 @@ def test_schedulers_for_mode_pairs_primary_and_shadow():
     assert shadow.spec.workflow_version == "linear-v1"
     primary, shadow = schedulers_for_mode("linear-v1")
     assert isinstance(primary, GraphScheduler) and isinstance(shadow, LinearScheduler)
+    # Graph v2 第一步：modeling-v2 是可选档位（迭代边放行 / 拒绝回退），线性调度器当影子
+    primary, shadow = schedulers_for_mode("modeling-v2")
+    assert isinstance(primary, GraphScheduler) and isinstance(shadow, LinearScheduler)
+    assert primary.spec.workflow_version == "modeling-v2"
     with pytest.raises(ValueError):
-        schedulers_for_mode("modeling-v2")
+        schedulers_for_mode("modeling-v3")
+
+
+# -- Graph v2 第一步：迭代边 -----------------------------------------------------------------
+
+
+def test_modeling_v2_adds_iteration_edges_to_self_and_every_upstream_node():
+    graph = modeling_v2()
+    graph.validate()
+    assert graph.workflow_version == "modeling-v2"
+    assert [n.id for n in graph.nodes] == [n.id for n in linear_v1().nodes]
+    assert [e for e in graph.edges if e.kind == "seq"] == list(linear_v1().edges), "前进边与 linear-v1 逐字相同"
+    iters = graph.iteration_edges
+    # 6 个节点：自环 + 全部上游 = 1+2+…+6 = 21 条，max_iters 统一取修订轮数上限
+    assert len(iters) == 21 and {e.max_iters for e in iters} == {MODELING_V2_MAX_ITERS}
+    assert graph.iteration_edge(TaskState.PAPER_WRITING, TaskState.PAPER_WRITING) is not None  # G4 退回修改
+    assert graph.iteration_edge(TaskState.VALIDATING, TaskState.EXPERIMENTING) is not None  # G3 重做实验
+    assert graph.iteration_edge(TaskState.PAPER_WRITING, TaskState.PROBLEM_ANALYSIS) is not None  # 修订到最前
+    assert graph.iteration_edge(TaskState.EXPERIMENTING, TaskState.VALIDATING) is None, "没有向前的迭代边"
+    # 快照往返
+    assert GraphSpec.from_dict(graph.to_dict()) == graph
+    assert graph.to_dict()["edges"][5] == {"from": "problem_analysis", "to": "problem_analysis", "kind": "iter", "max_iters": 3}
+
+
+def test_graph_scheduler_licenses_iterations_by_edge_and_round_limit():
+    scheduler = GraphScheduler(modeling_v2())
+    done = [step(s, StepStatus.SUCCEEDED) for s in WORK_SEQUENCE]
+    snap = snapshot_in(TaskState.PAPER_WRITING, done)
+    # 第一次退回修改：论文成功过 1 次 → 已走 0 轮 → 放行
+    edge = scheduler.check_iteration(snap, TaskState.PAPER_WRITING, TaskState.PAPER_WRITING)
+    assert edge is not None and edge.max_iters == 3
+    # 三轮重做之后（论文成功 4 次）：用尽 → E430，须由人另作决定
+    exhausted = snapshot_in(
+        TaskState.PAPER_WRITING,
+        done + [step(TaskState.PAPER_WRITING, StepStatus.SUCCEEDED, attempt=n) for n in (2, 3, 4)],
+    )
+    with pytest.raises(IterationRefused) as info:
+        scheduler.check_iteration(exhausted, TaskState.PAPER_WRITING, TaskState.PAPER_WRITING)
+    assert info.value.code is ErrorCode.GRAPH_ITERATION_LIMIT
+    assert isinstance(info.value, ValueError), "引擎前置条件错误的口径：控制面按 ValueError 处理"
+    assert info.value.context == {
+        "graph": "modeling-v2", "from": "PAPER_WRITING", "to": "PAPER_WRITING", "max_iters": 3, "taken": 3,
+    }
+    # 失败的尝试不算轮次：只数成功通过
+    with_failures = snapshot_in(
+        TaskState.PAPER_WRITING,
+        done + [step(TaskState.PAPER_WRITING, StepStatus.FAILED, attempt=n) for n in (2, 3, 4, 5)],
+    )
+    assert scheduler.check_iteration(with_failures, TaskState.PAPER_WRITING, TaskState.PAPER_WRITING) is not None
+    # 图上没有的回退（向前「回」）：E410
+    with pytest.raises(IterationRefused) as info:
+        scheduler.check_iteration(snap, TaskState.EXPERIMENTING, TaskState.VALIDATING)
+    assert info.value.code is ErrorCode.GRAPH_ILLEGAL_TRANSITION
+    # v1 图没有迭代边：不裁（与今天行为一致）
+    assert GraphScheduler(linear_v1()).check_iteration(exhausted, TaskState.PAPER_WRITING, TaskState.PAPER_WRITING) is None
 
 
 def test_default_mode_is_graph_driven_with_the_linear_engine_as_shadow():

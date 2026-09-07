@@ -59,6 +59,85 @@ def test_graph_driven_happy_path_is_the_golden_trajectory():
     assert session.replay().to_dict() == session.snapshot.to_dict()
 
 
+# -- Graph v2 第一步：迭代边（modeling-v2）------------------------------------------------------
+
+
+@pytest.mark.parametrize("scenario", SHADOW_SCENARIOS, ids=SCENARIO_IDS)
+def test_modeling_v2_is_control_flow_equivalent_on_every_scenario(scenario):
+    """迭代边只裁回退、不改前进：12 条场景（含 G3 / G4 重做与修订轮）在 modeling-v2 下与现引擎
+    控制流逐一相等，线性影子零分歧——已有的回退都在图的迭代边许可之内。"""
+    baseline = run_scenario(scenario, "off")
+    graph = run_scenario(scenario, "modeling-v2")
+
+    assert control_flow_trace(graph.sink.events) == control_flow_trace(baseline.sink.events)
+    assert snapshot_control_flow(graph.snapshot) == snapshot_control_flow(baseline.snapshot)
+    assert graph.engine.shadow_divergences == []
+    assert graph.replay().to_dict() == graph.snapshot.to_dict()
+
+
+def test_modeling_v2_refuses_the_fourth_paper_redo_and_leaves_the_gate_pending():
+    """G4「退回修改」是 PAPER_WRITING 到自身的迭代边（max_iters = 3）：三轮放行，第四轮 E430 拒绝
+    ——运行仍停在 G4，由人在闸门另作决定（确认交付照样走通）；拒绝不留任何事件。"""
+    from omm_agent_core import AdvanceOutcome, ErrorCode, IterationRefused
+    from omm_agent_evals.shadow import approve_plan, confirm_delivery
+
+    session = SHADOW_SCENARIOS[0].build("modeling-v2")
+    engine, snapshot = session.engine, session.snapshot
+    outcome = approve_plan(session)
+    for _round in range(3):
+        assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+        assert snapshot.review is not None and snapshot.review.resume_state is TaskState.PAPER_WRITING
+        engine.resolve_review(
+            snapshot, approved=True, reason="redo:PAPER_WRITING",
+            resume_state=TaskState.PAPER_WRITING, rerun=True,
+        )
+        outcome = engine.run_until_blocked(snapshot)
+    assert outcome.status == AdvanceOutcome.REVIEW_REQUESTED
+    events_before = len(session.sink.events)
+    with pytest.raises(IterationRefused) as info:
+        engine.resolve_review(
+            snapshot, approved=True, reason="redo:PAPER_WRITING",
+            resume_state=TaskState.PAPER_WRITING, rerun=True,
+        )
+    assert info.value.code is ErrorCode.GRAPH_ITERATION_LIMIT
+    assert isinstance(info.value, ValueError)
+    assert len(session.sink.events) == events_before, "拒绝不留事件"
+    assert snapshot.state is TaskState.NEEDS_REVIEW and snapshot.review is not None
+    # 闸门仍在：确认交付照样走通
+    assert confirm_delivery(session, outcome).status == AdvanceOutcome.COMPLETED
+    paper_steps = [step for step in snapshot.steps if step.state is TaskState.PAPER_WRITING]
+    assert len(paper_steps) == 4
+
+
+def test_modeling_v2_refuses_revision_beyond_the_iteration_limit_but_v1_does_not():
+    """修订轮 = 末节点回到目标阶段的迭代边：提出修订时就裁定；linear-v1 没有迭代边不裁（行为不变）。"""
+    from omm_agent_core import AdvanceOutcome, ErrorCode, IterationRefused
+    from omm_agent_evals.shadow import approve_plan, confirm_delivery
+
+    def exhaust(mode: str):
+        session = SHADOW_SCENARIOS[0].build(mode)
+        engine, snapshot = session.engine, session.snapshot
+        assert confirm_delivery(session, approve_plan(session)).status == AdvanceOutcome.COMPLETED
+        for round_no in range(3):
+            engine.request_revision(snapshot, TaskState.PAPER_WRITING, reason=f"第 {round_no + 1} 次改措辞")
+            engine.resolve_review(snapshot, approved=True)
+            assert confirm_delivery(session, engine.run_until_blocked(snapshot)).status == AdvanceOutcome.COMPLETED
+        return session
+
+    v2 = exhaust("modeling-v2")
+    with pytest.raises(IterationRefused) as info:
+        v2.engine.request_revision(v2.snapshot, TaskState.PAPER_WRITING, reason="第 4 次")
+    assert info.value.code is ErrorCode.GRAPH_ITERATION_LIMIT
+    assert v2.snapshot.state is TaskState.COMPLETED
+    # 回到更早的阶段是另一条迭代边，轮次单独计：MODEL_PLANNING 只成功过 1 次 → 放行
+    v2.engine.request_revision(v2.snapshot, TaskState.MODEL_PLANNING, reason="换方案")
+    assert v2.snapshot.state is TaskState.NEEDS_REVIEW
+
+    v1 = exhaust("linear-v1")
+    v1.engine.request_revision(v1.snapshot, TaskState.PAPER_WRITING, reason="第 4 次")
+    assert v1.snapshot.state is TaskState.NEEDS_REVIEW
+
+
 def test_scenarios_cover_every_control_flow_branch():
     """场景集合覆盖现引擎的全部分叉：审批放行 / 拒绝 / 回退重做 / 失败重试 / 修订 / 暂停 / 取消。"""
     seen: set[str] = set()

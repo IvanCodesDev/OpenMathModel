@@ -131,6 +131,15 @@ def _defect(code: ErrorCode, detail: str, **context: Any) -> AgentError:
     return AgentError(code, detail, context=context)
 
 
+class IterationRefused(AgentError, ValueError):
+    """迭代边不放行（没有这条边 = E410 / 轮次用尽 = E430）。
+
+    既是稳定错误码（事件与评测按 code 归类），也是 ``ValueError``——引擎的 ``resolve_review`` /
+    ``request_revision`` / ``redo`` 对前置条件不成立一律抛 ValueError，控制面按同一路径转成
+    「不能这么做」的回答，而不是 500。
+    """
+
+
 @dataclass(frozen=True)
 class GraphSpec:
     """一张图 = 版本化的宏观事实：接下来做什么要么写在这里，要么由人决定（原则 11）。"""
@@ -168,6 +177,21 @@ class GraphSpec:
 
     def successors(self, node_id: str) -> tuple[GraphEdge, ...]:
         return tuple(edge for edge in self.edges if edge.source == node_id)
+
+    @property
+    def iteration_edges(self) -> tuple[GraphEdge, ...]:
+        return tuple(edge for edge in self.edges if edge.kind == "iter")
+
+    def iteration_edge(self, source_state: TaskState, target_state: TaskState) -> GraphEdge | None:
+        """从 ``source_state`` 的节点回到 ``target_state`` 的节点的迭代边（没有就是不许回）。"""
+        source = self.node_for_state(source_state)
+        target = self.node_for_state(target_state)
+        if source is None or target is None:
+            return None
+        for edge in self.iteration_edges:
+            if edge.source == source.id and edge.target == target.id:
+                return edge
+        return None
 
     def entry(self) -> GraphNode:
         """唯一入口 = 没有非迭代入边的节点（``validate`` 保证恰好一个）。"""
@@ -395,6 +419,30 @@ def linear_v1() -> GraphSpec:
     return GraphSpec(id="linear", version=1, nodes=tuple(nodes), edges=tuple(edges))
 
 
+#: modeling-v2 迭代边的轮次上限：与控制面的修订轮数上限同一口径（三轮不成就该由人换路）。
+MODELING_V2_MAX_ITERS = 3
+
+
+def modeling_v2() -> GraphSpec:
+    """Graph v2 第一步：linear-v1 的节点与顺序边 + **迭代边**（§6.2 ``iter``）。
+
+    今天「退回重做」（G4 的 redo:PAPER_WRITING、G3 的 redo:EXPERIMENTING、跑完后的修订轮、
+    对话面的任意状态从阶段重做）都是引擎按事件直接把状态搬回去，图对此一无所知。这里把
+    「从哪个节点允许回到哪个节点、最多几轮」写成图的一等事实：每个节点到它自己及全部上游
+    节点各一条迭代边（重做 = 回到某阶段再顺序往下走），``max_iters`` 统一取修订轮数上限。
+    调度器据此**放行或拒绝**回退（没有边 = E410；轮次用尽 = E430 强制交人裁），前进路径与
+    linear-v1 逐字相同——影子等价证据照样成立。lane / join / cond 仍是后续步。
+    """
+    base = linear_v1()
+    edges: list[GraphEdge] = list(base.edges)
+    for index, source in enumerate(base.nodes):
+        for target in base.nodes[: index + 1]:
+            edges.append(
+                GraphEdge(source=source.id, target=target.id, kind="iter", max_iters=MODELING_V2_MAX_ITERS)
+            )
+    return GraphSpec(id="modeling", version=2, nodes=base.nodes, edges=tuple(edges))
+
+
 # ── 调度器端口（§6.3）───────────────────────────────────────────────────────
 
 
@@ -435,24 +483,63 @@ class LinearScheduler:
 
 
 class GraphScheduler:
-    """按 GraphSpec 选目标；v1 只认顺序边（cond / iter 是 v2 语义，装配期拒绝）。
+    """按 GraphSpec 选目标：前进只认顺序边（每节点至多一条），回退按迭代边放行 / 拒绝。
 
     运行期不做 reads 检查：现引擎没有这一步，做了就不再等价；reads 可满足性在
-    ``GraphSpec.validate`` 装配期证明一次即可（E420）。
+    ``GraphSpec.validate`` 装配期证明一次即可（E420）。条件边（cond）仍是后续步，装配期拒绝。
+    迭代边不参与前进选择（``select_target`` 与 linear-v1 逐字相同），只在引擎要把运行搬回
+    某阶段时经 ``check_iteration`` 裁定——没有迭代边的图（linear-v1）不裁，行为与今天一致。
     """
 
     def __init__(self, spec: GraphSpec) -> None:
         spec.validate()
         for node in spec.nodes:
-            out = spec.successors(node.id)
-            if len(out) > 1 or any(edge.kind != "seq" for edge in out):
+            forward = [edge for edge in spec.successors(node.id) if edge.kind != "iter"]
+            if len(forward) > 1 or any(edge.kind != "seq" for edge in forward):
                 raise _defect(
                     ErrorCode.GRAPH_ILLEGAL_TRANSITION,
-                    f"v1 调度器只支持每节点至多一条顺序出边，节点 {node.id} 不满足"
-                    "（条件边 / 迭代边随 Graph v2）",
+                    f"图调度器只支持每节点至多一条顺序出边，节点 {node.id} 不满足"
+                    "（条件边随 Graph v2 后续步）",
                     graph=spec.workflow_version, node_id=node.id,
                 )
         self.spec = spec
+
+    def check_iteration(
+        self, snapshot: TaskRunSnapshot, source_state: TaskState, target_state: TaskState
+    ) -> GraphEdge | None:
+        """把运行从 ``source_state`` 搬回 ``target_state`` 前的裁定（纯函数、不改快照）。
+
+        图上没有迭代边（v1）→ 不裁，返回 None；有迭代边的图 → 必须存在这条边（E410），且
+        已走过的轮次 < ``max_iters``（E430，强制交人在闸门另作决定）。已走轮次 = 目标阶段
+        已成功通过的次数 − 1（第一次成功是正常前进，之后每次成功都是一轮重做的结果）。
+        """
+        if not self.spec.iteration_edges:
+            return None
+        edge = self.spec.iteration_edge(source_state, target_state)
+        graph = self.spec.workflow_version
+        if edge is None:
+            raise IterationRefused(
+                ErrorCode.GRAPH_ILLEGAL_TRANSITION,
+                f"图 {graph} 不允许从 {source_state.value} 回到 {target_state.value}（没有迭代边）",
+                context={"graph": graph, "from": source_state.value, "to": target_state.value},
+            )
+        passes = sum(
+            1 for step in snapshot.steps
+            if step.state is target_state and step.status is StepStatus.SUCCEEDED
+        )
+        taken = max(0, passes - 1)
+        limit = int(edge.max_iters or 0)
+        if taken >= limit:
+            raise IterationRefused(
+                ErrorCode.GRAPH_ITERATION_LIMIT,
+                f"迭代边 {source_state.value}→{target_state.value} 的 {limit} 轮已用尽"
+                f"（{target_state.value} 已成功通过 {passes} 次），须由人在闸门另作决定",
+                context={
+                    "graph": graph, "from": source_state.value, "to": target_state.value,
+                    "max_iters": limit, "taken": taken,
+                },
+            )
+        return edge
 
     def select_target(self, snapshot: TaskRunSnapshot) -> TaskState:
         if snapshot.state is TaskState.CREATED:
@@ -469,7 +556,8 @@ class GraphScheduler:
                 return snapshot.state
             latest = _latest_step(snapshot, snapshot.state)
             if latest is not None and latest.status is StepStatus.SUCCEEDED:
-                out = self.spec.successors(node.id)
+                # 只沿顺序边前进：迭代边是回退的许可，不是下一步
+                out = [edge for edge in self.spec.successors(node.id) if edge.kind != "iter"]
                 if not out:
                     return TaskState.COMPLETED
                 return self.spec.node(out[0].target).state
@@ -593,11 +681,11 @@ class ShadowComparator:
 # ── 装配档位（§4.9）：OMM_GRAPH=off|shadow|linear-v1 ──────────────────────────
 
 GRAPH_MODE_ENV = "OMM_GRAPH"
-GRAPH_MODES: tuple[str, ...] = ("off", "shadow", "linear-v1")
+GRAPH_MODES: tuple[str, ...] = ("off", "shadow", "linear-v1", "modeling-v2")
 #: 缺省图驱动（§6.1 第二步「等价证明后切换默认」）：等价证据 = evals 12 剧本 off vs
 #: linear-v1 控制流等价 + core 双调度器逐快照同答 + worker / API 全链；线性调度器留作
-#: 影子，分歧照旧只进日志。``shadow`` / ``off`` 仍可显式选回；``modeling-v2`` 随 H4
-#: 才成为合法值。
+#: 影子，分歧照旧只进日志。``shadow`` / ``off`` 仍可显式选回；``modeling-v2``（Graph v2
+#: 第一步：迭代边放行 / 拒绝回退）是可选档位，等价证据齐了再切缺省。
 DEFAULT_GRAPH_MODE = "linear-v1"
 
 
@@ -620,6 +708,8 @@ def schedulers_for_mode(mode: str) -> tuple[Scheduler, Scheduler | None]:
         return LinearScheduler(), GraphScheduler(linear_v1())
     if mode == "linear-v1":
         return GraphScheduler(linear_v1()), LinearScheduler()
+    if mode == "modeling-v2":
+        return GraphScheduler(modeling_v2()), LinearScheduler()
     raise ValueError(f"unknown graph mode {mode!r}")
 
 
@@ -634,13 +724,16 @@ __all__ = [
     "GraphNode",
     "GraphScheduler",
     "GraphSpec",
+    "IterationRefused",
     "LINEAR_V1_GATES",
     "LinearScheduler",
+    "MODELING_V2_MAX_ITERS",
     "NODE_KINDS",
     "Scheduler",
     "SchedulingDivergence",
     "ShadowComparator",
     "linear_v1",
+    "modeling_v2",
     "resolve_graph_mode",
     "schedulers_for_mode",
     "stage_output_schema_id",
