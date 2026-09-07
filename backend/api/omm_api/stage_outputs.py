@@ -1,4 +1,4 @@
-﻿"""六阶段真实节点的最新成功输出 → 五类页面正文投影。
+"""六阶段真实节点的最新成功输出 → 五类页面正文投影。
 
 数据源是 ``run_domain_events``（执行事实来源，见 engine_glue.py 顶部说明）：
 按 seq 顺序重放 STEP_STARTED/STEP_SUCCEEDED 事件，记录每个 step_id 归属的节点，
@@ -688,8 +688,9 @@ _FROZEN_SOURCE_STAGES = frozenset(
 _AUDIT_FINDING_KINDS = frozenset(
     {"unsourced_number", "phantom_figure", "phantom_table", "unverified_citation"}
 )
-#: 真实图件的来源阶段（契约 enum）：只有实验 / 检验沙盒的图算论文图源。
-_FIGURE_SOURCE_STAGES = frozenset({"EXPERIMENTING", "VALIDATING"})
+#: 真实图件的来源阶段（契约 enum）：实验 / 检验沙盒顺手画的图，与论文阶段按总编规划、
+#: 只用本次运行真实数据补画的图（figure_render 第二步）。
+_FIGURE_SOURCE_STAGES = frozenset({"EXPERIMENTING", "VALIDATING", "PAPER_WRITING"})
 #: 引用条目的来源（契约 enum）：方案引用的知识库先例 / 用户提供并匹配到知识库的资料。
 _REFERENCE_SOURCES = frozenset({"plan_citation", "user_reference"})
 _HTTP_URL = re.compile(r"^https?://\S+$")

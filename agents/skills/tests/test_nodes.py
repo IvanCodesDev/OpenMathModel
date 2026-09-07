@@ -4735,6 +4735,280 @@ def test_paper_single_call_fallback_also_gets_figures(registry):
     ]
 
 
+# -- figure_render 第二步：图表规划 → 沙盒补图 → 渲染验证 ---------------------------
+
+PAPER_FIGURES_CODE = (
+    "import matplotlib\nmatplotlib.use('Agg')\nimport csv\nfrom matplotlib import pyplot as plt\n"
+    "rows = list(csv.DictReader(open('results.csv')))\nplt.bar(range(len(rows)), [float(r['dispatch']) for r in rows])\n"
+    "plt.savefig('figures/station_dispatch.png')\nprint('RENDERED: station_dispatch.png')\n"
+)
+
+PAPER_FIGURES_FINAL = {
+    "summary": "按 results.csv 画出各站点调度量分布，其余规划项数据不足已跳过",
+    "figure_notes": "station_dispatch.png — 画图工程师写的说明（应被总编图题覆盖）",
+}
+
+
+def paper_outline_with_figures_wanted():
+    """总编在 v8 骨架里规划补图：一张合规、一张数据来源不在白名单、一张与已有图件同名。"""
+    return {
+        **PAPER_OUTLINE_OK,
+        "figures_wanted": [
+            {"file": "station_dispatch.png", "title": "各站点调度量分布", "chapter": "3 结果分析与检验",
+             "source": "results.csv", "spec": "横轴站点编号、纵轴调度量，柱状图"},
+            {"file": "market_share.png", "title": "市场份额", "chapter": "1 问题重述",
+             "source": "外部统计.csv", "spec": "饼图"},
+            {"file": "convergence.svg", "title": "收敛曲线", "chapter": "2 模型建立与求解",
+             "source": "metrics", "spec": "折线图"},
+        ],
+    }
+
+
+def rendered_figure_artifact(name="station_dispatch.png", artifact_id="art_fig_paper", size=4096):
+    return ArtifactRef(
+        artifact_id=artifact_id,
+        kind="figure",
+        uri=f"local://cafebabe/{name}",
+        sha256="cafebabe",
+        size=size,
+        media_type="image/png",
+        producer_step="step_1",
+    )
+
+
+def paper_figure_tools(runs, files_after_run=("figures/station_dispatch.png",)):
+    """论文阶段的工作区：实验脚本 / 结果表 / 上游图件 / 步骤目录都在，只有 results.csv 算可画数据。"""
+    return SandboxToolInvoker(
+        runs=list(runs),
+        files=["experiment.py", "results.csv", "figures/fit_vs_baseline.png", "steps/step_0/main.py",
+               "artifacts/metrics.json"],
+        files_after_run=list(files_after_run),
+        texts={"results.csv": "station,dispatch\n1,12\n2,7\n"},
+    )
+
+
+def paper_figure_llm(sections, outline=None, figure_final=PAPER_FIGURES_FINAL):
+    return ScriptedLlmPort(
+        {
+            "paper_outline.default": [stub_response(outline or paper_outline_with_figures_wanted())],
+            "paper_section.default": [stub_response({"content": text, "digest": f"d{i}"}) for i, text in enumerate(sections, 1)],
+            "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
+        },
+        chat_scripts={"paper_figures.sandbox": sandbox_script(figure_final, code=PAPER_FIGURES_CODE)},
+    )
+
+
+def _paper_sections_inserting_figure_4():
+    pad = lambda text, target: text + "析" * (target - len(text))  # noqa: E731
+    return [
+        pad("背景。", 600),
+        pad("拟合效果见图 1。\n\n![图 1 模型与基线的拟合对比](fit_vs_baseline.png)\n\nrmse=0.12。", 1200),
+        pad("各站点调度量分布见图 4。\n\n![图 4 各站点调度量分布](station_dispatch.png)\n", 800),
+    ]
+
+
+def test_paper_writing_plans_renders_and_verifies_extra_figures(registry):
+    """figure_render 第二步：总编规划的补图经确定性准入（数据源白名单、不与已有图件同名）后
+    在沙盒里只用真实数据画出来；渲染验证通过的图并入同一张清单续编号（来源 PAPER_WRITING、
+    图题取总编规划），材料在逐章写作前重建；图件 / 脚本产物随草稿发布；检查点带上补图。"""
+    llm = paper_figure_llm(_paper_sections_inserting_figure_4())
+    tools = paper_figure_tools(runs=[tool_success(
+        stdout="RENDERED: station_dispatch.png\n",
+        artifacts=(rendered_figure_artifact(),),
+    )])
+    services = make_services(llm, tools)
+    audits: list = []
+    events: list = []
+    services.extras["subagents"] = SubagentSupervisor(audit=audits.append)
+    services.extras["progress"] = events.append
+    node = PaperWritingNode(registry, available_packages="numpy、pandas、matplotlib")
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    # 总编材料：可用数据文件只列表格 / 指标 JSON（脚本、既有图件、步骤目录、产物副本不算）
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    assert outline_call.variables["data_files"] == "- results.csv"
+    # 沙盒任务卡：规划表（只剩准入的那一张）、数据源白名单、包白名单与「只准真实数据」纪律
+    card = system_prompt_of(llm.chat_calls[0])
+    assert "- station_dispatch.png｜各站点调度量分布｜3 结果分析与检验｜results.csv｜横轴站点编号、纵轴调度量，柱状图" in card
+    assert "market_share.png" not in card and "convergence.svg" not in card
+    assert "- results.csv" in card and "numpy、pandas、matplotlib" in card
+    assert "禁止构造、模拟或估计任何数据" in card
+    brief = user_prompt_of(llm.chat_calls[0])
+    assert "figures_rendered" in brief and "station_dispatch.png" in brief
+    assert [call[2] for call in tools.python_calls] == [PYTHON_TOOL_NAME]
+    assert tools.python_calls[0][3]["code"] == PAPER_FIGURES_CODE
+    # 逐章材料在补图后重建：图 4 续编号、来源「论文阶段补图」、图题取总编规划而非画图工程师说明
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    assert len(section_calls) == 3
+    for call in section_calls:
+        assert "| 图 4 | station_dispatch.png | 论文阶段补图 | 各站点调度量分布 |" in call.variables["materials"]
+    # DocumentDraft.figures：上游三张 + 补图一张（inserted 按正文插图判）
+    assert result.outputs["figures"][3] == {
+        "number": 4, "name": "station_dispatch.png", "artifact_id": "art_fig_paper",
+        "caption": "各站点调度量分布", "source_stage": "PAPER_WRITING", "inserted": True,
+    }
+    assert result.outputs["audit_findings"] == []
+    impact = result.review_meta["impact"]
+    assert impact["figures_total"] == 4 and impact["figures_inserted"] == 2
+    # 产物：草稿 + 补图图件 + 画图脚本（paper_figures.py）
+    assert [ref.kind for ref in result.artifacts] == ["paper", "figure", "code"]
+    assert result.artifacts[1].artifact_id == "art_fig_paper"
+    assert result.artifacts[2].uri.endswith("paper_figures.py")
+    assert services.artifacts.blobs[result.artifacts[2].uri].decode("utf-8") == PAPER_FIGURES_CODE
+    # 指标：补图的两次会话调用计入 llm_attempts（5 次模板调用 + 2）；规划 / 渲染 / 运行次数如实
+    assert result.metrics["llm_attempts"] == 7
+    assert result.metrics["figures_planned"] == 1
+    assert result.metrics["figures_rendered"] == 1
+    assert result.metrics["figure_runs"] == 1
+    # 未获准入的两项如实记警告（原因可对账）
+    warnings = result.metrics["quality_warnings"]
+    assert any(
+        "总编规划的补图有 2 项未获准入：market_share.png：数据来源「外部统计.csv」不在可用数据源内；"
+        "convergence.svg：与已有图件同名" in w
+        for w in warnings
+    )
+    assert not any("未渲染" in w for w in warnings)
+    # 检查点：骨架事件带上已渲染的补图（续写不重画）；补图事件如实上报
+    outline_event = next(e for e in events if e["kind"] == "paper_outline")
+    assert outline_event["figures_rendered"] == [{
+        "name": "station_dispatch.png", "artifact_id": "art_fig_paper", "media_type": "image/png",
+        "caption": "各站点调度量分布",
+    }]
+    figure_event = next(e for e in events if e["kind"] == "paper_figures")
+    assert figure_event == {"kind": "paper_figures", "planned": 1, "rendered": 1, "missing": [], "runs": 1}
+    # 子代理经监督者派发（spawn 审计可见）
+    assert any(record.get("goal", "").startswith("只用本次运行的真实数据补画论文规划的 1 张图") for record in audits)
+
+
+def test_paper_writing_records_unrendered_figures_without_blocking(registry):
+    """渲染验证不过（脚本跑通但图件没被采集为非空产物）：修复波用尽后如实记警告与计数，
+    清单不变、论文照常发布——补图从不阻断论文。"""
+    llm = paper_figure_llm(_paper_sections_inserting_figure_4())
+    # 文件出现在工作区，但采集到的是 42 字节的空图：不算渲染成功
+    tools = paper_figure_tools(runs=[tool_success(
+        stdout="RENDERED: station_dispatch.png\n",
+        artifacts=(rendered_figure_artifact(size=42),),
+    )])
+    services = make_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert len(tools.python_calls) == 2, "两波修复各跑一次后收束"
+    assert len(result.outputs["figures"]) == 3
+    assert result.metrics["figures_planned"] == 1
+    assert result.metrics["figures_rendered"] == 0
+    assert result.metrics["figure_runs"] == 2
+    warning = next(w for w in result.metrics["quality_warnings"] if "未渲染成功" in w)
+    assert warning.startswith("论文补图 1 张中 1 张未渲染成功（station_dispatch.png）；")
+    assert "station_dispatch.png 未被采集为非空图件产物" in warning
+    # 正文引用并插入了没画出来的图 4：终稿审计如实记幽灵图（编号与文件名都点名），交 G4 裁决
+    assert [(f["kind"], f["numbers"]) for f in result.outputs["audit_findings"]] == [
+        ("phantom_figure", ["图 4", "station_dispatch.png"]),
+    ]
+    assert [ref.kind for ref in result.artifacts] == ["paper", "figure", "code"], "采集到的产物如实并入，只是不进图件清单"
+
+
+def test_paper_writing_skips_figure_rendering_without_tools_port(registry):
+    """可选能力：没有工具端口就不派发补图子代理——数据文件材料为「无」（据此工作区文件来源的
+    规划项确定性落选），指标来源的规划项因缺端口跳过并点名原因；不计渲染指标、论文其余流程逐字不变。"""
+    outline = {
+        **PAPER_OUTLINE_OK,
+        "figures_wanted": [
+            {"file": "metrics_bar.png", "title": "核心指标对比", "chapter": "3 结果分析与检验",
+             "source": "metrics", "spec": "柱状图"},
+            {"file": "station_dispatch.png", "title": "各站点调度量分布", "chapter": "3 结果分析与检验",
+             "source": "results.csv", "spec": "柱状图"},
+        ],
+    }
+    llm = paper_figure_llm(_paper_sections_inserting_figure_4(), outline=outline)
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_figures()), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    assert outline_call.variables["data_files"] == "无"
+    assert llm.chat_calls == []
+    assert len(result.outputs["figures"]) == 3
+    assert result.metrics["figures_planned"] == 1
+    assert "figures_rendered" not in result.metrics and "figure_runs" not in result.metrics
+    warnings = result.metrics["quality_warnings"]
+    assert "总编规划的补图有 1 项未获准入：station_dispatch.png：数据来源「results.csv」不在可用数据源内" in warnings
+    assert "总编规划了 1 张补图（metrics_bar.png），未配置工具端口，未渲染" in warnings
+
+
+def test_paper_resume_restores_rendered_figures_without_redrawing(registry):
+    """断点续写：上一趟补的图随骨架检查点回来（编号 / 图题 / 来源不变），不再派发沙盒；
+    输入指纹不含数据文件清单，所以旧检查点照旧命中。"""
+    from omm_agent_skills.nodes import _inputs_hash
+
+    llm = paper_figure_llm(_paper_sections_inserting_figure_4())
+    tools = paper_figure_tools(runs=[tool_failure()])
+    services = make_services(llm, tools)
+    services.extras["subagents"] = SubagentSupervisor()
+    node = PaperWritingNode(registry)
+    prior = paper_prior_with_figures()
+    services.extras["paper_resume"] = lambda: {
+        "inputs_hash": _inputs_hash(node.build_variables(make_ctx(TaskState.PAPER_WRITING, prior=prior))),
+        "outline": paper_outline_with_figures_wanted(),
+        "figures_rendered": [{
+            "name": "station_dispatch.png", "artifact_id": "art_fig_prev", "media_type": "image/png",
+            "caption": "各站点调度量分布",
+        }],
+        "sections": [],
+    }
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=prior), services)
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    assert llm.chat_calls == [] and tools.python_calls == []
+    assert [c.prompt_id for c in llm.calls] == ["paper_section.default"] * 3 + ["paper_finalize.default"]
+    assert result.outputs["figures"][3] == {
+        "number": 4, "name": "station_dispatch.png", "artifact_id": "art_fig_prev",
+        "caption": "各站点调度量分布", "source_stage": "PAPER_WRITING", "inserted": True,
+    }
+    assert result.metrics["resumed_chapters"] == 0
+    assert "figures_planned" not in result.metrics and "figures_rendered" not in result.metrics
+    for call in llm.calls[:3]:
+        assert "| 图 4 | station_dispatch.png | 论文阶段补图 | 各站点调度量分布 |" in call.variables["materials"]
+
+
+def test_figure_plan_admission_is_deterministic():
+    """准入只看机器可判的事实：文件名合规 / 不重名 / 数据源在白名单 / 有图题 / 不超上限。"""
+    outline = {"figures_wanted": [
+        {"file": "figures/a.png", "title": "A", "chapter": "1", "source": "results.csv", "spec": "s"},
+        {"file": "a.png", "title": "重复", "chapter": "1", "source": "results.csv", "spec": "s"},
+        {"file": "b.svg", "title": "B", "chapter": "2", "source": "frozen_numbers", "spec": ""},
+        {"file": "c.png", "title": "", "chapter": "2", "source": "metrics", "spec": "s"},
+        {"file": "坏名字.png", "title": "D", "chapter": "2", "source": "metrics", "spec": "s"},
+        {"file": "e.jpg", "title": "E", "chapter": "2", "source": "metrics", "spec": "s"},
+        {"file": "f.png", "title": "F", "chapter": "2", "source": "cleaned/data.csv", "spec": "s"},
+        {"file": "g.png", "title": "G", "chapter": "2", "source": "metrics", "spec": "s"},
+        {"file": "h.png", "title": "H", "chapter": "2", "source": "metrics", "spec": "s"},
+        "不是对象",
+    ]}
+    plan, dropped = PaperWritingNode._figure_plan(outline, ["results.csv", "cleaned/data.csv"], {"old.png"})
+    assert [item["file"] for item in plan] == ["a.png", "b.svg", "f.png"]
+    assert plan[0]["source"] == "results.csv" and plan[1]["spec"] == ""
+    assert dropped == [
+        "c.png：缺图题",
+        "坏名字.png：文件名不合规（英文 slug + .png/.svg）",
+        "e.jpg：文件名不合规（英文 slug + .png/.svg）",
+        "g.png：超出补图上限 3 张",
+        "h.png：超出补图上限 3 张",
+    ]
+    assert PaperWritingNode._figure_plan({"figures_wanted": "无"}, [], set()) == ([], [])
+    assert PaperWritingNode._figure_plan(
+        {"figures_wanted": [{"file": "old.png", "title": "旧", "chapter": "", "source": "metrics", "spec": ""}]},
+        [], {"old.png"},
+    ) == ([], ["old.png：与已有图件同名"])
+
+
 REFERENCE_ENTRY_1 = (
     "全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/cumcm-2021-c)"
 )

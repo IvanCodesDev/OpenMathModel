@@ -496,6 +496,7 @@ _PROMPT_NODE_IDS = {
     "paper_section.default": TaskState.PAPER_WRITING.value,
     "paper_finalize.default": TaskState.PAPER_WRITING.value,
     "paper_writing.default": TaskState.PAPER_WRITING.value,
+    "paper_figures.sandbox": TaskState.PAPER_WRITING.value,
 }
 
 #: 提示词 → 设置中心「智能路由」的任务类型（ADR-0015 决策 3）。数据准备阶段
@@ -520,6 +521,8 @@ _PROMPT_TASK_KINDS = {
     "paper_section.default": "writing",
     "paper_finalize.default": "writing",
     "paper_writing.default": "writing",
+    # 论文阶段补图是沙盒里写码画图：按编程任务路由
+    "paper_figures.sandbox": "coding",
 }
 
 
@@ -768,6 +771,9 @@ def _paper_resume_reader(session: Session, run_id: str) -> Callable[[], Optional
         return {
             "inputs_hash": outline_payload.get("inputs_hash"),
             "outline": outline_payload.get("outline"),
+            # 论文阶段补的图随骨架一起是检查点：续写时原样取回、不重画（渲染产物 id 每趟
+            # 不同，不进输入指纹）
+            "figures_rendered": outline_payload.get("figures_rendered") or [],
             "sections": [sections[index] for index in sorted(sections)],
         }
 
@@ -962,7 +968,10 @@ def _llm_wiring_impl(
             TaskState.VALIDATING: ValidationNode(
                 registry, available_packages=_sandbox_packages()
             ),
-            TaskState.PAPER_WRITING: PaperWritingNode(registry),
+            # 论文阶段补图（figure_render 第二步）与实验脚本共用同一沙箱解释器：包白名单同源
+            TaskState.PAPER_WRITING: PaperWritingNode(
+                registry, available_packages=_sandbox_packages()
+            ),
         }.items()
     }
     extras: dict[str, Any] = {

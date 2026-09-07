@@ -121,9 +121,9 @@ export interface PaperFigure {
    */
   caption: string;
   /**
-   * 产出该图件的阶段。
+   * 产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。
    */
-  source_stage: "EXPERIMENTING" | "VALIDATING";
+  source_stage: "EXPERIMENTING" | "VALIDATING" | "PAPER_WRITING";
   /**
    * 正文是否已插入该图（任一 `![…](url)` / `<img src>` 的 url 或其文件名命中 name），由节点确定性判定。
    */

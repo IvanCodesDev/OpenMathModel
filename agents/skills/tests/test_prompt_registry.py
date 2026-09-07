@@ -75,6 +75,7 @@ def test_default_registry_loads_all_stage_prompts():
         "model_planning.formalize",
         "model_planning.proposer",
         "model_planning.reduce",
+        "paper_figures.sandbox",
         "paper_finalize.default",
         "paper_outline.default",
         "paper_section.default",
@@ -130,3 +131,17 @@ def test_sandbox_prompts_are_agent_task_cards_not_single_shot_templates():
     assert {"experiment_code", "risk_points", "metrics"} <= robustness.placeholders()
     assert "OMM_METRICS_JSON" in robustness.body and '"checks"' in robustness.body
     assert "禁止为了通过而事后放宽阈值" in robustness.body
+
+    # 论文阶段补图（figure_render 第二步）：任务卡带规划表与数据源白名单，只准用真实数据
+    figures = registry.get("paper_figures.sandbox")
+    assert figures.stage == "PAPER_WRITING"
+    assert "code" not in figures.output_schema.get("required", [])
+    assert {"figures_wanted", "data_files", "metrics", "frozen_numbers"} <= figures.placeholders()
+    assert "禁止构造、模拟或估计任何数据" in figures.body
+    assert "figures/" in figures.body
+
+    outline = registry.get("paper_outline.default")
+    assert outline.version >= 8
+    assert "data_files" in outline.placeholders()
+    assert "figures_wanted" in outline.output_schema["properties"]
+    assert "figures_wanted" not in outline.output_schema.get("required", [])

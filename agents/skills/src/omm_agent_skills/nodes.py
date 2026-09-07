@@ -25,7 +25,7 @@ import json
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from omm_agent_core import KnowledgePort, NodeContext, NodeResult, NodeServices, TaskState
@@ -48,11 +48,13 @@ from omm_agent_harness import (
 
 from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
 from .figures import (
+    PAPER_FIGURE_STAGE,
     available_figure_names,
     figure_inventory,
     figure_manifest,
     mark_inserted,
     render_figure_material,
+    renderable_data_files,
 )
 from .frozen_numbers import (
     AUDIT_SAMPLE_LIMIT,
@@ -3563,6 +3565,21 @@ def render_paper_markdown(document: Mapping[str, Any]) -> str:
 PAPER_OUTLINE_PROMPT = "paper_outline.default"
 PAPER_SECTION_PROMPT = "paper_section.default"
 PAPER_FINALIZE_PROMPT = "paper_finalize.default"
+#: 论文阶段补图的沙盒会话模板（figure_render 第二步：图表规划 → 沙盒补图 → 渲染验证）。
+PAPER_FIGURES_PROMPT = "paper_figures.sandbox"
+
+#: 补图是锦上添花：总编最多规划几张、沙盒最多跑几次（R2）、修复几波；渲染验证的
+#: 最小文件大小（空白 PNG 头都不止这么大，低于它就是没画出东西）。
+_PAPER_FIGURES_MAX = 3
+_PAPER_FIGURE_RUNS = 3
+_PAPER_FIGURE_WAVES = 2
+_PAPER_FIGURE_MIN_BYTES = 256
+#: 规划的 source 除工作区数据文件外只认这两个逻辑来源（实验指标 / 冻结清单）。
+_PAPER_FIGURE_LOGICAL_SOURCES = ("metrics", "frozen_numbers")
+#: 规划的文件名：英文 slug + 位图 / 矢量后缀（沙盒按后缀归类为 figure 产物）。
+_PAPER_FIGURE_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\.(?:png|svg)$")
+_PAPER_FIGURE_DIR = "figures/"
+_PAPER_FIGURES_SCRIPT = "paper_figures.py"
 
 #: 章节数带宽：低于下限说明骨架退化（回退单次调用），高于上限说明规划失控。
 _CHAPTER_COUNT_MIN = 3
@@ -3808,6 +3825,56 @@ def _inputs_hash(variables: Mapping[str, str]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class _PaperFigureResult:
+    """论文阶段补图的结果：清单条目（figure_manifest 形状）、指标、警告、产物引用、调用次数。"""
+
+    figures: tuple[dict[str, Any], ...] = ()
+    metrics: Mapping[str, Any] = field(default_factory=dict)
+    warnings: Sequence[str] = ()
+    artifacts: tuple[Any, ...] = ()
+    llm_calls: int = 0
+
+
+def _rendered_figure_refs(expected: Sequence[str], capture: _SandboxCapture) -> list[Any]:
+    """沙盒采集到的产物里，规划文件名对得上、kind 为 figure 且非空的引用（渲染验证的事实面）。"""
+    wanted = set(expected)
+    refs: list[Any] = []
+    for ref in capture.artifacts:
+        if str(getattr(ref, "kind", "") or "") != "figure":
+            continue
+        name = str(getattr(ref, "uri", "") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        if name in wanted and int(getattr(ref, "size", 0) or 0) >= _PAPER_FIGURE_MIN_BYTES:
+            refs.append(ref)
+    return refs
+
+
+def _figures_rendered_check(expected: Sequence[str], capture: _SandboxCapture):
+    """断言：规划的每张图都在工作区 figures/ 下、被采集为非空 figure 产物。
+
+    看的是节点侧累计采集（沙盒只采集每次运行**新建**的文件：修复波重画同名文件不会
+    再次采集，只看最后一次运行会误判）。
+    """
+
+    def check(evidence) -> tuple[bool, str]:
+        files = {str(path).replace("\\", "/") for path in evidence.files}
+        captured = {
+            str(getattr(ref, "uri", "") or "").replace("\\", "/").rsplit("/", 1)[-1]
+            for ref in _rendered_figure_refs(expected, capture)
+        }
+        problems: list[str] = []
+        for name in expected:
+            if f"{_PAPER_FIGURE_DIR}{name}" not in files and name not in files:
+                problems.append(f"{name} 未保存到 {_PAPER_FIGURE_DIR}")
+            elif name not in captured:
+                problems.append(f"{name} 未被采集为非空图件产物（须由本次 python_run 新建、≥ {_PAPER_FIGURE_MIN_BYTES} 字节）")
+        if problems:
+            return False, "；".join(problems)
+        return True, f"{len(expected)} 张图已渲染并采集：{'、'.join(expected)}"
+
+    return check
+
+
 class PaperWritingNode(LlmSkillNode):
     """论文撰写：分章多轮生成，总编失败自动回退单次调用（不比旧链路差）。
 
@@ -3819,11 +3886,18 @@ class PaperWritingNode(LlmSkillNode):
     prompt_id = "paper_writing.default"
     state = TaskState.PAPER_WRITING
 
-    def __init__(self, registry: PromptRegistry, require_confirmation: bool = True) -> None:
+    def __init__(
+        self,
+        registry: PromptRegistry,
+        require_confirmation: bool = True,
+        available_packages: str = DEFAULT_AVAILABLE_PACKAGES,
+    ) -> None:
         super().__init__(registry)
         # G4 定稿闸门是产品的人工门（§11.1 必停）；与 G1 同一把开关：评测 /
         # 无人值守自动化可显式关掉，审计照做、只是不停。
         self._require_confirmation = require_confirmation
+        # 论文阶段补图与实验脚本共用同一沙箱解释器：包白名单由装配方给（同源）。
+        self._available_packages = available_packages
 
     def build_variables(self, ctx: NodeContext) -> dict[str, Any]:
         analysis = _require_outputs(ctx, TaskState.PROBLEM_ANALYSIS)
@@ -3897,6 +3971,13 @@ class PaperWritingNode(LlmSkillNode):
 
         attempts_total = 0
         inputs_hash = _inputs_hash(variables)
+        # 论文阶段补图只准读的工作区数据文件（figure_render 第二步）：确定性白名单进总编
+        # 材料与沙盒任务卡；没有工具端口就是「无」——总编据此不得规划补图。不进输入
+        # 指纹：清单只影响可选的补图，不该让既有检查点失配、整篇重来。
+        data_files = self._renderable_data_files(ctx, services)
+        variables["data_files"] = (
+            "\n".join(f"- {path}" for path in data_files) if data_files else "无"
+        )
 
         # ── ① 总编规划：骨架 + 符号表 + 每章写作指令。重试且输入未变时从
         #    事件检查点恢复（跳过总编调用与已完成章节），输入变了整篇重来。 ──
@@ -3927,14 +4008,41 @@ class PaperWritingNode(LlmSkillNode):
                 f"总编符号约定漏列 {len(filled_symbols)} 个方案符号"
                 f"（{'、'.join(row['symbol'] for row in filled_symbols)}），已按方案符号表补齐"
             )
+
+        # ── ①′ 图表规划 → 沙盒补图 → 渲染验证（figure_render 第二步）：总编规划的、
+        #    上游没画的图在沙盒里只用真实数据补画；渲染出来的图并入同一张图件清单
+        #    续编号，材料在逐章写作前重建。续写路径从检查点原样取回、不重画。 ──
+        figure_metrics: dict[str, Any] = {}
+        figure_artifacts: tuple[Any, ...] = ()
+        if resume is not None:
+            rendered = [
+                dict(item) for item in resume.get("figures_rendered") or [] if isinstance(item, Mapping)
+            ]
+        else:
+            figure_result = self._render_planned_figures(
+                ctx, services, outline, title, data_files, variables
+            )
+            rendered = [dict(item) for item in figure_result.figures]
+            figure_metrics = dict(figure_result.metrics)
+            figure_artifacts = figure_result.artifacts
+            attempts_total += figure_result.llm_calls
+            warnings.extend(figure_result.warnings)
+        if rendered:
+            figures = figure_inventory(ctx.prior_outputs, rendered)
+            variables["available_figures"] = render_figure_material(figures)
+            # 补图的说明里可能带数值（画图的人写的、随图进材料），允许集同步重建
+            allowed = allowed_number_tokens(
+                frozen, *(variables[key] for key in _NARRATIVE_MATERIAL_KEYS)
+            )
         if resume is None:
-            # 骨架事件同时是断点续写的检查点：携带输入指纹与完整骨架
+            # 骨架事件同时是断点续写的检查点：携带输入指纹、完整骨架与已渲染的补图
             _emit_progress(services, {
                 "kind": "paper_outline",
                 "total": total,
                 "headings": [str(chapter.get("heading") or "") for chapter in chapters],
                 "inputs_hash": inputs_hash,
                 "outline": dict(outline),
+                "figures_rendered": [dict(item) for item in rendered],
             })
 
         # ── ② 逐章写作：滚动摘要承接前文，符号表注入保证全文记号一致 ────────
@@ -4094,10 +4202,257 @@ class PaperWritingNode(LlmSkillNode):
             metrics_payload["audit_rewrites"] = audit_rewrites
         if filled_symbols:
             metrics_payload["notation_filled"] = len(filled_symbols)
+        metrics_payload.update(figure_metrics)
         if warnings:
             metrics_payload["quality_warnings"] = warnings
         return self._publish(
-            ctx, services, outputs, metrics_payload, frozen, allowed, figures, references, abstract_allowed
+            ctx,
+            services,
+            outputs,
+            metrics_payload,
+            frozen,
+            allowed,
+            figures,
+            references,
+            abstract_allowed,
+            extra_artifacts=figure_artifacts,
+        )
+
+    # -- figure_render 第二步：图表规划 → 沙盒补图 → 渲染验证 ---------------------
+
+    @staticmethod
+    def _renderable_data_files(ctx: NodeContext, services: NodeServices) -> list[str]:
+        """工作区里补图只准读的数据文件；没有工具端口 / 列目录失败就是空（补图只是锦上添花）。"""
+        if services.tools is None:
+            return []
+        try:
+            return renderable_data_files(_workspace_files(ctx, services))
+        except Exception:  # noqa: BLE001 - 工作区不可达不影响论文本身
+            return []
+
+    @staticmethod
+    def _figure_plan(
+        outline: Mapping[str, Any],
+        data_files: Sequence[str],
+        existing_names: Collection[str],
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        """总编的 ``figures_wanted`` → 确定性准入后的规划表 + 被剔除项的原因。
+
+        准入只看能被机器判定的事实：文件名合规、不与已有图件同名、数据来源在可用
+        数据源白名单内（工作区数据文件 / 实验指标 / 冻结清单）、有图题、不超上限——
+        不给模型「编一个数据源」的口子。
+        """
+        wanted = outline.get("figures_wanted")
+        if not isinstance(wanted, list) or not wanted:
+            return [], []
+        allowed_sources = set(data_files) | set(_PAPER_FIGURE_LOGICAL_SOURCES)
+        plan: list[dict[str, str]] = []
+        dropped: list[str] = []
+        seen: set[str] = set()
+        for item in wanted:
+            if not isinstance(item, Mapping):
+                continue
+            file = str(item.get("file") or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+            title = str(item.get("title") or "").strip()
+            source = str(item.get("source") or "").strip().replace("\\", "/").lstrip("./")
+            if not _PAPER_FIGURE_FILE.match(file):
+                dropped.append(f"{file or '（无文件名）'}：文件名不合规（英文 slug + .png/.svg）")
+                continue
+            if file in seen:
+                continue
+            if file in existing_names:
+                dropped.append(f"{file}：与已有图件同名")
+                continue
+            if source not in allowed_sources:
+                dropped.append(f"{file}：数据来源「{source or '（空）'}」不在可用数据源内")
+                continue
+            if not title:
+                dropped.append(f"{file}：缺图题")
+                continue
+            if len(plan) >= _PAPER_FIGURES_MAX:
+                dropped.append(f"{file}：超出补图上限 {_PAPER_FIGURES_MAX} 张")
+                continue
+            seen.add(file)
+            plan.append({
+                "file": file,
+                "title": title,
+                "chapter": str(item.get("chapter") or "").strip(),
+                "source": source,
+                "spec": str(item.get("spec") or "").strip(),
+            })
+        return plan, dropped
+
+    def _render_planned_figures(
+        self,
+        ctx: NodeContext,
+        services: NodeServices,
+        outline: Mapping[str, Any],
+        title: str,
+        data_files: Sequence[str],
+        variables: Mapping[str, Any],
+    ) -> "_PaperFigureResult":
+        """总编规划的补图在沙盒里只用真实数据画出来，渲染验证后并入图件清单。
+
+        可选能力：缺工具端口 / 监督者 / 会话式模型端口、模板缺失、预算不足时如实记
+        警告并跳过；沙盒失败或部分失败也只记警告——补图从不阻断论文。渲染验证是确定性
+        的：规划的文件确实出现在工作区、被沙盒采集为 ``figure`` 产物、且非空。
+        """
+        existing = available_figure_names(figure_inventory(ctx.prior_outputs))
+        plan, dropped = self._figure_plan(outline, data_files, existing)
+        warnings: list[str] = []
+        if dropped:
+            warnings.append(f"总编规划的补图有 {len(dropped)} 项未获准入：{'；'.join(dropped)}")
+        if not plan:
+            return _PaperFigureResult(warnings=warnings)
+        planned = "、".join(item["file"] for item in plan)
+
+        def skipped(reason: str) -> _PaperFigureResult:
+            warnings.append(f"总编规划了 {len(plan)} 张补图（{planned}），{reason}，未渲染")
+            return _PaperFigureResult(metrics={"figures_planned": len(plan)}, warnings=warnings)
+
+        if services.tools is None:
+            return skipped("未配置工具端口")
+        supervisor = (services.extras or {}).get("subagents")
+        if supervisor is None:
+            return skipped("未配置子代理监督者")
+        if not supports_chat(services.llm):
+            return skipped("模型端口不支持会话式调用")
+        try:
+            template = self._registry.get(PAPER_FIGURES_PROMPT)
+        except KeyError:
+            return skipped(f"缺少提示词模板 {PAPER_FIGURES_PROMPT}")
+        governor = (services.extras or {}).get("budget_governor")
+        budgets: RunBudget = (
+            governor.subagent_slice() if governor is not None else RunBudget()
+        )
+        if budgets.max_sandbox_runs < 1 or budgets.max_llm_calls < 2:
+            return skipped("剩余预算不足以派发补图子代理")
+
+        experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
+        metrics = dict(experiment.get("metrics") or {})
+        system_prompt = template.render({
+            "title": title,
+            "figures_wanted": "\n".join(
+                f"- {item['file']}｜{item['title']}｜{item['chapter'] or '未指定'}"
+                f"｜{item['source']}｜{item['spec'] or '按图题自拟'}"
+                for item in plan
+            ),
+            "data_files": "\n".join(f"- {path}" for path in data_files) or "无",
+            "metrics": json.dumps(metrics, ensure_ascii=False),
+            "frozen_numbers": str(variables.get("frozen_numbers") or "无"),
+            "available_packages": self._available_packages,
+        })
+        expected = tuple(item["file"] for item in plan)
+        capture = _SandboxCapture()
+        final_answer: dict[str, Any] = {}
+        llm_calls = {"count": 0}
+        chat = text_protocol_chat(
+            services.llm,
+            label=PAPER_FIGURES_PROMPT,
+            on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
+        )
+        task = SandboxTask(
+            task_id=f"{ctx.step_id}:paper_figures",
+            goal=f"只用本次运行的真实数据补画论文规划的 {len(plan)} 张图并保存到 {_PAPER_FIGURE_DIR}",
+            system_prompt=system_prompt,
+            task_brief=tool_protocol_note(SANDBOX_TOOL_NAMES),
+            assertions=(
+                SandboxAssertion(
+                    id="run_ok",
+                    description="画图脚本经 python_run 成功运行（退出码 0）",
+                    check=_experiment_run_ok_check,
+                ),
+                SandboxAssertion(
+                    id="figures_rendered",
+                    description=(
+                        f"规划的 {len(plan)} 张图都按原文件名保存到 {_PAPER_FIGURE_DIR} 并被采集为非空图件产物"
+                        f"（≥ {_PAPER_FIGURE_MIN_BYTES} 字节）：{planned}"
+                    ),
+                    check=_figures_rendered_check(expected, capture),
+                ),
+            ),
+            seeds=dict(SANDBOX_SEEDS),
+            max_runs=max(1, min(_PAPER_FIGURE_RUNS, budgets.max_sandbox_runs)),
+            max_waves=_PAPER_FIGURE_WAVES,
+            optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
+        )
+        executor = _sandbox_tool_executor(ctx, services, capture)
+        fingerprint = _env_fingerprint(ctx, services)
+
+        def runner(_spec: SpawnSpec) -> ResultEnvelope:
+            report = run_sandbox_task(
+                task,
+                chat=chat,
+                execute_tools=executor,
+                workspace_files=lambda: _workspace_files(ctx, services),
+                read_text=_workspace_reader(ctx, services),
+                env_fingerprint=fingerprint,
+                publish_code=_publish_code_callback(ctx, services, capture, _PAPER_FIGURES_SCRIPT),
+                on_final_answer=final_answer.update,
+            )
+            return ResultEnvelope(
+                status="done",
+                output=report,
+                usage=Usage(0, 0, int(report["usage"]["duration_ms"])),
+            )
+
+        envelope = supervisor.spawn(
+            SpawnSpec(
+                kind="sandbox",
+                goal=task.goal,
+                context_slice={"figures_wanted": plan, "data_files": list(data_files)},
+                toolset=tuple(SANDBOX_TOOL_NAMES),
+                tool_tier="execute",
+                budgets=budgets,
+                output_schema_id="sandbox-run-report.v1",
+            ),
+            runner,
+            parent_tier="execute",
+            output_validator=_report_shape_problems,
+        )
+        report = envelope.output if envelope.ok and isinstance(envelope.output, dict) else {}
+        runs = int(((report.get("usage") or {}).get("runs") or 0)) if report else 0
+
+        # 渲染验证通过的图才进清单：规划表里的、真被采集到且非空的 figure 产物；
+        # 图题优先总编规划的 title（画图的人没写说明也有题）
+        rendered_refs = _rendered_figure_refs(expected, capture)
+        titles = {item["file"]: item["title"] for item in plan}
+        rendered: list[dict[str, Any]] = []
+        for entry in figure_manifest(rendered_refs, final_answer.get("figure_notes")):
+            rendered.append({**entry, "caption": titles.get(entry["name"]) or entry["caption"]})
+        missing = [file for file in expected if file not in {item["name"] for item in rendered}]
+        if missing:
+            reason = ""
+            if not envelope.ok:
+                reason = f"；子代理未正常收束：{envelope.error or envelope.status}"
+            elif report.get("status") != "passed":
+                failed = [
+                    str(item.get("detail") or item.get("id"))
+                    for item in report.get("assertions") or []
+                    if not item.get("passed")
+                ]
+                reason = f"；{'；'.join(failed)}" if failed else ""
+            warnings.append(
+                f"论文补图 {len(plan)} 张中 {len(missing)} 张未渲染成功（{'、'.join(missing)}）{reason}"
+            )
+        result_metrics: dict[str, Any] = {
+            "figures_planned": len(plan),
+            "figures_rendered": len(rendered),
+            "figure_runs": runs,
+        }
+        _emit_progress(services, {
+            "kind": "paper_figures",
+            "planned": len(plan),
+            "rendered": len(rendered),
+            "missing": missing,
+            "runs": runs,
+        })
+        return _PaperFigureResult(
+            figures=rendered,
+            metrics=result_metrics,
+            warnings=warnings,
+            artifacts=tuple(capture.artifacts),
+            llm_calls=llm_calls["count"],
         )
 
     # -- helpers -------------------------------------------------------------
@@ -4143,7 +4498,13 @@ class PaperWritingNode(LlmSkillNode):
                 "digest": str(entry.get("digest") or "").strip()[:_DIGEST_CHARS],
             })
             expected += 1
-        return {"outline": outline, "completed": completed}
+        rendered = data.get("figures_rendered")
+        return {
+            "outline": outline,
+            "completed": completed,
+            # 上一趟补的图随骨架检查点回来（不重画）；老检查点没有这一键就是空
+            "figures_rendered": list(rendered) if isinstance(rendered, list) else [],
+        }
 
     @staticmethod
     def _outline_problems(outline: Mapping[str, Any]) -> str | None:
@@ -4248,6 +4609,7 @@ class PaperWritingNode(LlmSkillNode):
         figures: Sequence[Mapping[str, Any]] = (),
         references: Sequence[Mapping[str, Any]] = (),
         abstract_allowed: set[str] | None = None,
+        extra_artifacts: Sequence[Any] = (),
     ) -> NodeResult:
         """发布草稿产物 → 终稿审计链（数值 → 图表 → 引用）→ G4 必停。
 
@@ -4300,8 +4662,10 @@ class PaperWritingNode(LlmSkillNode):
             "chars": chars,
             "audit_findings": len(findings),
         })
+        # 论文阶段补图的图件 / 脚本产物随草稿一起进本步产物（下游投影按产物 id 取下载链接）
+        artifacts = (ref, *extra_artifacts)
         if not self._require_confirmation:
-            return NodeResult.succeeded(outputs=outputs, metrics=metrics, artifacts=(ref,))
+            return NodeResult.succeeded(outputs=outputs, metrics=metrics, artifacts=artifacts)
         reason, meta = self._g4_review(len(sections), chars, len(frozen), findings)
         # 图件 / 文献事实也进卡片证据：真实图件几张、正文插了几张；可引用文献几条、正文引了几条
         # （人裁「图太少 / 有图没用 / 有先例不引」时有据）
@@ -4318,7 +4682,7 @@ class PaperWritingNode(LlmSkillNode):
             outputs=outputs,
             review_meta=meta,
             metrics=metrics,
-            artifacts=(ref,),
+            artifacts=artifacts,
         )
 
     # -- G4 gate ----------------------------------------------------------------

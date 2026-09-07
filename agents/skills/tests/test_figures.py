@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from omm_agent_core.models import ArtifactRef
 from omm_agent_skills import (
+    PAPER_FIGURE_STAGE,
     available_figure_names,
     figure_inventory,
     figure_manifest,
     mark_inserted,
     parse_figure_notes,
     render_figure_material,
+    renderable_data_files,
 )
 
 
@@ -119,6 +121,37 @@ def test_figure_inventory_tolerates_missing_stages_and_shapes():
         "VALIDATING": {"robustness": {"figures": [{"name": "sens.png", "artifact_id": "a"}]}}
     })
     assert [(f["number"], f["source_stage"]) for f in only_validation] == [(1, "VALIDATING")]
+
+
+def test_figure_inventory_appends_paper_stage_figures_last_and_dedupes():
+    """论文阶段补的图（figure_render 第二步）排在实验 / 检验图之后续编号，来源记 PAPER_WRITING；
+    与上游同名的补图不重复编号，畸形条目忽略。"""
+    prior = {"EXPERIMENTING": {"figures": [{"name": "fit.png", "artifact_id": "art_1", "caption": "拟合"}]}}
+    rendered = [
+        {"name": "figures/dispatch.png", "artifact_id": "art_p1", "media_type": "image/png", "caption": "调度量"},
+        {"name": "fit.png", "artifact_id": "art_dup", "caption": "重复"},
+        {"name": "", "artifact_id": "art_x"},
+        "not a mapping",
+    ]
+    assert figure_inventory(prior, rendered) == [
+        {"number": 1, "name": "fit.png", "artifact_id": "art_1", "caption": "拟合", "source_stage": "EXPERIMENTING"},
+        {"number": 2, "name": "dispatch.png", "artifact_id": "art_p1", "caption": "调度量", "source_stage": PAPER_FIGURE_STAGE},
+    ]
+    assert PAPER_FIGURE_STAGE == "PAPER_WRITING"
+    assert "| 图 2 | dispatch.png | 论文阶段补图 | 调度量 |" in render_figure_material(figure_inventory(prior, rendered))
+    assert figure_inventory({}, rendered)[0]["number"] == 1
+
+
+def test_renderable_data_files_keeps_tables_and_json_outside_step_and_artifact_dirs():
+    files = [
+        "experiment.py", "results.csv", "cleaned/data.csv", "data/raw.tsv", "metrics.json",
+        "figures/fit.png", "steps/step_1/main.py", "steps/step_1/out.csv", "artifacts/x.json",
+        "./results.csv", "validation\\checks.csv", "", "notes.txt",
+    ]
+    assert renderable_data_files(files) == [
+        "results.csv", "cleaned/data.csv", "data/raw.tsv", "metrics.json", "validation/checks.csv",
+    ]
+    assert renderable_data_files([]) == []
 
 
 # -- 材料与审计集合 ----------------------------------------------------------------

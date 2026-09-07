@@ -236,6 +236,33 @@ def robustness_code(*passed_flags: bool) -> str:
 ROBUSTNESS_CODE = robustness_code(True, True, True)
 ROBUSTNESS_OUTPUT = {"summary": "三项稳健性检查均在阈值内，结论稳健"}
 
+#: 论文阶段补图（figure_render 第二步）：总编规划的文件名与沙盒里 stub 模型发出的画图脚本。
+#: 脚本只读实验写出的 results.csv、用标准库写一张 SVG（沙箱按后缀归类为 figure 产物），
+#: 不依赖 matplotlib；正文补足 256 字节以过「非空图件」的渲染验证。
+PAPER_FIGURE_FILE = "metric_bars.svg"
+PAPER_FIGURES_CODE = (
+    "import csv, os\n"
+    "os.makedirs('figures', exist_ok=True)\n"
+    "with open('results.csv', encoding='utf-8', newline='') as fh:\n"
+    "    rows = list(csv.DictReader(fh))\n"
+    "bars = ''.join(\n"
+    "    '<rect x=\"%d\" y=\"%.1f\" width=\"30\" height=\"%.1f\" fill=\"#3b6\"/>'\n"
+    "    % (20 + i * 40, 100 - float(r['value']) * 100, float(r['value']) * 100)\n"
+    "    for i, r in enumerate(rows)\n"
+    ")\n"
+    "svg = ('<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" height=\"160\">'\n"
+    "       '<title>experiment metrics</title>' + bars +\n"
+    "       '<text x=\"10\" y=\"140\">metric</text><text x=\"10\" y=\"155\">value</text>'\n"
+    "       '<!-- ' + 'padding ' * 40 + ' --></svg>')\n"
+    f"with open('figures/{PAPER_FIGURE_FILE}', 'w', encoding='utf-8', newline='') as fh:\n"
+    "    fh.write(svg)\n"
+    f"print('RENDERED: {PAPER_FIGURE_FILE}')\n"
+)
+PAPER_FIGURES_OUTPUT = {
+    "summary": "按 results.csv 画出实验指标柱状图；market.png 无可用数据未画",
+    "figure_notes": f"{PAPER_FIGURE_FILE} — 画图工程师的说明（清单图题应取总编规划）",
+}
+
 PAPER_OUTPUT = {
     "title": "基于整数规划的共享单车调度优化",
     "abstract": "本文建立整数规划模型求解调度问题……",
@@ -272,6 +299,14 @@ PAPER_OUTLINE_OUTPUT = {
             "source_keys": ["validation_summary"],
         },
     ],
+    # figure_render 第二步：总编规划一张上游没画的图（数据来源 = 实验写出的 results.csv），
+    # 由论文阶段的沙盒子代理只用真实数据补画；第二项数据来源不在白名单，节点应确定性剔除
+    "figures_wanted": [
+        {"file": PAPER_FIGURE_FILE, "title": "实验指标柱状图", "chapter": "3 模型检验",
+         "source": "results.csv", "spec": "横轴指标名、纵轴取值，柱状图"},
+        {"file": "market.png", "title": "市场规模", "chapter": "1 问题重述",
+         "source": "外部统计.csv", "spec": "折线图"},
+    ],
 }
 
 SECTION_LEAD = "围绕 rmse=0.5 与需求率敏感性的分析正文。"
@@ -283,11 +318,18 @@ PAPER_SECTION_OUTPUT = {
 
 
 def _section_reply(prompt: str) -> dict:
-    """章节回复按提示词里的目标字数填充：达标稿不触发字数有界重写，调用数确定。"""
+    """章节回复按提示词里的目标字数填充：达标稿不触发字数有界重写，调用数确定。
+
+    检验章拿到补图后按清单插图（图 1 = 论文阶段补画的 metric_bars.svg）：交付记录的
+    「已插入图件有可下载产物」检查因此有实事可核。
+    """
     matched = re.search(r"目标字数 (\d+) 字", prompt)
     target = int(matched.group(1)) if matched else 600
+    lead = SECTION_LEAD
+    if f"| 图 1 | {PAPER_FIGURE_FILE} | 论文阶段补图 |" in prompt and "3 模型检验" in prompt:
+        lead = f"实验指标见图 1。\n\n![图 1 实验指标柱状图]({PAPER_FIGURE_FILE})\n\n" + SECTION_LEAD
     return {
-        "content": SECTION_LEAD + "析" * max(target - len(SECTION_LEAD), 0),
+        "content": lead + "析" * max(target - len(lead), 0),
         "digest": PAPER_SECTION_OUTPUT["digest"],
     }
 
@@ -407,6 +449,17 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         assert "python_run" not in opening and "ws_write" not in opening, "审稿人只读"
         assert "- knowledge_search：" in opening, "API 装配把知识库两个只读工具接给了审稿人"
         return _llm_reply(REVIEW_OUTPUT)
+    if "图表工程师" in system:
+        # 论文阶段补图子代理（figure_render 第二步）：任务卡只剩准入的规划项（数据来源不在
+        # 白名单的 market.png 已被节点确定性剔除）、数据源白名单与「只准真实数据」纪律
+        assert f"- {PAPER_FIGURE_FILE}｜实验指标柱状图｜3 模型检验｜results.csv｜" in system, "补图任务卡应携带总编规划"
+        assert "market.png" not in system, "数据来源不在白名单的规划项不得进任务卡"
+        assert "- results.csv" in system, "补图任务卡应携带可用数据文件白名单"
+        assert "禁止构造、模拟或估计任何数据" in system
+        assert '"rmse": 0.5' in system, "补图任务卡应携带实验真实指标"
+        opening = messages[1]["content"]
+        assert "figures_rendered" in opening and PAPER_FIGURE_FILE in opening, "渲染验证断言应写进任务说明"
+        return _sandbox_reply(messages, PAPER_FIGURES_CODE, PAPER_FIGURES_OUTPUT)
     if "实验工程师" in system:
         assert '"id": "A"' in system, "实验任务卡应携带选中的方案 A"
         return _sandbox_reply(messages, EXPERIMENT_CODE, EXPERIMENT_OUTPUT)
@@ -463,6 +516,9 @@ def _stage_router(request: httpx.Request) -> httpx.Response:
         assert f"数据画像：{PREPARATION_OUTPUT['profile_summary']}" in prompt, "总编规划应携带数据画像结论"
         assert "清洗执行：" in prompt, "总编规划应携带清洗执行结论"
         assert ("不得虚构清洗过程" in prompt) or ("通过验收" in prompt), "清洗结论要么如实未执行、要么带验收结论"
+        # 可用数据文件白名单（论文阶段补图只准读这些）：实验写出的 results.csv 在、脚本与步骤目录不在
+        assert "## 可用数据文件" in prompt and "- results.csv" in prompt, "总编规划应携带可用数据文件清单"
+        assert "experiment.py" not in prompt.split("## 可用数据文件", 1)[1].split("##", 1)[0], "脚本不算可画数据"
         return _llm_reply(PAPER_OUTLINE_OUTPUT)
     if "章节写手" in prompt:
         assert PAPER_OUTLINE_OUTPUT["notation"] in prompt, "章节写作应携带全文符号约定"
@@ -791,6 +847,14 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert by_file["experiment.py"]["kind"] == "code"
     assert "paper-draft.md" in by_file, "论文草稿应发布为产物"
     assert by_file["paper-draft.md"]["kind"] == "paper"
+    # 论文阶段补图（figure_render 第二步）：沙盒真跑出的图件与画图脚本都是产物
+    assert PAPER_FIGURE_FILE in by_file, "总编规划、沙盒补画的图应作为 figure 产物发布"
+    assert by_file[PAPER_FIGURE_FILE]["kind"] == "figure"
+    assert "paper_figures.py" in by_file and by_file["paper_figures.py"]["kind"] == "code"
+    figure_download = client.get(f"/api/v1/artifacts/{by_file[PAPER_FIGURE_FILE]['id']}/download")
+    assert figure_download.status_code == 200
+    assert figure_download.content.startswith(b"<svg ") and b"experiment metrics" in figure_download.content
+    assert len(figure_download.content) >= 256
 
     # 沙盒工作区必须落在 create_app 注入的 workspaces_dir（本用例的 tmp_path），
     # 而不是进程 .env 指向的真实 backend/api/data/workspaces：曾因 engine_glue 直读
@@ -822,6 +886,24 @@ def test_configured_run_uses_llm_nodes_end_to_end(client, monkeypatch, tmp_path)
     assert [entry["index"] for entry in section_events] == [1, 2, 3]
     assert section_events[0]["heading"] == "1 问题重述"
     assert "rmse=0.5" in section_events[0]["content"]
+    # 补图随骨架进检查点（续写不重画）：条目带真实产物 id、图题取总编规划；补图事件如实计数
+    rendered = outline_events[0]["figures_rendered"]
+    assert [(item["name"], item["caption"]) for item in rendered] == [(PAPER_FIGURE_FILE, "实验指标柱状图")]
+    assert rendered[0]["artifact_id"] == by_file[PAPER_FIGURE_FILE]["id"]
+    figure_events = [entry for entry in logs if entry.get("kind") == "paper_figures"]
+    assert figure_events == [{"kind": "paper_figures", "planned": 1, "rendered": 1, "missing": [], "runs": 1}]
+    paper_figure_spawns = [
+        entry for entry in logs
+        if entry.get("phase") == "spawn" and "补画论文规划的 1 张图" in str(entry.get("goal") or "")
+    ]
+    assert paper_figure_spawns, "补图子代理经监督者派发，spawn 审计落 run.log"
+    # DocumentDraft.figures：本链上游没画图，补图编为图 1、来源 PAPER_WRITING、检验章已插入
+    draft = client.get(f"/api/v1/task-runs/{run['id']}/stage-outputs").json()["document_draft"]
+    assert draft["figures"] == [{
+        "number": 1, "name": PAPER_FIGURE_FILE, "artifact_id": by_file[PAPER_FIGURE_FILE]["id"],
+        "caption": "实验指标柱状图", "source_stage": "PAPER_WRITING", "inserted": True,
+    }]
+    assert draft["audit_findings"] == []
 
     # 工具调用留痕：python_run 的 TOOL_CALLED 事件投影到 run.log；三路提议子代理
     # 的 spawn / result 审计同路落 run.log（工作台执行轨迹可见）

@@ -532,7 +532,8 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
     # 验证阶段：ws_list（脚本在场）→ ws_read（脚本正文进任务卡）→ env_probe →
     # 监督者 spawn 审计 → 沙盒 python_run → 断言取证 ws_list → 监督者 result 审计
     # → 检验脚本自己的审稿环：确定性复跑 python_run → 审稿任务卡 ws_list →
-    # reviewer 子代理 spawn / result 审计。
+    # reviewer 子代理 spawn / result 审计；论文阶段：补图可用数据文件白名单 ws_list
+    # （figure_render 第二步；本链总编没规划补图，不派沙盒）。
     assert [e.payload["tool"] for e in tool_events] == [
         "ws_list",
         "ws_list",
@@ -555,6 +556,7 @@ def test_full_chain_review_gate_then_approval_completes(tmp_path):
         "ws_list",
         "subagent:reviewer",
         "subagent:reviewer",
+        "ws_list",
     ]
     experiment_event, rerun_event, robustness_event, robustness_rerun_event = [
         e for e in tool_events if e.payload["tool"] == "python_run"

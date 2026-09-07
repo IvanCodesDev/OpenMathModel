@@ -84,7 +84,8 @@ test("label falls back to id; unknown stage passes through verbatim", () => {
     audit_findings: [],
   });
   assert.deepEqual(section.rows, [{ id: "x.y", value: "3.5", label: "x.y", stage: "SOMETHING_NEW", path: "x.y" }]);
-  assert.equal(Object.keys(FROZEN_STAGE_LABELS).length, 4);
+  assert.equal(Object.keys(FROZEN_STAGE_LABELS).length, 5);
+  assert.equal(FROZEN_STAGE_LABELS.PAPER_WRITING, "论文撰写");
 });
 
 test("audit chain fixture: findings of all kinds pass through verbatim, tokens stay as chips", () => {

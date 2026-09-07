@@ -56,12 +56,16 @@ export function summarizeFindingKinds(findings: readonly { kind: string }[]): Fi
     .map(label => ({ label, count: counts.get(label) ?? 0 }));
 }
 
-/** 冻结清单条目的出处阶段 → 页面用的阶段名（与工作台执行轨迹的阶段文案一致）。 */
+/**
+ * 冻结清单条目 / 真实图件的出处阶段 → 页面用的阶段名（与工作台执行轨迹的阶段文案一致）。
+ * PAPER_WRITING 只出现在图件表：论文阶段按总编规划、只用本次运行真实数据补画的图。
+ */
 export const FROZEN_STAGE_LABELS: Record<string, string> = {
   DATA_PREPARATION: "数据准备",
   MODEL_PLANNING: "建模方案",
   EXPERIMENTING: "实验运行",
   VALIDATING: "结果验证",
+  PAPER_WRITING: "论文撰写",
 };
 
 export interface FrozenRow {

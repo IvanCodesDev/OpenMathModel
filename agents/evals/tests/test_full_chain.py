@@ -255,12 +255,15 @@ def test_happy_path_event_log_is_the_golden_trajectory(completed_session):
     experiment_step = steps_for(completed_session, TaskState.EXPERIMENTING)[0]
     validation_step = steps_for(completed_session, TaskState.VALIDATING)[0]
     data_step = steps_for(completed_session, TaskState.DATA_PREPARATION)[0]
+    paper_step = steps_for(completed_session, TaskState.PAPER_WRITING)[0]
 
     by_step = {}
     for event in all_tool_events:
         by_step.setdefault(event.payload["step_id"], []).append(event.payload["tool"])
     assert by_step == {
         data_step.step_id: ["ws_list"],
+        # 论文阶段补图（figure_render 第二步）的数据源白名单；总编未规划补图，不派沙盒
+        paper_step.step_id: ["ws_list"],
         experiment_step.step_id: [
             "ws_list",
             "env_probe",

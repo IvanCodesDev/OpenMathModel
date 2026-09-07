@@ -722,6 +722,9 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.STEP_SUCCEEDED,
     EventType.STATE_CHANGED,  # -> PAPER_WRITING
     EventType.STEP_STARTED,
+    # 论文阶段补图（figure_render 第二步）：先列工作区数据文件给总编做补图规划的
+    # 数据源白名单；本评测的总编不规划补图，不派沙盒
+    EventType.TOOL_CALLED,  # ws_list（可用数据文件白名单）
     EventType.ARTIFACT_PRODUCED,  # paper-draft.md
     EventType.STEP_SUCCEEDED,
     EventType.REVIEW_REQUESTED,  # G4 定稿交付闸门（必停）：审计发现进卡片

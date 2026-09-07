@@ -43,6 +43,7 @@ from test_task_runs_llm_nodes import (
     ANALYSIS_OUTPUT,
     CLEANING_OUTPUT,
     EXPERIMENT_OUTPUT,
+    PAPER_FIGURE_FILE,
     PAPER_OUTPUT,
     PLANNING_OUTPUT,
     PREPARATION_OUTPUT,
@@ -207,9 +208,18 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert delivery_manifest["paper_citation"]["artifact_id"] in paper_artifact_ids
     table_artifacts = [a for a in delivery_manifest["artifacts"] if a["kind"] == "table"]
     assert table_artifacts and table_artifacts[0]["producer_node"] == "EXPERIMENTING"
+    # H5 切片 18：论文阶段按总编规划补画的图（沙盒真跑、SVG 产物）进同一张图件清单，
+    # 来源 PAPER_WRITING、检验章已插入；产物带 figure kind 与哈希
+    assert document_draft["figures"] == [{
+        "number": 1, "name": PAPER_FIGURE_FILE, "artifact_id": document_draft["figures"][0]["artifact_id"],
+        "caption": "实验指标柱状图", "source_stage": "PAPER_WRITING", "inserted": True,
+    }]
+    figure_artifacts = [a for a in delivery_manifest["artifacts"] if a["kind"] == "figure"]
+    assert [a["id"] for a in figure_artifacts] == [document_draft["figures"][0]["artifact_id"]]
+    assert figure_artifacts[0]["producer_node"] == "PAPER_WRITING" and figure_artifacts[0]["download_url"]
     # H5 切片 17：文件 + 哈希 + 一致性结果——每个产物带登记哈希；用户在 G4「确认交付」后
-    # 交付记录 confirmed，五项确定性检查全过（论文产物可读、审计 0 发现、无图件、
-    # 实验指标 rmse=0.5 出现在正文、检验结论在场）
+    # 交付记录 confirmed，五项确定性检查全过（论文产物可读、审计 0 发现、已插入的一张图有
+    # 可下载产物、实验指标 rmse=0.5 出现在正文、检验结论在场）
     assert all(len(a["sha256"]) == 64 for a in delivery_manifest["artifacts"]), "产物哈希齐全"
     delivery = delivery_manifest["delivery"]
     # 审批接口不透出 evidence.gate，按 G4 的选项 id 认门（与 conftest.confirm_delivery 同口径）
@@ -224,12 +234,13 @@ def test_stage_outputs_readable_after_full_llm_chain(client, monkeypatch, valida
     assert delivery["audit"] == {
         "findings_total": 0, "findings_by_kind": {},
         "frozen_numbers_total": len(document_draft["frozen_numbers"]),
-        "figures_total": 0, "figures_inserted": 0, "references_total": 0, "references_cited": 0,
+        "figures_total": 1, "figures_inserted": 1, "references_total": 0, "references_cited": 0,
     }
     assert [(check["id"], check["passed"]) for check in delivery["checks"]] == [
         ("paper_artifact_ready", True), ("audit_clean", True), ("figures_delivered", True),
         ("metrics_in_paper", True), ("validation_reported", True),
     ]
+    assert delivery["checks"][2]["detail"] == "1 / 1 张已插入图件有可下载产物"
     assert delivery["checks"][3]["detail"].startswith("1 / 1 个实验指标出现在论文正文或摘要中")
     assert delivery["files_total"] == len(delivery_manifest["artifacts"])
     assert delivery["files_hashed"] == delivery["files_total"]
@@ -811,6 +822,9 @@ def test_figures_projection_whitelists_real_figures_and_drops_malformed(validate
          "inserted": "yes"},
         {"number": 3, "name": "sensitivity.png", "artifact_id": "art_fig3", "caption": "灵敏度",
          "source_stage": "VALIDATING", "inserted": False},
+        # 论文阶段按总编规划补画的图（figure_render 第二步）：同一张清单、来源 PAPER_WRITING
+        {"number": 4, "name": "station_dispatch.png", "artifact_id": "art_fig_paper", "caption": "各站点调度量分布",
+         "source_stage": "PAPER_WRITING", "inserted": True},
         {"number": 0, "name": "zero.png", "artifact_id": "a", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
         {"number": True, "name": "bool.png", "artifact_id": "a", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
         {"number": 4, "name": "  ", "artifact_id": "a", "caption": "", "source_stage": "EXPERIMENTING", "inserted": False},
@@ -825,6 +839,8 @@ def test_figures_projection_whitelists_real_figures_and_drops_malformed(validate
          "inserted": True},
         {"number": 3, "name": "sensitivity.png", "artifact_id": "art_fig3", "caption": "灵敏度",
          "source_stage": "VALIDATING", "inserted": False},
+        {"number": 4, "name": "station_dispatch.png", "artifact_id": "art_fig_paper", "caption": "各站点调度量分布",
+         "source_stage": "PAPER_WRITING", "inserted": True},
     ]
     assert _figures(None) is None and _figures("oops") is None and _figures([]) == []
 

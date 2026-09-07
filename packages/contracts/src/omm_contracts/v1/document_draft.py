@@ -71,11 +71,12 @@ class AuditFinding(BaseModel):
 
 class SourceStage1(Enum):
     """
-    产出该图件的阶段。
+    产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。
     """
 
     EXPERIMENTING = "EXPERIMENTING"
     VALIDATING = "VALIDATING"
+    PAPER_WRITING = "PAPER_WRITING"
 
 
 class PaperFigure(BaseModel):
@@ -97,7 +98,10 @@ class PaperFigure(BaseModel):
         ...,
         description="画图工程师在终答里给的一句话说明（只挂到真实文件上）；没有说明为空串。",
     )
-    source_stage: SourceStage1 = Field(..., description="产出该图件的阶段。")
+    source_stage: SourceStage1 = Field(
+        ...,
+        description="产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。",
+    )
     inserted: bool = Field(
         ...,
         description="正文是否已插入该图（任一 `![…](url)` / `<img src>` 的 url 或其文件名命中 name），由节点确定性判定。",

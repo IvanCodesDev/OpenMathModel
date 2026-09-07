@@ -20,22 +20,31 @@ from .paper_audit import image_urls
 
 __all__ = [
     "FIGURE_KIND",
+    "PAPER_FIGURE_STAGE",
     "available_figure_names",
     "figure_inventory",
     "figure_manifest",
     "mark_inserted",
     "parse_figure_notes",
     "render_figure_material",
+    "renderable_data_files",
 ]
 
 #: 与 omm_agent_tools.python_runner._KIND_BY_SUFFIX 的图件 kind 一致（契约 artifact.kind enum）。
 FIGURE_KIND = "figure"
+#: 论文阶段按章需求补画的图（figure_render 第二步）在清单里的来源阶段。
+PAPER_FIGURE_STAGE = "PAPER_WRITING"
 
-#: 图件清单的阶段来源与顺序：实验图先编号，检验图其后（§9.1 图源只列这两处）。
+#: 图件清单的阶段来源与顺序：实验图先编号，检验图其后（§9.1 图源只列这两处）；
+#: 论文阶段补的图（extra）排在最后。
 _FIGURE_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("EXPERIMENTING", ("figures",)),
     ("VALIDATING", ("robustness", "figures")),
 )
+
+#: 论文阶段补图只准读的工作区数据文件：表格 / 指标 JSON；脚本、产物副本、步骤目录与既有图件不算。
+_DATA_SUFFIXES = (".csv", ".tsv", ".json")
+_DATA_EXCLUDED_PREFIXES = ("steps/", "artifacts/", "figures/")
 
 #: figure_notes 一行：「文件名 — 说明」；分隔符容忍 — / – / - / : / ：，文件名可带路径或反引号。
 _NOTE_LINE = re.compile(
@@ -99,32 +108,58 @@ def _stage_figures(outputs: Mapping[str, Any], path: Sequence[str]) -> list[Mapp
     return [item for item in node if isinstance(item, Mapping) and str(item.get("name") or "").strip()]
 
 
-def figure_inventory(prior_outputs: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """上游各阶段的图件 → 编号固定的清单 ``[{number, name, artifact_id, caption, source_stage}]``。
+def figure_inventory(
+    prior_outputs: Mapping[str, Mapping[str, Any]],
+    extra: Iterable[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """上游各阶段的图件（+ 论文阶段补的图）→ 编号固定的清单 ``[{number, name, artifact_id, caption, source_stage}]``。
 
-    实验 → 检验顺序、文件名去重（先到先得）；编号一经给出就是全文的「图 N」，写手按它插图与
-    引用，审计按它核对——不做事后重编号（改编号要同步改正文所有引用，风险大于收益）。
+    实验 → 检验 → 论文补图顺序、文件名去重（先到先得）；编号一经给出就是全文的「图 N」，写手按它
+    插图与引用，审计按它核对——不做事后重编号（改编号要同步改正文所有引用，风险大于收益）。
+    ``extra`` 是本节点刚渲染出来的图件（``figure_manifest`` 形状），来源阶段记 PAPER_WRITING。
     """
     inventory: list[dict[str, Any]] = []
     seen: set[str] = set()
+
+    def add(item: Mapping[str, Any], stage: str) -> None:
+        name = _basename(str(item.get("name")))
+        if not name or name in seen:
+            return
+        seen.add(name)
+        inventory.append({
+            "number": len(inventory) + 1,
+            "name": name,
+            "artifact_id": str(item.get("artifact_id") or ""),
+            "caption": str(item.get("caption") or "").strip(),
+            "source_stage": stage,
+        })
+
     for stage, path in _FIGURE_SOURCES:
         outputs = prior_outputs.get(stage) or {}
         for item in _stage_figures(outputs, path):
-            name = _basename(str(item.get("name")))
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            inventory.append({
-                "number": len(inventory) + 1,
-                "name": name,
-                "artifact_id": str(item.get("artifact_id") or ""),
-                "caption": str(item.get("caption") or "").strip(),
-                "source_stage": stage,
-            })
+            add(item, stage)
+    for item in extra:
+        if isinstance(item, Mapping) and str(item.get("name") or "").strip():
+            add(item, PAPER_FIGURE_STAGE)
     return inventory
 
 
-_STAGE_LABELS = {"EXPERIMENTING": "实验阶段", "VALIDATING": "检验阶段"}
+def renderable_data_files(files: Iterable[str]) -> list[str]:
+    """工作区里论文补图**只准**读的数据文件：`.csv / .tsv / .json`，排除步骤目录、产物副本与既有图件。"""
+    kept: list[str] = []
+    for raw in files:
+        path = str(raw or "").replace("\\", "/").lstrip("./")
+        if not path or path in kept:
+            continue
+        if any(path.startswith(prefix) for prefix in _DATA_EXCLUDED_PREFIXES):
+            continue
+        if not path.lower().endswith(_DATA_SUFFIXES):
+            continue
+        kept.append(path)
+    return kept
+
+
+_STAGE_LABELS = {"EXPERIMENTING": "实验阶段", "VALIDATING": "检验阶段", PAPER_FIGURE_STAGE: "论文阶段补图"}
 
 
 def render_figure_material(inventory: Sequence[Mapping[str, Any]]) -> str:

@@ -12,7 +12,7 @@ const { artifactDownloadUrl, figureImageResolver, summarizeFigures } = await imp
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
-/** 契约 fixture document-draft.4：三张真实图件（两张已插入、一张没有产物 id）。 */
+/** 契约 fixture document-draft.4：四张真实图件（三张已插入、一张没有产物 id；第四张是论文阶段补画的）。 */
 const fixture = JSON.parse(
   await readFile(
     new URL("../../../../packages/contracts/fixtures/v1/valid/document-draft.4.json", import.meta.url),
@@ -45,7 +45,9 @@ test("resolver is inert without figures and encodes the artifact id", () => {
 });
 
 test("figure summary counts total and inserted; absent or empty list yields null", () => {
-  assert.deepEqual(summarizeFigures(fixture.figures), { total: 3, inserted: 2 });
+  assert.deepEqual(summarizeFigures(fixture.figures), { total: 4, inserted: 3 });
+  // 论文阶段补画的图（source_stage PAPER_WRITING）与上游图件同一张清单、同样解析下载链接
+  assert.equal(figureImageResolver(fixture.figures)("station_dispatch.png"), "/api/v1/artifacts/art_b7c8d9e0f1a2/download");
   assert.equal(summarizeFigures(null), null);
   assert.equal(summarizeFigures(undefined), null);
   assert.equal(summarizeFigures([]), null);

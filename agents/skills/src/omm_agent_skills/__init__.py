@@ -6,12 +6,14 @@
 
 from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
 from .figures import (
+    PAPER_FIGURE_STAGE,
     available_figure_names,
     figure_inventory,
     figure_manifest,
     mark_inserted,
     parse_figure_notes,
     render_figure_material,
+    renderable_data_files,
 )
 from .frozen_numbers import (
     allowed_number_tokens,
@@ -147,6 +149,7 @@ __all__ = [
     "MIN_ROBUSTNESS_CHECKS",
     "NO_KNOWLEDGE_HITS_NOTE",
     "NO_KNOWLEDGE_NOTE",
+    "PAPER_FIGURE_STAGE",
     "PROPOSER_LOOP_BUDGET",
     "PROPOSER_MAX_TOOL_ROUNDS",
     "PROPOSER_PROMPT_ID",
@@ -224,6 +227,7 @@ __all__ = [
     "render_frozen_numbers",
     "render_paper_markdown",
     "render_reference_material",
+    "renderable_data_files",
     "reviewer_tool_brief",
     "stub_response",
     "summarize_kinds",
