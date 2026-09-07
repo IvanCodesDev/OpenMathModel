@@ -64,6 +64,14 @@ from .frozen_numbers import (
 )
 from .paper_audit import audit_chain, count_by_kind, summarize_kinds
 from .prompt_registry import PromptRegistry, PromptTemplate
+from .references import (
+    build_reference_library,
+    mark_cited,
+    reference_inventory,
+    reference_titles,
+    render_reference_material,
+    verified_reference_ids,
+)
 from .review import (
     CLEANING_REVIEW_FOCUS,
     CLEANING_REVIEW_PROMPT_ID,
@@ -901,7 +909,7 @@ class ModelPlanningNode(LlmSkillNode):
             return NodeResult.failed("no LLM port configured for this run")
         supervisor = (services.extras or {}).get("subagents")
         if not self._views or supervisor is None:
-            return super().run(ctx, services)
+            return self._with_references(ctx, super().run(ctx, services))
         try:
             variables = self.build_variables(ctx)
         except KeyError as exc:
@@ -945,6 +953,11 @@ class ModelPlanningNode(LlmSkillNode):
         if error:
             warnings.append(f"模型假设表与符号表未生成（{error}）")
 
+        # 引用库结算（refs/ 第一步）：方案卡文本里标出处的知识库卡片 + 用户提供的资料，
+        # 解析成带出处 URL 的条目；论文阶段按 G1 选中的方案取子集当参考文献。
+        references, reference_warnings = self._reference_library(ctx, reduced["plans"], reduced.get("rationale"))
+        warnings.extend(reference_warnings)
+
         outputs: dict[str, Any] = {
             "plans": [dict(plan) for plan in reduced["plans"]],
             "recommended_plan_id": reduced["recommended_plan_id"],
@@ -960,11 +973,40 @@ class ModelPlanningNode(LlmSkillNode):
             "proposer_failures": list(failures),
             "quality_warnings": warnings,
             "llm_attempts": llm_calls,
+            "references": references,
         }
         if not self._require_confirmation:
             return NodeResult.succeeded(outputs=outputs, metrics={"llm_attempts": llm_calls})
         reason, meta = self._g1_review(reduced, proposals, failures)
         return NodeResult.needs_review(reason=reason, outputs=outputs, review_meta=meta)
+
+    # -- reference library (refs/ 第一步) -------------------------------------------
+
+    def _reference_library(
+        self, ctx: NodeContext, plans: Sequence[Mapping[str, Any]], rationale: Any
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        params = ctx.inputs.get("params") if isinstance(ctx.inputs, Mapping) else None
+        reference_metadata = (params or {}).get("reference_metadata") if isinstance(params, Mapping) else None
+        return build_reference_library(
+            self._knowledge,
+            plans,
+            rationale,
+            reference_metadata if isinstance(reference_metadata, list) else (),
+        )
+
+    def _with_references(self, ctx: NodeContext, result: NodeResult) -> NodeResult:
+        """单次调用路径同样结算引用库：outputs 补 ``references``，解析警告并入 quality_warnings。"""
+        if result.status == NodeResult.FAILED:
+            return result
+        plans = [plan for plan in result.outputs.get("plans") or [] if isinstance(plan, Mapping)]
+        references, warnings = self._reference_library(ctx, plans, result.outputs.get("rationale"))
+        outputs = {**result.outputs, "references": references}
+        if warnings:
+            outputs["quality_warnings"] = [
+                *[str(item) for item in result.outputs.get("quality_warnings") or []],
+                *warnings,
+            ]
+        return replace(result, outputs=outputs)
 
     def _propose(
         self,
@@ -3546,13 +3588,15 @@ _MATERIAL_LABELS = {
     "validation_summary": "检验结论",
     "frozen_numbers": "数字冻结清单（正文数值只准引用此表与上述材料中的数字）",
     "available_figures": "可用图件清单（本次运行真实产出的图；插图只准从此表选、编号固定）",
+    "available_references": "可引用文献表（本次运行可核实的引用条目；引用只准写表中 [n]、参考文献章逐条照抄）",
 }
-#: 冻结清单与图件清单不受总编的 source_keys 路由影响：每章都必须看到它们（§9 硬规则：
-#: 数字只准引冻结值、图只准引真实图件——漏发给某一章，那章就会凭空写）。
-_ALWAYS_MATERIAL_KEYS = ("frozen_numbers", "available_figures")
+#: 冻结清单、图件清单与文献表不受总编的 source_keys 路由影响：每章都必须看到它们（§9 硬规则：
+#: 数字只准引冻结值、图只准引真实图件、引用只准来自已验证条目——漏发给某一章，那章就会凭空写）。
+_ALWAYS_MATERIAL_KEYS = ("frozen_numbers", "available_figures", "available_references")
 #: 叙述材料（审计允许集的文本来源；冻结清单本身按值进允许集）。两表也算：
 #: 假设文本与符号取值里的数字（「删行 ≤ 5%」「{0,1}」）是有出处的；图件说明里的
-#: 数字（「RMSE 0.12 vs 基线 0.30」）与实验摘要同一先例——画图的人写的、随图进材料。
+#: 数字（「RMSE 0.12 vs 基线 0.30」）与实验摘要同一先例——画图的人写的、随图进材料；
+#: 文献条目里的年份 / 题号 / 队号是知识库卡片的元数据、有出处。
 _NARRATIVE_MATERIAL_KEYS = (
     "problem_analysis",
     "data_preparation",
@@ -3562,6 +3606,7 @@ _NARRATIVE_MATERIAL_KEYS = (
     "experiment_summary",
     "validation_summary",
     "available_figures",
+    "available_references",
 )
 
 # ── G4 定稿交付闸门（§11.1「必停」）────────────────────────────────────────
@@ -3805,6 +3850,11 @@ class PaperWritingNode(LlmSkillNode):
             # 真实图件清单（figure_render 第一步）：实验 / 检验沙盒采集到的图件按序编号，
             # 写手只准插这张表里的图、按表上编号引用（§9.1「图表 id 真实」）。
             "available_figures": render_figure_material(figure_inventory(ctx.prior_outputs)),
+            # 可引用文献表（refs/ 第一步）：方案阶段解析到的知识库条目按选中方案取子集、
+            # 编成 [1..N]，写手只准引表中编号、参考文献章逐条照抄（§10.3.5「引用只准来自已验证条目」）。
+            "available_references": render_reference_material(
+                reference_inventory(ctx.prior_outputs, plan.get("id"))
+            ),
         }
 
     @staticmethod
@@ -3840,6 +3890,10 @@ class PaperWritingNode(LlmSkillNode):
         )
         # 真实图件清单：与材料同一份（编号一致），终稿审计据此核对「图 N」与插图。
         figures = figure_inventory(ctx.prior_outputs)
+        # 可引用文献表：同样与材料同一份，终稿审计据此核对 [n] 与参考文献条目。
+        references = reference_inventory(
+            ctx.prior_outputs, chosen_plan(_require_outputs(ctx, TaskState.MODEL_PLANNING), ctx.review_decisions).get("id")
+        )
 
         attempts_total = 0
         inputs_hash = _inputs_hash(variables)
@@ -3856,7 +3910,7 @@ class PaperWritingNode(LlmSkillNode):
                 outline, error = None, structural
             if outline is None:
                 return self._run_single_call(
-                    ctx, services, variables, attempts_total, str(error), frozen, allowed, figures
+                    ctx, services, variables, attempts_total, str(error), frozen, allowed, figures, references
                 )
 
         chapters: list[Mapping[str, Any]] = outline["chapters"]
@@ -4043,7 +4097,7 @@ class PaperWritingNode(LlmSkillNode):
         if warnings:
             metrics_payload["quality_warnings"] = warnings
         return self._publish(
-            ctx, services, outputs, metrics_payload, frozen, allowed, figures, abstract_allowed
+            ctx, services, outputs, metrics_payload, frozen, allowed, figures, references, abstract_allowed
         )
 
     # -- helpers -------------------------------------------------------------
@@ -4166,6 +4220,7 @@ class PaperWritingNode(LlmSkillNode):
         frozen: list[dict[str, Any]],
         allowed: set[str],
         figures: Sequence[Mapping[str, Any]] = (),
+        references: Sequence[Mapping[str, Any]] = (),
     ) -> NodeResult:
         """回退路径：总编规划失败时整篇单次生成（paper_writing.default，与总编同一套材料）。"""
         template = self._registry.get(self.prompt_id)
@@ -4180,7 +4235,7 @@ class PaperWritingNode(LlmSkillNode):
             "fallback": "single_call",
             "fallback_reason": fallback_reason,
         }
-        return self._publish(ctx, services, parsed, metrics_payload, frozen, allowed, figures)
+        return self._publish(ctx, services, parsed, metrics_payload, frozen, allowed, figures, references)
 
     def _publish(
         self,
@@ -4191,6 +4246,7 @@ class PaperWritingNode(LlmSkillNode):
         frozen: list[dict[str, Any]],
         allowed: set[str],
         figures: Sequence[Mapping[str, Any]] = (),
+        references: Sequence[Mapping[str, Any]] = (),
         abstract_allowed: set[str] | None = None,
     ) -> NodeResult:
         """发布草稿产物 → 终稿审计链（数值 → 图表 → 引用）→ G4 必停。
@@ -4198,20 +4254,22 @@ class PaperWritingNode(LlmSkillNode):
         审计在这里对**终稿**做（数值：分章路径已按章重写过一次，这里是最终对账；
         回退单次生成的路径没有章级重写，全靠这一道。图表 / 引用：定义可能在别的章，
         只能在终稿判），结果同时进 outputs（DocumentDraft 契约的 frozen_numbers /
-        audit_findings / figures）与 G4 卡片。真实图件集合 = 材料里那张图件清单（实验 /
-        检验沙盒真正采集到的图）；已验证引用库今天还不存在（refs/ 未建），传空集——写手
-        引用的文献一律无从核实、如实记发现。
+        audit_findings / figures / references）与 G4 卡片。真实图件集合 = 材料里那张图件
+        清单（实验 / 检验沙盒真正采集到的图）；已验证引用库 = 材料里那张文献表（方案阶段
+        解析到的知识库条目）——编号与条目正文都核；表为空时写手引用的文献一律无从核实、如实记发现。
         """
         sections = [
             section for section in outputs.get("sections") or [] if isinstance(section, Mapping)
         ]
+        abstract = str(outputs.get("abstract") or "")
         findings = audit_chain(
             sections,
-            str(outputs.get("abstract") or ""),
+            abstract,
             allowed=allowed,
             abstract_allowed=abstract_allowed,
             available_figures=available_figure_names(figures),
-            verified_refs=(),
+            verified_refs=verified_reference_ids(references),
+            reference_titles=reference_titles(references),
         )
         outputs = {
             **outputs,
@@ -4220,6 +4278,9 @@ class PaperWritingNode(LlmSkillNode):
             # 图件清单原样进 DocumentDraft（编号 / 文件名 / 产物 id / 说明 / 来源），并按
             # 正文插图确定性标「已插入」——论文页据此把 `![…](文件名)` 解析成产物下载链接
             "figures": mark_inserted(figures, sections),
+            # 文献表原样进 DocumentDraft（编号 / 标题 / 条目 / 出处 URL / 来源），并按正文
+            # 引用标记确定性标「已引用」
+            "references": mark_cited(references, sections, abstract),
         }
         markdown = render_paper_markdown(outputs)
         ref = services.artifacts.put(
@@ -4242,10 +4303,15 @@ class PaperWritingNode(LlmSkillNode):
         if not self._require_confirmation:
             return NodeResult.succeeded(outputs=outputs, metrics=metrics, artifacts=(ref,))
         reason, meta = self._g4_review(len(sections), chars, len(frozen), findings)
-        # 图件事实也进卡片证据：真实图件几张、正文插了几张（人裁「图太少 / 有图没用」时有据）
+        # 图件 / 文献事实也进卡片证据：真实图件几张、正文插了几张；可引用文献几条、正文引了几条
+        # （人裁「图太少 / 有图没用 / 有先例不引」时有据）
         meta["impact"]["figures_total"] = len(outputs["figures"])
         meta["impact"]["figures_inserted"] = sum(
             1 for item in outputs["figures"] if item.get("inserted")
+        )
+        meta["impact"]["references_total"] = len(outputs["references"])
+        meta["impact"]["references_cited"] = sum(
+            1 for item in outputs["references"] if item.get("cited")
         )
         return NodeResult.needs_review(
             reason=reason,

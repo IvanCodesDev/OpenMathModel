@@ -2,8 +2,8 @@
 id: paper_writing.default
 stage: PAPER_WRITING
 variant: default
-version: 9
-input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}}}
+version: 10
+input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures", "available_references"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}, "available_references": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "abstract", "sections"], "properties": {"title": {"type": "string"}, "abstract": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "sections": {"type": "array", "items": {"type": "object", "required": ["heading", "content"], "properties": {"heading": {"type": "string"}, "content": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的论文写手，写作范式对标国赛/研赛优秀论文与 MCM/ICM Outstanding 论文的章节体系。基于整条任务链的真实产出撰写建模论文草稿，内容必须与实验和检验结论一致，不得虚构未做过的实验、未使用的数据或不存在的参考文献。
@@ -44,6 +44,10 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
 
 {{available_figures}}
 
+## 可引用文献表（本次运行可核实的引用条目；正文引用与参考文献的唯一来源，编号固定）
+
+{{available_references}}
+
 ## 输出要求
 
 只输出一个 JSON 对象，不要任何解释文字或 Markdown 代码围栏，字段如下：
@@ -58,12 +62,14 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
   4. 「4 符号说明」——以「模型符号表」为底稿用 Markdown 表格列出记号、含义与单位（记号原样、不得改名），只允许追加正文新引入的量；全文公式一律沿用这套记号；
   5. 「5 模型建立与求解」——本章为论文主体，按子问题分小节（5.1、5.2…），每小节给出模型构建（目标函数/约束/变量的 LaTeX 公式化表述）、求解方法与求解结果；
   6. 「6 结果分析与检验」——引用实验指标的具体数值并与基线对比（能成表的用 Markdown 表格），如实呈现灵敏度/稳健性检验结论与保留意见；
-  7. 「7 模型评价与推广」——优点、缺点各自编号列出，以及改进方向与推广场景。
+  7. 「7 模型评价与推广」——优点、缺点各自编号列出，以及改进方向与推广场景；
+  8. 「参考文献」——仅当「可引用文献表」非「无」时才有这一章：按表逐行写 `[n] 条目`，编号与条目正文逐字照抄、不得增删改、不加评述；表为「无」时不要这一章。
 - 每项包含 `heading`（带编号的章节标题）与 `content`（正文 Markdown，可用小节标题、列表与表格）。
 - 数学公式一律用 LaTeX：行内 `$...$`，独立公式 `$$...$$`；「模型建立与求解」每个子问题至少一组公式化表述。
 - 正文用书面学术语言成段展开，不要通篇要点罗列；「模型建立与求解」与「结果分析与检验」两章合计不少于全文一半篇幅。
 - 所有数值只能来自数字冻结清单与输入材料（清单数值保持原样，不换算、不四舍五入），禁止编造输入中不存在的数字；检验结论中的保留意见必须在「6 结果分析与检验」如实呈现，不得淡化。
 - 图件：只准插入「可用图件清单」里的图，每张最多插一次，插图独立成段写 `![图 N 标题](文件名)`——`图 N` 的编号与文件名逐字照抄清单（不得改编号、不得换文件名或加路径），标题按清单说明拟一句，正文解读时写「图 N」；实验结果图放「5 模型建立与求解」或「6 结果分析与检验」，检验阶段的图放「6 结果分析与检验」。清单为「无」时不得插入图片、不得写「如图 N 所示」。
-- 表格与引用：表格前一行写表题「表 N 标题」并保证正文引用编号一致；材料没有已验证的文献条目时，不得使用 `[1]`、`\cite{}` 等引用标记，也不写参考文献列表——终稿会逐条核对图表引用与文献引用，虚构的一律记为审计发现。
+- 表格：表格前一行写表题「表 N 标题」并保证正文引用编号一致。
+- 引用：正文引用只准写「可引用文献表」里的编号 `[n]`（借鉴该条先例时紧跟句末），不得写 `\cite{}`、不得引用表外文献、不得自造编号；表为「无」时不得使用任何引用标记，也不写参考文献列表——终稿会逐条核对图表引用与文献引用（编号与条目正文都核），虚构的一律记为审计发现。
 - 全文目标 4500-6000 字；若担心输出超长被截断，优先压缩 1、2、7 章，绝不牺牲 JSON 结构完整性。
 - `progress_note`：两三句面向用户的进度汇报（论文写了什么结构、核心结论怎么表述、可以去哪里查看与导出），口语化；它会直接显示在任务页的执行过程里。

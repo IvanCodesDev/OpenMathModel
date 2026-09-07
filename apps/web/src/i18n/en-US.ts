@@ -1141,7 +1141,7 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "不在冻结清单与材料中": "not in the frozen list or source materials",
   "引用的图没有对应的真实图件": "referenced figure has no real figure file behind it",
   "引用的表在全文找不到带该编号表题的表格": "referenced table has no captioned table with that number anywhere in the text",
-  "引用未经验证（参考文献库尚未建立）": "citation unverified (no verified reference library yet)",
+  "引用不在本次运行的已验证引用库中": "citation is not in this run's verified reference library",
   "上游阶段没有可冻结的数字，正文数值只能引用材料中已有的数值":
     "Upstream stages produced no numbers to freeze; the text may only cite numbers already in the source materials",
   "口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行），一位数不计；引用的图须是本次运行产出的图件、引用的表须有带编号的表题；引用标记与参考文献须来自已验证的引用库。":
@@ -1157,7 +1157,15 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "图": "Figure",
   "已插入": "inserted",
   "未插入": "not inserted",
-  // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」已在其他阶段词典里）
+  // 已验证引用库（DocumentDraft.references，refs/ 第一步）：条里的计数（N / M 占位由代码替换）与清单表；条目标题原样不译
+  "N 条已验证文献，正文引用 M 条": "N verified references, M cited",
+  "参考文献库": "Reference library",
+  "条目": "Entry",
+  "方案引用的先例": "Precedent cited by the plan",
+  "用户提供": "Provided by the user",
+  "已引用": "cited",
+  "未引用": "not cited",
+  // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」已在其他阶段词典里）
 };
 
 /** 赛题库、论文库与方法库。 */

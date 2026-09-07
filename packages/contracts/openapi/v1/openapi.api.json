@@ -1645,6 +1645,21 @@
             "title": "Keywords",
             "type": "array"
           },
+          "references": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PaperReference"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "本次运行的已验证引用库（H5 refs/ 第一步）：方案阶段从知识库解析到的条目——选中方案引用的先例 + 用户提供的资料，均带记录级出处 URL——按固定顺序编号 [n]，是正文引用标记与「参考文献」章条目的唯一合法来源；引用审计据此核编号与条目正文。空数组 = 本次运行没有可核实的引用条目；论文节点未产出该字段（旧运行、模拟节点）时为 null。可选字段：旧消费者可忽略。",
+            "title": "References"
+          },
           "run_id": {
             "$ref": "#/components/schemas/RunId"
           },
@@ -2673,6 +2688,73 @@
           "inserted"
         ],
         "title": "PaperFigure",
+        "type": "object"
+      },
+      "PaperReference": {
+        "additionalProperties": false,
+        "properties": {
+          "card_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "知识库卡片 id（problem:… / paper:…）；没有对应卡片时为 null。",
+            "title": "Card Id"
+          },
+          "cited": {
+            "description": "正文（含摘要）是否引用了该条目（任一 [n] 标记展开后命中编号），由节点确定性判定。",
+            "title": "Cited",
+            "type": "boolean"
+          },
+          "number": {
+            "description": "全文固定编号 n（正文引用标记「[n]」与参考文献条目编号），按 方案引用 → 用户提供 顺序赋予，不因未引用而重编。",
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "text": {
+            "description": "参考文献条目正文（不含编号；由卡片元数据确定性生成，全文 / 来源链接为 Markdown 链接），写手须逐字照抄。",
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "description": "知识库卡片的标题原文；引用审计据此核参考文献章的条目正文。",
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "pattern": "^https?://\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "出处链接（论文全文或来源页，仅 http(s)）；卡片没有可用链接时为 null。",
+            "title": "Url"
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "text",
+          "url",
+          "source",
+          "card_id",
+          "cited"
+        ],
+        "title": "PaperReference",
         "type": "object"
       },
       "PaperSection": {
@@ -3822,6 +3904,15 @@
       "Sha256": {
         "pattern": "^[a-f0-9]{64}$",
         "title": "Sha256",
+        "type": "string"
+      },
+      "Source": {
+        "description": "条目来源：plan_citation = 选中方案在方案文本里标出处引用的知识库卡片；user_reference = 用户在首页「添加上下文」提供、按标题匹配到知识库的资料。",
+        "enum": [
+          "plan_citation",
+          "user_reference"
+        ],
+        "title": "Source",
         "type": "string"
       },
       "SourceStage": {

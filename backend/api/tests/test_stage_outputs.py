@@ -31,6 +31,7 @@ from omm_api.stage_outputs import (
     _document_draft,
     _figures,
     _plan_proposal,
+    _references,
     _review_report,
     _robustness_report,
     _validation_report,
@@ -689,6 +690,40 @@ def test_figures_projection_whitelists_real_figures_and_drops_malformed(validate
     payload = _document_draft(_RUN_ID, state).model_dump(mode="json")
     validate_contract("document-draft.schema.json", payload)
     assert payload["figures"] == figures
+    # 引用库字段出现之前的运行：没有 references 键 → null
+    assert payload["references"] is None
+
+
+def test_references_projection_whitelists_verified_entries_and_drops_malformed(validate_contract):
+    """本次运行的已验证引用库进契约：编号 / 标题 / 来源畸形的条目剔除，非 http(s) 链接归 null、
+    card_id 空串归 null、cited 强制布尔；缺键 → null、空数组原样。"""
+    raw = [
+        {"number": 1, "title": "生产企业原材料的订购与运输", "text": "全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/c)",
+         "url": "https://example.test/c", "source": "plan_citation", "card_id": "problem:cumcm-2021-c", "cited": True},
+        {"number": 2, "title": "机场出租车排队仿真", "text": "", "url": "javascript:alert(1)", "source": "user_reference",
+         "card_id": "", "cited": "yes"},
+        {"number": 0, "title": "编号为零", "text": "x", "url": None, "source": "plan_citation", "card_id": None, "cited": False},
+        {"number": True, "title": "编号是布尔", "text": "x", "url": None, "source": "plan_citation", "card_id": None, "cited": False},
+        {"number": 3, "title": "  ", "text": "x", "url": None, "source": "plan_citation", "card_id": None, "cited": False},
+        {"number": 4, "title": "凭空写的", "text": "x", "url": None, "source": "made_up", "card_id": None, "cited": True},
+        "garbage",
+    ]
+    references = _references(raw)
+    assert references == [
+        {"number": 1, "title": "生产企业原材料的订购与运输",
+         "text": "全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/c)",
+         "url": "https://example.test/c", "source": "plan_citation", "card_id": "problem:cumcm-2021-c", "cited": True},
+        {"number": 2, "title": "机场出租车排队仿真", "text": "机场出租车排队仿真", "url": None, "source": "user_reference",
+         "card_id": None, "cited": True},
+    ]
+    assert _references(None) is None and _references("oops") is None and _references([]) == []
+
+    state = StageState()
+    state.at = datetime(2026, 9, 7, 4, 0, tzinfo=timezone.utc)
+    state.outputs = {**PAPER_OUTPUT, "frozen_numbers": [], "audit_findings": [], "figures": [], "references": raw}
+    payload = _document_draft(_RUN_ID, state).model_dump(mode="json")
+    validate_contract("document-draft.schema.json", payload)
+    assert payload["references"] == references
 
 
 def test_stage_outputs_carry_cleaning_and_its_review_after_real_cleaning(client, monkeypatch, validate_contract):

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -689,6 +690,48 @@ _AUDIT_FINDING_KINDS = frozenset(
 )
 #: 真实图件的来源阶段（契约 enum）：只有实验 / 检验沙盒的图算论文图源。
 _FIGURE_SOURCE_STAGES = frozenset({"EXPERIMENTING", "VALIDATING"})
+#: 引用条目的来源（契约 enum）：方案引用的知识库先例 / 用户提供并匹配到知识库的资料。
+_REFERENCE_SOURCES = frozenset({"plan_citation", "user_reference"})
+_HTTP_URL = re.compile(r"^https?://\S+$")
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        return None
+    return value
+
+
+def _references(raw: Any) -> Optional[list[dict[str, Any]]]:
+    """节点 outputs.references → 契约 paper_reference[]（缺键 → null；畸形条目逐条剔除）。
+
+    编号非正整数、标题为空、来源不在 enum 的条目剔除；url 不是 http(s) → null（编辑页不给
+    可疑链接做成超链接）；card_id 空串 → null；cited 强制布尔。
+    """
+    if not isinstance(raw, list):
+        return None
+    references: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        number = _positive_int(item.get("number"))
+        title = str(item.get("title") or "").strip()
+        source = str(item.get("source") or "")
+        if number is None or not title or source not in _REFERENCE_SOURCES:
+            continue
+        url = str(item.get("url") or "").strip()
+        card_id = str(item.get("card_id") or "").strip()
+        references.append(
+            {
+                "number": number,
+                "title": title,
+                "text": str(item.get("text") or "").strip() or title,
+                "url": url if _HTTP_URL.match(url) else None,
+                "source": source,
+                "card_id": card_id or None,
+                "cited": bool(item.get("cited")),
+            }
+        )
+    return references
 
 
 def _figures(raw: Any) -> Optional[list[dict[str, Any]]]:
@@ -812,6 +855,7 @@ def _document_draft(run_id: str, state: Optional[StageState]) -> Optional[Docume
         frozen_numbers=_frozen_numbers(outputs.get("frozen_numbers")),
         audit_findings=_audit_findings(outputs.get("audit_findings")),
         figures=_figures(outputs.get("figures")),
+        references=_references(outputs.get("references")),
     )
 
 

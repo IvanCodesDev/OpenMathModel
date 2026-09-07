@@ -104,6 +104,47 @@ class PaperFigure(BaseModel):
     )
 
 
+class Source(Enum):
+    """
+    条目来源：plan_citation = 选中方案在方案文本里标出处引用的知识库卡片；user_reference = 用户在首页「添加上下文」提供、按标题匹配到知识库的资料。
+    """
+
+    plan_citation = "plan_citation"
+    user_reference = "user_reference"
+
+
+class PaperReference(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    number: conint(ge=1) = Field(
+        ...,
+        description="全文固定编号 n（正文引用标记「[n]」与参考文献条目编号），按 方案引用 → 用户提供 顺序赋予，不因未引用而重编。",
+    )
+    title: constr(min_length=1) = Field(
+        ..., description="知识库卡片的标题原文；引用审计据此核参考文献章的条目正文。"
+    )
+    text: str = Field(
+        ...,
+        description="参考文献条目正文（不含编号；由卡片元数据确定性生成，全文 / 来源链接为 Markdown 链接），写手须逐字照抄。",
+    )
+    url: constr(pattern=r"^https?://\S+$") | None = Field(
+        ...,
+        description="出处链接（论文全文或来源页，仅 http(s)）；卡片没有可用链接时为 null。",
+    )
+    source: Source = Field(
+        ...,
+        description="条目来源：plan_citation = 选中方案在方案文本里标出处引用的知识库卡片；user_reference = 用户在首页「添加上下文」提供、按标题匹配到知识库的资料。",
+    )
+    card_id: constr(min_length=1) | None = Field(
+        ..., description="知识库卡片 id（problem:… / paper:…）；没有对应卡片时为 null。"
+    )
+    cited: bool = Field(
+        ...,
+        description="正文（含摘要）是否引用了该条目（任一 [n] 标记展开后命中编号），由节点确定性判定。",
+    )
+
+
 class RunId(RootModel[constr(pattern=r"^run_[0-9a-f]{32}$")]):
     root: constr(pattern=r"^run_[0-9a-f]{32}$")
 
@@ -153,4 +194,8 @@ class DocumentDraft(BaseModel):
     figures: list[PaperFigure] | None = Field(
         None,
         description="真实图件清单（H5 figure_render 第一步）：本次运行实验 / 检验沙盒真正落盘并采集为 figure 产物的图，按 实验 → 检验 顺序编号（图 N），是正文插图 `![图 N 标题](文件名)` 的唯一合法来源；图表审计据此核对。编辑页用 name → artifact_id 把插图解析成产物下载链接。空数组 = 本次运行没有产出图件；论文节点未产出该字段（2026-09-07 之前的运行、模拟节点）时为 null。可选字段：旧消费者可忽略。",
+    )
+    references: list[PaperReference] | None = Field(
+        None,
+        description="本次运行的已验证引用库（H5 refs/ 第一步）：方案阶段从知识库解析到的条目——选中方案引用的先例 + 用户提供的资料，均带记录级出处 URL——按固定顺序编号 [n]，是正文引用标记与「参考文献」章条目的唯一合法来源；引用审计据此核编号与条目正文。空数组 = 本次运行没有可核实的引用条目；论文节点未产出该字段（旧运行、模拟节点）时为 null。可选字段：旧消费者可忽略。",
     )

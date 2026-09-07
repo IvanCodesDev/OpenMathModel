@@ -31,6 +31,7 @@ import {
   summarizeFindingKinds,
 } from "./paper-audit";
 import { figureImageResolver, summarizeFigures } from "./paper-figures";
+import { referenceRows, summarizeReferences } from "./paper-references";
 import type { PlanDecisionView } from "./plan-decision";
 import {
   describePlanDecision,
@@ -1391,10 +1392,15 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
   const figureNote = figures
     ? `，${t("N 张真实图件，已插入 M 张").replace("N", String(figures.total)).replace("M", String(figures.inserted))}`
     : "";
+  // 已验证文献计数（refs/ 第一步）：同理，只有引用库非空的运行才多这一句
+  const references = summarizeReferences(draft.references);
+  const referenceNote = references
+    ? `，${t("N 条已验证文献，正文引用 M 条").replace("N", String(references.total)).replace("M", String(references.cited))}`
+    : "";
   summary.append(
     icon(iconName),
     el("strong", "", `${t("终稿审计")}：`),
-    el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}${figureNote}`),
+    el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}${figureNote}${referenceNote}`),
     el("span", "paper-audit-hint", t("展开查看清单与发现")),
   );
   details.append(summary);
@@ -1463,6 +1469,42 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
         el("td", "", figure.caption || "—"),
         el("td", figure.inserted ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
           t(figure.inserted ? "已插入" : "未插入")),
+      );
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    body.append(table);
+  }
+
+  if (references) {
+    // 已验证引用库：编号是正文 [n] 与参考文献条目的唯一合法编号；未引用的条目如实列出
+    body.append(el("h4", "", t("参考文献库")));
+    const table = el("table", "paper-audit-table paper-audit-references");
+    const thead = el("thead");
+    const head = el("tr");
+    for (const label of ["编号", "条目", "来源", "状态"]) head.append(el("th", "", t(label)));
+    thead.append(head);
+    const tbody = el("tbody");
+    for (const row of referenceRows(draft.references ?? [])) {
+      const tr = el("tr");
+      const entry = el("td", "paper-audit-reference-entry");
+      // 出处链接只放行 http(s)（referenceRows 已过滤）；条目正文原文放悬停，标题上屏
+      if (row.url) {
+        const link = el("a", "", row.title) as HTMLAnchorElement;
+        link.href = row.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        entry.append(link);
+      } else {
+        entry.append(document.createTextNode(row.title));
+      }
+      entry.title = row.text;
+      tr.append(
+        el("td", "paper-audit-id", row.label),
+        entry,
+        el("td", "paper-audit-source", t(row.source)),
+        el("td", row.cited ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
+          t(row.cited ? "已引用" : "未引用")),
       );
       tbody.append(tr);
     }

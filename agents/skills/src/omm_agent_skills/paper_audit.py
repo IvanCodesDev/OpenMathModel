@@ -11,9 +11,11 @@
 
 真实图件集合由 ``figures.figure_inventory`` 从实验 / 检验沙盒真正采集到的图件产物生成
 （文件名 + 产物 id），调用方按 ``available_figures`` 传入：写手只能插清单里的图，编号在
-alt 或图题里写明才算定义。引用库今天还不存在（refs/ 未建），``verified_refs`` 传空集：
-写手引用的任何文献在今天都无从核实，如实记为发现——这正是 §9 硬规则「引用必须带出处 id」
-「模拟内容必须标明」在论文阶段的兜底。
+alt 或图题里写明才算定义。引用库由 ``references.reference_inventory`` 从方案阶段解析到的
+知识库卡片（方案引用的先例 + 用户提供的资料，记录级出处 URL）编成，调用方按
+``verified_refs``（编号集合）与 ``reference_titles``（编号 → 标题）传入：标记 ``[n]`` 的 n
+须在库里，参考文献章的条目须与库条目一致；库为空时写手引用的任何文献都无从核实，如实记为
+发现——这正是 §9 硬规则「引用必须带出处 id」「模拟内容必须标明」在论文阶段的兜底。
 
 ``numbers`` 字段沿用契约既有名字（删属性 = BREAKING），装的是取样后的违规 token：
 数值 / 图表编号 / 引用标记。
@@ -278,12 +280,44 @@ def _reference_block(heading: str, text: str) -> tuple[str, str]:
 
 
 def _reference_entries(block: str) -> list[str]:
-    entries: list[str] = []
+    return [entry for entry, _text in _reference_entry_lines(block)]
+
+
+def _reference_entry_lines(block: str) -> list[tuple[str, str]]:
+    """参考文献块里的 (编号, 条目正文) 序列，同一编号只取第一条。"""
+    seen: set[str] = set()
+    entries: list[tuple[str, str]] = []
     for line in block.splitlines():
         match = _REFERENCE_ENTRY.match(line)
-        if match:
-            entries.append(match.group(1) or match.group(2))
-    return _unique(entries)
+        if not match:
+            continue
+        entry = match.group(1) or match.group(2)
+        if entry in seen:
+            continue
+        seen.add(entry)
+        entries.append((entry, line[match.end() - 1:].strip()))
+    return entries
+
+
+_TITLE_NOISE = re.compile(r"[\s\W_]+", re.UNICODE)
+
+
+def _normalize_title(text: str) -> str:
+    """条目一致性比对的口径：去空白与标点、casefold——写手换个标点或大小写不算改题。"""
+    return _TITLE_NOISE.sub("", str(text or "")).casefold()
+
+
+def cited_reference_ids(sections: Sequence[Mapping[str, Any]], abstract: str) -> set[str]:
+    """正文（各章 + 摘要）里所有引用标记展开后的编号 / key 集合——引用库据此标「已引用」。
+
+    与审计同一套正则：剥数学段、`[0,1]` 区间与 `[x](url)` 链接不算；参考文献块本身不算引用。
+    """
+    ids: set[str] = set()
+    for (_scope, text), section in zip(_scopes(sections, abstract), list(sections) + [{}]):
+        body, _block = _reference_block(str(section.get("heading") or ""), text)
+        for _mark, mark_ids in _citations(body):
+            ids.update(mark_ids)
+    return ids
 
 
 def _strip_math(text: str) -> str:
@@ -322,14 +356,22 @@ def audit_citations(
     sections: Sequence[Mapping[str, Any]],
     abstract: str,
     verified_refs: Iterable[str] = (),
+    reference_titles: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """引用审计：引用标记与参考文献条目必须来自已验证的引用库。
 
-    ``verified_refs`` 是已验证条目的编号 / key 集合（refs/ 就绪后由节点传入）；空集时
-    每一处引用都记「未经验证」，参考文献章的条目另记一条（写手编造文献最常见的落点）。
-    引用了列表里没有的编号在 detail 里点明。
+    ``verified_refs`` 是本次运行引用库里已验证条目的编号 / key 集合（``references``
+    模块按方案引用的知识库卡片 + 用户提供的资料编成）；空集时每一处引用都记「未经验证」，
+    参考文献章的条目另记一条（写手编造文献最常见的落点）。引用了列表里没有的编号在 detail
+    里点明。``reference_titles``（编号 → 库中标题）在场时再核条目正文：编号对得上、条目
+    里却没有那条文献的标题，同样记发现——只核编号，写手在 ``[1]`` 下面编一条假文献照样能过。
     """
     verified = {str(item) for item in verified_refs if str(item)}
+    titles = {str(key): str(value) for key, value in (reference_titles or {}).items() if str(value)}
+    why_missing = (
+        f"不在本次运行的引用库（{len(verified)} 条）中" if verified
+        else "本次运行没有可核实的引用条目，无法核实"
+    )
     scopes = _scopes(sections, abstract)
     split = [
         (scope, *_reference_block(str(section.get("heading") or ""), text))
@@ -355,18 +397,37 @@ def audit_citations(
                     FINDING_UNVERIFIED_CITATION,
                     [mark for mark, _ids in marks],
                     f"{scope}有 {len(marks)} 处引用未经验证（{_join([m for m, _ in marks])}）"
-                    f"：参考文献库尚未建立，无法核实{tail}",
+                    f"：{why_missing}{tail}",
                 )
             )
-        entries = [entry for entry in _reference_entries(block) if entry not in verified]
+        entry_lines = _reference_entry_lines(block)
+        entries = [entry for entry, _text in entry_lines if entry not in verified]
         if entries:
             findings.append(
                 _finding(
                     scope,
                     FINDING_UNVERIFIED_CITATION,
                     [f"[{entry}]" for entry in entries],
-                    f"{scope}列出的 {len(entries)} 条参考文献均未经验证"
-                    f"（{_join([f'[{e}]' for e in entries])}）：参考文献库尚未建立，条目真实性无法核实",
+                    f"{scope}列出的 {len(entries)} 条参考文献未经验证"
+                    f"（{_join([f'[{e}]' for e in entries])}）：{why_missing}，条目真实性无法核实",
+                )
+            )
+        # 编号对得上、条目正文却不是库里那条：库条目的标题（归一化后）必须出现在条目行里
+        mismatched = [
+            (entry, titles[entry])
+            for entry, text in entry_lines
+            if entry in verified and entry in titles
+            and _normalize_title(titles[entry]) not in _normalize_title(text)
+        ]
+        if mismatched:
+            findings.append(
+                _finding(
+                    scope,
+                    FINDING_UNVERIFIED_CITATION,
+                    [f"[{entry}]" for entry, _title in mismatched],
+                    f"{scope}有 {len(mismatched)} 条参考文献条目与引用库不一致"
+                    f"（{'；'.join(f'[{entry}] 库中为《{title}》' for entry, title in mismatched[:3])}"
+                    f"{'…' if len(mismatched) > 3 else ''}）：条目须逐字照抄可引用文献表",
                 )
             )
     return findings
@@ -383,12 +444,13 @@ def audit_chain(
     abstract_allowed: set[str] | None = None,
     available_figures: Iterable[str] = (),
     verified_refs: Iterable[str] = (),
+    reference_titles: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """顺序过三审计：数值 → 图表 → 引用；发现按审计顺序拼接（数值发现在前）。"""
     return [
         *audit_document(sections, abstract, allowed, abstract_allowed),
         *audit_figures_and_tables(sections, abstract, available_figures),
-        *audit_citations(sections, abstract, verified_refs),
+        *audit_citations(sections, abstract, verified_refs, reference_titles),
     ]
 
 

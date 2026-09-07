@@ -22,7 +22,7 @@ export const FINDING_KIND_REASONS: Record<string, string> = {
   unsourced_number: "不在冻结清单与材料中",
   phantom_figure: "引用的图没有对应的真实图件",
   phantom_table: "引用的表在全文找不到带该编号表题的表格",
-  unverified_citation: "引用未经验证（参考文献库尚未建立）",
+  unverified_citation: "引用不在本次运行的已验证引用库中",
 };
 
 /** 发现类型 → 汇总一句里的量词短语（「N 处…」的后半段），图 / 表并成一类。 */

@@ -853,6 +853,11 @@ class FakeKnowledge:
         return [dict(hit) for hit in hits[:limit]]
 
     def read(self, card_id):
+        """全卡读取：按 id 在两张表里找（容忍丢前缀），找不到 → None。"""
+        wanted = str(card_id or "").strip()
+        for hit in [*self.problems, *self.papers]:
+            if hit["id"] == wanted or hit["id"].split(":", 1)[-1] == wanted:
+                return dict(hit)
         return None
 
 
@@ -971,6 +976,62 @@ def test_model_planning_single_call_path_also_gets_knowledge(registry):
     assert llm.calls[0].variables["knowledge"].startswith("- [problem:cumcm-2021-c]")
     rendered = registry.get("model_planning.default").render(llm.calls[0].variables)
     assert "## 相似赛题与获奖论文方法（知识库检索，按相关度）" in rendered
+
+
+def test_model_planning_settles_the_reference_library_on_both_paths(registry):
+    """refs/ 第一步：方案卡里标出处的卡片 + 用户提供的资料解析成 outputs.references
+    （fan-out 与单次回落两条路径同一出口）；解析不到的记警告、不入库；无端口 → 空表。"""
+    port = FakeKnowledge()
+    cited_reduce = {
+        **REDUCE_OK,
+        "plans": [
+            {**REDUCE_OK["plans"][0], "approach": "MILP 建模，借鉴 [problem:cumcm-2021-c] 的订购思路。"},
+            {**REDUCE_OK["plans"][1], "fit": "排队论先例见 [paper:orphan]，另有 [paper:ghost]"},
+            REDUCE_OK["plans"][2],
+        ],
+        "rationale": "综合 [problem:cumcm-2021-c] 的做法，精确解更稳",
+    }
+    inputs = {"params": {"reference_metadata": [
+        {"kind": "paper", "title": "机场出租车排队仿真", "excerpt": "…"},
+        {"kind": "method", "title": "TOPSIS", "excerpt": "…"},
+    ]}}
+    llm = StubLlmPort(fanout_stubs(**{"model_planning.reduce": stub_response(cited_reduce)}))
+    node = ModelPlanningNode(registry, knowledge=port)
+    result = node.run(
+        make_ctx(TaskState.MODEL_PLANNING, inputs=inputs, prior=prior_with_analysis()),
+        make_fanout_services(llm),
+    )
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    references = result.outputs["references"]
+    assert [(r["card_id"], r["cited_by"], r["source"]) for r in references] == [
+        ("problem:cumcm-2021-c", ["A", "rationale"], "plan_citation"),
+        ("paper:orphan", ["B", "user"], "plan_citation"),
+    ]
+    assert references[0]["text"].startswith("全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z].")
+    assert references[1]["url"] == "https://example.test/orphan"
+    assert "方案文本引用了 1 张知识库里不存在的卡片（paper:ghost），不进引用库" in result.outputs["quality_warnings"]
+
+    # 单次回落路径：同一出口
+    single_llm = StubLlmPort({"model_planning.default": stub_response({
+        **PLANNING_OK,
+        "plans": [{**PLANNING_OK["plans"][0], "approach": "借鉴 [paper:orphan]"}, PLANNING_OK["plans"][1]],
+    })})
+    single = ModelPlanningNode(registry, proposer_views=(), knowledge=FakeKnowledge()).run(
+        make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis()), make_fanout_services(single_llm)
+    )
+    assert [(r["card_id"], r["cited_by"]) for r in single.outputs["references"]] == [("paper:orphan", ["A"])]
+    assert single.outputs["plans"] == [
+        {**PLANNING_OK["plans"][0], "approach": "借鉴 [paper:orphan]", "language": "python"},
+        {**PLANNING_OK["plans"][1], "language": "python"},
+    ]
+
+    # 无知识库端口：空表、无警告
+    plain = ModelPlanningNode(registry, proposer_views=()).run(
+        make_ctx(TaskState.MODEL_PLANNING, prior=prior_with_analysis()),
+        make_fanout_services(StubLlmPort({"model_planning.default": stub_response(PLANNING_OK)})),
+    )
+    assert plain.outputs["references"] == [] and "quality_warnings" not in plain.outputs
 
 
 def test_model_planning_knowledge_failure_does_not_block_the_stage(registry):
@@ -4471,17 +4532,27 @@ def test_citation_audit_flags_marks_and_reference_entries_but_not_intervals():
     ]
     # 区间 [0,1]、数学段里的 [1, 5]、Markdown 链接都不是引用；同一标记只报一次
     assert findings[0]["numbers"] == ["[3]", "[5-7]", "\\cite{smith2020}"]
-    assert "参考文献库尚未建立" in findings[0]["detail"]
+    assert "本次运行没有可核实的引用条目" in findings[0]["detail"]
     assert "其中 [7]、[smith2020] 在参考文献列表中没有条目" in findings[0]["detail"]
     # 参考文献章：条目逐条未验证（[n] 与 n. 两种写法）
     assert findings[1]["numbers"] == ["[3]", "[5]", "[6]"]
-    assert "列出的 3 条参考文献均未经验证" in findings[1]["detail"]
+    assert "列出的 3 条参考文献未经验证" in findings[1]["detail"]
     assert findings[2]["numbers"] == ["［2］"]
 
-    # refs/ 就绪后：已验证的编号 / key 放行，只剩列表里没有的 [7]
+    # 引用库在场：已验证的编号 / key 放行，只剩列表里没有的 [7]；文案改口为「不在本次运行的引用库中」
     verified = audit_citations(sections, abstract, {"3", "5", "6", "smith2020", "2"})
     assert [f["scope"] for f in verified] == ["第2章《5 模型建立与求解》"]
     assert verified[0]["numbers"] == ["[5-7]"]
+    assert "不在本次运行的引用库（5 条）中" in verified[0]["detail"]
+
+    # 条目正文核对：编号对得上、条目里却不是库里那篇 → 记发现；标点 / 大小写差异不算改题
+    titled = audit_citations(
+        sections, abstract, {"2", "3", "5", "6", "7", "smith2020"},
+        reference_titles={"3": "Bike Sharing", "5": "Fleet Rebalancing", "6": "Roe B. 2018"},
+    )
+    assert [(f["scope"], f["numbers"]) for f in titled] == [("第3章《参考文献》", ["[5]"])]
+    assert "[5] 库中为《Fleet Rebalancing》" in titled[0]["detail"]
+    assert "条目须逐字照抄可引用文献表" in titled[0]["detail"]
 
     # 正文里以 ### 起头的参考文献小节同样算列表；其后的下一个小节回到正文
     inline = [{
@@ -4662,3 +4733,135 @@ def test_paper_single_call_fallback_also_gets_figures(registry):
     assert [(f["number"], f["inserted"]) for f in result.outputs["figures"]] == [
         (1, False), (2, True), (3, False),
     ]
+
+
+REFERENCE_ENTRY_1 = (
+    "全国大学生数学建模竞赛 2021 2021 CUMCM C. 生产企业原材料的订购与运输[Z]. [来源](https://example.test/cumcm-2021-c)"
+)
+REFERENCE_ENTRY_2 = (
+    "中国研究生数学建模竞赛. 机场出租车排队仿真[Z]. 中国研究生数学建模竞赛 2018，优秀论文. [全文](https://example.test/orphan)"
+)
+
+
+def paper_prior_with_references():
+    """方案阶段结算过的引用库：方案 A 引用赛题先例、方案 B 引用论文先例、用户提供一篇论文。"""
+    prior = paper_prior()
+    prior[TaskState.MODEL_PLANNING.value] = {
+        **PLANNING_OK,
+        "references": [
+            {"card_id": "problem:cumcm-2021-c", "kind": "problem", "title": "生产企业原材料的订购与运输",
+             "text": REFERENCE_ENTRY_1, "url": "https://example.test/cumcm-2021-c",
+             "source": "plan_citation", "cited_by": ["A"]},
+            {"card_id": "paper:only-b", "kind": "paper", "title": "只有方案 B 引用的论文",
+             "text": "某队. 只有方案 B 引用的论文[Z]. 2020.", "url": None,
+             "source": "plan_citation", "cited_by": ["B"]},
+            {"card_id": "paper:orphan", "kind": "paper", "title": "机场出租车排队仿真",
+             "text": REFERENCE_ENTRY_2, "url": "https://example.test/orphan",
+             "source": "user_reference", "cited_by": ["user"]},
+        ],
+    }
+    return prior
+
+
+def test_paper_writing_feeds_verified_references_to_materials_audit_and_outputs(registry):
+    """refs/ 第一步：选中方案引用的先例 + 用户资料编成 [1..N] 进每章材料；写手按表引用并照抄
+    参考文献章 → 引用审计 0 发现；DocumentDraft.references 带 cited，G4 卡片带文献计数。"""
+    pad = lambda text, target: text + "析" * (target - len(text))  # noqa: E731
+    ch1 = pad("背景。", 600)
+    ch2 = pad("分层订购思路借鉴了赛题先例[1]。rmse=0.12。", 1200)
+    ch3 = pad("结论。", 800)
+    outline = {
+        **PAPER_OUTLINE_OK,
+        "chapters": [*PAPER_OUTLINE_OK["chapters"], {"heading": "参考文献", "brief": "按表照抄", "target_chars": 160}],
+    }
+    refs_chapter = f"[1] {REFERENCE_ENTRY_1}\n[2] {REFERENCE_ENTRY_2}"
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(outline)],
+        "paper_section.default": [
+            stub_response({"content": ch1, "digest": "d1"}),
+            stub_response({"content": ch2, "digest": "d2"}),
+            stub_response({"content": ch3, "digest": "d3"}),
+            stub_response({"content": refs_chapter, "digest": "d4"}),
+        ],
+        "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(
+        make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_references()), make_services(llm)
+    )
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    # 材料：只有选中方案 A 的先例 + 用户资料，方案 B 独有的不进；编号固定
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    material = outline_call.variables["available_references"]
+    assert f"| [1] | {REFERENCE_ENTRY_1} | 方案引用的先例 |" in material
+    assert f"| [2] | {REFERENCE_ENTRY_2} | 用户提供 |" in material
+    assert "只有方案 B 引用的论文" not in material
+    for call in (c for c in llm.calls if c.prompt_id == "paper_section.default"):
+        assert "### 可引用文献表" in call.variables["materials"]
+    # 审计：[1] 在库、参考文献章照抄 → 引用一条 0 发现；条目里的年份不算无出处数值
+    assert result.outputs["audit_findings"] == []
+    assert result.outputs["references"] == [
+        {"number": 1, "title": "生产企业原材料的订购与运输", "text": REFERENCE_ENTRY_1,
+         "url": "https://example.test/cumcm-2021-c", "source": "plan_citation",
+         "card_id": "problem:cumcm-2021-c", "cited": True},
+        {"number": 2, "title": "机场出租车排队仿真", "text": REFERENCE_ENTRY_2,
+         "url": "https://example.test/orphan", "source": "user_reference",
+         "card_id": "paper:orphan", "cited": False},
+    ]
+    impact = result.review_meta["impact"]
+    assert impact["references_total"] == 2 and impact["references_cited"] == 1
+    assert "图表与引用审计 0 违规" in result.review_reason
+
+
+def test_paper_writing_flags_forged_reference_entries_and_out_of_library_marks(registry):
+    """写手在库内编号下换了条目、或引了表外编号：终稿审计记发现（不硬阻断），G4 推荐退回。"""
+    pad = lambda text, target: text + "析" * (target - len(text))  # noqa: E731
+    outline = {
+        **PAPER_OUTLINE_OK,
+        "chapters": [*PAPER_OUTLINE_OK["chapters"], {"heading": "参考文献", "brief": "按表照抄", "target_chars": 120}],
+    }
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(outline)],
+        "paper_section.default": [
+            stub_response({"content": pad("背景。", 600), "digest": "d1"}),
+            stub_response({"content": pad("借鉴 [1] 与 [3]。rmse=0.12。", 1200), "digest": "d2"}),
+            stub_response({"content": pad("结论。", 800), "digest": "d3"}),
+            stub_response({"content": f"[1] 张三. 编造的一本书. 2020.\n[2] {REFERENCE_ENTRY_2}", "digest": "d4"}),
+        ],
+        "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
+    })
+
+    result = PaperWritingNode(registry).run(
+        make_ctx(TaskState.PAPER_WRITING, prior=paper_prior_with_references()), make_services(llm)
+    )
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    findings = result.outputs["audit_findings"]
+    # 审计顺序 数值 → 图表 → 引用：编造条目里的年份先被数值审计抓到（章级重写一次仍在 → 记发现），
+    # 再是表外编号 [3]，最后是 [1] 条目与库不一致
+    assert [(f["scope"], f["kind"], f["numbers"]) for f in findings] == [
+        ("第4章《参考文献》", "unsourced_number", ["2020"]),
+        ("第2章《2 模型建立与求解》", "unverified_citation", ["[3]"]),
+        ("第4章《参考文献》", "unverified_citation", ["[1]"]),
+    ]
+    assert "不在本次运行的引用库（2 条）中" in findings[1]["detail"]
+    assert "其中 [3] 在参考文献列表中没有条目" in findings[1]["detail"]
+    assert "库中为《生产企业原材料的订购与运输》" in findings[2]["detail"]
+    assert result.review_meta["impact"]["recommended"] == "redo:PAPER_WRITING"
+    assert result.review_meta["impact"]["audit_findings_by_kind"] == {"unsourced_number": 1, "unverified_citation": 2}
+    assert [(r["number"], r["cited"]) for r in result.outputs["references"]] == [(1, True), (2, False)]
+
+
+def test_paper_writing_without_reference_library_keeps_the_none_material(registry):
+    llm = multipass_paper_stub()
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    outline_call = next(c for c in llm.calls if c.prompt_id == "paper_outline.default")
+    assert outline_call.variables["available_references"].startswith("无（本次运行没有可核实的引用条目")
+    assert result.outputs["references"] == []
+    assert result.review_meta["impact"]["references_total"] == 0
