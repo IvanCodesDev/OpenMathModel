@@ -50,12 +50,12 @@ from .chat_adapter import supports_chat, text_protocol_chat, tool_protocol_note
 from .frozen_numbers import (
     AUDIT_SAMPLE_LIMIT,
     allowed_number_tokens,
-    audit_document,
     build_frozen_numbers,
     number_tokens,
     render_frozen_numbers,
     unsourced_numbers,
 )
+from .paper_audit import audit_chain, count_by_kind, summarize_kinds
 from .prompt_registry import PromptRegistry, PromptTemplate
 from .review import (
     CLEANING_REVIEW_FOCUS,
@@ -4156,17 +4156,24 @@ class PaperWritingNode(LlmSkillNode):
         allowed: set[str],
         abstract_allowed: set[str] | None = None,
     ) -> NodeResult:
-        """发布草稿产物 → 终稿数字审计 → G4 必停。
+        """发布草稿产物 → 终稿审计链（数值 → 图表 → 引用）→ G4 必停。
 
-        审计在这里对**终稿**做（分章路径已按章重写过一次，这里是最终对账；
-        回退单次生成的路径没有章级重写，全靠这一道），结果同时进 outputs
-        （DocumentDraft 契约的 frozen_numbers / audit_findings）与 G4 卡片。
+        审计在这里对**终稿**做（数值：分章路径已按章重写过一次，这里是最终对账；
+        回退单次生成的路径没有章级重写，全靠这一道。图表 / 引用：定义可能在别的章，
+        只能在终稿判），结果同时进 outputs（DocumentDraft 契约的 frozen_numbers /
+        audit_findings）与 G4 卡片。真实图件集合与已验证引用库今天都不存在
+        （figure_render / refs/ 未建），传空集——写手引用的图与文献一律无从核实、如实记发现。
         """
         sections = [
             section for section in outputs.get("sections") or [] if isinstance(section, Mapping)
         ]
-        findings = audit_document(
-            sections, str(outputs.get("abstract") or ""), allowed, abstract_allowed
+        findings = audit_chain(
+            sections,
+            str(outputs.get("abstract") or ""),
+            allowed=allowed,
+            abstract_allowed=abstract_allowed,
+            available_figures=(),
+            verified_refs=(),
         )
         outputs = {**outputs, "frozen_numbers": list(frozen), "audit_findings": findings}
         markdown = render_paper_markdown(outputs)
@@ -4207,21 +4214,27 @@ class PaperWritingNode(LlmSkillNode):
         frozen_total: int,
         findings: Sequence[Mapping[str, Any]],
     ) -> tuple[str, dict[str, Any]]:
-        """G4 卡片：0 审计发现推荐「确认交付」，否则推荐「退回修改」（人可改选）。"""
+        """G4 卡片：0 审计发现推荐「确认交付」，否则推荐「退回修改」（人可改选）。
+
+        title 先给三条审计的分类计数（无出处数值 / 图表引用不实 / 引用未经验证），
+        再点名前两处；完整清单在 impact 与 DocumentDraft。
+        """
         if findings:
             named = "；".join(
                 str(f.get("detail") or f.get("scope")) for f in findings[:_G4_TITLE_FINDINGS]
             )
-            more = f" 等 {len(findings)} 处" if len(findings) > _G4_TITLE_FINDINGS else ""
+            more = (
+                f"，前 {_G4_TITLE_FINDINGS} 处" if len(findings) > _G4_TITLE_FINDINGS else ""
+            )
             reason = (
-                f"论文草稿已生成（{chapters} 章，约 {chars} 字）；数字审计发现 {len(findings)} 处"
-                f"无出处数值{more}：{named}。请确认是否交付，或写明修改要求后退回修改"
+                f"论文草稿已生成（{chapters} 章，约 {chars} 字）；终稿审计发现 {len(findings)} 处"
+                f"（{summarize_kinds(findings)}）{more}：{named}。请确认是否交付，或写明修改要求后退回修改"
             )
             recommended = G4_REDO_OPTION_ID
         else:
             reason = (
                 f"论文草稿已生成（{chapters} 章，约 {chars} 字，冻结数字 {frozen_total} 项"
-                "全部对账通过）。请确认是否交付"
+                "全部对账通过，图表与引用审计 0 违规）。请确认是否交付"
             )
             recommended = G4_CONFIRM_OPTION_ID
         options = []
@@ -4240,6 +4253,7 @@ class PaperWritingNode(LlmSkillNode):
                 "chars": chars,
                 "frozen_numbers_total": frozen_total,
                 "audit_findings_total": len(findings),
+                "audit_findings_by_kind": count_by_kind(findings),
                 "audit_findings": [dict(f) for f in findings[:AUDIT_SAMPLE_LIMIT]],
                 "recommended": recommended,
             },

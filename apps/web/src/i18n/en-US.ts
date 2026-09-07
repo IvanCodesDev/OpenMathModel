@@ -1126,20 +1126,26 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "摘要": "Abstract",
   "关键词": "Keywords",
   "产物数量": "Artifact count",
-  // 论文页「数字审计」条（DocumentDraft.frozen_numbers / audit_findings，G4 定稿闸门的证据面；按片段拼接）
-  "数字审计": "Number audit",
+  // 论文页「终稿审计」条（DocumentDraft.frozen_numbers / audit_findings，G4 定稿闸门的证据面；按片段拼接）
+  "终稿审计": "Final-draft audit",
   "项冻结数字": "frozen numbers",
   "处无出处数值": "unsourced numbers",
-  "正文数值全部对账通过": "all in-text numbers reconciled",
-  "未做终稿数值审计": "final draft not audited",
+  "处图表引用不实": "phantom figure/table references",
+  "处引用未经验证": "unverified citations",
+  "处其他发现": "other findings",
+  "数值、图表与引用审计全部通过": "numbers, figures/tables and citations all passed",
+  "未做终稿审计": "final draft not audited",
   "展开查看清单与发现": "Expand for the list and findings",
   "审计发现": "Findings",
   "数字冻结清单": "Frozen number list",
   "不在冻结清单与材料中": "not in the frozen list or source materials",
+  "引用的图没有对应的真实图件": "referenced figure has no real figure file behind it",
+  "引用的表在全文找不到带该编号表题的表格": "referenced table has no captioned table with that number anywhere in the text",
+  "引用未经验证（参考文献库尚未建立）": "citation unverified (no verified reference library yet)",
   "上游阶段没有可冻结的数字，正文数值只能引用材料中已有的数值":
     "Upstream stages produced no numbers to freeze; the text may only cite numbers already in the source materials",
-  "口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行）；一位数不计。":
-    "Rule: in-text numbers must come from the frozen list or the input materials (problem-statement constants pass via the materials); single digits are not counted.",
+  "口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行），一位数不计；引用的图须是本次运行产出的图件、引用的表须有带编号的表题；引用标记与参考文献须来自已验证的引用库。":
+    "Rule: in-text numbers must come from the frozen list or the input materials (problem-statement constants pass via the materials), single digits are not counted; referenced figures must be files produced by this run and referenced tables must carry a numbered caption; citation marks and reference entries must come from a verified reference library.",
   "编号": "ID",
   "数值": "Value",
   "出处": "Source",

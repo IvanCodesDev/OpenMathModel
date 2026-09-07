@@ -2,7 +2,7 @@
 id: paper_writing.default
 stage: PAPER_WRITING
 variant: default
-version: 7
+version: 8
 input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "abstract", "sections"], "properties": {"title": {"type": "string"}, "abstract": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "sections": {"type": "array", "items": {"type": "object", "required": ["heading", "content"], "properties": {"heading": {"type": "string"}, "content": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
@@ -59,5 +59,6 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
 - 数学公式一律用 LaTeX：行内 `$...$`，独立公式 `$$...$$`；「模型建立与求解」每个子问题至少一组公式化表述。
 - 正文用书面学术语言成段展开，不要通篇要点罗列；「模型建立与求解」与「结果分析与检验」两章合计不少于全文一半篇幅。
 - 所有数值只能来自数字冻结清单与输入材料（清单数值保持原样，不换算、不四舍五入），禁止编造输入中不存在的数字；检验结论中的保留意见必须在「6 结果分析与检验」如实呈现，不得淡化。
+- 图表与引用：输入材料没有提供真实图件时，不得插入图片、不得写「如图 N 所示」；表格前一行写表题「表 N 标题」并保证正文引用编号一致；材料没有已验证的文献条目时，不得使用 `[1]`、`\cite{}` 等引用标记，也不写参考文献列表——终稿会逐条核对图表引用与文献引用，虚构的一律记为审计发现。
 - 全文目标 4500-6000 字；若担心输出超长被截断，优先压缩 1、2、7 章，绝不牺牲 JSON 结构完整性。
 - `progress_note`：两三句面向用户的进度汇报（论文写了什么结构、核心结论怎么表述、可以去哪里查看与导出），口语化；它会直接显示在任务页的执行过程里。

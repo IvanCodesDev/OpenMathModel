@@ -13,6 +13,13 @@ from .frozen_numbers import (
     unsourced_numbers,
 )
 from .llm import ChatCall, LlmCall, ScriptedLlmPort, StubLlmPort, stub_response
+from .paper_audit import (
+    audit_chain,
+    audit_citations,
+    audit_figures_and_tables,
+    count_by_kind,
+    summarize_kinds,
+)
 from .nodes import (
     ADOPT_OPTION_PREFIX,
     CLEANING_PROMPT_ID,
@@ -153,11 +160,15 @@ __all__ = [
     "allowed_number_tokens",
     "assumption_material",
     "assumptions_to_verify",
+    "audit_chain",
+    "audit_citations",
     "audit_document",
+    "audit_figures_and_tables",
     "build_frozen_numbers",
     "chosen_plan",
     "compare_metrics",
     "complete_notation",
+    "count_by_kind",
     "extract_json",
     "gpu_hardware_note",
     "knowledge_hit_ids",
@@ -178,6 +189,7 @@ __all__ = [
     "render_paper_markdown",
     "reviewer_tool_brief",
     "stub_response",
+    "summarize_kinds",
     "supports_chat",
     "symbol_material",
     "text_protocol_chat",

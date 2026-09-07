@@ -23,7 +23,7 @@ import { typesetMath } from "../text/math-typeset";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
-import { describePaperAudit, paperAuditStamp } from "./paper-audit";
+import { FINDING_KIND_REASONS, describePaperAudit, paperAuditStamp, summarizeFindingKinds } from "./paper-audit";
 import type { PlanDecisionView } from "./plan-decision";
 import {
   describePlanDecision,
@@ -1335,9 +1335,10 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
   settle();
 }
 
-// ── 论文页「数字审计」条（DocumentDraft.frozen_numbers / audit_findings → 编辑器上方） ──
+// ── 论文页「终稿审计」条（DocumentDraft.frozen_numbers / audit_findings → 编辑器上方） ──
 //
 // G4 定稿交付闸门的证据面：卡片 title 只点得出前两处发现，完整清单与发现在契约字段里。
+// 审计链三条（数值 / 图表 / 引用）的发现同列一张表，每条按 kind 给原因、违规 token 成 chip。
 // 条挂在 article.paper-editor 的工具栏与纸面之间——不进 contenteditable 纸面（不会被本机
 // 草稿保存 / 导出带走），也不受「用户草稿优先」早退影响（审计说的是智能体这一版）。
 // 原生 <details>：一行结论默认收起，展开看发现与清单，不引入新交互模型。
@@ -1371,13 +1372,13 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
   const iconName = tone === "warn" ? "warning-circle" : tone === "clean" ? "check-circle" : "list-numbers";
   const rows = section.rows;
   const verdict = section.kind === "findings"
-    ? `${section.findings.length} ${t("处无出处数值")}`
+    ? summarizeFindingKinds(section.findings).map(entry => `${entry.count} ${t(entry.label)}`).join("、")
     : section.kind === "clean"
-      ? t("正文数值全部对账通过")
-      : t("未做终稿数值审计");
+      ? t("数值、图表与引用审计全部通过")
+      : t("未做终稿审计");
   summary.append(
     icon(iconName),
-    el("strong", "", `${t("数字审计")}：`),
+    el("strong", "", `${t("终稿审计")}：`),
     el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}`),
     el("span", "paper-audit-hint", t("展开查看清单与发现")),
   );
@@ -1390,14 +1391,11 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
       const item = el("li");
       const text = el("div");
       text.append(el("strong", "", `${finding.scope}：`));
-      if (finding.kind === "unsourced_number") {
-        // 数值 token 原样成 chip，用户可直接去正文里搜
-        finding.numbers.forEach(number => text.append(paperAuditChip(number)));
-        text.append(el("span", "paper-audit-reason", t("不在冻结清单与材料中")));
-      } else {
-        // 审计链后续新增的发现类型（引用 / 图表）：先按节点给的说明原样示人
-        text.append(el("span", "paper-audit-reason", finding.detail || finding.kind));
-      }
+      // 违规 token 原样成 chip（数值 / 「图 N」「表 N」/ 引用标记），用户可直接去正文里搜
+      finding.numbers.forEach(token => text.append(paperAuditChip(token)));
+      const reason = FINDING_KIND_REASONS[finding.kind];
+      // 契约 enum 之外的 kind：按节点给的说明原样示人
+      text.append(el("span", "paper-audit-reason", reason ? t(reason) : finding.detail || finding.kind));
       item.append(icon("warning-circle"), text);
       list.append(item);
     }
@@ -1429,7 +1427,7 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
     table.append(thead, tbody);
     body.append(table);
   }
-  body.append(el("p", "paper-audit-note", t("口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行）；一位数不计。")));
+  body.append(el("p", "paper-audit-note", t("口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行），一位数不计；引用的图须是本次运行产出的图件、引用的表须有带编号的表题；引用标记与参考文献须来自已验证的引用库。")));
   details.append(body);
 
   const toolbar = article.querySelector<HTMLElement>(":scope > .editor-toolbar");

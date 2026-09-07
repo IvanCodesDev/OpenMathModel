@@ -1,0 +1,13 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "title": "基于整数规划的共享单车调度优化",
+  "abstract": "本文建立整数规划模型求解调度问题。",
+  "keywords": [],
+  "sections": [{ "heading": "1 问题重述", "content": "题目要求给出调度方案……" }],
+  "version": 1,
+  "updated_at": "2026-09-03T08:10:00.000000Z",
+  "frozen_numbers": [],
+  "audit_findings": [
+    { "scope": "第1章《1 问题重述》", "kind": "made_up_kind", "numbers": ["图 1"], "detail": "审计链没有这种发现类型" }
+  ]
+}

@@ -36,6 +36,9 @@ from omm_agent_skills import (
     allowed_number_tokens,
     assumption_material,
     assumptions_to_verify,
+    audit_chain,
+    audit_citations,
+    audit_figures_and_tables,
     build_frozen_numbers,
     chosen_plan,
     complete_notation,
@@ -53,6 +56,7 @@ from omm_agent_skills import (
     render_frozen_numbers,
     render_paper_markdown,
     stub_response,
+    summarize_kinds,
     symbol_material,
     unsourced_numbers,
 )
@@ -4321,7 +4325,143 @@ def test_paper_writing_unsourced_numbers_get_one_bounded_rewrite_then_audit_find
     assert findings[2]["numbers"] == ["1180"]
     meta = result.review_meta
     assert meta["impact"]["audit_findings_total"] == 3
+    assert meta["impact"]["audit_findings_by_kind"] == {"unsourced_number": 3}
     assert [o["id"] for o in meta["options"] if o.get("recommended")] == ["redo:PAPER_WRITING"]
-    assert "数字审计发现 3 处" in result.review_reason
+    assert "终稿审计发现 3 处（无出处数值 3 处），前 2 处：" in result.review_reason
     assert "第2章《2 模型建立与求解》有 1 个数值" in result.review_reason
     assert any("未在冻结清单与材料中找到出处" in w for w in result.metrics["quality_warnings"])
+
+
+# ── 审计链其余两条（图表 / 引用）：确定性、全文找定义、按章报发现 ─────────────────
+
+
+def test_figure_table_audit_requires_real_figures_and_captioned_tables():
+    sections = [
+        {"heading": "1 问题重述", "content": "题目附件给出了地图 1 与附表 2，不算引用。"},
+        {
+            "heading": "5 模型建立与求解",
+            "content": (
+                "模型结构如图 1 所示，参数设置见表 1，结果见表 2 与 Table 3。\n\n"
+                "表 1 参数设置\n\n| 参数 | 值 |\n| --- | --- |\n| rmse | 0.12 |\n\n"
+                "**表 2 结果对比**\n| 方案 | rmse |\n| --- | --- |\n| A | 0.12 |\n\n"
+                "![图 2 拟合曲线](figures/fit.png)\n如图 2 与图 3-1 所示。"
+            ),
+        },
+        # 只有表题、附近没有表格 → 不算定义；引用它的章会被记发现
+        {"heading": "6 结果分析", "content": "表 4 说明\n\n正文没有表格。见表 4。"},
+    ]
+    abstract = "摘要不引图。"
+
+    findings = audit_figures_and_tables(sections, abstract)
+    assert [(f["scope"], f["kind"]) for f in findings] == [
+        ("第2章《5 模型建立与求解》", "phantom_figure"),
+        ("第2章《5 模型建立与求解》", "phantom_table"),
+        ("第3章《6 结果分析》", "phantom_table"),
+    ]
+    # 今天没有真实图件：所有图引用 + 插图都是幽灵；表 1 / 表 2 有表题 + 表格 → 只剩 Table 3
+    assert findings[0]["numbers"] == ["图 1", "图 2", "图 3-1", "fit.png"]
+    assert "引用了 3 处不存在的图（图 1、图 2、图 3-1）" in findings[0]["detail"]
+    assert "插入了 1 张不是本次运行产出的图件（fit.png）" in findings[0]["detail"]
+    assert "本次运行没有可引用的真实图件" in findings[0]["detail"]
+    assert findings[1]["numbers"] == ["表 3"]
+    assert findings[2]["numbers"] == ["表 4"] and "找不到带该编号表题" in findings[2]["detail"]
+
+    # 图件真实化后（figure_render 产出 fit.png）：alt 里的图题定义了图 2，只剩图 1 / 图 3-1
+    with_figure = audit_figures_and_tables(sections, abstract, {"figures/fit.png"})
+    assert with_figure[0]["numbers"] == ["图 1", "图 3-1"]
+    assert "图件须是本次运行的产出" in with_figure[0]["detail"]
+
+    # 只用表格、表题编号一致、不引图 → 0 发现
+    clean = [{"heading": "5 求解", "content": "见表 1。\n\n表 1 结果\n| a | b |\n| --- | --- |\n| 1 | 2 |"}]
+    assert audit_figures_and_tables(clean, "") == []
+
+
+def test_citation_audit_flags_marks_and_reference_entries_but_not_intervals():
+    sections = [
+        {"heading": "1 问题重述", "content": "归一化到 [0,1] 区间，$w \\in [1, 5]$ 为权重，链接 [1](https://x) 不算。"},
+        {
+            "heading": "5 模型建立与求解",
+            "content": "文献 [3] 与 [5-7] 给出了类似做法，\\cite{smith2020} 亦然；再次提到 [3]。",
+        },
+        {"heading": "参考文献", "content": "[3] Smith J. Bike sharing. 2020.\n[5] Doe A. 2019.\n6. Roe B. 2018."},
+    ]
+    abstract = "摘要引用 ［2］ 一处。"
+
+    findings = audit_citations(sections, abstract)
+    assert [(f["scope"], f["kind"]) for f in findings] == [
+        ("第2章《5 模型建立与求解》", "unverified_citation"),
+        ("第3章《参考文献》", "unverified_citation"),
+        ("摘要", "unverified_citation"),
+    ]
+    # 区间 [0,1]、数学段里的 [1, 5]、Markdown 链接都不是引用；同一标记只报一次
+    assert findings[0]["numbers"] == ["[3]", "[5-7]", "\\cite{smith2020}"]
+    assert "参考文献库尚未建立" in findings[0]["detail"]
+    assert "其中 [7]、[smith2020] 在参考文献列表中没有条目" in findings[0]["detail"]
+    # 参考文献章：条目逐条未验证（[n] 与 n. 两种写法）
+    assert findings[1]["numbers"] == ["[3]", "[5]", "[6]"]
+    assert "列出的 3 条参考文献均未经验证" in findings[1]["detail"]
+    assert findings[2]["numbers"] == ["［2］"]
+
+    # refs/ 就绪后：已验证的编号 / key 放行，只剩列表里没有的 [7]
+    verified = audit_citations(sections, abstract, {"3", "5", "6", "smith2020", "2"})
+    assert [f["scope"] for f in verified] == ["第2章《5 模型建立与求解》"]
+    assert verified[0]["numbers"] == ["[5-7]"]
+
+    # 正文里以 ### 起头的参考文献小节同样算列表；其后的下一个小节回到正文
+    inline = [{
+        "heading": "7 模型评价",
+        "content": "见 [1]。\n### 参考文献\n[1] A. 2020.\n### 附注\n这里的 [9] 是正文引用。",
+    }]
+    inline_findings = audit_citations(inline, "")
+    assert inline_findings[0]["numbers"] == ["[1]", "[9]"]
+    assert "其中 [9] 在参考文献列表中没有条目" in inline_findings[0]["detail"]
+    assert inline_findings[1]["numbers"] == ["[1]"]
+
+
+def test_audit_chain_orders_numbers_then_figures_then_citations():
+    sections = [{"heading": "5 求解", "content": "取 0.87，如图 1 所示，见表 9，文献 [2]。"}]
+    findings = audit_chain(sections, "", allowed={"0.12"})
+    assert [f["kind"] for f in findings] == [
+        "unsourced_number", "phantom_figure", "phantom_table", "unverified_citation",
+    ]
+    assert summarize_kinds(findings) == "无出处数值 1 处、图表引用不实 2 处、引用未经验证 1 处"
+    assert summarize_kinds([]) == ""
+
+
+def test_paper_writing_g4_counts_phantom_figures_and_citations(registry):
+    """终稿审计链在 G4：图表 / 引用发现与数值发现同进 outputs 与卡片，title 带分类计数；
+    没有章级重写（定义跨章，只能在终稿判）。"""
+    pad = lambda text, target: text + "析" * (target - len(text))  # noqa: E731
+    ch1 = pad("背景如图 1 所示。", 600)
+    ch2 = pad("rmse=0.12，见表 1。\n\n表 1 指标\n| 指标 | 值 |\n| --- | --- |\n| rmse | 0.12 |\n", 1200)
+    ch3 = pad("结论与文献 [4] 一致。", 800)
+    llm = ScriptedLlmPort({
+        "paper_outline.default": [stub_response(PAPER_OUTLINE_OK)],
+        "paper_section.default": [
+            stub_response({"content": ch1, "digest": "d1"}),
+            stub_response({"content": ch2, "digest": "d2"}),
+            stub_response({"content": ch3, "digest": "d3"}),
+        ],
+        "paper_finalize.default": [stub_response(PAPER_FINALIZE_OK)],
+    })
+    node = PaperWritingNode(registry)
+
+    result = node.run(make_ctx(TaskState.PAPER_WRITING, prior=paper_prior()), make_services(llm))
+
+    assert result.status == NodeResult.NEEDS_REVIEW
+    section_calls = [c for c in llm.calls if c.prompt_id == "paper_section.default"]
+    assert len(section_calls) == 3, "图表 / 引用发现不触发章级重写"
+    assert result.metrics.get("audit_rewrites") is None
+    findings = result.outputs["audit_findings"]
+    assert [(f["scope"], f["kind"]) for f in findings] == [
+        ("第1章《1 问题重述》", "phantom_figure"),
+        ("第3章《3 结果分析与检验》", "unverified_citation"),
+    ]
+    assert findings[0]["numbers"] == ["图 1"] and findings[1]["numbers"] == ["[4]"]
+    meta = result.review_meta
+    assert meta["impact"]["audit_findings_total"] == 2
+    assert meta["impact"]["audit_findings_by_kind"] == {"phantom_figure": 1, "unverified_citation": 1}
+    assert meta["impact"]["recommended"] == "redo:PAPER_WRITING"
+    assert "终稿审计发现 2 处（图表引用不实 1 处、引用未经验证 1 处）：" in result.review_reason
+    assert "引用了 1 处不存在的图（图 1）" in result.review_reason
+    assert "1 处引用未经验证（[4]）" in result.review_reason

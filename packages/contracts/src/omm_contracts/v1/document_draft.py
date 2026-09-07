@@ -44,10 +44,13 @@ class FrozenNumber(BaseModel):
 
 class Kind(Enum):
     """
-    发现类型；目前只有「无出处数值」，审计链（H5 切片 2）按需新增取值。
+    发现类型：unsourced_number 无出处数值（不在冻结清单与材料中）；phantom_figure 图引用 / 插图没有对应的真实图件；phantom_table 表引用在全文找不到带该编号表题的表格；unverified_citation 引用标记或参考文献条目不在已验证的引用库中。消费者须容忍未知取值。
     """
 
     unsourced_number = "unsourced_number"
+    phantom_figure = "phantom_figure"
+    phantom_table = "phantom_table"
+    unverified_citation = "unverified_citation"
 
 
 class AuditFinding(BaseModel):
@@ -57,10 +60,11 @@ class AuditFinding(BaseModel):
     scope: str = Field(..., description="发现所在位置：「第 N 章《…》」或「摘要」。")
     kind: Kind = Field(
         ...,
-        description="发现类型；目前只有「无出处数值」，审计链（H5 切片 2）按需新增取值。",
+        description="发现类型：unsourced_number 无出处数值（不在冻结清单与材料中）；phantom_figure 图引用 / 插图没有对应的真实图件；phantom_table 表引用在全文找不到带该编号表题的表格；unverified_citation 引用标记或参考文献条目不在已验证的引用库中。消费者须容忍未知取值。",
     )
     numbers: list[str] = Field(
-        ..., description="对不上账的数值原样 token（取样，最多 8 个）。"
+        ...,
+        description="违规 token 原样取样（最多 8 个）：数值 / 「图 N」「表 N」与插图文件名 / 引用标记（[3]、\\cite{key}）。字段名沿用首版（改名即破坏性变更）。",
     )
     detail: str = Field(..., description="人可读说明。")
 
@@ -109,5 +113,5 @@ class DocumentDraft(BaseModel):
     )
     audit_findings: list[AuditFinding] | None = Field(
         None,
-        description="终稿数字审计发现（G4 定稿闸门的证据）；空数组 = 审计过且 0 违规；未审计（旧运行、模拟节点）为 null。可选字段：旧消费者可忽略。",
+        description="终稿审计链的发现（G4 定稿闸门的证据）：数值审计（正文数值 ∈ 冻结清单 ∪ 材料）、图表审计（引用的图须是真实图件、引用的表须有带编号表题的表格）、引用审计（引用标记与参考文献条目须来自已验证的引用库）三条确定性审计顺序过终稿；空数组 = 审计过且 0 违规；未审计（旧运行、模拟节点）为 null。可选字段：旧消费者可忽略。",
     )

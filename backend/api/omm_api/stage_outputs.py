@@ -683,7 +683,10 @@ def _experiment_summary(
 _FROZEN_SOURCE_STAGES = frozenset(
     {"DATA_PREPARATION", "MODEL_PLANNING", "EXPERIMENTING", "VALIDATING"}
 )
-_AUDIT_FINDING_KINDS = frozenset({"unsourced_number"})
+#: 审计链三条审计产出的发现类型（契约 enum）：数值 / 图表（图、表分开） / 引用。
+_AUDIT_FINDING_KINDS = frozenset(
+    {"unsourced_number", "phantom_figure", "phantom_table", "unverified_citation"}
+)
 
 
 def _frozen_numbers(raw: Any) -> Optional[list[dict[str, Any]]]:
@@ -717,7 +720,11 @@ def _frozen_numbers(raw: Any) -> Optional[list[dict[str, Any]]]:
 
 
 def _audit_findings(raw: Any) -> Optional[list[dict[str, Any]]]:
-    """节点 outputs.audit_findings → 契约 audit_finding[]（同上：缺省 null、畸形剔除）。"""
+    """节点 outputs.audit_findings → 契约 audit_finding[]（同上：缺省 null、畸形剔除）。
+
+    kind 不在契约 enum 里的条目剔除（透传会让 additionalProperties=false 的契约把整个
+    接口打成 500）；新审计类型必须先进契约 enum 再进这张白名单。
+    """
     if not isinstance(raw, list):
         return None
     findings: list[dict[str, Any]] = []

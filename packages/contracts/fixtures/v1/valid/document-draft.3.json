@@ -1,0 +1,51 @@
+{
+  "run_id": "run_2b3c4d5e6f708192a3b4c5d6e7f8091a",
+  "title": "基于整数规划的共享单车调度优化",
+  "abstract": "本文建立整数规划模型求解调度问题，贪心基线 rmse=0.12，稳健性复跑三项检查通过两项。",
+  "keywords": ["整数规划", "调度"],
+  "sections": [
+    { "heading": "1 问题重述", "content": "题目要求给出调度方案……" },
+    { "heading": "5 模型建立与求解", "content": "模型结构如图 1 所示，参数设置见表 1，文献 [3] 与 [5-7] 给出了类似做法。\n\n![图 2 拟合曲线](figures/fit.png)" },
+    { "heading": "6 结果分析与检验", "content": "bootstrap 稳定性 0.31 超出阈值 0.2，结论需谨慎外推；文献常见值为 0.87。" },
+    { "heading": "参考文献", "content": "[3] Smith J. Bike sharing rebalancing. 2020.\n[5] Doe A. Integer programming for fleets. 2019.\n[6] Roe B. Demand forecasting. 2018." }
+  ],
+  "version": 3,
+  "updated_at": "2026-09-06T18:30:00.000000Z",
+  "frozen_numbers": [
+    { "id": "metrics.rmse", "label": "实验指标 rmse", "value": 0.12, "source_stage": "EXPERIMENTING", "source_path": "metrics.rmse" },
+    { "id": "robustness.bootstrap.value", "label": "稳健性检查「bootstrap 稳定性」实测值", "value": 0.31, "source_stage": "VALIDATING", "source_path": "robustness.checks[1].value" },
+    { "id": "robustness.bootstrap.threshold", "label": "稳健性检查「bootstrap 稳定性」阈值", "value": 0.2, "source_stage": "VALIDATING", "source_path": "robustness.checks[1].threshold" }
+  ],
+  "audit_findings": [
+    {
+      "scope": "第3章《6 结果分析与检验》",
+      "kind": "unsourced_number",
+      "numbers": ["0.87"],
+      "detail": "第3章《6 结果分析与检验》有 1 个数值不在冻结清单与材料中（0.87）"
+    },
+    {
+      "scope": "第2章《5 模型建立与求解》",
+      "kind": "phantom_figure",
+      "numbers": ["图 1", "图 2", "fit.png"],
+      "detail": "第2章《5 模型建立与求解》引用了 2 处不存在的图（图 1、图 2），插入了 1 张不是本次运行产出的图件（fit.png）；本次运行没有可引用的真实图件"
+    },
+    {
+      "scope": "第2章《5 模型建立与求解》",
+      "kind": "phantom_table",
+      "numbers": ["表 1"],
+      "detail": "第2章《5 模型建立与求解》引用了 1 处没有对应表格的表（表 1）：全文找不到带该编号表题的 Markdown 表格"
+    },
+    {
+      "scope": "第2章《5 模型建立与求解》",
+      "kind": "unverified_citation",
+      "numbers": ["[3]", "[5-7]"],
+      "detail": "第2章《5 模型建立与求解》有 2 处引用未经验证（[3]、[5-7]）：参考文献库尚未建立，无法核实；其中 [7] 在参考文献列表中没有条目"
+    },
+    {
+      "scope": "第4章《参考文献》",
+      "kind": "unverified_citation",
+      "numbers": ["[3]", "[5]", "[6]"],
+      "detail": "第4章《参考文献》列出的 3 条参考文献均未经验证（[3]、[5]、[6]）：参考文献库尚未建立，条目真实性无法核实"
+    }
+  ]
+}

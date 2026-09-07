@@ -25,8 +25,10 @@ from conftest import (
 from omm_api.orm import ApprovalRequestRow
 from omm_api.stage_outputs import (
     StageState,
+    _audit_findings,
     _cleaning_report,
     _dataset_profile,
+    _document_draft,
     _plan_proposal,
     _review_report,
     _robustness_report,
@@ -623,6 +625,32 @@ def test_cleaning_projection_strips_process_fields_and_normalizes(validate_contr
     legacy = _dataset_profile(_RUN_ID, state).model_dump(mode="json")
     validate_contract("dataset-profile.schema.json", legacy)
     assert legacy["cleaning"] is None
+
+
+def test_audit_findings_projection_keeps_audit_chain_kinds_and_drops_unknown(validate_contract):
+    """审计链三条审计的四种 kind 都进契约；节点将来多出的未知 kind 逐条剔除
+    （契约 enum 硬约束，透传会把 stage-outputs 打成 500）；缺键 → null、空数组原样。"""
+    raw = [
+        {"scope": "第3章《6 结果分析与检验》", "kind": "unsourced_number", "numbers": ["0.87"], "detail": "无出处"},
+        {"scope": "第2章《5 模型建立与求解》", "kind": "phantom_figure", "numbers": ["图 1", "fit.png"], "detail": "幽灵图"},
+        {"scope": "第2章《5 模型建立与求解》", "kind": "phantom_table", "numbers": ["表 1"], "detail": "幽灵表"},
+        {"scope": "第4章《参考文献》", "kind": "unverified_citation", "numbers": ["[3]", "[5]"], "detail": "未验证"},
+        {"scope": "摘要", "kind": "future_kind", "numbers": [], "detail": "投影不认识的类型"},
+        "garbage",
+    ]
+    findings = _audit_findings(raw)
+    assert [f["kind"] for f in findings] == [
+        "unsourced_number", "phantom_figure", "phantom_table", "unverified_citation",
+    ]
+    assert findings[1]["numbers"] == ["图 1", "fit.png"] and findings[3]["numbers"] == ["[3]", "[5]"]
+    assert _audit_findings(None) is None and _audit_findings([]) == []
+
+    state = StageState()
+    state.at = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    state.outputs = {**PAPER_OUTPUT, "frozen_numbers": [], "audit_findings": raw}
+    payload = _document_draft(_RUN_ID, state).model_dump(mode="json")
+    validate_contract("document-draft.schema.json", payload)
+    assert [f["kind"] for f in payload["audit_findings"]] == [f["kind"] for f in findings]
 
 
 def test_stage_outputs_carry_cleaning_and_its_review_after_real_cleaning(client, monkeypatch, validate_contract):

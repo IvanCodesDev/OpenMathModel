@@ -2,7 +2,7 @@
 id: paper_outline.default
 stage: PAPER_WRITING
 variant: outline
-version: 4
+version: 5
 input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "notation", "chapters"], "properties": {"title": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "notation": {"type": "string"}, "chapters": {"type": "array", "items": {"type": "object", "required": ["heading", "brief", "target_chars"], "properties": {"heading": {"type": "string"}, "brief": {"type": "string"}, "target_chars": {"type": "integer"}, "source_keys": {"type": "array", "items": {"type": "string"}}}}}}}
 ---
@@ -53,4 +53,5 @@ output_schema: {"type": "object", "required": ["title", "notation", "chapters"],
   - `target_chars`：本章目标字数；全部章节合计 8000-12000 字，「模型建立与求解」与「结果分析与检验」两章合计不少于总量一半。
   - `source_keys`：本章写作需要的材料，取值只能是 `problem_analysis`、`data_preparation`、`chosen_plan`、`model_assumptions`、`model_symbols`、`experiment_summary`、`validation_summary`、`frozen_numbers` 的子集（数字冻结清单每章都会自动附上，不必重复列出）。
 - 所有数值只能来自数字冻结清单与输入材料，禁止编造；检验结论中的保留意见必须规划进「结果分析与检验」章的 brief，不得淡化。
+- 图表与引用：输入材料没有提供真实图件时，brief 不得要求「配图」或引用「图 N」；材料没有已验证的文献条目时，不要规划「参考文献」章，brief 也不得要求引用文献——终稿会逐条核对图表引用与文献引用，虚构的一律记为审计发现。表格可以规划（写手用 Markdown 表格并配表题）。
 - 数据准备与清洗结论决定正文的样本口径：数据预处理小节按其中的清洗策略与执行结论描述（清洗未执行就写按原始数据建模，不得虚构清洗过程）；清洗脚本独立审稿未解决的意见、以及用户在数据确认闸门的决策所要求的说明，必须规划进相应章节的 brief，不得淡化。
