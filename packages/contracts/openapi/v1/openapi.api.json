@@ -512,6 +512,97 @@
         "title": "ArtifactList",
         "type": "object"
       },
+      "ArtifactPreview": {
+        "description": "表格产物的前 N 行预览（数据页「原始数据 / 清洗后预览」用）。\n\n只做分隔符文本（csv / tsv）：首行作表头、其后 ``rows`` 行原样字符串（单元格截到\n200 字符）；``row_count`` 是数据行总数（内容 ≤ 10 MB 时全量计数，否则 null）；\n``truncated`` = 还有没展示的行。内容与下载走同一条归属 + 哈希核验路径。",
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "delimiter": {
+            "title": "Delimiter",
+            "type": "string"
+          },
+          "encoding": {
+            "title": "Encoding",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "media_type",
+          "encoding",
+          "delimiter",
+          "columns",
+          "rows",
+          "truncated"
+        ],
+        "title": "ArtifactPreview",
+        "type": "object"
+      },
       "ArtifactText": {
         "description": "附件正文抽取结果。\n\n``status`` 分五档：ready 完整抽出、partial 触顶截断、empty 文件正常但没有\n文字、unsupported 缺少可选依赖或格式不支持、failed 文件损坏或抽取出错。\n后三档也是正常响应（200）——调用方需要的是原因，而不是一个错误码。",
         "properties": {
@@ -1260,6 +1351,133 @@
         "title": "ChatTurnTraceRequest",
         "type": "object"
       },
+      "CleaningDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "拍板人（账户标识原值；无登录信息时为 user）。",
+            "title": "Actor",
+            "type": "string"
+          },
+          "approval_id": {
+            "description": "G2 审批请求 id（/task-runs/{run_id}/approvals 里的那条）。",
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "拍板时的备注；无则 null。",
+            "title": "Comment"
+          },
+          "option_id": {
+            "description": "所选选项 id：adopt_cleaned 采用清洗结果 / use_raw 改用原始数据 / reject 退回调整（节点声明的选项，消费者须容忍新增取值）。",
+            "title": "Option Id",
+            "type": "string"
+          },
+          "resolved_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "approval_id",
+          "option_id",
+          "actor",
+          "comment",
+          "resolved_at"
+        ],
+        "title": "CleaningDecision",
+        "type": "object"
+      },
+      "CleaningOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "description": "产物 id（/api/v1/artifacts/{id}/download 的主键）。",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "可下载时的相对地址（/api/v1/artifacts/{id}/download）；内容对象缺失或产物未就绪为 null。",
+            "title": "Download Url"
+          },
+          "media_type": {
+            "description": "登记的媒体类型；未知为 application/octet-stream。",
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "description": "文件名（内容 URI 尾部的真实文件名）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/CleaningOutputRole"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "登记的内容摘要（下载端点按同一值核验）；未登记为 null。",
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "登记大小；未知为 null。",
+            "title": "Size Bytes"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "role",
+          "media_type",
+          "size_bytes",
+          "sha256",
+          "download_url"
+        ],
+        "title": "CleaningOutput",
+        "type": "object"
+      },
+      "CleaningOutputRole": {
+        "description": "产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ figure 探索性图件（figures/ 下的图）/ other 其余登记产物（日志等）。消费者须容忍新增取值。",
+        "enum": [
+          "cleaned_data",
+          "script",
+          "figure",
+          "other"
+        ],
+        "title": "CleaningOutputRole",
+        "type": "string"
+      },
       "CleaningReport": {
         "additionalProperties": false,
         "properties": {
@@ -1269,10 +1487,36 @@
             "title": "Attempts",
             "type": "integer"
           },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CleaningDecision"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "G2 数据确认闸门对这一版清洗的人工决策（采用清洗结果 / 改用原始数据 / 退回调整）。闸门未触发（影响面在阈值内且审稿未僵持）、仍挂起、或未执行清洗时为 null。可选字段：该字段出现之前的消费者可忽略。"
+          },
           "executed": {
             "description": "清洗脚本是否真的执行过。false 时 status 为 null、数字为 0、列表为空、reason 说明原因（未配置工具 / 监督者 / 会话端口、无数据文件、预算不足、子代理未完成）。",
             "title": "Executed",
             "type": "boolean"
+          },
+          "figures": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DataFigure"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "清洗沙盒顺手画的探索性图件（清洗前后分布 / 缺失情况等，只画真实数据）：沙盒真实落盘并被采集的图件清单，编号与论文节点的图件清单同一规则（数据准备阶段的图最先编号）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。",
+            "title": "Figures"
           },
           "imputed_columns": {
             "description": "被插补的列（脚本标记行 imputed_columns）；无则空列表。",
@@ -1289,6 +1533,21 @@
             },
             "title": "Imputed Target Columns",
             "type": "array"
+          },
+          "outputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CleaningOutput"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "清洗产出的文件：cleaned/ 下的清洗后数据表与清洗脚本 cleaning.py（数据准备节点最近一趟登记的产物；投影按产物登记表确定性填，不经模型）。未执行为空列表。可选字段：该字段出现之前的消费者可忽略。",
+            "title": "Outputs"
           },
           "reason": {
             "description": "未执行的原因；执行过为空串。",
@@ -1540,6 +1799,133 @@
         "title": "CreateTaskRunInput",
         "type": "object"
       },
+      "DataFigure": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。",
+            "title": "Artifact Id"
+          },
+          "caption": {
+            "description": "清洗工程师在终答 figure_notes 里给的一句说明；未给为空串。",
+            "title": "Caption",
+            "type": "string"
+          },
+          "name": {
+            "description": "图件文件名（basename）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "description": "全文统一编号「图 N」（数据准备阶段的图最先编号，与实验 / 检验 / 论文补图同一张清单）。",
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "source_stage": {
+            "$ref": "#/components/schemas/DataFigureStage"
+          }
+        },
+        "required": [
+          "number",
+          "name",
+          "artifact_id",
+          "caption",
+          "source_stage"
+        ],
+        "title": "DataFigure",
+        "type": "object"
+      },
+      "DataFigureStage": {
+        "description": "图件的来源阶段：数据准备（清洗沙盒的探索性图）。",
+        "enum": [
+          "DATA_PREPARATION"
+        ],
+        "title": "DataFigureStage",
+        "type": "string"
+      },
+      "DataInput": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "description": "附件产物 id（/api/v1/artifacts/{id}/download 与 /preview 的主键）。",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "可下载时的相对地址（/api/v1/artifacts/{id}/download）；产物缺失、不属于本项目或内容对象不可读为 null。",
+            "title": "Download Url"
+          },
+          "media_type": {
+            "description": "登记的媒体类型；产物不在登记表时为 application/octet-stream。",
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "description": "文件名（运行参数里登记的名字，取 basename）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "登记的内容摘要；未登记为 null。",
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "登记大小；未知为 null。",
+            "title": "Size Bytes"
+          },
+          "staged": {
+            "description": "是否满足下发到沙盒工作区 data/ 的条件（.csv 文件、同项目产物、≤ 10 MB）——不满足的附件数据阶段看不到，只作附件摘要。",
+            "title": "Staged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "media_type",
+          "size_bytes",
+          "sha256",
+          "download_url",
+          "staged"
+        ],
+        "title": "DataInput",
+        "type": "object"
+      },
       "DatasetEntry": {
         "additionalProperties": false,
         "properties": {
@@ -1609,6 +1995,21 @@
             },
             "title": "Derived Features",
             "type": "array"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DataInput"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "本次运行下发给数据阶段的原始数据文件（运行参数 attachment_metadata 里的附件，按登记顺序；投影按产物登记表确定性填，不经模型）。没有附件为空列表。可选字段：该字段出现之前的消费者可忽略。",
+            "title": "Inputs"
           },
           "missing_value_strategy": {
             "anyOf": [
@@ -2073,6 +2474,60 @@
         "title": "DocumentDraft",
         "type": "object"
       },
+      "ExperimentFigure": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。",
+            "title": "Artifact Id"
+          },
+          "caption": {
+            "description": "画图工程师在终答里给的一句说明；未给为空串。",
+            "title": "Caption",
+            "type": "string"
+          },
+          "name": {
+            "description": "图件文件名（basename）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "description": "全文统一编号「图 N」（实验图先、检验图后，文件名去重）。",
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "source_stage": {
+            "$ref": "#/components/schemas/ExperimentFigureStage"
+          }
+        },
+        "required": [
+          "number",
+          "name",
+          "artifact_id",
+          "caption",
+          "source_stage"
+        ],
+        "title": "ExperimentFigure",
+        "type": "object"
+      },
+      "ExperimentFigureStage": {
+        "description": "图件的来源阶段：实验运行沙盒 / 结果验证（稳健性复跑）沙盒。",
+        "enum": [
+          "EXPERIMENTING",
+          "VALIDATING"
+        ],
+        "title": "ExperimentFigureStage",
+        "type": "string"
+      },
       "ExperimentSummary": {
         "additionalProperties": false,
         "description": "实验与验证页正文投影：EXPERIMENTING 阶段真实节点（LLM 生成代码 + python 沙箱执行）的最新成功输出；validation 为同页 VALIDATING 阶段的检验报告，检验未完成时为 null。",
@@ -2086,6 +2541,21 @@
             "description": "实验过程摘要（思路 + 核心指标 + 产物文件），供检验与论文阶段引用。",
             "title": "Experiment Summary",
             "type": "string"
+          },
+          "figures": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ExperimentFigure"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实验 / 检验阶段沙盒真实落盘并被采集的图件清单（实验图先编号、检验图其后，与论文节点的图件清单同一编号规则；论文阶段补画的图不在此列）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。",
+            "title": "Figures"
           },
           "metrics": {
             "additionalProperties": true,
@@ -3102,9 +3572,22 @@
             "title": "Card Id"
           },
           "cited": {
-            "description": "正文（含摘要）是否引用了该条目（任一 [n] 标记展开后命中编号），由节点确定性判定。",
+            "description": "正文（含摘要）是否引用了该条目（任一 [n] / \\cite{key} 标记展开后命中编号或 key），由节点确定性判定。",
             "title": "Cited",
             "type": "boolean"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z_][a-z0-9_]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "稳定的引用 key（`\\cite{key}` 与 refs/references.bib 用），由卡片 id 确定性生成；老运行没有为 null。",
+            "title": "Key"
           },
           "number": {
             "description": "全文固定编号 n（正文引用标记「[n]」与参考文献条目编号），按 方案引用 → 用户提供 顺序赋予，不因未引用而重编。",
@@ -3138,6 +3621,17 @@
             ],
             "description": "出处链接（论文全文或来源页，仅 http(s)）；卡片没有可用链接时为 null。",
             "title": "Url"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verification"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。"
           }
         },
         "required": [
@@ -4322,11 +4816,12 @@
         "type": "string"
       },
       "SourceStage1": {
-        "description": "产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。",
+        "description": "产出该图件的阶段：数据准备清洗沙盒的探索性图（DATA_PREPARATION，最先编号）、实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。消费者须容忍新增取值。",
         "enum": [
           "EXPERIMENTING",
           "VALIDATING",
-          "PAPER_WRITING"
+          "PAPER_WRITING",
+          "DATA_PREPARATION"
         ],
         "title": "SourceStage1",
         "type": "string"
@@ -5210,6 +5705,16 @@
           "fail"
         ],
         "title": "Verdict",
+        "type": "string"
+      },
+      "Verification": {
+        "description": "记录级验证状态：source_verified = 知识库卡片自带来源 URL；title_matched = 用户资料按标题匹配到知识库；unverified = 两者皆非；老运行没有为 null。",
+        "enum": [
+          "source_verified",
+          "title_matched",
+          "unverified"
+        ],
+        "title": "Verification",
         "type": "string"
       },
       "omm_contracts__v1__approval_request__Status": {
@@ -7123,6 +7628,59 @@
         ]
       }
     },
+    "/api/v1/artifacts/{artifact_id}/preview": {
+      "get": {
+        "description": "表格产物的前 N 行（数据页「原始数据」/「清洗后预览」）。\n\n只做分隔符文本（csv / tsv）；其余产物 409 ``ARTIFACT_PREVIEW_UNSUPPORTED``。内容与下载\n走同一条归属 + 哈希核验路径；``rows`` 夹到 [1, 200]，不缓存（产物内容寻址、解析很快）。",
+        "operationId": "preview_artifact_table_api_v1_artifacts__artifact_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rows",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "title": "Rows",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Artifact Table",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/v1/artifacts/{artifact_id}/text": {
       "get": {
         "description": "读取附件正文；首次访问时现场抽取并缓存。\n\n抽取放在读取时而不是上传时：上传路径要对用户即时响应，而几十兆的 PDF 抽一遍\n要好几秒。产物内容寻址、字节不可变，因此抽一次可以一直复用；没抽出正文的\n负结果只在 TTL 内复用（见 NEGATIVE_TEXT_CACHE_TTL），``refresh=true``\n用于服务端补装了 OCR 或解析依赖之后立即重跑。",
@@ -7971,6 +8529,47 @@
         "summary": "List Task Run Approvals",
         "tags": [
           "task-runs"
+        ]
+      }
+    },
+    "/api/v1/task-runs/{run_id}/delivery-package": {
+      "get": {
+        "operationId": "download_delivery_package_api_v1_task_runs__run_id__delivery_package_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "交付包 zip：manifest.json + SHA256SUMS + README.txt + package.json + files/"
+          },
+          "409": {
+            "description": "运行尚无可交付的论文成果（成果清单没有交付记录）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Delivery Package",
+        "tags": [
+          "delivery"
         ]
       }
     },
