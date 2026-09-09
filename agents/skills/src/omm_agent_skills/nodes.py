@@ -3332,6 +3332,101 @@ def _robustness_summary_text(status: str, checks: Sequence[Mapping[str, Any]]) -
     return text + f"；未通过：{detail}。"
 
 
+def _previous_robustness(ctx: NodeContext) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+    """回退前那一轮的稳健性结果（反馈包 ``superseded`` 里被丢弃的 VALIDATING 产出）+ 反馈元信息。
+
+    只有上一轮真的跑过检验且有未通过项时才有可比对象；没有回退 / 上一轮未执行 / 全过 → None。
+    """
+    feedback = ctx.iteration_feedback
+    if not feedback:
+        return None
+    validation = (feedback.get("superseded") or {}).get(TaskState.VALIDATING.value)
+    if not isinstance(validation, Mapping):
+        return None
+    robustness = validation.get("robustness")
+    if (
+        not isinstance(robustness, Mapping)
+        or not robustness.get("executed")
+        or str(robustness.get("status") or "") != "passed"
+    ):
+        return None
+    failed = [check for check in (robustness.get("failed_checks") or []) if isinstance(check, Mapping)]
+    if not failed:
+        return None
+    return robustness, feedback
+
+
+def _previous_checks_note(previous: Mapping[str, Any], feedback: Mapping[str, Any]) -> str:
+    """检验任务卡（与审稿材料）里的「上一轮未过检查」段：数字原样，要求同名 id 复检以便对比。"""
+    origin = "图按条件边自动回退" if feedback.get("auto") else "回退重做"
+    lines = [
+        f"- 上一轮检验（{origin}前）未通过的检查——本轮沿用同名检查 id 复检以便跨轮对比；"
+        "阈值照旧，不得为通过而放宽："
+    ]
+    for check in previous.get("failed_checks") or []:
+        name = str(check.get("name") or check.get("id") or "检查")
+        bits = [str(check.get("detail") or "").strip()]
+        if check.get("value") is not None:
+            bits.append(f"实测 {check.get('value')}")
+        if check.get("threshold") is not None:
+            bits.append(f"阈值 {check.get('threshold')}")
+        lines.append(f"  - {check.get('id')}｜{name}：{'；'.join(bit for bit in bits if bit)}")
+    return "\n".join(lines)
+
+
+def _round_comparison(
+    previous: Mapping[str, Any], checks: Sequence[Mapping[str, Any]], feedback: Mapping[str, Any]
+) -> dict[str, Any]:
+    """上一轮未过项 × 本轮检查 → 跨轮对比（按检查 id 求交，纯计数与点名，不判好坏）。"""
+    current = {str(check.get("id")): check for check in checks}
+    resolved: list[dict[str, Any]] = []
+    still_failing: list[dict[str, Any]] = []
+    not_rechecked: list[dict[str, Any]] = []
+    for check in previous.get("failed_checks") or []:
+        check_id = str(check.get("id"))
+        entry = {"id": check_id, "name": str(check.get("name") or check_id)}
+        now = current.get(check_id)
+        if now is None:
+            not_rechecked.append(entry)
+        elif now.get("passed"):
+            resolved.append(entry)
+        else:
+            still_failing.append({**entry, "value": now.get("value"), "threshold": now.get("threshold")})
+    iteration = feedback.get("iteration")
+    return {
+        "previous_total": int(previous.get("checks_total") or 0),
+        "previous_failed": [
+            {"id": str(c.get("id")), "name": str(c.get("name") or c.get("id"))}
+            for c in previous.get("failed_checks") or []
+        ],
+        "resolved": resolved,
+        "still_failing": still_failing,
+        "not_rechecked": not_rechecked,
+        "auto": bool(feedback.get("auto")),
+        "iteration": iteration if isinstance(iteration, int) and not isinstance(iteration, bool) else None,
+    }
+
+
+def _round_comparison_sentence(comparison: Mapping[str, Any]) -> str:
+    """「较上一轮：…」一句话（G3 卡片与论文材料共用）：只点名与计数。"""
+    origin = (
+        f"第 {comparison['iteration']} 轮自动回退后复检"
+        if comparison.get("auto") and comparison.get("iteration")
+        else "回退重做后复检"
+    )
+    bits: list[str] = []
+    if comparison.get("resolved"):
+        names = "、".join(entry["name"] for entry in comparison["resolved"])
+        bits.append(f"{len(comparison['resolved'])} 项转为通过（{names}）")
+    if comparison.get("still_failing"):
+        names = "、".join(entry["name"] for entry in comparison["still_failing"])
+        bits.append(f"{len(comparison['still_failing'])} 项仍未通过（{names}）")
+    if comparison.get("not_rechecked"):
+        names = "、".join(entry["name"] for entry in comparison["not_rechecked"])
+        bits.append(f"{len(comparison['not_rechecked'])} 项本轮未复检（{names}）")
+    return f"较上一轮（{origin}）：上一轮未过的 {len(comparison.get('previous_failed') or [])} 项中 " + "、".join(bits)
+
+
 class ValidationNode(LlmSkillNode):
     """验证 = LLM 判读（单轮）→ 稳健性检查沙盒复跑（子代理）→ G3 条件闸门。
 
@@ -3449,6 +3544,12 @@ class ValidationNode(LlmSkillNode):
         experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
         metrics = dict(experiment.get("metrics") or {})
         risk_points = _risk_points(plan, judgement, experiment.get("review"))
+        # 跨轮对比（s35）：回退重做时把上一轮未过的检查点名进任务卡（要求同名 id 复检），
+        # 检验工程师据此聚焦复检而不是重新发明检查；审稿材料共用同一段。
+        previous = _previous_robustness(ctx)
+        if previous is not None:
+            note = _previous_checks_note(previous[0], previous[1])
+            risk_points = f"{risk_points}\n{note}" if risk_points else note
         # 须检验的假设进任务卡：检查优先围绕重点验证 / 待检验假设设计，标记行用
         # assumption_id 回指；已知 id 集合用于归一化与覆盖统计。
         focus = self._focus_assumptions(ctx)
@@ -3621,6 +3722,10 @@ class ValidationNode(LlmSkillNode):
         }
         if review is not None:
             robustness["review"] = review
+        # 跨轮对比结果（s35）：上一轮未过项 × 本轮检查按 id 求交；G3 卡片与论文材料据此
+        # 说得出「重做后哪些过了、哪些仍未过」。上一轮没有可比对象 / 本轮没跑成 → 不带键。
+        if previous is not None and status == "passed":
+            robustness["round_comparison"] = _round_comparison(previous[0], checks, previous[1])
         artifacts = _union_artifacts(waves, capture)
         # 检验阶段的图件（灵敏度 / 扰动图）同样是论文的合法图源，与实验图一起编号
         robustness["figures"] = figure_manifest(
@@ -3724,6 +3829,10 @@ class ValidationNode(LlmSkillNode):
         if failed:
             names = "、".join(str(check.get("name") or check.get("id")) for check in failed)
             reasons.append(f"稳健性检查 {total} 项中 {len(failed)} 项未通过：{names}")
+        comparison = robustness.get("round_comparison")
+        if isinstance(comparison, Mapping) and comparison.get("previous_failed"):
+            # 跨轮对比（s35）：拍板的人要看得到「重做之后有没有变好」
+            reasons.append(_round_comparison_sentence(comparison))
         if stalemate:
             reasons.append(
                 f"独立审稿 {int((review or {}).get('rounds') or 0)} 轮后仍有 "
@@ -3770,6 +3879,8 @@ class ValidationNode(LlmSkillNode):
                 "checks_reviewer_findings": checks_unresolved,
             },
         }
+        if isinstance(comparison, Mapping) and comparison.get("previous_failed"):
+            meta["impact"]["round_comparison"] = dict(comparison)
         return reason, meta
 
 
@@ -4028,6 +4139,14 @@ def _validation_material(
         text = str(robustness.get("summary_text") or "").strip()
         if text:
             summary = f"{summary}\n{text}"
+        comparison = robustness.get("round_comparison")
+        if isinstance(comparison, Mapping) and comparison.get("previous_failed"):
+            # 跨轮对比（s35）进论文材料：检验章可以如实写「重做后复检」的事实，
+            # 但只准引用本轮数字——上一轮的结果已作废，不得混用。
+            summary = (
+                f"{summary}\n本结果为回退重做后的复检。{_round_comparison_sentence(comparison)}。"
+                "论文只准引用本轮数字，不得引用或混入上一轮的作废结果。"
+            )
         coverage_text = _assumption_coverage_text(robustness.get("assumption_coverage"))
         if coverage_text:
             summary = f"{summary}\n{coverage_text}"
