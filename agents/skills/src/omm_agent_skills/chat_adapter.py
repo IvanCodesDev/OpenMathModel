@@ -46,8 +46,14 @@ def supports_chat(llm: Any) -> bool:
 
 #: 工具目录的协议说明（与 omm_agent_tools 的注册名对齐，装配期契约）：沙盒
 #: 五件套 + 卡片知识库两个只读工具（方案阶段提议人自主检索，§10.3 切片二）。
+#: code_run 是多语言统一入口（§7.4，H7）：language 由任务卡固定，执行体会退回换语言的调用。
 _TOOL_USAGE_LINES = {
     "python_run": '- python_run：执行完整 Python 脚本。arguments = {"code": "<脚本源码>"}',
+    "code_run": (
+        "- code_run：按任务卡实现语言执行完整脚本。"
+        'arguments = {"code": "<脚本源码>", '
+        '"language": "<任务卡给定的语言，如 python / r>"}'
+    ),
     "ws_write": '- ws_write：写工作区 UTF-8 文本文件。arguments = {"path": "相对路径", "text": "内容"}',
     "ws_read": '- ws_read：读工作区文本文件。arguments = {"path": "相对路径"}',
     "ws_list": '- ws_list：列出工作区文件。arguments = {"prefix": "可选路径前缀"}',

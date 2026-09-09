@@ -5,6 +5,10 @@
 这里做**确定性**核验：``ast`` 解析通过验收的脚本收集绑定过的标识符，把每条记号规范化成
 候选标识符，按三级匹配（精确 / 变体 / 仅主体）对账。结果进节点产出、审稿材料与警告，
 不改脚本、不改符号表、不硬阻断——脚本与记号对不上是审稿人与人裁的事实依据，不是失败。
+
+标识符收集只有 Python ``ast`` 版：实现语言不是 python 时（§7.4 多语言 Runner）
+``check_symbols`` 返回 ``skipped`` 结果——记号全部既不算命中也不算未命中，材料与警告如实写
+「未执行」（R-C 纪律），不把「没查」写成「全对」或「全错」。
 """
 
 from __future__ import annotations
@@ -16,12 +20,16 @@ from typing import Any
 
 __all__ = [
     "MATCH_LEVELS",
+    "SYMBOL_CHECK_LANGUAGES",
     "check_symbols",
     "script_identifiers",
     "symbol_candidates",
     "symbol_check_material",
     "symbol_check_warning",
 ]
+
+#: 有代码侧核验规则的实现语言（契约小写标识）；其余语言的收集器随 H7 各 Runner 落地再补。
+SYMBOL_CHECK_LANGUAGES: frozenset[str] = frozenset({"python"})
 
 #: 匹配等级（从强到弱）：exact = 记号规范化后与变量名逐字相同；variant = 大小写 / 下标连接
 #: 方式 / 希腊字母拼写的变体；base = 只有主体字母对上（``x_{ij}`` ↔ ``x``），最弱。
@@ -183,12 +191,17 @@ def _match(symbol: str, identifiers: set[str], lowered: Mapping[str, str]) -> tu
     return None
 
 
-def check_symbols(rows: Sequence[Mapping[str, Any]], code: str) -> dict[str, Any]:
-    """符号表 × 脚本 → ``{covered, missing, unmapped_variables, coverage, error?}``。
+def check_symbols(
+    rows: Sequence[Mapping[str, Any]], code: str, language: str = "python"
+) -> dict[str, Any]:
+    """符号表 × 脚本 → ``{covered, missing, unmapped_variables, coverage, error?, skipped?}``。
 
     ``covered`` = ``[{symbol, variable, match}]``；``missing`` = 找不到对应变量的记号；
     ``unmapped_variables`` = 脚本里没有对应到任何记号的绑定名（排序、截断）；``coverage`` =
     命中 / 记号数，符号表为空时 None。脚本解析失败不抛：全空 + ``error``。
+
+    ``language`` 是任务卡的实现语言：不在 :data:`SYMBOL_CHECK_LANGUAGES` 里 → 不解析，
+    ``skipped`` 带原因、``symbols_total`` 记有多少条记号没对照，``coverage`` 为 None。
     """
     symbols = [str(row.get("symbol") or "").strip() for row in rows if isinstance(row, Mapping)]
     symbols = [symbol for symbol in symbols if symbol]
@@ -198,6 +211,13 @@ def check_symbols(rows: Sequence[Mapping[str, Any]], code: str) -> dict[str, Any
         "unmapped_variables": [],
         "coverage": None,
     }
+    normalized = str(language or "python").strip().lower() or "python"
+    if normalized not in SYMBOL_CHECK_LANGUAGES:
+        result["skipped"] = (
+            f"实现语言 {normalized} 尚无代码侧核验规则（当前只有 Python ast 版）；本项未执行"
+        )
+        result["symbols_total"] = len(symbols)
+        return result
     try:
         identifiers = script_identifiers(code or "")
     except SyntaxError as exc:
@@ -225,6 +245,14 @@ def check_symbols(rows: Sequence[Mapping[str, Any]], code: str) -> dict[str, Any
 
 def symbol_check_material(result: Mapping[str, Any]) -> str:
     """审稿材料段：命中 / 未命中 / 脚本里多出来的变量，供审稿人判断脚本是否忠实于方案记号。"""
+    if result.get("skipped"):
+        total = int(result.get("symbols_total") or 0)
+        if total == 0:
+            return "符号对照（代码侧核验）：方案阶段未生成符号表，无可对照。"
+        return (
+            f"符号对照（代码侧核验）：未执行——{result['skipped']}；符号表 {total} 条记号"
+            "请你按脚本变量名人工核对。"
+        )
     covered = list(result.get("covered") or [])
     missing = list(result.get("missing") or [])
     total = len(covered) + len(missing)
@@ -252,7 +280,12 @@ def symbol_check_material(result: Mapping[str, Any]) -> str:
 
 
 def symbol_check_warning(result: Mapping[str, Any]) -> str | None:
-    """质量警告（只在有未命中记号时给）：可对账的一句中文。"""
+    """质量警告（只在有未命中记号、或有记号却没能核验时给）：可对账的一句中文。"""
+    if result.get("skipped"):
+        total = int(result.get("symbols_total") or 0)
+        if total == 0:
+            return None
+        return f"符号一致性核验未执行（{result['skipped']}），符号表 {total} 条记号未对照"
     missing = list(result.get("missing") or [])
     if not missing:
         return None
