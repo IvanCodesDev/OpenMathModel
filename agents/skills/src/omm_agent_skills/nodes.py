@@ -64,7 +64,14 @@ from .frozen_numbers import (
     render_frozen_numbers,
     unsourced_numbers,
 )
-from .paper_audit import audit_chain, count_by_kind, summarize_kinds
+from .paper_audit import (
+    FINDING_PHANTOM_FIGURE,
+    FINDING_PHANTOM_TABLE,
+    FINDING_UNVERIFIED_CITATION,
+    audit_chain,
+    count_by_kind,
+    summarize_kinds,
+)
 from .prompt_registry import PromptRegistry, PromptTemplate
 from .references import (
     REFS_BIB_PATH,
@@ -3750,6 +3757,10 @@ _DIGESTS_TOTAL_CHARS = 1200
 _SECTION_LENGTH_TOLERANCE = 0.3
 #: 全文的有界重写总额度（字数越界与无出处数字共享；控成本：不给多话的模型每章都加一次调用）。
 _MAX_LENGTH_REVISIONS = 2
+#: 终稿审计的图表 / 引用发现按章定向回改（R3）的额度：最多回改几章、每章一轮；剩下的交 G4。
+_MAX_TARGETED_REWRITES = 2
+_TARGETED_KINDS = frozenset({FINDING_PHANTOM_FIGURE, FINDING_PHANTOM_TABLE, FINDING_UNVERIFIED_CITATION})
+_SCOPE_CHAPTER = re.compile(r"^第(\d+)章《")
 #: source_keys 的合法取值与材料标题（总编给每章指定材料，缺失时给全量）。
 _MATERIAL_LABELS = {
     "problem_analysis": "问题分析结果（JSON）",
@@ -4219,21 +4230,27 @@ class PaperWritingNode(LlmSkillNode):
                 digests.append(
                     f"第{done_index}章《{entry['heading']}》：{entry['digest'] or '（无摘要）'}"
                 )
-        for index in range(len(sections) + 1, total + 1):
+        def chapter_target(index: int) -> int:
+            raw_target = chapters[index - 1].get("target_chars")
+            return raw_target if isinstance(raw_target, int) and raw_target > 0 else 1200
+
+        def chapter_vars(index: int) -> dict[str, str]:
+            """第 index 章的写作变量：逐章写作与终稿定向回改共用同一份（材料 / 前文摘要口径一致）。"""
             chapter = chapters[index - 1]
-            heading = str(chapter.get("heading") or f"第 {index} 章").strip()
-            raw_target = chapter.get("target_chars")
-            target = raw_target if isinstance(raw_target, int) and raw_target > 0 else 1200
-            materials = self._materials(variables, chapter.get("source_keys"))
-            section_vars = {
+            return {
                 "title": title,
                 "notation": notation,
-                "chapter_heading": heading,
+                "chapter_heading": str(chapter.get("heading") or f"第 {index} 章").strip(),
                 "chapter_brief": str(chapter.get("brief") or ""),
-                "target_chars": str(target),
-                "materials": materials,
-                "previous_digests": self._joined_digests(digests),
+                "target_chars": str(chapter_target(index)),
+                "materials": self._materials(variables, chapter.get("source_keys")),
+                "previous_digests": self._joined_digests(digests[: index - 1]),
             }
+
+        for index in range(len(sections) + 1, total + 1):
+            section_vars = chapter_vars(index)
+            heading = section_vars["chapter_heading"]
+            target = chapter_target(index)
             section, attempts, error = complete_validated(services, section_template, section_vars)
             attempts_total += attempts
             if section is None:
@@ -4340,6 +4357,33 @@ class PaperWritingNode(LlmSkillNode):
                 f"（如 {'、'.join(unsourced[:3])}）"
             )
 
+        # ── ③′ 终稿审计的图表 / 引用发现 → 按章定向回改（R3，有界）：定义跨章、只能在终稿判，
+        #    所以放在统稿之后：把该章的发现逐条喂回去重写一轮，全文复审只有真减少才采纳；
+        #    剩下的照旧进 audit_findings 交 G4。 ──
+        targeted_metrics, targeted_warnings, targeted_attempts = self._targeted_rewrites(
+            services,
+            section_template,
+            sections,
+            digests,
+            abstract,
+            chapter_vars,
+            audit_kwargs={
+                "allowed": allowed,
+                "abstract_allowed": abstract_allowed,
+                "available_figures": available_figure_names(figures),
+                "verified_refs": verified_reference_ids(references),
+                "reference_titles": reference_titles(references),
+                "reference_count": len(references),
+            },
+            figures=figures,
+            references=references,
+        )
+        attempts_total += targeted_attempts
+        warnings.extend(targeted_warnings)
+        if targeted_metrics.get("targeted_rewrites"):
+            # 采纳了回改的章其摘要可能变化：摘要允许集按新摘要重建（摘要正文不重写）
+            abstract_allowed = allowed | number_tokens(*digests)
+
         keywords = [
             str(keyword).strip()
             for keyword in (finalize.get("keywords") or outline.get("keywords") or [])
@@ -4365,6 +4409,7 @@ class PaperWritingNode(LlmSkillNode):
         if filled_symbols:
             metrics_payload["notation_filled"] = len(filled_symbols)
         metrics_payload.update(figure_metrics)
+        metrics_payload.update(targeted_metrics)
         if warnings:
             metrics_payload["quality_warnings"] = warnings
         return self._publish(
@@ -4905,6 +4950,134 @@ class PaperWritingNode(LlmSkillNode):
             "fallback_reason": fallback_reason,
         }
         return self._publish(ctx, services, parsed, metrics_payload, frozen, allowed, figures, references)
+
+    # -- R3：终稿审计的图表 / 引用发现按章定向回改 ----------------------------------
+
+    @staticmethod
+    def _targeted_by_chapter(findings: Sequence[Mapping[str, Any]]) -> dict[int, list[Mapping[str, Any]]]:
+        """图表 / 引用类发现按章归组（摘要与解析不出章号的发现不在回改范围）。"""
+        grouped: dict[int, list[Mapping[str, Any]]] = {}
+        for finding in findings:
+            if str(finding.get("kind") or "") not in _TARGETED_KINDS:
+                continue
+            match = _SCOPE_CHAPTER.match(str(finding.get("scope") or ""))
+            if match is None:
+                continue
+            grouped.setdefault(int(match.group(1)), []).append(finding)
+        return grouped
+
+    @staticmethod
+    def _targeted_instruction(
+        findings: Sequence[Mapping[str, Any]],
+        figures: Sequence[Mapping[str, Any]],
+        references: Sequence[Mapping[str, Any]],
+    ) -> str:
+        """回改指令：本章的发现逐条点名 + 三条修改规则（图件 / 表格 / 文献各自的合法来源），其余不动。"""
+        listed = "\n".join(f"- {str(item.get('detail') or item.get('scope') or '')}" for item in findings)
+        figure_rule = (
+            "只准引用或插入本次运行真实产出的图件，编号与文件名逐字照抄可用图件清单："
+            + "、".join(f"图 {item.get('number')}（{item.get('name')}）" for item in figures)
+            if figures
+            else "本次运行没有真实图件：删除全部「图 N」引用与插图，改为文字表述"
+        )
+        reference_rule = (
+            "引用文献只准写可引用文献表里的编号 "
+            + "、".join(f"[{item.get('number')}]" for item in references)
+            + "（或对应 \\cite{key}），参考文献章逐条照抄表中条目，不得自编编号或条目"
+            if references
+            else "本次运行没有可引用文献：删除全部 [n] / \\cite{} 标记与参考文献条目"
+        )
+        return (
+            f"终稿审计在本章发现 {len(findings)} 处图表 / 引用问题，须逐条修正后重写本章：\n{listed}\n"
+            f"修改规则：① {figure_rule}；② 引用「表 N」前必须在本章给出带编号表题「表 N …」的 Markdown "
+            f"表格，否则改为文字表述或删除该引用；③ {reference_rule}；④ 其余内容、公式、小节结构与全部数值"
+            "保持不变，字数带宽不变，只输出同格式 JSON。"
+        )
+
+    def _targeted_rewrites(
+        self,
+        services: NodeServices,
+        template: PromptTemplate,
+        sections: list[dict[str, str]],
+        digests: list[str],
+        abstract: str,
+        chapter_vars: Callable[[int], dict[str, str]],
+        *,
+        audit_kwargs: Mapping[str, Any],
+        figures: Sequence[Mapping[str, Any]],
+        references: Sequence[Mapping[str, Any]],
+    ) -> tuple[dict[str, Any], list[str], int]:
+        """终稿审计的图表 / 引用发现 → 按章定向回改（就地改 ``sections`` / ``digests``）。
+
+        发现最多的章先改，最多 ``_MAX_TARGETED_REWRITES`` 章、每章一轮；候选稿放回全文复审，
+        **该章的图表 / 引用发现真减少且无出处数字不增多**才采纳（定义跨章：表题 / 图题可能在别章，
+        只审本章会误判）。未采纳、超额度的章如实记警告，发现照旧进 audit_findings 交 G4。
+        返回 (指标, 警告, 会话调用次数)。
+        """
+        allowed = set(audit_kwargs["allowed"])
+        current = self._targeted_by_chapter(audit_chain(sections, abstract, **audit_kwargs))
+        if not current:
+            return {}, [], 0
+        order = sorted(current, key=lambda index: (-len(current[index]), index))
+        chosen = [index for index in order if 1 <= index <= len(sections)][:_MAX_TARGETED_REWRITES]
+        warnings: list[str] = []
+        attempts = 0
+        adopted = 0
+        for index in chosen:
+            findings = current[index]
+            heading = sections[index - 1]["heading"]
+            content = sections[index - 1]["content"]
+            kinds = sorted({str(item.get("kind")) for item in findings})
+            revised, extra, _error = complete_validated(
+                services,
+                template,
+                {
+                    **chapter_vars(index),
+                    "__repair_error": self._targeted_instruction(findings, figures, references),
+                    "__previous_output": content[:2000],
+                },
+            )
+            attempts += extra
+            candidate = str((revised or {}).get("content") or "").strip()
+            remaining = len(findings)
+            adopt = False
+            if candidate:
+                trial = [dict(section) for section in sections]
+                trial[index - 1]["content"] = candidate
+                after = self._targeted_by_chapter(audit_chain(trial, abstract, **audit_kwargs)).get(index, [])
+                numbers_ok = len(unsourced_numbers(candidate, allowed)) <= len(unsourced_numbers(content, allowed))
+                if len(after) < len(findings) and numbers_ok:
+                    sections[index - 1]["content"] = candidate
+                    new_digest = str(revised.get("digest") or "").strip()[:_DIGEST_CHARS]
+                    if new_digest:
+                        digests[index - 1] = f"第{index}章《{heading}》：{new_digest}"
+                    remaining = len(after)
+                    adopt = True
+                    adopted += 1
+            _emit_progress(services, {
+                "kind": "paper_targeted_rewrite",
+                "index": index,
+                "heading": heading,
+                "kinds": kinds,
+                "before": len(findings),
+                "after": remaining,
+                "adopted": adopt,
+            })
+            if not adopt:
+                warnings.append(
+                    f"第 {index} 章「{heading}」的 {len(findings)} 处图表 / 引用发现（{'、'.join(kinds)}）"
+                    "定向回改未见改善，交 G4 裁定"
+                )
+        skipped = [index for index in order if index not in chosen]
+        if skipped:
+            warnings.append(
+                f"另有 {len(skipped)} 章（第 {'、'.join(str(i) for i in skipped)} 章）的图表 / 引用发现"
+                f"超出本轮定向回改额度（{_MAX_TARGETED_REWRITES} 章），交 G4 裁定"
+            )
+        metrics: dict[str, Any] = {"targeted_rewrite_attempts": len(chosen)}
+        if adopted:
+            metrics["targeted_rewrites"] = adopted
+        return metrics, warnings, attempts
 
     def _publish(
         self,
