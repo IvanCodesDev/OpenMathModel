@@ -1,0 +1,23 @@
+{
+  "run_id": "run_4d5e6f708192a3b4c5d6e7f8091a2b3c",
+  "title": "基于整数规划的共享单车调度优化",
+  "abstract": "本文对订单数据做缺失值插补与异常值截断后建立整数规划模型，贪心基线 rmse=0.12。",
+  "keywords": ["整数规划", "调度", "数据清洗"],
+  "sections": [
+    { "heading": "1 问题重述", "content": "题目要求给出调度方案……" },
+    { "heading": "3 数据预处理", "content": "各列缺失比例见图 1，volume 列缺失 3.2%，按线性插值补齐。\n\n![图 1 清洗前各列缺失比例](missing_by_column.png)\n\n清洗后保留 995 行。" },
+    { "heading": "5 模型建立与求解", "content": "模型与基线的拟合对比见图 2。\n\n![图 2 模型与随机基线的 rmse 对比](fit_vs_baseline.png)\n\n贪心近似 rmse=0.12。" }
+  ],
+  "version": 1,
+  "updated_at": "2026-09-09T06:30:00.000000Z",
+  "frozen_numbers": [
+    { "id": "cleaning.rows_after", "label": "清洗后行数", "value": 995, "source_stage": "DATA_PREPARATION", "source_path": "cleaning.rows_after" },
+    { "id": "metrics.rmse", "label": "实验指标 rmse", "value": 0.12, "source_stage": "EXPERIMENTING", "source_path": "metrics.rmse" }
+  ],
+  "audit_findings": [],
+  "figures": [
+    { "number": 1, "name": "missing_by_column.png", "artifact_id": "art_1d2e3f4a5b6c", "caption": "清洗前各列缺失比例", "source_stage": "DATA_PREPARATION", "inserted": true },
+    { "number": 2, "name": "fit_vs_baseline.png", "artifact_id": "art_8f2a1c3d4e5b", "caption": "模型与随机基线的 rmse 对比", "source_stage": "EXPERIMENTING", "inserted": true }
+  ],
+  "references": []
+}

@@ -83,6 +83,15 @@
         "size_bytes": 2048,
         "sha256": "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
         "download_url": "/api/v1/artifacts/art_c1e2a3d4b5f6071a/download"
+      },
+      {
+        "artifact_id": "art_c1e2a3d4b5f6071b",
+        "name": "missing_by_column.png",
+        "role": "figure",
+        "media_type": "image/png",
+        "size_bytes": 18734,
+        "sha256": "2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e",
+        "download_url": "/api/v1/artifacts/art_c1e2a3d4b5f6071b/download"
       }
     ],
     "decision": {
@@ -91,7 +100,23 @@
       "actor": "user",
       "comment": "审稿僵持，先用原始数据建模",
       "resolved_at": "2026-09-06T12:05:00.000000Z"
-    }
+    },
+    "figures": [
+      {
+        "number": 1,
+        "name": "missing_by_column.png",
+        "artifact_id": "art_c1e2a3d4b5f6071b",
+        "caption": "清洗前各列缺失比例",
+        "source_stage": "DATA_PREPARATION"
+      },
+      {
+        "number": 2,
+        "name": "demand_before_after.svg",
+        "artifact_id": null,
+        "caption": "",
+        "source_stage": "DATA_PREPARATION"
+      }
+    ]
   },
   "inputs": [
     {

@@ -1446,10 +1446,11 @@
         "type": "object"
       },
       "CleaningOutputRole": {
-        "description": "产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ other 其余登记产物（日志等）。",
+        "description": "产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ figure 探索性图件（figures/ 下的图）/ other 其余登记产物（日志等）。消费者须容忍新增取值。",
         "enum": [
           "cleaned_data",
           "script",
+          "figure",
           "other"
         ],
         "title": "CleaningOutputRole",
@@ -1479,6 +1480,21 @@
             "description": "清洗脚本是否真的执行过。false 时 status 为 null、数字为 0、列表为空、reason 说明原因（未配置工具 / 监督者 / 会话端口、无数据文件、预算不足、子代理未完成）。",
             "title": "Executed",
             "type": "boolean"
+          },
+          "figures": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DataFigure"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "清洗沙盒顺手画的探索性图件（清洗前后分布 / 缺失情况等，只画真实数据）：沙盒真实落盘并被采集的图件清单，编号与论文节点的图件清单同一规则（数据准备阶段的图最先编号）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。",
+            "title": "Figures"
           },
           "imputed_columns": {
             "description": "被插补的列（脚本标记行 imputed_columns）；无则空列表。",
@@ -1760,6 +1776,59 @@
         ],
         "title": "CreateTaskRunInput",
         "type": "object"
+      },
+      "DataFigure": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。",
+            "title": "Artifact Id"
+          },
+          "caption": {
+            "description": "清洗工程师在终答 figure_notes 里给的一句说明；未给为空串。",
+            "title": "Caption",
+            "type": "string"
+          },
+          "name": {
+            "description": "图件文件名（basename）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "description": "全文统一编号「图 N」（数据准备阶段的图最先编号，与实验 / 检验 / 论文补图同一张清单）。",
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "source_stage": {
+            "$ref": "#/components/schemas/DataFigureStage"
+          }
+        },
+        "required": [
+          "number",
+          "name",
+          "artifact_id",
+          "caption",
+          "source_stage"
+        ],
+        "title": "DataFigure",
+        "type": "object"
+      },
+      "DataFigureStage": {
+        "description": "图件的来源阶段：数据准备（清洗沙盒的探索性图）。",
+        "enum": [
+          "DATA_PREPARATION"
+        ],
+        "title": "DataFigureStage",
+        "type": "string"
       },
       "DataInput": {
         "additionalProperties": false,
@@ -4725,11 +4794,12 @@
         "type": "string"
       },
       "SourceStage1": {
-        "description": "产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。",
+        "description": "产出该图件的阶段：数据准备清洗沙盒的探索性图（DATA_PREPARATION，最先编号）、实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。消费者须容忍新增取值。",
         "enum": [
           "EXPERIMENTING",
           "VALIDATING",
-          "PAPER_WRITING"
+          "PAPER_WRITING",
+          "DATA_PREPARATION"
         ],
         "title": "SourceStage1",
         "type": "string"

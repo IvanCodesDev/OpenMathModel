@@ -13,17 +13,33 @@ import type { DatasetProfile } from "@openmathmodel/contracts";
 
 import { describeCleaning, describeReview } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
+import { figureCards } from "./result-figures";
+import type { FigureCard } from "./result-figures";
 
 export type CleaningReport = NonNullable<DatasetProfile["cleaning"]>;
 export type CleaningOutput = NonNullable<CleaningReport["outputs"]>[number];
 export type CleaningDecision = NonNullable<CleaningReport["decision"]>;
+export type DataFigure = NonNullable<CleaningReport["figures"]>[number];
 
 /** 产物角色 → 中文源串（调用方 t()）；enum 外原样。 */
 export const OUTPUT_ROLE_LABELS: Record<string, string> = {
   cleaned_data: "清洗后数据",
   script: "清洗脚本",
+  figure: "探索性图件",
   other: "其他产物",
 };
+
+/**
+ * 清洗沙盒顺手画的探索性图件（H5 切片 s32）→ 缩略图卡；编号与论文图件清单同一规则（数据准备阶段的图最先编号）。
+ * 字段缺席（该字段出现之前的运行）→ null；空表 → { total: 0 }。
+ */
+export function describeDataFigures(
+  figures: readonly DataFigure[] | null | undefined,
+): { total: number; withImage: number; cards: FigureCard[] } | null {
+  if (!Array.isArray(figures)) return null;
+  const cards = figureCards(figures);
+  return { total: cards.length, withImage: cards.filter(card => card.imageUrl).length, cards };
+}
 
 /** G2 选项 → 中文源串（与节点 G2_OPTIONS 的 label 同一口径）；enum 外原样。 */
 export const DECISION_LABELS: Record<string, string> = {
@@ -129,6 +145,8 @@ export type CleanDataView =
       dataOutputs: OutputRow[];
       script: OutputRow | null;
       decision: DecisionView | null;
+      /** 探索性图件（s32）：字段缺席 → null；空表 → { total: 0 }。 */
+      figures: { total: number; withImage: number; cards: FigureCard[] } | null;
     };
 
 const G2_ROW_DELETION_THRESHOLD = 0.05;
@@ -163,5 +181,6 @@ export function describeCleanData(profile: DatasetProfile): CleanDataView {
     dataOutputs: rows.filter(row => row.role === "cleaned_data"),
     script: rows.find(row => row.role === "script") ?? null,
     decision: describeDecision(cleaning.decision),
+    figures: describeDataFigures(cleaning.figures),
   };
 }

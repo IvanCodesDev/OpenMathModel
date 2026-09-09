@@ -43,7 +43,21 @@ export interface FigureCard {
   inserted: boolean | null;
 }
 
-function figureCard(figure: { number: number; name: string; caption: string; source_stage: string; artifact_id: string | null; inserted?: boolean }): FigureCard {
+export interface FigureLike {
+  number: number;
+  name: string;
+  caption: string;
+  source_stage: string;
+  artifact_id: string | null;
+  inserted?: boolean;
+}
+
+/** 任一契约的图件清单（experiment / dataset-profile / document-draft 的 figures）→ 按编号排序的缩略图卡。 */
+export function figureCards(figures: readonly FigureLike[]): FigureCard[] {
+  return [...figures].sort((a, b) => a.number - b.number).map(figureCard);
+}
+
+function figureCard(figure: FigureLike): FigureCard {
   const artifactId = figure.artifact_id ? String(figure.artifact_id) : null;
   return {
     number: figure.number,
@@ -69,7 +83,7 @@ export function describeResultFigures(summary: ExperimentSummary): ResultFigures
   const figures = summary.figures;
   if (!Array.isArray(figures)) return { kind: "absent" };
   if (figures.length === 0) return { kind: "empty" };
-  const cards = [...figures].sort((a, b) => a.number - b.number).map(figureCard);
+  const cards = figureCards(figures);
   const stages: string[] = [];
   for (const card of cards) if (!stages.includes(card.stage)) stages.push(card.stage);
   return {
@@ -123,7 +137,7 @@ export function describePaperPackage(draft: DocumentDraft): PaperPackageView {
     ? {
         total: draft.figures.length,
         inserted: summarizeFigures(draft.figures)?.inserted ?? 0,
-        cards: [...draft.figures].sort((a, b) => a.number - b.number).map(figureCard),
+        cards: figureCards(draft.figures),
       }
     : null;
   const references = Array.isArray(draft.references)

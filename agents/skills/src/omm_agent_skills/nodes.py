@@ -2057,6 +2057,8 @@ class DataPreparationNode(LlmSkillNode):
                 seeds=dict(SANDBOX_SEEDS),
                 max_runs=max_runs,
                 extra_final_keys=(),
+                # 探索性图（清洗前后分布 / 缺失情况）是可选附带物：画了就逐张说明，没画写「无」
+                optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
             )
             executor = _sandbox_tool_executor(ctx, services, capture)
 
@@ -2130,6 +2132,7 @@ class DataPreparationNode(LlmSkillNode):
             )
 
         impact = _cleaning_impact(capture.metrics, target_columns)
+        produced = _union_artifacts(waves, capture)
         cleaning = {
             "executed": True,
             "status": str(report.get("status") or "failed"),
@@ -2139,11 +2142,14 @@ class DataPreparationNode(LlmSkillNode):
             "target_columns": target_columns,
             "final_code_artifact": str(report.get("final_code_artifact") or ""),
             "produced_artifacts": list(report.get("produced_artifacts") or []),
+            # 探索性图件清单（figure_render 图源第三处）：沙盒真正采集到的图件产物 + 清洗工程师的
+            # 逐张说明（只挂到真实文件上）；论文节点把它们编在图件清单最前（数据预处理章用）
+            "figures": figure_manifest(produced, final_answer.get(FIGURE_NOTES_FINAL_KEY[0])),
             **impact,
         }
         if review is not None:
             cleaning["review"] = review
-        return cleaning, _union_artifacts(waves, capture)
+        return cleaning, produced
 
     def _review_spec(
         self,

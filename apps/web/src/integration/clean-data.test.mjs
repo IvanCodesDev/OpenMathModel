@@ -8,14 +8,23 @@ const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.
 const transpile = async relative => ts.transpileModule(
   await readFile(new URL(relative, import.meta.url), "utf8"), { compilerOptions },
 ).outputText;
-// clean-data.ts 运行时依赖 experiment-notes.ts（纯函数、无运行时 import）：先把依赖编成 data: 模块再改写 import 目标
-const notesUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(await transpile("./experiment-notes.ts"))}`;
-const cleanDataSource = (await transpile("./clean-data.ts")).replace(/from\s+"\.\/experiment-notes"/g, `from ${JSON.stringify(notesUrl)}`);
+const dataUrl = code => `data:text/javascript;charset=utf-8,${encodeURIComponent(code)}`;
+const rewire = (code, deps) => Object.entries(deps).reduce(
+  (source, [name, url]) => source.replace(new RegExp(`from\\s+"\\./${name}"`, "g"), `from ${JSON.stringify(url)}`),
+  code,
+);
+// clean-data.ts 运行时依赖 experiment-notes.ts（纯函数）与 result-figures.ts（缩略图卡；其依赖 paper-audit /
+// paper-figures / paper-references 只有纯函数）：先把依赖编成 data: 模块再改写 import 目标
+const leaf = {};
+for (const name of ["experiment-notes", "paper-audit", "paper-figures", "paper-references"]) leaf[name] = dataUrl(await transpile(`./${name}.ts`));
+const resultFigures = dataUrl(rewire(await transpile("./result-figures.ts"), leaf));
+const cleanDataSource = rewire(await transpile("./clean-data.ts"), { ...leaf, "result-figures": resultFigures });
 const {
-  DECISION_LABELS, OUTPUT_ROLE_LABELS, describeCleanData, describeDecision, formatSize, outputRows, shortHash,
-} = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(cleanDataSource)}`);
+  DECISION_LABELS, OUTPUT_ROLE_LABELS, describeCleanData, describeDataFigures, describeDecision, formatSize, outputRows, shortHash,
+} = await import(dataUrl(cleanDataSource));
 
-/** 契约 fixture dataset-profile.2：清洗执行、审稿僵持、三个产物（两表一脚本，一表不可下载）、G2 决策 use_raw。 */
+/** 契约 fixture dataset-profile.2：清洗执行、审稿僵持、四个产物（两表一脚本一图，一表不可下载）、G2 决策 use_raw、
+ * 两张探索性图（一张有产物、一张没有）。 */
 const fixture = JSON.parse(
   await readFile(new URL("../../../../packages/contracts/fixtures/v1/valid/dataset-profile.2.json", import.meta.url), "utf8"),
 );
@@ -42,6 +51,7 @@ test("describeCleanData: executed cleaning → status, ratios, outputs split by 
     ["orders.csv", "cleaned_data", "清洗后数据", "47.1 KB", "9b3f0c2a6d5e…", "/api/v1/artifacts/art_c1e2a3d4b5f60718/download"],
     ["stations.csv", "cleaned_data", "清洗后数据", "3.0 KB", "—", null],
     ["cleaning.py", "script", "清洗脚本", "2.0 KB", "1c2d3e4f5a6b…", "/api/v1/artifacts/art_c1e2a3d4b5f6071a/download"],
+    ["missing_by_column.png", "figure", "探索性图件", "18.3 KB", "2d3e4f5a6b7c…", "/api/v1/artifacts/art_c1e2a3d4b5f6071b/download"],
   ]);
   assert.deepEqual(view.dataOutputs.map(row => row.name), ["orders.csv", "stations.csv"]);
   assert.equal(view.script.name, "cleaning.py");
@@ -49,6 +59,24 @@ test("describeCleanData: executed cleaning → status, ratios, outputs split by 
     optionId: "use_raw", label: "改用原始数据", actor: "user", comment: "审稿僵持，先用原始数据建模",
     resolvedAt: "2026-09-06T12:05:00.000000Z", usesCleaned: false,
   });
+  // 探索性图件（s32）：编号是全文「图 N」，有产物 id 才有缩略图地址；没有说明退回文件名
+  assert.deepEqual([view.figures.total, view.figures.withImage], [2, 1]);
+  assert.deepEqual(view.figures.cards.map(card => [card.label, card.name, card.caption, card.stage, card.stageKey, card.imageUrl, card.inserted]), [
+    ["图 1", "missing_by_column.png", "清洗前各列缺失比例", "数据准备", "DATA_PREPARATION", "/api/v1/artifacts/art_c1e2a3d4b5f6071b/download", null],
+    ["图 2", "demand_before_after.svg", "demand_before_after.svg", "数据准备", "DATA_PREPARATION", null, null],
+  ]);
+});
+
+test("describeDataFigures: absent field → null, empty → total 0, cards sorted by number", () => {
+  assert.equal(describeDataFigures(undefined), null);
+  assert.equal(describeDataFigures(null), null);
+  assert.deepEqual(describeDataFigures([]), { total: 0, withImage: 0, cards: [] });
+  const view = describeDataFigures([
+    { number: 3, name: "b.png", artifact_id: null, caption: "", source_stage: "DATA_PREPARATION" },
+    { number: 1, name: "a.png", artifact_id: "art_a", caption: "A", source_stage: "DATA_PREPARATION" },
+  ]);
+  assert.deepEqual(view.cards.map(card => card.label), ["图 1", "图 3"]);
+  assert.deepEqual([view.total, view.withImage], [2, 1]);
 });
 
 test("describeCleanData: skipped cleaning keeps the reason; legacy / sim profiles are absent", () => {
@@ -66,7 +94,7 @@ test("describeCleanData: skipped cleaning keeps the reason; legacy / sim profile
 });
 
 test("describeCleanData: pre-s23 executed report (no outputs / decision keys) and zero rows", () => {
-  const older = Object.fromEntries(Object.entries(fixture.cleaning).filter(([key]) => key !== "outputs" && key !== "decision"));
+  const older = Object.fromEntries(Object.entries(fixture.cleaning).filter(([key]) => !["outputs", "decision", "figures"].includes(key)));
   const view = describeCleanData({ ...fixture, cleaning: { ...older, status: "failed", rows_before: 0, rows_after: 0, rows_deleted_ratio: 0 } });
   assert.equal(view.kind, "executed");
   assert.equal(view.passed, false);
@@ -76,6 +104,7 @@ test("describeCleanData: pre-s23 executed report (no outputs / decision keys) an
   assert.deepEqual(view.outputs, []);
   assert.equal(view.script, null);
   assert.equal(view.decision, null);
+  assert.equal(view.figures, null, "figures 字段出现之前的运行：不摆图件条");
 });
 
 test("helpers: sizes, hashes, unknown roles / options pass through, malformed outputs tolerated", () => {

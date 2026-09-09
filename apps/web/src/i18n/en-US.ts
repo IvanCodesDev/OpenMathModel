@@ -655,8 +655,11 @@ const DATA_STAGE: Record<string, string> = {
   "角色": "Role",
   "清洗后数据": "Cleaned data",
   "清洗脚本": "Cleaning script",
+  "探索性图件": "Exploratory figures",
   "其他产物": "Other output",
   "没有登记到清洗产物（cleaned/ 目录为空或产物未采集）。": "No cleaning outputs were registered (cleaned/ is empty or nothing was captured).",
+  // 清洗沙盒的探索性图件条（H5 切片 s32）
+  "编号与论文图件清单一致": "numbered as in the paper's figure list",
   "结论与决策": "Conclusions and decision",
   "清洗工程师自述": "Cleaning engineer's summary",
   "G2 数据确认": "G2 data confirmation",

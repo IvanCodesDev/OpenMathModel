@@ -35,9 +35,10 @@ FIGURE_KIND = "figure"
 #: 论文阶段按章需求补画的图（figure_render 第二步）在清单里的来源阶段。
 PAPER_FIGURE_STAGE = "PAPER_WRITING"
 
-#: 图件清单的阶段来源与顺序：实验图先编号，检验图其后（§9.1 图源只列这两处）；
-#: 论文阶段补的图（extra）排在最后。
+#: 图件清单的阶段来源与顺序：数据准备阶段清洗沙盒顺手画的探索性图最先编号（论文里它们出现在
+#: 数据预处理章、在模型结果之前），实验图其后，检验图再后；论文阶段补的图（extra）排在最后。
 _FIGURE_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("DATA_PREPARATION", ("cleaning", "figures")),
     ("EXPERIMENTING", ("figures",)),
     ("VALIDATING", ("robustness", "figures")),
 )
@@ -114,8 +115,9 @@ def figure_inventory(
 ) -> list[dict[str, Any]]:
     """上游各阶段的图件（+ 论文阶段补的图）→ 编号固定的清单 ``[{number, name, artifact_id, caption, source_stage}]``。
 
-    实验 → 检验 → 论文补图顺序、文件名去重（先到先得）；编号一经给出就是全文的「图 N」，写手按它
-    插图与引用，审计按它核对——不做事后重编号（改编号要同步改正文所有引用，风险大于收益）。
+    数据准备（清洗沙盒的探索性图）→ 实验 → 检验 → 论文补图顺序、文件名去重（先到先得）；编号一经给出
+    就是全文的「图 N」，写手按它插图与引用，审计按它核对——不做事后重编号（改编号要同步改正文所有
+    引用，风险大于收益）。
     ``extra`` 是本节点刚渲染出来的图件（``figure_manifest`` 形状），来源阶段记 PAPER_WRITING。
     """
     inventory: list[dict[str, Any]] = []
@@ -159,7 +161,12 @@ def renderable_data_files(files: Iterable[str]) -> list[str]:
     return kept
 
 
-_STAGE_LABELS = {"EXPERIMENTING": "实验阶段", "VALIDATING": "检验阶段", PAPER_FIGURE_STAGE: "论文阶段补图"}
+_STAGE_LABELS = {
+    "DATA_PREPARATION": "数据准备阶段（清洗 / 探索性分析）",
+    "EXPERIMENTING": "实验阶段",
+    "VALIDATING": "检验阶段",
+    PAPER_FIGURE_STAGE: "论文阶段补图",
+}
 
 
 def render_figure_material(inventory: Sequence[Mapping[str, Any]]) -> str:
@@ -168,7 +175,8 @@ def render_figure_material(inventory: Sequence[Mapping[str, Any]]) -> str:
         return "无（本次运行没有产出图件；正文不得插入图片，也不得引用任何「图 N」）"
     lines = [
         "本次运行真实产出的图件（插图只准从此表选，编号固定；用 `![图 N 标题](文件名)` 独立成段插入，"
-        "正文引用写「图 N」；未插入的图不得引用）：",
+        "正文引用写「图 N」；未插入的图不得引用；来源为数据准备阶段的图描述的是清洗前后的数据本身，"
+        "宜放在数据预处理 / 数据分析章，不得当作模型结果引用）：",
         "",
         "| 编号 | 文件名 | 来源 | 说明 |",
         "| --- | --- | --- | --- |",

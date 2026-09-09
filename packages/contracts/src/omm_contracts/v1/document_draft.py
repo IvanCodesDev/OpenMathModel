@@ -71,12 +71,13 @@ class AuditFinding(BaseModel):
 
 class SourceStage1(Enum):
     """
-    产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。
+    产出该图件的阶段：数据准备清洗沙盒的探索性图（DATA_PREPARATION，最先编号）、实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。消费者须容忍新增取值。
     """
 
     EXPERIMENTING = "EXPERIMENTING"
     VALIDATING = "VALIDATING"
     PAPER_WRITING = "PAPER_WRITING"
+    DATA_PREPARATION = "DATA_PREPARATION"
 
 
 class PaperFigure(BaseModel):
@@ -100,7 +101,7 @@ class PaperFigure(BaseModel):
     )
     source_stage: SourceStage1 = Field(
         ...,
-        description="产出该图件的阶段：实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。",
+        description="产出该图件的阶段：数据准备清洗沙盒的探索性图（DATA_PREPARATION，最先编号）、实验 / 检验沙盒顺手画的图，或论文阶段按总编规划、只用本次运行真实数据补画的图（PAPER_WRITING）。消费者须容忍新增取值。",
     )
     inserted: bool = Field(
         ...,

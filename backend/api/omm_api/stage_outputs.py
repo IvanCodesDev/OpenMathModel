@@ -237,28 +237,43 @@ def _non_negative_int(value: Any) -> int:
 #: 清洗产物角色（契约 enum cleaning_output_role）与清洗脚本的登记文件名（nodes.py 发布回调同一口径）。
 _CLEANING_ROLE_DATA = "cleaned_data"
 _CLEANING_ROLE_SCRIPT = "script"
+_CLEANING_ROLE_FIGURE = "figure"
 _CLEANING_ROLE_OTHER = "other"
 _CLEANING_SCRIPT_NAME = "cleaning.py"
 #: G2 数据确认闸门在审批表里的样子（nodes.py `_g2_review` 的 review_meta：evidence.gate = "G2"）。
 _G2_GATE = "G2"
 
 
+def _artifact_file_name(row: ArtifactRow) -> str:
+    """产物的真实文件名：内容 URI 尾部（``local://<sha256>/figures/eda.svg`` → ``eda.svg``）；URI 没带路径时退回
+    登记名的尾部。登记名可能是展示名（图件一律登记成「基线实验结果图（模拟）」），不能当文件名用。"""
+    uri = str(row.uri or "").replace("\\", "/").rstrip("/")
+    _, _, rest = uri.partition("://")
+    if "/" in rest:
+        tail = rest.rsplit("/", 1)[-1].split("?", 1)[0].strip()
+        if tail:
+            return tail
+    return str(row.name or "").rsplit("/", 1)[-1].strip() or row.id
+
+
 def _cleaning_output_role(row: ArtifactRow) -> str:
-    name = str(row.name or "").rsplit("/", 1)[-1]
+    name = _artifact_file_name(row)
     if row.kind == "code" or name == _CLEANING_SCRIPT_NAME:
         return _CLEANING_ROLE_SCRIPT
     if row.kind == "table":
         return _CLEANING_ROLE_DATA
+    if row.kind == "figure":
+        return _CLEANING_ROLE_FIGURE
     return _CLEANING_ROLE_OTHER
 
 
 def _cleaning_outputs(
     rows: Iterable[ArtifactRow], blobs: Optional[ArtifactBlobStore]
 ) -> list[dict[str, Any]]:
-    """数据准备节点登记的产物 → 契约 ``cleaning_output[]``：清洗后数据表在前、脚本其后、其余最后；
-    同角色按登记顺序。下载地址与成果清单同一判定（READY 且内容对象可读）。"""
+    """数据准备节点登记的产物 → 契约 ``cleaning_output[]``：清洗后数据表在前、脚本其后、探索性图件再后、
+    其余最后；同角色按登记顺序。下载地址与成果清单同一判定（READY 且内容对象可读）。"""
     entries: list[tuple[int, int, dict[str, Any]]] = []
-    order = {_CLEANING_ROLE_DATA: 0, _CLEANING_ROLE_SCRIPT: 1, _CLEANING_ROLE_OTHER: 2}
+    order = {_CLEANING_ROLE_DATA: 0, _CLEANING_ROLE_SCRIPT: 1, _CLEANING_ROLE_FIGURE: 2, _CLEANING_ROLE_OTHER: 3}
     for index, row in enumerate(rows):
         role = _cleaning_output_role(row)
         downloadable = (
@@ -268,7 +283,7 @@ def _cleaning_outputs(
         )
         entries.append((order[role], index, {
             "artifact_id": row.id,
-            "name": str(row.name or "").rsplit("/", 1)[-1] or row.id,
+            "name": _artifact_file_name(row),
             "role": role,
             "media_type": row.media_type or "application/octet-stream",
             "size_bytes": row.size_bytes,
@@ -333,6 +348,8 @@ def _cleaning_report(
       status 越界归 failed；review 走 ``_review_report``；
     - ``outputs``（清洗产物：登记表确定性推导）与 ``decision``（G2 决策）由调用方算好传入：
       执行过才带产物，决策有就带（未执行时两者分别为空表 / null）；
+    - ``figures``（清洗沙盒的探索性图件）按节点写的 ``cleaning.figures`` 经图件清单编号
+      （``_data_figures``），未执行为空表；
     - 该字段出现之前的运行 / 模拟节点没有该键 → None（契约 null）。
     """
     if not isinstance(raw, dict):
@@ -353,6 +370,7 @@ def _cleaning_report(
             "review": None,
             "outputs": [],
             "decision": None,
+            "figures": [],
         }
     rows_before = _non_negative_int(raw.get("rows_before"))
     rows_after = _non_negative_int(raw.get("rows_after"))
@@ -376,7 +394,32 @@ def _cleaning_report(
         "review": _review_report(raw.get("review")),
         "outputs": list(outputs or []),
         "decision": decision,
+        "figures": _data_figures(raw),
     }
+
+
+#: 数据准备图件的来源阶段（dataset-profile.v1 enum data_figure_stage）。
+_DATA_FIGURE_STAGE = "DATA_PREPARATION"
+
+
+def _data_figures(cleaning: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """节点 ``cleaning.figures``（清洗沙盒采集到的探索性图件）→ 契约 ``data_figure[]``。
+
+    编号走论文节点同一张清单（``figure_inventory``：数据准备阶段的图最先编号、文件名去重），数据页、
+    结果页与论文里的「图 N」因此指同一张图。artifact_id 空串归 null；来源阶段越界的条目剔除。
+    """
+    figures: list[dict[str, Any]] = []
+    for item in figure_inventory({_DATA_FIGURE_STAGE: {"cleaning": dict(cleaning)}}):
+        if str(item.get("source_stage") or "") != _DATA_FIGURE_STAGE:
+            continue
+        figures.append({
+            "number": int(item["number"]),
+            "name": str(item["name"]),
+            "artifact_id": str(item.get("artifact_id") or "").strip() or None,
+            "caption": str(item.get("caption") or ""),
+            "source_stage": _DATA_FIGURE_STAGE,
+        })
+    return figures
 
 
 #: 附件下发到工作区 data/ 的条件（与 engine_glue._stage_attachment_tables 同一口径）：.csv、同项目、≤ 10 MB。
@@ -821,15 +864,21 @@ _EXPERIMENT_FIGURE_STAGES = ("EXPERIMENTING", "VALIDATING")
 
 
 def _experiment_figures(
-    experimenting: StageState, validating: Optional[StageState]
+    experimenting: StageState,
+    validating: Optional[StageState],
+    data_preparation: Optional[StageState] = None,
 ) -> list[dict[str, Any]]:
     """实验 / 检验节点写在 outputs 里的真实图件 → 契约 ``experiment_figure[]``。
 
-    编号与论文节点的图件清单同一规则（``omm_agent_skills.figures.figure_inventory``：实验图先、
-    检验图后、文件名去重、先到先得），结果页与论文里的「图 N」因此指同一张图；论文阶段补画的图
-    不在实验投影里。artifact_id 空串归 null（页面据此不拼下载链接）；来源阶段越界的条目剔除。
+    编号与论文节点的图件清单同一规则（``omm_agent_skills.figures.figure_inventory``：数据准备的
+    探索性图最先、实验图其后、检验图再后、文件名去重、先到先得），结果页与论文里的「图 N」因此指
+    同一张图——所以数据阶段的图也要进清单参与编号，只是不出现在实验投影里；论文阶段补画的图同理。
+    artifact_id 空串归 null（页面据此不拼下载链接）；来源阶段越界的条目剔除。
     """
-    prior = {"EXPERIMENTING": experimenting.outputs}
+    prior: dict[str, Mapping[str, Any]] = {}
+    if data_preparation is not None:
+        prior["DATA_PREPARATION"] = data_preparation.outputs
+    prior["EXPERIMENTING"] = experimenting.outputs
     if validating is not None:
         prior["VALIDATING"] = validating.outputs
     figures: list[dict[str, Any]] = []
@@ -851,6 +900,7 @@ def _experiment_summary(
     run_id: str,
     experimenting: Optional[StageState],
     validating: Optional[StageState],
+    data_preparation: Optional[StageState] = None,
 ) -> Optional[ExperimentSummary]:
     if experimenting is None:
         return None
@@ -869,8 +919,8 @@ def _experiment_summary(
         validation=validation,
         # 实验代码的独立审稿结论（§8.4 生成者-评审者环）；审稿环之前的运行 → null
         review=_review_report(outputs.get("review")),
-        # 实验 / 检验沙盒真实落盘的图件（结果页图件展示的唯一图源）
-        figures=_experiment_figures(experimenting, validating),
+        # 实验 / 检验沙盒真实落盘的图件（结果页图件展示的唯一图源）；数据阶段的探索性图参与编号
+        figures=_experiment_figures(experimenting, validating, data_preparation),
         updated_at=iso_z(updated_at),
     )
 
@@ -885,7 +935,7 @@ _AUDIT_FINDING_KINDS = frozenset(
 )
 #: 真实图件的来源阶段（契约 enum）：实验 / 检验沙盒顺手画的图，与论文阶段按总编规划、
 #: 只用本次运行真实数据补画的图（figure_render 第二步）。
-_FIGURE_SOURCE_STAGES = frozenset({"EXPERIMENTING", "VALIDATING", "PAPER_WRITING"})
+_FIGURE_SOURCE_STAGES = frozenset({"DATA_PREPARATION", "EXPERIMENTING", "VALIDATING", "PAPER_WRITING"})
 #: 引用条目的来源（契约 enum）：方案引用的知识库先例 / 用户提供并匹配到知识库的资料。
 _REFERENCE_SOURCES = frozenset({"plan_citation", "user_reference"})
 #: 引用 key（`\cite{key}`）与记录级验证三态（契约 enum）。
@@ -1399,7 +1449,7 @@ def build_stage_outputs(
         ),
         plan_proposal=_plan_proposal(run.id, stages.get(_MODEL_PLANNING), approvals),
         experiment_summary=_experiment_summary(
-            run.id, stages.get(_EXPERIMENTING), stages.get(_VALIDATING)
+            run.id, stages.get(_EXPERIMENTING), stages.get(_VALIDATING), stages.get(_DATA_PREPARATION)
         ),
         document_draft=_document_draft(run.id, stages.get(_PAPER_WRITING)),
         delivery_manifest=_delivery_manifest(run, stages, step_nodes, artifact_rows, blobs, approvals),

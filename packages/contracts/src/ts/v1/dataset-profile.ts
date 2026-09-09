@@ -14,13 +14,17 @@ export type CleaningStatus = "passed" | "failed";
  */
 export type ReviewVerdict = "accept" | "reject";
 /**
- * 产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ other 其余登记产物（日志等）。
+ * 产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ figure 探索性图件（figures/ 下的图）/ other 其余登记产物（日志等）。消费者须容忍新增取值。
  */
-export type CleaningOutputRole = "cleaned_data" | "script" | "other";
+export type CleaningOutputRole = "cleaned_data" | "script" | "figure" | "other";
 /**
  * UTC ISO-8601，统一以 Z 结尾。
  */
 export type Timestamp = string;
+/**
+ * 图件的来源阶段：数据准备（清洗沙盒的探索性图）。
+ */
+export type DataFigureStage = "DATA_PREPARATION";
 
 /**
  * 数据准备页正文投影：DATA_PREPARATION 阶段真实 LLM 节点的最新成功输出（run_domain_events 的 STEP_SUCCEEDED）。模拟链或阶段未完成时该投影整体为 null，由 stage-outputs 端点表达。
@@ -132,6 +136,10 @@ export interface CleaningReport {
    * G2 数据确认闸门对这一版清洗的人工决策（采用清洗结果 / 改用原始数据 / 退回调整）。闸门未触发（影响面在阈值内且审稿未僵持）、仍挂起、或未执行清洗时为 null。可选字段：该字段出现之前的消费者可忽略。
    */
   decision?: null | CleaningDecision;
+  /**
+   * 清洗沙盒顺手画的探索性图件（清洗前后分布 / 缺失情况等，只画真实数据）：沙盒真实落盘并被采集的图件清单，编号与论文节点的图件清单同一规则（数据准备阶段的图最先编号）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。
+   */
+  figures?: DataFigure[];
 }
 export interface ReviewReport {
   /**
@@ -238,6 +246,25 @@ export interface CleaningDecision {
    */
   comment: string | null;
   resolved_at: Timestamp;
+}
+export interface DataFigure {
+  /**
+   * 全文统一编号「图 N」（数据准备阶段的图最先编号，与实验 / 检验 / 论文补图同一张清单）。
+   */
+  number: number;
+  /**
+   * 图件文件名（basename）。
+   */
+  name: string;
+  /**
+   * 图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。
+   */
+  artifact_id: string | null;
+  /**
+   * 清洗工程师在终答 figure_notes 里给的一句说明；未给为空串。
+   */
+  caption: string;
+  source_stage: DataFigureStage;
 }
 export interface DataInput {
   /**

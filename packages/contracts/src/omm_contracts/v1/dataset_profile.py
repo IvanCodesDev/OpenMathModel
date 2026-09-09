@@ -109,11 +109,12 @@ class ReviewReport(BaseModel):
 
 class CleaningOutputRole(Enum):
     """
-    产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ other 其余登记产物（日志等）。
+    产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ figure 探索性图件（figures/ 下的图）/ other 其余登记产物（日志等）。消费者须容忍新增取值。
     """
 
     cleaned_data = "cleaned_data"
     script = "script"
+    figure = "figure"
     other = "other"
 
 
@@ -181,6 +182,33 @@ class DataInput(BaseModel):
     )
 
 
+class DataFigureStage(Enum):
+    """
+    图件的来源阶段：数据准备（清洗沙盒的探索性图）。
+    """
+
+    DATA_PREPARATION = "DATA_PREPARATION"
+
+
+class DataFigure(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    number: conint(ge=1) = Field(
+        ...,
+        description="全文统一编号「图 N」（数据准备阶段的图最先编号，与实验 / 检验 / 论文补图同一张清单）。",
+    )
+    name: str = Field(..., description="图件文件名（basename）。")
+    artifact_id: str | None = Field(
+        ...,
+        description="图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。",
+    )
+    caption: str = Field(
+        ..., description="清洗工程师在终答 figure_notes 里给的一句说明；未给为空串。"
+    )
+    source_stage: DataFigureStage
+
+
 class CleaningReport(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -227,6 +255,10 @@ class CleaningReport(BaseModel):
     decision: CleaningDecision | None = Field(
         None,
         description="G2 数据确认闸门对这一版清洗的人工决策（采用清洗结果 / 改用原始数据 / 退回调整）。闸门未触发（影响面在阈值内且审稿未僵持）、仍挂起、或未执行清洗时为 null。可选字段：该字段出现之前的消费者可忽略。",
+    )
+    figures: list[DataFigure] | None = Field(
+        None,
+        description="清洗沙盒顺手画的探索性图件（清洗前后分布 / 缺失情况等，只画真实数据）：沙盒真实落盘并被采集的图件清单，编号与论文节点的图件清单同一规则（数据准备阶段的图最先编号）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。",
     )
 
 

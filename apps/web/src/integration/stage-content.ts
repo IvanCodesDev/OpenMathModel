@@ -662,6 +662,20 @@ function renderCleanDataPanel(root: HTMLElement, profile: DatasetProfile): void 
     previewSections.push(section);
   }
 
+  // 探索性图件（s32）：清洗沙盒顺手画的图（清洗前后分布 / 缺失情况），编号与论文图件清单一致；
+  // 字段缺席或为空都不摆——图是可选附带物，没有图不是问题，不编一句「没有图」占位
+  const figureSections: HTMLElement[] = [];
+  if (view.figures && view.figures.total > 0) {
+    const section = el("section", "focused-template-section clean-data-figures");
+    const title = el("div", "focused-template-section-title");
+    title.append(
+      el("h2", "", t("探索性图件")),
+      el("span", "", `${view.figures.total} ${t("张")}（${view.figures.withImage} ${t("张可预览")}）· ${t("编号与论文图件清单一致")}`),
+    );
+    section.append(title, figureStrip(view.figures.cards));
+    figureSections.push(section);
+  }
+
   const notesSection = el("section", "focused-template-section");
   const notesTitle = el("div", "focused-template-section-title");
   notesTitle.append(el("h2", "", t("结论与决策")));
@@ -688,7 +702,7 @@ function renderCleanDataPanel(root: HTMLElement, profile: DatasetProfile): void 
   }
   notesSection.append(notes);
 
-  template.append(header, metrics, outputsSection, ...previewSections, notesSection);
+  template.append(header, metrics, outputsSection, ...previewSections, ...figureSections, notesSection);
   panel.replaceChildren(template);
   settleClamps(panel);
   revealWorkspaceTab(root, "clean-data");

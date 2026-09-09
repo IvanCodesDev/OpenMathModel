@@ -88,11 +88,11 @@ class StaticCheckProfile:
     allowed_read_files: tuple[str, ...] = field(default=())
 
 
-#: 清洗：读任务卡数据文件（data/），写 cleaned/。
+#: 清洗：读任务卡数据文件（data/），写 cleaned/ 与探索性图件 figures/。
 CLEANING_STATIC_PROFILE = StaticCheckProfile(
     name="data_cleaning",
     allowed_read_prefixes=("data/", "cleaned/"),
-    allowed_write_prefixes=("cleaned/",),
+    allowed_write_prefixes=("cleaned/", "figures/"),
 )
 #: 实验：读 data/ 与 cleaned/，写结果表 / 指标 / 图件（工作区根下的 results*、metrics* 也算）。
 EXPERIMENT_STATIC_PROFILE = StaticCheckProfile(

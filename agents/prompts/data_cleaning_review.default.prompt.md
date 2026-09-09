@@ -2,7 +2,7 @@
 id: data_cleaning_review.default
 stage: DATA_PREPARATION
 variant: default
-version: 2
+version: 3
 input_schema: {"type": "object", "required": ["preparation_plan", "data_files", "cleaning_code", "impact", "rerun_report", "cleaning_summary"], "properties": {"preparation_plan": {"type": "string"}, "data_files": {"type": "string"}, "cleaning_code": {"type": "string"}, "impact": {"type": "string"}, "rerun_report": {"type": "string"}, "cleaning_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "findings", "summary"], "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "issue"], "properties": {"id": {"type": "string"}, "severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "location": {"type": "string"}, "issue": {"type": "string"}, "fix_hint": {"type": "string"}}}}, "summary": {"type": "string"}}}
 ---
@@ -50,7 +50,7 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 
 ## 核查清单（逐条过，不得跳）
 
-1. **忠实性**：缺失值与异常值的处理是否就是方案写的策略（如方案说中位数插补却用了删行、方案说 IQR 截尾却直接删除）；有没有按方案之外的条件静默删行或改列。
+1. **忠实性**：缺失值与异常值的处理是否就是方案写的策略（如方案说中位数插补却用了删行、方案说 IQR 截尾却直接删除）；有没有按方案之外的条件静默删行或改列。另存到 figures/ 的探索性图（缺失比例、清洗前后分布）不算方案外动作——只要它们只画真实数据、不改变清洗结果；画图代码若影响了 cleaned/ 的内容或统计才是问题。
 2. **目标列**：`target_columns` 里的列有没有被插补、截尾或改写——目标列被插补等于编造标签，除非方案明确允许，否则是 blocker；有没有用目标列去推导特征造成泄漏。
 3. **统计真实性**：`rows_before / rows_after / imputed_columns` 是否由代码真实算出（读取后计数、按实际插补的列收集），而不是写死的常量或估算；统计与 cleaned/ 文件的实际内容是否相符（可用 ws_read / ws_list 抽查文件头部与行数线索）。
 4. **完整性**：每个原始数据文件是否都处理到、cleaned/ 下是否都有对应产物；列名与列结构是否保留（后续阶段按方案里的列名取数）；编码 / 分隔符 / 日期解析有没有把数据读坏。

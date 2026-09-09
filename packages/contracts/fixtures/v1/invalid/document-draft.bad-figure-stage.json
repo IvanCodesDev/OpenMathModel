@@ -9,6 +9,6 @@
   "frozen_numbers": [],
   "audit_findings": [],
   "figures": [
-    { "number": 1, "name": "eda.png", "artifact_id": "art_1", "caption": "清洗前后分布", "source_stage": "DATA_PREPARATION", "inserted": false }
+    { "number": 1, "name": "eda.png", "artifact_id": "art_1", "caption": "清洗前后分布", "source_stage": "PROBLEM_ANALYSIS", "inserted": false }
   ]
 }
