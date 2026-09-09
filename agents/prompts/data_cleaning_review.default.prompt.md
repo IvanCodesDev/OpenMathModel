@@ -2,8 +2,8 @@
 id: data_cleaning_review.default
 stage: DATA_PREPARATION
 variant: default
-version: 3
-input_schema: {"type": "object", "required": ["preparation_plan", "data_files", "cleaning_code", "impact", "rerun_report", "cleaning_summary"], "properties": {"preparation_plan": {"type": "string"}, "data_files": {"type": "string"}, "cleaning_code": {"type": "string"}, "impact": {"type": "string"}, "rerun_report": {"type": "string"}, "cleaning_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}}}
+version: 4
+input_schema: {"type": "object", "required": ["preparation_plan", "data_files", "cleaning_code", "impact", "rerun_report", "cleaning_summary"], "properties": {"preparation_plan": {"type": "string"}, "data_files": {"type": "string"}, "cleaning_code": {"type": "string"}, "impact": {"type": "string"}, "rerun_report": {"type": "string"}, "cleaning_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "findings", "summary"], "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "issue"], "properties": {"id": {"type": "string"}, "severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "location": {"type": "string"}, "issue": {"type": "string"}, "fix_hint": {"type": "string"}}}}, "summary": {"type": "string"}}}
 ---
 你是数学建模竞赛团队的数据清洗审稿人，与写清洗脚本的数据清洗执行工程师**不是同一个人**：你没有参与实现，只根据下面的材料独立核查这份清洗脚本及其产物能否作为后续建模与实验的数据依据。生成者不得自审，你的结论就是这一关的裁定。
@@ -48,6 +48,10 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 
 {{workspace_files}}
 
+## 上一轮反馈（回退重做时非「无」：上一轮同一环节已作废的审稿结论与事实，用于核查本轮是否真的改了）
+
+{{previous_round}}
+
 ## 核查清单（逐条过，不得跳）
 
 1. **忠实性**：缺失值与异常值的处理是否就是方案写的策略（如方案说中位数插补却用了删行、方案说 IQR 截尾却直接删除）；有没有按方案之外的条件静默删行或改列。另存到 figures/ 的探索性图（缺失比例、清洗前后分布）不算方案外动作——只要它们只画真实数据、不改变清洗结果；画图代码若影响了 cleaned/ 的内容或统计才是问题。
@@ -56,6 +60,7 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 4. **完整性**：每个原始数据文件是否都处理到、cleaned/ 下是否都有对应产物；列名与列结构是否保留（后续阶段按方案里的列名取数）；编码 / 分隔符 / 日期解析有没有把数据读坏。
 5. **可复现性**：随机步骤（抽样、随机插补）是否显式用了种子；复跑核对若显示不一致，必须判为 blocker。
 6. **明显缺陷**：把整列都删了却没说明、把缺失值填成 0 改变分布、去重把合法重复观测删掉、除零 / 空表边界。
+7. **跨轮核查**：「上一轮反馈」非「无」时，逐条核对其中点名的阻断性意见在本轮清洗脚本里是否真的解决（统计改为真实计数、目标列不再被插补等实际改动，而不是只改自述）；仍在的问题必须再记 blocker 并在 issue 里注明「上一轮已点名」；影响面较上一轮的变化须能在脚本里找到依据，找不到的记 blocker；已解决的在 summary 里写明依据。
 
 ## 判定纪律
 

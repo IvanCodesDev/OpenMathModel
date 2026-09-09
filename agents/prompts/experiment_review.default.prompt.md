@@ -2,8 +2,8 @@
 id: experiment_review.default
 stage: EXPERIMENTING
 variant: default
-version: 2
-input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "model_symbols", "experiment_code", "metrics", "rerun_report", "approach_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "rerun_report": {"type": "string"}, "approach_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}}}
+version: 3
+input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "model_symbols", "experiment_code", "metrics", "rerun_report", "approach_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "rerun_report": {"type": "string"}, "approach_summary": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "findings", "summary"], "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "issue"], "properties": {"id": {"type": "string"}, "severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "location": {"type": "string"}, "issue": {"type": "string"}, "fix_hint": {"type": "string"}}}}, "summary": {"type": "string"}}}
 ---
 你是数学建模竞赛团队的实验审稿人，与写代码的实验工程师**不是同一个人**：你没有参与实现，只根据下面的材料独立核查这份实验代码及其结果能否作为后续检验与论文的依据。生成者不得自审，你的结论就是这一关的裁定。
@@ -52,6 +52,10 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 
 {{workspace_files}}
 
+## 上一轮反馈（回退重做时非「无」：上一轮同一环节已作废的审稿结论与事实，用于核查本轮是否真的改了）
+
+{{previous_round}}
+
 ## 核查清单（逐条过，不得跳）
 
 1. **忠实性**：核心算法是否就是方案写的那一个；「模型假设」的每一条是否被遵守，有没有在代码里悄悄替换（如把泊松需求改成常数、把硬约束改成惩罚项而不说明）。
@@ -59,6 +63,7 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 3. **可复现性**：随机种子是否显式使用；复跑核对若显示不一致，必须判为 blocker（结果不可复现就不能进论文）。
 4. **数据与产物**：读的是 cleaned/ 或 data/ 的真实文件还是凭空捏造；`results.csv` 等结果表是否真的写出且内容与指标相符（可用 ws_read / ws_list 核对）。
 5. **明显缺陷**：数据泄漏（用测试集调参 / 拟合）、把训练误差当泛化误差、除零 / 空集边界、只跑了极小规模却声称结论成立。
+6. **跨轮核查**：「上一轮反馈」非「无」时，逐条核对其中点名的阻断性意见与未过检查在本轮代码里是否真的解决（约束 / 参数 / 数值方法的实际改动，而不是只换随机种子或改写自述）；仍在的问题必须再记 blocker 并在 issue 里注明「上一轮已点名」；指标较上一轮的变化须能在代码里找到实现依据，找不到的记 blocker；已解决的在 summary 里写明依据。
 
 ## 判定纪律
 

@@ -2158,8 +2158,10 @@ class DataPreparationNode(LlmSkillNode):
         data_files: Sequence[str],
         target_columns: Sequence[str],
     ) -> _ReviewSpec:
-        """清洗审稿口径：材料 = 准备方案 / 数据文件 / 脚本正文 / 影响面 / 复跑 / 清洗摘要。"""
+        """清洗审稿口径：材料 = 准备方案 / 数据文件 / 脚本正文 / 影响面 / 复跑 / 清洗摘要 / 上一轮反馈。"""
         script_path = f"steps/{ctx.step_id}/main.py"
+        # 上一轮反馈（s37）：回退重做时审稿人拿上一轮清洗审稿的阻断意见与影响面对照核查
+        previous_round = cleaning_reviewer_note(ctx)
 
         def materials(
             capture: _SandboxCapture,
@@ -2178,6 +2180,7 @@ class DataPreparationNode(LlmSkillNode):
                 "cleaning_summary": str(final_answer.get("summary") or "无"),
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
                 "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+                "previous_round": previous_round,
             }
 
         def context_slice(
@@ -2188,6 +2191,7 @@ class DataPreparationNode(LlmSkillNode):
                 "impact": _cleaning_impact(capture.metrics, target_columns),
                 "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
                 "round": round_no,
+                "redo_round": previous_round != "无",
             }
 
         return _ReviewSpec(
@@ -2715,6 +2719,174 @@ def redo_feedback_note(ctx: NodeContext) -> str | None:
     return "\n".join(lines)
 
 
+def superseded_stage(
+    ctx: NodeContext, state: TaskState
+) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+    """反馈包里被丢弃的某阶段上一轮产出 + 反馈元信息；没有回退 / 该阶段上一轮没有产出 → None。
+
+    回退落到某阶段时，它与下游各阶段的上一轮产出一并作废进 ``superseded``——下游节点重跑时
+    同样有「上一轮」可比（s35 检验跨轮对比即此口径），所以不以 ``target_state`` 为限。
+    """
+    feedback = ctx.iteration_feedback
+    if not feedback:
+        return None
+    previous = (feedback.get("superseded") or {}).get(state.value)
+    if not isinstance(previous, Mapping) or not previous:
+        return None
+    return previous, feedback
+
+
+def reviewer_redo_note(
+    feedback: Mapping[str, Any],
+    *,
+    subject: str,
+    previous_review: Any,
+    facts: Sequence[str] = (),
+) -> str:
+    """审稿任务卡的「上一轮反馈」段（s37）：上一轮同一环节的审稿阻断意见 + 消费方事实 + 跨轮核查纪律。
+
+    生成者的任务说明里已有同一反馈包（s34 / s35），这里给的是审稿这一侧的对照材料——审稿人
+    据此核查「上一轮点名的问题本轮是否真的改了」；纪律写死在段末，不靠审稿人自觉。
+    """
+    origin = "图按条件边自动回退" if feedback.get("auto") else "用户 / 闸门决定回退"
+    iteration = feedback.get("iteration")
+    round_text = (
+        f"第 {iteration} 轮自动回退后"
+        if feedback.get("auto") and isinstance(iteration, int) and not isinstance(iteration, bool)
+        else "回退后"
+    )
+    lines = [
+        f"本轮{subject}是{round_text}的重做（{origin}），上一轮同一环节的产出与审稿结论已作废。"
+        "以下是上一轮的事实，用于核查「上一轮点名的问题本轮是否真的改了」，不得替代你对本轮代码的核查："
+    ]
+    reason = str(feedback.get("reason") or "").strip()
+    if reason:
+        lines.append(f"- 回退原因：{reason}")
+    blockers = _unresolved_blockers(previous_review)
+    if blockers:
+        lines.append(
+            f"- 上一轮{subject}独立审稿的阻断性意见 {len(blockers)} 条"
+            "（逐条核查本轮是否已解决；仍在的必须再记 blocker，并在 issue 里注明「上一轮已点名」）："
+        )
+        lines.extend(f"  - {line}" for line in findings_material(blockers).split("\n"))
+    elif isinstance(previous_review, Mapping) and previous_review.get("executed"):
+        lines.append(f"- 上一轮{subject}独立审稿无阻断性意见。")
+    lines.extend(facts)
+    lines.append(
+        "- 核查纪律：只认本轮代码与运行结果，不认自述「已修复」；问题若只是因为换随机种子、"
+        "放宽阈值、删掉检查或改写叙述而「消失」，判为 blocker。"
+    )
+    return "\n".join(lines)
+
+
+def _failed_check_lines(checks: Sequence[Mapping[str, Any]]) -> list[str]:
+    """上一轮未过检查逐条：「  - id｜name：detail；实测 v；阈值 t；对应假设 a」（数字原样）。"""
+    lines: list[str] = []
+    for check in checks:
+        name = str(check.get("name") or check.get("id") or "检查")
+        bits = [str(check.get("detail") or "").strip()]
+        if check.get("value") is not None:
+            bits.append(f"实测 {check.get('value')}")
+        if check.get("threshold") is not None:
+            bits.append(f"阈值 {check.get('threshold')}")
+        if check.get("assumption_id"):
+            bits.append(f"对应假设 {check.get('assumption_id')}")
+        lines.append(f"  - {check.get('id')}｜{name}：{'；'.join(bit for bit in bits if bit)}")
+    return lines
+
+
+def _previous_failed_checks(feedback: Mapping[str, Any]) -> tuple[list[dict[str, Any]], Any]:
+    """反馈包里上一轮检验未通过的检查（只认真跑过且 passed 的那一轮）与检查总数。"""
+    validation = (feedback.get("superseded") or {}).get(TaskState.VALIDATING.value)
+    robustness = validation.get("robustness") if isinstance(validation, Mapping) else None
+    if (
+        not isinstance(robustness, Mapping)
+        or not robustness.get("executed")
+        or str(robustness.get("status") or "") != "passed"
+    ):
+        return [], None
+    failed = [dict(check) for check in (robustness.get("failed_checks") or []) if isinstance(check, Mapping)]
+    return failed, robustness.get("checks_total")
+
+
+def experiment_reviewer_note(ctx: NodeContext) -> str:
+    """实验审稿人的「上一轮反馈」：上一轮实验审稿阻断意见、方法与指标、导致回退的未过检查；没有 → 「无」。"""
+    previous = superseded_stage(ctx, TaskState.EXPERIMENTING)
+    if previous is None:
+        return "无"
+    outputs, feedback = previous
+    facts: list[str] = []
+    approach = str(outputs.get("approach_summary") or "").strip()
+    if approach:
+        facts.append(f"- 上一轮方法摘要：{approach}")
+    metrics = outputs.get("metrics")
+    if isinstance(metrics, Mapping) and metrics:
+        facts.append(
+            f"- 上一轮首跑指标：{json.dumps(dict(metrics), ensure_ascii=False)}"
+            "（对比本轮指标：变化须能在代码里找到实现依据，不得是事后调数）"
+        )
+    failed, total = _previous_failed_checks(feedback)
+    if failed:
+        facts.append(
+            f"- 上一轮稳健性检查{f' {total} 项中' if total else ''} {len(failed)} 项未通过"
+            "（重做的直接原因；核查本轮实现是否针对性修正了约束 / 参数 / 数值方法，而不是只换种子）："
+        )
+        facts.extend(_failed_check_lines(failed))
+    return reviewer_redo_note(
+        feedback, subject="实验代码", previous_review=outputs.get("review"), facts=facts
+    )
+
+
+def validation_reviewer_note(ctx: NodeContext) -> str:
+    """检验审稿人的「上一轮反馈」：上一轮检验审稿阻断意见与未过检查（同名 id 复检、阈值照旧）；没有 → 「无」。"""
+    previous = superseded_stage(ctx, TaskState.VALIDATING)
+    if previous is None:
+        return "无"
+    outputs, feedback = previous
+    robustness = outputs.get("robustness") if isinstance(outputs.get("robustness"), Mapping) else {}
+    facts: list[str] = []
+    failed, total = _previous_failed_checks(feedback)
+    if failed:
+        facts.append(
+            f"- 上一轮检验{f' {total} 项中' if total else ''} {len(failed)} 项未通过"
+            "（本轮应沿用同名 id 复检：核查阈值是否与上一轮一致、未通过项有没有被删掉或改名、"
+            "「转为通过」的项能否在代码与数据里找到原因）："
+        )
+        facts.extend(_failed_check_lines(failed))
+    summary = str(outputs.get("validation_summary") or "").strip()
+    if summary:
+        facts.append(f"- 上一轮检验结论：{summary}")
+    return reviewer_redo_note(
+        feedback, subject="检验脚本", previous_review=robustness.get("review"), facts=facts
+    )
+
+
+def cleaning_reviewer_note(ctx: NodeContext) -> str:
+    """清洗审稿人的「上一轮反馈」：上一轮清洗审稿阻断意见与影响面；没有 → 「无」。"""
+    previous = superseded_stage(ctx, TaskState.DATA_PREPARATION)
+    if previous is None:
+        return "无"
+    outputs, feedback = previous
+    cleaning = outputs.get("cleaning") if isinstance(outputs.get("cleaning"), Mapping) else {}
+    facts: list[str] = []
+    if cleaning.get("executed") and str(cleaning.get("status") or "") == "passed":
+        bits: list[str] = []
+        ratio = cleaning.get("rows_deleted_ratio")
+        if _is_number(ratio):
+            bits.append(
+                f"删行 {float(ratio):.1%}（{cleaning.get('rows_before')} → {cleaning.get('rows_after')} 行）"
+            )
+        imputed = [str(column) for column in (cleaning.get("imputed_columns") or [])]
+        bits.append("插补列：" + ("、".join(imputed) if imputed else "无"))
+        targets = [str(column) for column in (cleaning.get("imputed_target_columns") or [])]
+        if targets:
+            bits.append("被插补的目标列：" + "、".join(targets))
+        facts.append("- 上一轮影响面：" + "；".join(bits) + "（对比本轮影响面：变化须能在脚本里找到依据）")
+    return reviewer_redo_note(
+        feedback, subject="清洗脚本", previous_review=cleaning.get("review"), facts=facts
+    )
+
+
 class ExperimentExecutionNode(LlmSkillNode):
     """实验阶段 = 沙盒 Agent 执行体（H3 前置刀：迁移自单发生成+私有重试环）+ 独立审稿（§8.4）。
 
@@ -2930,7 +3102,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 services,
                 supervisor,
                 self._registry,
-                self._review_spec(plan, planning),
+                self._review_spec(ctx, plan, planning),
                 first=(report, capture, final_answer),
                 sandbox_wave=sandbox_wave,
                 max_runs=self.max_sandbox_runs,
@@ -3004,9 +3176,9 @@ class ExperimentExecutionNode(LlmSkillNode):
         return REVIEWER_TOOL_NAMES + REVIEWER_KNOWLEDGE_TOOL_NAMES
 
     def _review_spec(
-        self, plan: Mapping[str, Any], planning: Mapping[str, Any]
+        self, ctx: NodeContext, plan: Mapping[str, Any], planning: Mapping[str, Any]
     ) -> _ReviewSpec:
-        """实验审稿口径：材料 = 方案 / 假设 / 符号 / 脚本正文 / 指标 / 复跑 / 实现摘要。
+        """实验审稿口径：材料 = 方案 / 假设 / 符号 / 脚本正文 / 指标 / 复跑 / 实现摘要 / 上一轮反馈。
 
         独立上下文 = 只拿这些结构化切片，不继承生成者会话；tier readonly——运行
         部分已由节点做完。
@@ -3014,6 +3186,8 @@ class ExperimentExecutionNode(LlmSkillNode):
         assumptions = assumption_material(plan_assumptions(planning, plan.get("id")))
         symbol_rows = plan_symbols(planning, plan.get("id"))
         symbols = symbol_material(symbol_rows)
+        # 上一轮反馈（s37）：回退重做时审稿人拿上一轮实验审稿阻断意见、指标与未过检查对照核查
+        previous_round = experiment_reviewer_note(ctx)
 
         def materials(
             capture: _SandboxCapture,
@@ -3034,6 +3208,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "approach_summary": str(final_answer.get("approach_summary") or "无"),
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
                 "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+                "previous_round": previous_round,
             }
 
         def context_slice(
@@ -3045,6 +3220,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "metrics": dict(capture.metrics),
                 "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
                 "round": round_no,
+                "redo_round": previous_round != "无",
             }
 
         return _ReviewSpec(
@@ -3743,9 +3919,12 @@ class ValidationNode(LlmSkillNode):
         focus_ids: Sequence[str],
         risk_points: str,
     ) -> _ReviewSpec:
-        """稳健性审稿口径：材料 = 方案 / 须检验假设 / 实验脚本 / 检验脚本 / 检查结果 / 复跑。"""
+        """稳健性审稿口径：材料 = 方案 / 须检验假设 / 实验脚本 / 检验脚本 / 检查结果 / 复跑 / 上一轮反馈。"""
         script_path = f"steps/{ctx.step_id}/main.py"
         assumptions = assumption_material(list(focus))
+        # 上一轮反馈（s37）：回退重做时审稿人拿上一轮检验审稿阻断意见与未过检查对照核查
+        # （同名 id 复检、阈值不得放宽、未过项不得删改名）
+        previous_round = validation_reviewer_note(ctx)
 
         def materials(
             capture: _SandboxCapture,
@@ -3767,6 +3946,7 @@ class ValidationNode(LlmSkillNode):
                 "risk_points": risk_points or "无",
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
                 "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+                "previous_round": previous_round,
             }
 
         def context_slice(
@@ -3779,6 +3959,7 @@ class ValidationNode(LlmSkillNode):
                 "checks_failed": sum(1 for check in checks if not check["passed"]),
                 "rerun_consistent": bool(rerun.get("executed") and rerun.get("consistent")),
                 "round": round_no,
+                "redo_round": previous_round != "无",
             }
 
         return _ReviewSpec(

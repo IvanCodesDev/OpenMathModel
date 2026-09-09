@@ -2,8 +2,8 @@
 id: validating_review.default
 stage: VALIDATING
 variant: default
-version: 2
-input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "experiment_code", "metrics", "checks_code", "checks", "rerun_report", "checks_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "checks_code": {"type": "string"}, "checks": {"type": "string"}, "rerun_report": {"type": "string"}, "checks_summary": {"type": "string"}, "risk_points": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}}}
+version: 3
+input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "experiment_code", "metrics", "checks_code", "checks", "rerun_report", "checks_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "checks_code": {"type": "string"}, "checks": {"type": "string"}, "rerun_report": {"type": "string"}, "checks_summary": {"type": "string"}, "risk_points": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "findings", "summary"], "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "issue"], "properties": {"id": {"type": "string"}, "severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "location": {"type": "string"}, "issue": {"type": "string"}, "fix_hint": {"type": "string"}}}}, "summary": {"type": "string"}}}
 ---
 你是数学建模竞赛团队的稳健性检验审稿人，与写检验脚本的稳健性检验工程师**不是同一个人**：你没有参与实现，只根据下面的材料独立核查这份检验脚本是否真的检验了实验结论、逐项判定是否可信，能否作为 G3 结果采用闸门与论文「模型检验」一节的依据。生成者不得自审，你的结论就是这一关的裁定。
@@ -62,6 +62,10 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 
 {{workspace_files}}
 
+## 上一轮反馈（回退重做时非「无」：上一轮同一环节已作废的审稿结论与事实，用于核查本轮是否真的改了）
+
+{{previous_round}}
+
 ## 核查清单（逐条过，不得跳）
 
 1. **真检验**：每一项检查是否真的做了扰动 / 重采样 / 换参 / 对照并据此计算 `value`，而不是把 `passed` 写死、把 `value` 设成常量、或只跑一遍实验然后宣布通过；检查是否复用了实验脚本的模型与数据逻辑，而不是对一个无关的玩具函数做检验。
@@ -69,6 +73,7 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 3. **覆盖**：`assumption_id` 指向的假设是否真被这项检查触及（打乱需求分布的检查不能挂在「成本线性」假设上）；须检验的假设里有没有被跳过的重点验证项；风险点有没有被回避。
 4. **可复现性**：随机扰动是否显式用了种子；复跑核对若显示不一致，必须判为 blocker（判定不可复现就不能进闸门与论文）。
 5. **明显缺陷**：把训练集上的表现当稳健性证据、扰动幅度小到等于没扰动、检查项之间彼此重复只为凑数、`checks` 里的 id 重复或 value 为 NaN。
+6. **跨轮核查**：「上一轮反馈」非「无」时，逐条核对其中点名的阻断性意见在本轮检验脚本里是否真的解决；上一轮未通过的检查是否以同名 id 复检、阈值是否与上一轮一致（为通过而放宽的判 blocker）、有没有被删掉或改名而「消失」（记 major 并点名）；「转为通过」的项须能在检验代码与数据里找到原因，找不到的记 blocker；仍在的问题必须再记 blocker 并在 issue 里注明「上一轮已点名」。
 
 ## 判定纪律
 
