@@ -17,7 +17,14 @@ import {
   persistPendingTaskReferences,
 } from "./composer-references";
 import { demoMode } from "./demo-mode";
-import { resetHomeChat, restoreHomeChat, runHomeChatTurn, stopHomeChatGeneration } from "./home-chat";
+import {
+  beginHomeChatTurn,
+  resetHomeChat,
+  restoreHomeChat,
+  runHomeChatTurn,
+  stopHomeChatGeneration,
+  type PendingHomeTurn,
+} from "./home-chat";
 import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
 import {
   showTaskLaunchOverlay,
@@ -130,8 +137,6 @@ interface SubmitOptions {
   onDraft: (draft: TaskDraft) => void;
   /** 接待判定放行后各阶段真实开始时回调：过场遮罩据此推进步骤。 */
   onPhase?: (phase: TaskLaunchPhase) => void;
-  /** 首页对话已开启：接待判定的进度不再写状态行（气泡区自会反馈）。 */
-  quietIntake?: () => boolean;
 }
 
 async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<SubmitOutcome> {
@@ -143,7 +148,9 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
     if (!saveDraft(next)) throw new Error(failure);
   };
 
-  const me = await fetchMe(true);
+  // 用缓存的登录态，不为每次发送多绕一趟 /me：会话真的过期时接下来的任何请求都会
+  // 401，错误路径统一 invalidateMe + 重新登录，不会漏掉。
+  const me = await fetchMe();
   if (!me) return { status: "auth-required" };
 
   // 接待判定（对话优先，Codex/opencode 式门控）：闲聊或缺题面的输入不建任务、
@@ -155,7 +162,7 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   // 不该启动六阶段；解析不出文字的附件（纯图片/关闭自动解析/确认页只有
   // 元数据）服务端维持放行，由问题分析节点的 viability 门兜底。
   if (!draft.project_id) {
-    if (!options.quietIntake?.()) options.onProgress("正在确认任务类型…");
+    options.onProgress("正在确认任务类型…");
     const hasProblemReference = listComposerReferences().some(item => item.kind === "problem");
     const store = options.attachments;
     let intakeAttachments: { name: string; excerpt: string; characters: number }[] | undefined;
@@ -277,12 +284,18 @@ interface TaskSubmitterOptions {
   isDisposed: () => boolean;
   /** 接待判定不放行时的处理；缺省显示在状态行（确认页）。首页转对话气泡。 */
   onGuidance?: (reply: string, sentText: string) => void;
-  /** 对话态下接待判定静默进行（气泡区自会反馈），不写状态行。 */
-  quietIntake?: () => boolean;
+  /**
+   * 首页的对话优先体感：点发送的瞬间先把消息落到对话区（`begin`），接待判定在后台
+   * 静默进行；判定不放行时回复写进同一个占位，放行则过场遮罩接管；需要登录或出错
+   * 时 `rollback` 撤回占位并把文字还给输入框。提供了它，状态行就只在出错时使用——
+   * 进度反馈由占位块与过场遮罩承担，不再在输入框下面滚一行字。
+   */
+  optimistic?: { begin(sentText: string): void; rollback(): void };
 }
 
 function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
   const { root } = options;
+  const showProgress = !options.optimistic;
   let pending = false;
   let draft: TaskDraft | undefined;
 
@@ -301,8 +314,9 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
     pending = true;
     options.setBusy(true);
     root.dataset.taskStartState = "loading";
-    renderStatus(root, "正在验证登录状态并创建项目…");
+    clearStatus(root);
     const sentText = draft.description;
+    options.optimistic?.begin(sentText);
     // 过场遮罩：接待判定放行、第一个阶段真实开始时才出现（闲聊/缺题面转
     // 首页对话的路径永远看不到它）；每次提交一个实例，失败即淡出。
     let overlay: TaskLaunchOverlay | undefined;
@@ -312,7 +326,7 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
       signal: options.signal,
       attachments: options.attachments,
       onProgress: message => {
-        renderStatus(root, message);
+        if (showProgress) renderStatus(root, message);
         overlay?.setNote(message);
       },
       onDraft: updated => { draft = updated; },
@@ -321,13 +335,13 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
         overlay ??= showTaskLaunchOverlay({ hasAttachments });
         overlay.setPhase(phase);
       },
-      quietIntake: options.quietIntake,
     }).then(outcome => {
       if (options.isDisposed()) return;
       if (outcome.status === "auth-required") {
         pending = false;
         options.setBusy(false);
         overlay?.dismiss();
+        options.optimistic?.rollback();
         requestAuthentication("请先登录，登录成功后会继续创建当前任务。");
         return;
       }
@@ -345,7 +359,7 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
         return;
       }
       root.dataset.taskStartState = "created";
-      renderStatus(root, "任务已创建，正在进入运行工作台…");
+      if (showProgress) renderStatus(root, "任务已创建，正在进入运行工作台…");
       // 成功：遮罩打勾定格后再导航；遮罩缺席（极端时序）直接导航兜底。
       if (overlay) overlay.succeed(() => navigate(outcome.url));
       else navigate(outcome.url);
@@ -354,6 +368,7 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
       pending = false;
       options.setBusy(false);
       overlay?.dismiss();
+      options.optimistic?.rollback();
       if (error instanceof WorkspaceApiError && error.status === 401) {
         invalidateMe();
         requestAuthentication("登录状态已失效，请重新登录后继续。");
@@ -420,42 +435,63 @@ function mountNewTask(root: HTMLElement): () => void {
     if (!draft.description && legacyPrompt) draft = { ...draft, description: legacyPrompt };
   }
 
+  // 发送瞬间落地的占位对话轮：同一时刻只会有一次提交在途（submitter 自己有闸），
+  // 一个变量够用。判定不放行时回复写进它；需要登录 / 出错时撤回并把文字还回输入框。
+  let pendingTurn: PendingHomeTurn | null = null;
+
   const submitter = createTaskSubmitter({
     root,
     signal: abortController.signal,
     attachments,
     isDisposed: () => disposed,
-    // 首页发送键只有图标没有文案，忙碌态用禁用 + aria-busy 表达，进度写在状态行里。
+    // 首页发送键只有图标没有文案，忙碌态用禁用 + aria-busy 表达。
     setBusy: busy => {
       if (!sendButton) return;
       sendButton.disabled = busy;
       sendButton.setAttribute("aria-busy", String(busy));
     },
-    // 接待判定不放行 → 进入首页对话：输入变成用户气泡，回复由用户配置的
-    // 模型流式生成；@ 引用的资料随本轮消息送给模型（与执行页同语义：
-    // 发送成功后清空引用，失败保留以便重试）。输入框清空以便继续聊或
-    // 粘贴完整题面（后续发送仍会先过接待判定，题面完整时自动升级）。
+    optimistic: {
+      begin: sentText => {
+        pendingTurn = beginHomeChatTurn(
+          root,
+          sentText,
+          listComposerReferences().map(reference => reference.title),
+        );
+        // 消息已经在对话区了，输入框腾出来。这里不写草稿：提交流程正拿着草稿写回
+        // project_id / 幂等 token，同一把钥匙两处写会把重试凭据冲掉。
+        if (textarea) textarea.value = "";
+      },
+      rollback: () => {
+        pendingTurn?.discard();
+        pendingTurn = null;
+        if (textarea && !textarea.value && draft.description) textarea.value = draft.description;
+      },
+    },
+    // 接待判定不放行 → 进入首页对话：回复由用户配置的模型流式生成，写进发送时
+    // 已落地的那个占位块；@ 引用的资料随本轮消息送给模型（与执行页同语义：
+    // 发送成功后清空引用，失败保留以便重试）。后续发送仍会先过接待判定，
+    // 题面完整时自动升级为任务。
     onGuidance: (_reply, sentText) => {
-      if (textarea) {
-        textarea.value = "";
-        persistCurrent();
-      }
-      // 这句已经变成对话消息，不再是待办的任务题面：连提交时写下的旧
-      // openmathmodelPrompt 一起清掉，否则下次回首页输入框里又躺着它。
+      // 输入框在发送瞬间就腾出来了，这里不再碰它——用户可能已经在敲下一句；
+      // 只把草稿按输入框现状重写（这句已是对话消息，不再是待办题面）。
+      persistCurrent();
+      // 连提交时写下的旧 openmathmodelPrompt 一起清掉，否则下次回首页输入框里又躺着它。
       try {
         sessionStorage.removeItem(LEGACY_PROMPT_KEY);
       } catch {
         // 会话存储不可用时也没有残留可清
       }
       const references = listComposerReferences();
+      const pending = pendingTurn;
+      pendingTurn = null;
       void runHomeChatTurn(root, sentText, {
+        pending,
         referenceContext: composerReferenceBlock(),
         referenceTitles: references.map(reference => reference.title),
       }).then(delivered => {
         if (delivered && references.length > 0) clearComposerReferences();
       });
     },
-    quietIntake: () => root.dataset.homeChat === "on",
   });
 
   const persistCurrent = (): boolean => {

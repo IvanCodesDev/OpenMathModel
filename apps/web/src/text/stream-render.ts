@@ -10,11 +10,13 @@
  *   只在尾部增长，已上屏且未变化的前缀块（含已排版的公式）原样保留，每帧
  *   只替换真正变化的尾部块。
  *
- * 公式排版仍走 text/math-typeset（KaTeX 结果缓存 + data-tex-done 跳过），
- * 每次真实渲染后只会排版新替换的尾部块。
+ * 公式排版仍走 text/math-typeset（KaTeX 结果缓存 + data-tex-done 跳过），代码块的
+ * 复制按钮与高亮走 text/code-blocks（同样带就绪标记与结果缓存），每次真实渲染后
+ * 只会处理新替换的尾部块。
  */
 
 import { t } from "../i18n/locale";
+import { decorateCodeBlocks } from "./code-blocks";
 import { renderMarkdown } from "./markdown";
 import { typesetMath } from "./math-typeset";
 
@@ -73,6 +75,9 @@ export function createStreamingMarkdownRenderer(
     }
     lastBlocksHtml = nextHtml;
     typesetMath(target);
+    // 复制按钮与高亮只改块内部，不增删顶层块；对比用的 nextHtml 取自离屏容器（装饰前），
+    // 下一帧的前缀比对不受影响
+    decorateCodeBlocks(target);
     if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
   };
 

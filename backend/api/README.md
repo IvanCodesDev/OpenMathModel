@@ -24,9 +24,12 @@ npm run dev
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e packages/contracts -e agents/core -e agents/skills -e "backend/api[dev]"
 
-# 启动：数据库为 PostgreSQL（见下节）。启动时先探库，本地 pg-dev 实例没起会自动 start 一次；
+# 启动（热重载，参数已钉死）：
+npm run dev:api
+
+# 等价的完整命令。数据库为 PostgreSQL（见下节）。启动时先探库，本地 pg-dev 实例没起会自动 start 一次；
 # --reload-dir 必带——不加时 --reload 监视整个 cwd（含 backend/api/data/），沙盒每写一个 .py
-# 就把 API 重启一次；--timeout-graceful-shutdown 让 SSE 长连接不拖死重载
+# 就把 API 重启一次、打断运行中的阶段；--timeout-graceful-shutdown 让 SSE 长连接不拖死重载
 .venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --reload-dir backend/api/omm_api --reload-dir agents --timeout-graceful-shutdown 5 --port 8000
 ```
 
@@ -74,6 +77,18 @@ cd backend/api
 | `OMM_OCR_API_BASE_URL` | `https://maas-api.cn-huabei-1.xf-yun.com/v2` | 远程 OCR 的 OpenAI 兼容 Base URL |
 | `OMM_OCR_API_MODEL` | `xoppaddleocrv16` | 远程 OCR 的 Model ID |
 | `OMM_OCR_API_TIMEOUT_SECONDS` | `60` | 单次识别调用（每页一次）的超时 |
+| `OMM_RUN_MAX_TOKENS` | 无上限 | 单次运行的 token 硬停（E310）。**默认不设限**，填正整数才启用；`0` / 负数 / 不填 = 关闭 |
+| `OMM_RUN_MAX_LLM_CALLS` | 无上限 | 单次运行的模型调用次数硬停（E310），同上 |
+| `OMM_RUN_MAX_SANDBOX_RUNS` | 无上限 | 单次运行的沙箱执行次数硬停（E310，按次预付），同上 |
+| `OMM_NODE_MAX_TOKENS` | 无上限 | 单个阶段节点的 token 硬停（E320），同上 |
+
+> 四项资源预算 2026-09-08 起默认关闭。它们原本要防的失控是「后端进程反复重启 →
+> 阶段无上限重跑」，那条已由 `MAX_CONSECUTIVE_INTERRUPTS`（连续 3 次 executor lost
+> 即停）在源头掐断；而额度一旦烧光是整个运行不可逆卡死——账本按 run 累计，人工
+> 「重试」也会在调用前的预检处被拦。要恢复硬闸就填正整数，改完需重启 API 进程；
+> 每发起一轮修订，run/node 两级的有限额度各追加一份（ADR-0013 §3.1），不设限的
+> 维度不受影响。用量记录不受开关影响，「设置中心 → 用量监控」的月度费用预算与
+> 硬限制是另一套闸门，仍然照常生效。
 
 ## 测试
 

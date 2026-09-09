@@ -350,6 +350,12 @@ class ChatTurnTraceRequest(BaseModel):
     trace: list[dict] = Field(default_factory=list, max_length=50)
 
 
+class ChatTurnFeedbackRequest(BaseModel):
+    """PUT /api/chat/turns/{id}/feedback：回复右下角的赞 / 踩；null = 撤回评价。"""
+
+    feedback: Optional[Literal["up", "down"]] = None
+
+
 # ── 响应体构造 ───────────────────────────────────────────────────
 
 

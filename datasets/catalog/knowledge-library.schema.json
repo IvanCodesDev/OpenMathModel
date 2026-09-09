@@ -164,10 +164,13 @@
         "models": { "type": "array", "items": { "type": "string" } },
         "innovation": { "type": "string" },
         "summary": { "type": "string" },
+        "page_count": { "type": "integer", "minimum": 1 },
         "source_id": { "type": "string" },
         "source_url": { "type": "string", "format": "uri" },
         "full_text_url": { "type": ["string", "null"], "format": "uri" },
+        "local_pdf_path": { "type": "string", "pattern": "^/paper-files/archive/[a-z-]+/\\d{4}/[A-FTX]/[^/]+\\.pdf$" },
         "source_file_bytes": { "type": "integer", "minimum": 1 },
+        "source_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "source_git_blob_sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
         "source_status": { "type": "string" },
         "access_scope": { "enum": ["metadata_only", "linked_content", "stored_content"] }

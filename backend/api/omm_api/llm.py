@@ -1533,6 +1533,47 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 2)
 
 
+#: 从思考通道抢救答案时最多回溯多少个候选 ``{``：正常情况第一二个候选就命中
+#: （答案就是思考末尾那个对象），上限只防极端长思考里满是花括号时白算。
+_SALVAGE_MAX_CANDIDATES = 2000
+
+
+def salvage_answer_from_reasoning(reasoning: str) -> str:
+    """正文为空、答案却写在思考通道里时，从思考末尾取回那个 JSON 对象。
+
+    实测（2026-09-07，DeepSeek 实验模型跑沙盒会话）：模型把整个
+    ``{"tool": "python_run", ...}`` 信封原样写进 ``reasoning_content``、
+    ``content`` 一字不给，一次运行里五次调用有三次如此。下游拿到空串只能
+    判成「输出未通过结构校验」再花几分钟让模型重来，重来还是空的就直接
+    「尚未用 python_run 运行任何代码」失败——答案明明已经生成出来了。
+
+    只在思考以 ``}`` 收尾时尝试：从最后一个 ``}`` 往前找每个 ``{``，第一个能
+    把剩余尾巴整体解析成 JSON 对象的就是最外层答案（内层 ``{`` 都会多出配不
+    上的 ``}`` 而解析失败）。取回的文本仍要过调用方自己的解析与校验，抢救
+    只把「必然失败」变成「有机会成功」，不引入新的信任。找不到返回空串。
+    """
+    text = reasoning.rstrip()
+    # 末尾的 markdown 围栏一并容忍：只输出一个 JSON 对象的模型偶尔还是会包一层
+    if text.endswith("```"):
+        text = text[: -len("```")].rstrip()
+    if not text.endswith("}"):
+        return ""
+    start = text.rfind("{")
+    attempts = 0
+    while start != -1 and attempts < _SALVAGE_MAX_CANDIDATES:
+        attempts += 1
+        candidate = text[start:]
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return candidate
+        start = text.rfind("{", 0, start)
+    return ""
+
+
 def notes_prompt_block(
     notes: Sequence[tuple[str, str]], node_id: Optional[str]
 ) -> str:
@@ -1769,6 +1810,19 @@ class EngineLlmPort:
                 "elapsed_ms": outcome.elapsed_ms,
                 "text": _clip_thinking(outcome.reasoning),
             })
+        # 正文为空但思考末尾就是答案 JSON：取回来交给下游解析，而不是让节点
+        # 拿着空串走修复梯（推理模型把答案写错通道的实测案例见函数说明）。
+        text = outcome.text
+        salvaged = False
+        if not text.strip() and outcome.reasoning:
+            recovered = salvage_answer_from_reasoning(outcome.reasoning)
+            if recovered:
+                text = recovered
+                salvaged = True
+                logger.warning(
+                    "llm answer salvaged from reasoning channel: prompt=%s model=%s chars=%d",
+                    prompt_id, outcome.model, len(recovered),
+                )
         task_kind = self._task_kind_for_prompt.get(prompt_id)
         self._emit({
             "kind": "llm_call",
@@ -1782,6 +1836,8 @@ class EngineLlmPort:
             # 「同输入同 prompt」的纯函数纪律由此可在事件日志层面被 evals 断言。
             "prompt_hash": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(),
             **({"tokens_estimated": True} if estimated else {}),
+            # 审计留痕：这次的「回答」是从思考通道里取回的，不是正文通道给的
+            **({"answer_from_reasoning": True} if salvaged else {}),
             # ADR-0015：这一步归哪类任务、是否命中了设置中心的任务类型定向
             **(
                 {
@@ -1792,4 +1848,4 @@ class EngineLlmPort:
                 else {}
             ),
         })
-        return outcome.text
+        return text

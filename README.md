@@ -82,11 +82,16 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 统一入口诊断时可分别启动两个进程：
 
 ```powershell
-# 终端 A：API
+# 终端 A：API（热重载）。等价于下面那条完整命令，参数已钉死，推荐直接用它：
+npm run dev:api
+
+# 手敲时两个参数缺一不可：
 # --timeout-graceful-shutdown 必带：页面的 SSE 长连接永不排空，不设上限时 --reload 的
 #   优雅停机会无限等待，表现为改代码后 API 失联；
 # --reload-dir 必带：不加时 --reload 监视整个当前目录（含 backend/api/data/），沙盒每写
-#   一个 .py（steps/*/main.py、experiment.py）API 就重启一次，会把运行中的任务打断。
+#   一个 .py（steps/*/main.py、experiment.py）API 就重启一次，会把运行中的任务打断——
+#   页面上表现为思考行标「本次调用中断」、阶段反复重试直到失败（活动流会补一句
+#   「后端进程在…执行中途重启」说明原因）。
 .venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --reload-dir backend/api/omm_api --reload-dir agents --timeout-graceful-shutdown 5 --port 8000
 
 # 终端 B：Web

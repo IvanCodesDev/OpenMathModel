@@ -30,6 +30,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -540,8 +541,9 @@ def _kill_process_tree(proc: subprocess.Popen[str]) -> None:
             with contextlib.suppress(subprocess.TimeoutExpired, OSError):
                 subprocess.run(
                     [str(taskkill), "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                    timeout=15.0,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3.0,
                     check=False,
                 )
     else:
@@ -574,19 +576,42 @@ def run_process_tree(
         errors="replace",
         **popen_kwargs,
     )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def drain(stream: Any, chunks: list[str]) -> None:
+        with contextlib.suppress(OSError, ValueError):
+            while line := stream.readline():
+                chunks.append(line)
+
+    readers = [
+        threading.Thread(target=drain, args=(proc.stdout, stdout_chunks), daemon=True),
+        threading.Thread(target=drain, args=(proc.stderr, stderr_chunks), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    timed_out = False
     try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
+        proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
+        timed_out = True
         _kill_process_tree(proc)
-        try:
-            stdout, stderr = proc.communicate(timeout=_DRAIN_AFTER_KILL_S)
-        except subprocess.TimeoutExpired:
-            stdout, stderr = "", ""
-        return CompletedRun(
-            returncode=None, stdout=stdout or "", stderr=stderr or "", timed_out=True
-        )
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=_DRAIN_AFTER_KILL_S)
+
+    deadline = time.monotonic() + _DRAIN_AFTER_KILL_S
+    for reader in readers:
+        reader.join(max(0.0, deadline - time.monotonic()))
+    # An escaped descendant may still own a copied pipe handle. Closing that stream
+    # from this thread can block until the descendant exits, defeating the timeout.
+    # The daemon reader owns the handle and will close naturally at EOF.
+
     return CompletedRun(
-        returncode=proc.returncode, stdout=stdout or "", stderr=stderr or "", timed_out=False
+        returncode=None if timed_out else proc.returncode,
+        stdout="".join(stdout_chunks),
+        stderr="".join(stderr_chunks),
+        timed_out=timed_out,
     )
 
 

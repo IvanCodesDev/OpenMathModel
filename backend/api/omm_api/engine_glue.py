@@ -35,12 +35,14 @@ from omm_agent_core import (
 )
 from omm_agent_core import (
     GRAPH_MODE_ENV,
+    INTERRUPTED_STEP_ERROR,
     ArtifactRef,
     EventType,
     NodeContext,
     NodeResult,
     NodeServices,
     SchedulingDivergence,
+    StepStatus,
     TaskRunEngine,
     TaskRunSnapshot,
     TaskState,
@@ -49,7 +51,14 @@ from omm_agent_core import (
     schedulers_for_mode,
 )
 from omm_agent_core.errors import AgentError
-from omm_agent_harness import BudgetGovernor, NodeBudget, RunBudget, SubagentSupervisor
+from omm_agent_harness import (
+    UNLIMITED,
+    BudgetGovernor,
+    NodeBudget,
+    RunBudget,
+    SubagentSupervisor,
+    is_unlimited,
+)
 from omm_agent_skills import (
     DEFAULT_HARDWARE_NOTE,
     DataPreparationNode,
@@ -528,28 +537,47 @@ _PROMPT_TASK_KINDS = {
 }
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_limit(name: str) -> int | float:
+    """预算上限的环境变量解析：**默认无上限**，给正整数才恢复硬闸。
+
+    2026-09-08 IvanCodesDev 拍板去掉默认额度。原先 §4.7 的四个数字（150 万
+    tokens / 300 次调用 / 40 次沙箱 / 每节点 30 万 tokens）是失控保护，但它保护
+    的那类失控——进程被反复重启导致阶段无上限重跑——现在由
+    ``MAX_CONSECUTIVE_INTERRUPTS`` 在源头掐断（连续 3 次「executor lost」即停），
+    而额度一旦烧光是**整个 run 不可逆地卡死**：账本按 run 累计，连人工「重试」
+    都会在预检处被拦（2026-09-07 真实案例：实验阶段撞 E320 后彻底无法继续）。
+    保护弱、副作用重，所以默认关掉，需要时再按变量显式开。
+
+    ``0`` / 负数 / 非数字 / 未设置一律视为无上限；这里的 ``0`` 不同于治理器里的
+    ``0``（那是「一次都不给」的真实额度），手敲环境变量的人写 0 想表达的是关闭。
+    """
+    raw = (os.environ.get(name) or "").strip()
     try:
-        value = int(os.environ.get(name, ""))
+        value = int(raw)
     except ValueError:
-        return default
-    return value if value > 0 else default
+        return UNLIMITED
+    return value if value > 0 else UNLIMITED
+
+
+def _scaled_limit(limit: int | float, quota_multiple: int) -> int | float:
+    """无上限乘几份还是无上限；有限额度按修订轮数追加（ADR-0013 §3.1）。"""
+    return limit if is_unlimited(limit) else limit * quota_multiple
 
 
 def _run_budget_from_env(quota_multiple: int = 1) -> RunBudget:
-    """§4.7 拍板默认值 + 环境变量覆盖（预算追加的临时通道，GB 闸门后续批次）。
+    """运行级预算：默认四项全不设限，环境变量给正整数才恢复对应的硬停。
 
     ``quota_multiple`` 是修订回合的配额份数（ADR-0013 §3.1）。
     """
-    defaults = RunBudget()
     return RunBudget(
-        max_total_tokens=_env_int("OMM_RUN_MAX_TOKENS", defaults.max_total_tokens) * quota_multiple,
-        max_llm_calls=_env_int("OMM_RUN_MAX_LLM_CALLS", defaults.max_llm_calls) * quota_multiple,
-        max_sandbox_runs=_env_int("OMM_RUN_MAX_SANDBOX_RUNS", defaults.max_sandbox_runs)
-        * quota_multiple,
+        max_total_tokens=_scaled_limit(_env_limit("OMM_RUN_MAX_TOKENS"), quota_multiple),
+        max_llm_calls=_scaled_limit(_env_limit("OMM_RUN_MAX_LLM_CALLS"), quota_multiple),
+        max_sandbox_runs=_scaled_limit(
+            _env_limit("OMM_RUN_MAX_SANDBOX_RUNS"), quota_multiple
+        ),
         # 墙钟按执行时间计的语义未实现：治理器按进程内时钟计会把审批等待也算进去，
         # 宁可不启用也不误伤（禁用 = 上限无穷大）。
-        max_wall_clock_s=float("inf"),
+        max_wall_clock_s=UNLIMITED,
     )
 
 
@@ -579,10 +607,17 @@ def _build_budget_governor(session: Session, run: TaskRunRow) -> BudgetGovernor:
     全 run 累计的，不追加的话第二轮做到一半必然撞上首轮的额度而硬停。
     """
     quota_multiple = 1 + revision_rounds(session, run.id)
-    governor = BudgetGovernor(run_budget=_run_budget_from_env(quota_multiple))
-    node_cap = _env_int("OMM_NODE_MAX_TOKENS", NodeBudget().max_tokens) * quota_multiple
+    node_budget = NodeBudget(
+        max_tokens=_scaled_limit(_env_limit("OMM_NODE_MAX_TOKENS"), quota_multiple)
+    )
+    # default_node_budget 必须一起给：治理器对没 open_node 过的节点原本回落到
+    # §4.7 的 30 万 tokens，只 open 这张表里的节点会让表外节点绕过本地配置。
+    governor = BudgetGovernor(
+        run_budget=_run_budget_from_env(quota_multiple),
+        default_node_budget=node_budget,
+    )
     for node_id in set(_PROMPT_NODE_IDS.values()):
-        governor.open_node(node_id, NodeBudget(max_tokens=node_cap))
+        governor.open_node(node_id, node_budget)
 
     total_tokens = 0
     llm_calls = 0
@@ -655,9 +690,10 @@ def _budget_stop_message(error: AgentError) -> str:
         f"沙箱运行 {context.get('sandbox_runs', '?')} 次"
     )
     return (
-        f"{error}。{used}。这是失控保护：确需继续，可提高环境变量上限"
-        "（OMM_RUN_MAX_TOKENS / OMM_RUN_MAX_LLM_CALLS / OMM_RUN_MAX_SANDBOX_RUNS / "
-        "OMM_NODE_MAX_TOKENS）后重试，或取消任务；GB 预算追加闸门在后续批次提供。"
+        f"{error}。{used}。资源预算默认不设上限，出现这条说明本机显式配置了额度："
+        "调高或删除对应环境变量（OMM_RUN_MAX_TOKENS / OMM_RUN_MAX_LLM_CALLS / "
+        "OMM_RUN_MAX_SANDBOX_RUNS / OMM_NODE_MAX_TOKENS，置 0 即关闭该项）后重启 API "
+        "再重试，或取消任务。"
     )
 
 
@@ -1802,8 +1838,92 @@ def advance_run(session: Session, run: TaskRunRow) -> None:
     # 修复语义把它们落定为 STEP_FAILED（"executor lost"），事件日志与 step_runs
     # 才是闭合的；随后的 advance 以 attempt+1 重跑该阶段。进程内互斥由唯一的
     # 推进线程保证（本函数是 checkpoint 模式的唯一入口）。
-    engine.heal_interrupted(snapshot)
+    healed = engine.heal_interrupted(snapshot)
+    if healed:
+        _note_executor_restart(session, run, snapshot, healed)
+        streak = _interrupt_streak(snapshot)
+        if streak >= MAX_CONSECUTIVE_INTERRUPTS:
+            # crash loop：再自动重跑只是再花一遍模型调用然后再被打断。停在这里、把原因和
+            # 出路写进失败信息（含 executor lost 标记 → TRANSIENT，UI 照常给「重试」）。
+            label = STAGE_LABELS.get(snapshot.state.value, snapshot.state.value)
+            engine.fail_run(
+                snapshot,
+                error=(
+                    f"「{label}」阶段连续 {streak} 次在执行中途被后端进程重启打断"
+                    f"（{INTERRUPTED_STEP_ERROR}），已停止自动重跑以免空耗模型额度。"
+                    "请先排查后端为何反复重启——开发环境最常见的原因是以 uvicorn --reload 启动却没加 "
+                    "--reload-dir，沙盒每写一个 .py 就触发一次重载（改用 npm run dev:api，见 README）；"
+                    "排除后点「重试当前阶段」继续。"
+                ),
+            )
+            return
     engine.advance(snapshot)
+
+
+#: 同一阶段连续多少次「执行中途被进程重启打断」后停止自动重跑。每次重跑都要重新花一遍
+#: 模型调用；进程反复被杀（uvicorn --reload 监视到沙盒写的 .py）时无上限重跑会把该节点的
+#: token 额度烧光——2026-09-07 真实案例：实验阶段 23 次连环打断、39 万 tokens，直到 E320
+#: 预算硬停，此后连人工重试都被预算门拦下。
+MAX_CONSECUTIVE_INTERRUPTS = 3
+
+
+def _interrupt_streak(snapshot: TaskRunSnapshot) -> int:
+    """当前阶段末尾连续被判「executor lost」的步骤数（从最新一步往前数，遇到别的结果即停）。"""
+    streak = 0
+    for step in reversed(snapshot.steps):
+        if step.state is not snapshot.state:
+            break
+        if step.status is not StepStatus.FAILED or step.error != INTERRUPTED_STEP_ERROR:
+            break
+        streak += 1
+    return streak
+
+
+def _note_executor_restart(
+    session: Session, run: TaskRunRow, snapshot: TaskRunSnapshot, healed: list[CoreEvent]
+) -> None:
+    """悬挂步骤被修复落定时，把「进程重启打断了执行」说给用户和开发者听。
+
+    页面上这一幕只表现为思考行标着「本次调用中断」、随后又开一次尝试，用户
+    很容易把它归因于自己刚做的操作（切页、切对话）。真实案例（2026-09-07）：
+    以 ``uvicorn --reload`` 起 API 却没加 ``--reload-dir``，沙盒每写一个
+    ``steps/*/main.py`` 都触发重载——实验阶段每次尝试都在第一次 python_run 之后
+    十几秒被打断、永远跑不完。这里落一条叙述事件让活动流如实说明原因，并在服务
+    端日志给出 README 里的修正命令；事件发送失败绝不影响推进。
+    """
+    step_ids = [str(event.payload.get("step_id") or "") for event in healed]
+    steps = [step for step in map(snapshot.find_step, step_ids) if step is not None]
+    labels = sorted({STAGE_LABELS.get(step.state.value, step.state.value) for step in steps})
+    stage = "、".join(labels) or "当前"
+    next_attempt = max((step.attempt for step in steps), default=1) + 1
+    logger.warning(
+        "run %s: %d step(s) in「%s」were interrupted by a process restart; retrying as attempt %d. "
+        "If the API runs under `uvicorn --reload`, add `--reload-dir backend/api/omm_api --reload-dir agents` "
+        "(see README) — otherwise every sandbox-written .py under %s restarts the server.",
+        run.id,
+        len(healed),
+        stage,
+        next_attempt,
+        runtime_settings().workspaces_dir,
+    )
+    try:
+        append_event(
+            session,
+            run.id,
+            AgentEventType.run_log.value,
+            {
+                "kind": "executor_restarted",
+                "message": (
+                    f"后端进程在「{stage}」执行中途重启，进行中的模型调用被打断；"
+                    f"已自动作为第 {next_attempt} 次尝试重跑该阶段"
+                ),
+                "steps": step_ids,
+            },
+        )
+        session.commit()
+    except Exception:  # noqa: BLE001 - 说明性事件绝不允许拖垮推进
+        logger.exception("executor_restarted 叙述事件写入失败")
+        session.rollback()
 
 
 def pause_run(session: Session, run: TaskRunRow) -> None:

@@ -75,6 +75,25 @@ python datasets/recipes/discover_electric_cup.py discover
 #    逐届快照官网通知并固定校验和，入库时只取主题/选题小节。
 python datasets/recipes/stage_tjjmds_notices.py all
 
+#    优秀论文（第二批赛事）。国赛论文只有知网专栏与纸质论文选，官网不提供下载，
+#    因此与美赛论文一样取自固定 commit 的社区快照；评述、评阅要点、赛题附件，
+#    以及文件名带参赛队员姓名的文件都不收。
+python datasets/recipes/ingest_cumcm_paper_fulltext.py all
+
+#    华数杯、亚太赛、MathorCup 的优秀论文由主办方在报名平台的「历年优秀论文」
+#    公告里以压缩包发布：按固定字节数与 SHA-256 下载，解压后按年份/题组归一化，
+#    再逐篇读封面。RAR 用系统自带的 bsdtar 解开，不引入额外二进制依赖。
+python datasets/recipes/stage_award_paper_bundles.py all
+
+#    泰迪杯在竞赛官网逐篇发布优秀作品，封面写明作品名称、荣获奖项与作品单位；
+#    成员与指导老师姓名属个人信息，不解析、不入库。
+python datasets/recipes/stage_tipdm_award_papers.py all
+
+#    近几届（国赛 2021–2025、华为杯 2024–2025）没有任何公开合集：官方只发获奖名单，
+#    社区合集也停在更早的年份。这份 recipe 逐篇登记参赛队自己公开的获奖论文，
+#    固定到具体 commit 与文件，奖项等级以来源自述为准，说不清奖项的不收。
+python datasets/recipes/ingest_community_award_papers.py all
+
 # 6. 将官方站点快照与完整题面规范化为前端赛题库/优秀论文数据
 & "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   datasets/recipes/ingest_full_problem_archives.py all
@@ -92,6 +111,14 @@ python datasets/recipes/build_knowledge_library.py
 - `raw/sources/github/zhanwen-MathModel/source-manifest.json`：17 份题面原文件的 Git blob、SHA-256 和固定 commit 清单。
 - `interim/github_zhanwen_mathmodel/full-problems.json`：12 道完整赛题的原序结构化内容块。
 - 同一 interim 清单还包含仓库内 2004–2023 年 685 份优秀论文 PDF 的逐篇结构化索引。
+- `raw/sources/paper-archives/<赛事>/<年份>/<题组>/<编号>.pdf`：第二批赛事的优秀论文原件
+  （国赛 300 篇、泰迪杯 95 篇、MathorCup 50 篇、亚太赛 24 篇、华数杯 18 篇、华为杯近两届 2 篇）。
+  开发服务器的 `/paper-files/archive/…` 路由直接读这里；这批论文只索引不再分发，原件不入库。
+- `interim/cumcm_paper_fulltext/papers.json`、`interim/award_paper_bundles/papers.json`、
+  `interim/tipdm_award_papers/papers.json`、`interim/community_award_papers/papers.json`：
+  上述论文的封面解析结果（题名、参赛编号、院校、摘要、关键词与方法标签）。
+- 全国大学生统计建模大赛的获奖论文只以《获奖论文选》纸质图书和知网收录发布，官网不提供
+  全文下载，因此该赛事目前只有赛题（主题）入库，没有论文；缺口记录在来源注册表里。
 - `apps/web/public/problem-assets/<problem-id>/`：从 DOCX 提取并转换为浏览器可显示格式的题面插图。
 - `apps/web/public/problem-figures/<problem-id>/`：从 PDF 原题提取的内嵌插图，不使用整页截图替代正文。
 - `apps/web/public/problem-files/<problem-id>/`：可点击下载的原题 PDF，以及按赛题归档的随题数据附件包。

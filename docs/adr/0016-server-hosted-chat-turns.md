@@ -19,7 +19,7 @@
 
 ### 1. 一轮对话 = 服务端的一条 `chat_turns` 记录 + 一个后台作业
 
-新增表 `chat_turns`（迁移 `0019_chat_turns`）：`id`（`cturn_…`）、`user_id`、`scope_id`（`run_…` 任务运行或 `chat_…` 首页对话）、`status`（`running / completed / failed / stopped / interrupted`）、`opening`（是否系统自动发起的开场分析）、`text`、`attachments`、`reply`、`reasoning`、`meta`（实际接口/模型/Auto 路由/用量/耗时）、`error_code / error_message`、`trace`（页面侧执行轨迹行）、`created_at / updated_at / ended_at`。索引 `(scope_id, created_at)`。
+新增表 `chat_turns`（迁移 `0019_chat_turns`）：`id`（`cturn_…`）、`user_id`、`scope_id`（`run_…` 任务运行或 `chat_…` 首页对话）、`status`（`running / completed / failed / stopped / interrupted`）、`opening`（是否系统自动发起的开场分析）、`text`、`attachments`、`reply`、`reasoning`、`meta`（实际接口/模型/Auto 路由/用量/耗时）、`error_code / error_message`、`trace`（页面侧执行轨迹行）、`created_at / updated_at / ended_at`。索引 `(scope_id, created_at)`。2026-09-07 补 `feedback`（迁移 `0020_chat_turn_feedback`，`up / down / NULL`）：回复右下角的赞 / 踩落在这一轮上，重进按轮回显。
 
 `ChatTurnHub`（`omm_api/chat_turns.py`，进程内单例，与 `RunnerThread` 同样假定单进程 API）负责每一轮的生命周期：
 
@@ -36,6 +36,7 @@ GET    /api/chat/turns/{id}/events?after=N  → SSE              从 seq N 之�
 POST   /api/chat/turns/{id}/stop            → {turn}           停止生成（保留半截）
 GET    /api/chat/turns/{id}                 → {turn}
 PATCH  /api/chat/turns/{id}                 → {turn}           补写页面侧执行轨迹行 {trace}
+PUT    /api/chat/turns/{id}/feedback        → {turn}           赞 / 踩 {feedback: up|down|null}（null 撤回；2026-09-07）
 GET    /api/chat/scopes/{scope}/turns       → {items}          该归属全部轮（running 的带半截正文与 last_seq）
 DELETE /api/chat/scopes/{scope}             → {deleted}        删除该归属全部轮（运行中的先停）
 ```

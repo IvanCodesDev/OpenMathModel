@@ -51,8 +51,9 @@ _DATA_EXCLUDED_PREFIXES = ("steps/", "artifacts/", "figures/")
 _NOTE_LINE = re.compile(
     r"^\s*(?:[-*•]\s*)?`?(?P<name>[^`\s—–:：]+?\.[A-Za-z0-9]{1,5})`?\s*(?:[—–\-:：]+|\s)\s*(?P<note>.+?)\s*$"
 )
-#: 说明的长度上限：图题是一句话，不是一段实验报告。
-_NOTE_MAX_CHARS = 200
+#: 说明的长度上限：一句结论 + 样本量 / 种子数 + 不确定性定义 + 数据来源（出图规范要求的图注
+#: 四要素）放得下，一段实验报告放不下。
+_NOTE_MAX_CHARS = 400
 
 
 def _basename(path: str) -> str:
@@ -60,14 +61,18 @@ def _basename(path: str) -> str:
 
 
 def parse_figure_notes(text: Any) -> dict[str, str]:
-    """终答 ``figure_notes`` → {文件名(basename): 说明}。「无」/ 空 / 不成行的内容一律忽略。"""
+    """终答 ``figure_notes`` → {文件名(basename): 说明}。「无」/ 空 / 不成行的内容一律忽略。
+
+    说明进论文材料的 Markdown 表格单元格，ASCII 竖线会被当成列分隔——按出图规范用 ``｜``
+    分隔图注要素的写手偶尔会打成 ``|``，这里统一归一为全角。
+    """
     notes: dict[str, str] = {}
     for line in str(text or "").splitlines():
         match = _NOTE_LINE.match(line)
         if not match:
             continue
         name = _basename(match.group("name"))
-        note = match.group("note").strip().strip("。").strip()
+        note = match.group("note").strip().strip("。").strip().replace("|", "｜")
         if name and note and name not in notes:
             notes[name] = note[:_NOTE_MAX_CHARS]
     return notes
@@ -176,7 +181,8 @@ def render_figure_material(inventory: Sequence[Mapping[str, Any]]) -> str:
     lines = [
         "本次运行真实产出的图件（插图只准从此表选，编号固定；用 `![图 N 标题](文件名)` 独立成段插入，"
         "正文引用写「图 N」；未插入的图不得引用；来源为数据准备阶段的图描述的是清洗前后的数据本身，"
-        "宜放在数据预处理 / 数据分析章，不得当作模型结果引用）：",
+        "宜放在数据预处理 / 数据分析章，不得当作模型结果引用；「说明」列是画图工程师给的图注要素——"
+        "结论、样本量 / 种子数、不确定性定义、数据来源——写正式图注时照抄其中的事实，不得补造）：",
         "",
         "| 编号 | 文件名 | 来源 | 说明 |",
         "| --- | --- | --- | --- |",

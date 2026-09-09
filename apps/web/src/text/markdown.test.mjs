@@ -12,7 +12,7 @@ const source = await readFile(new URL("./markdown.ts", import.meta.url), "utf8")
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { renderMarkdown } = await import(
+const { renderMarkdown, codeLanguage } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
@@ -42,14 +42,44 @@ test("renders headings, lists, quote and hr", () => {
 
 test("keeps fenced code verbatim and escaped", () => {
   const html = renderMarkdown("```python\nprint('<hi> & **bold**')\n```");
-  assert.ok(html.includes('<pre class="md-code"><code data-lang="python">'));
+  assert.ok(html.includes('<div class="md-code" data-lang="python" data-label="Python"><pre><code>'));
   assert.ok(html.includes("print(&#039;&lt;hi&gt; &amp; **bold**&#039;)"), "代码块内不做行内标记");
+});
+
+test("fenced code is a block: never wrapped in <p>, neighbours keep their paragraphs", () => {
+  const html = renderMarkdown("前文\n```python\nx = 1\n```\n后文");
+  assert.equal(
+    html,
+    '<p>前文</p><div class="md-code" data-lang="python" data-label="Python"><pre><code>x = 1</code></pre></div><p>后文</p>',
+  );
+  const sameLine = renderMarkdown("```\nx\n``` 见上");
+  assert.ok(
+    sameLine.startsWith('<div class="md-code" data-lang="plaintext" data-label="Text"><pre><code>x</code></pre></div>'),
+    "没标语言的围栏也按纯文本给出标签",
+  );
+  assert.ok(sameLine.endsWith("<p>见上</p>"), "闭合围栏同一行的文字成段落，不把代码块裹进 <p>");
+});
+
+test("fence language aliases normalise to one id and a display label", () => {
+  assert.deepEqual(codeLanguage("py"), { id: "python", label: "Python" });
+  assert.deepEqual(codeLanguage("Sh"), { id: "bash", label: "Bash" });
+  assert.deepEqual(codeLanguage("tex"), { id: "latex", label: "LaTeX" });
+  assert.deepEqual(codeLanguage("octave"), { id: "matlab", label: "Octave" }, "同一语法、各自的显示名");
+  assert.deepEqual(codeLanguage("html"), { id: "xml", label: "HTML" });
+  assert.deepEqual(codeLanguage("c++"), { id: "cpp", label: "C++" });
+  assert.deepEqual(codeLanguage("txt"), { id: "plaintext", label: "Text" }, "纯文本：有标签、不高亮");
+  assert.deepEqual(codeLanguage("csv"), { id: "plaintext", label: "CSV" });
+  assert.deepEqual(codeLanguage("mermaid"), { id: "mermaid", label: "Mermaid" }, "未收录语言：只做标签，不会有高亮语法");
+  assert.deepEqual(codeLanguage(""), { id: "plaintext", label: "Text" }, "没标语言：按纯文本，标题带仍有名字");
+  const html = renderMarkdown("```js\nlet a = 1\n```");
+  assert.ok(html.includes('data-lang="javascript" data-label="JavaScript"'));
 });
 
 test("unclosed fence during streaming still renders as code", () => {
   const html = renderMarkdown("```python\nx = 1\n");
   assert.ok(html.includes('data-lang="python"'));
   assert.ok(html.includes("x = 1"));
+  assert.ok(!html.includes("<p><div"), "流式半截代码块同样是块级");
 });
 
 test("math becomes data-tex nodes with source fallback", () => {

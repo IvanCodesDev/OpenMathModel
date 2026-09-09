@@ -38,6 +38,11 @@ from .ports import Clock, EventSink, IdGenerator, NodeServices
 from .reducer import apply_event
 from .states import TaskState, WORK_SEQUENCE, WORK_STATES
 
+#: Error recorded on a step that was still RUNNING when its executor died
+#: (``heal_interrupted``). Control planes match on it to classify the failure
+#: as transient and to count crash loops — keep the wording stable.
+INTERRUPTED_STEP_ERROR = "interrupted: executor lost before completion"
+
 
 @dataclass
 class AdvanceOutcome:
@@ -297,10 +302,30 @@ class TaskRunEngine:
                     EventType.STEP_FAILED,
                     {
                         "step_id": step.step_id,
-                        "error": "interrupted: executor lost before completion",
+                        "error": INTERRUPTED_STEP_ERROR,
                     },
                     events,
                 )
+        return events
+
+    def fail_run(self, snapshot: TaskRunSnapshot, error: str) -> list[AgentEvent]:
+        """Fail the run from its current work state without running another step.
+
+        For supervisors that see a hopeless situation *between* steps — e.g. the
+        executor keeps dying mid-step and every automatic re-run burns another
+        model call. Any dangling step must already be settled (``heal_interrupted``).
+        Terminal and review-gated snapshots are left untouched; ``retry`` re-enters
+        the failed state as usual.
+        """
+        events: list[AgentEvent] = []
+        if snapshot.is_terminal or snapshot.state is TaskState.NEEDS_REVIEW:
+            return events
+        self._record(
+            snapshot,
+            EventType.RUN_FAILED,
+            {"failed_state": snapshot.state.value, "error": error},
+            events,
+        )
         return events
 
     # -- control actions ---------------------------------------------------

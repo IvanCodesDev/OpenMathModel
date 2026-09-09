@@ -23,7 +23,7 @@ export interface LlmUsageRecord {
 const USAGE_KEY = "openmathmodelLlmUsage";
 const USAGE_LIMIT = 100;
 
-/** 「允许使用第三方中转站」当前开关值（发送前显示域名与用量记录都随它）。 */
+/** 「允许使用第三方中转站」当前开关值（本机用量记录随它；对话里不显示任何接口信息）。 */
 export function proxyTransparencyEnabled(): boolean {
   try {
     const settings = JSON.parse(localStorage.getItem("openmathmodelSettings") || "{}") as Record<string, unknown>;

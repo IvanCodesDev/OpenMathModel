@@ -12,6 +12,9 @@ import type { ConversationTraceRow } from "../tasks/conversation-log";
 
 export type ChatTurnStatus = "running" | "completed" | "failed" | "stopped" | "interrupted";
 
+/** 用户对一轮回复的评价（回复右下角的赞 / 踩）；null = 未评价或已撤回。 */
+export type ChatTurnFeedback = "up" | "down" | null;
+
 /** Auto 模式的路由判定结果：难度 1-5 与判定用的模型（空 = 规则估计/继承）。 */
 export interface ChatRouteMeta {
   mode?: string;
@@ -78,6 +81,8 @@ export interface ChatTurnView {
   meta: ChatMeta;
   error: { code: string; message: string } | null;
   trace: ConversationTraceRow[] | null;
+  /** 赞 / 踩；旧后端的视图没有这一项，读取时按未评价处理。 */
+  feedback?: ChatTurnFeedback;
   /** 附着直播的游标：视图里的 reply/reasoning 恰好包含前 last_seq 个事件。 */
   last_seq: number;
   /** 服务端内存里仍有事件缓冲（生成中或刚结束）；false = 只剩库里定格的文本。 */
@@ -178,6 +183,15 @@ export async function patchChatTurnTrace(turnId: string, trace: ConversationTrac
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trace }),
+  }));
+}
+
+/** 赞 / 踩这一轮回复：整体置值，null 撤回；返回更新后的视图。 */
+export async function setChatTurnFeedback(turnId: string, feedback: ChatTurnFeedback): Promise<ChatTurnView> {
+  return turnOf(await request(`/api/chat/turns/${encodeURIComponent(turnId)}/feedback`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ feedback }),
   }));
 }
 

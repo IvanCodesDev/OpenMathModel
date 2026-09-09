@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import urllib.request
 from pathlib import Path, PurePosixPath
@@ -60,10 +61,20 @@ def manifest_path(edition: dict[str, Any]) -> Path:
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with filesystem_path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def filesystem_path(path: Path) -> Path:
+    """Use the Win32 extended path form for deeply nested archive members."""
+    if os.name != "nt":
+        return path
+    resolved = str(path.resolve())
+    if resolved.startswith("\\\\?\\"):
+        return Path(resolved)
+    return Path("\\\\?\\" + resolved)
 
 
 def validate(edition: dict[str, Any]) -> None:
@@ -94,7 +105,10 @@ def fetch(edition: dict[str, Any]) -> None:
 
 def decoded_name(info: ZipInfo) -> str:
     name = info.filename.replace("\\", "/")
-    if info.flag_bits & 0x800:
+    # Python may already recover the Info-ZIP Unicode Path extra field even when
+    # the legacy UTF-8 flag is absent. Do not force that valid Unicode back
+    # through cp437; only repair genuinely mojibaked legacy names below.
+    if info.flag_bits & 0x800 or any("\u3400" <= char <= "\u9fff" for char in name):
         return name
     raw = name.encode("cp437")
     for encoding in ("gb18030", "utf-8"):
@@ -123,7 +137,7 @@ def expand(edition: dict[str, Any]) -> dict[str, Any]:
     validate(edition)
     root = extracted_path(edition)
     if root.exists():
-        shutil.rmtree(root)
+        shutil.rmtree(filesystem_path(root))
     root.mkdir(parents=True)
     members = []
     with ZipFile(archive_path(edition)) as bundle:
@@ -134,11 +148,12 @@ def expand(edition: dict[str, Any]) -> dict[str, Any]:
                 target.mkdir(parents=True, exist_ok=True)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            with bundle.open(info) as source, target.open("wb") as output:
+            stored_target = filesystem_path(target)
+            with bundle.open(info) as source, stored_target.open("wb") as output:
                 shutil.copyfileobj(source, output)
             members.append({
                 "path": target.relative_to(ROOT).as_posix(),
-                "bytes": target.stat().st_size,
+                "bytes": stored_target.stat().st_size,
                 "sha256": sha256(target),
             })
     if len(members) != edition["member_count"]:
@@ -176,7 +191,9 @@ def verify(edition: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"Unexpected {edition['slug']} manifest")
     for item in manifest["extracted"]["members"]:
         path = ROOT / item["path"]
-        if not path.is_file() or path.stat().st_size != item["bytes"] or sha256(path) != item["sha256"]:
+        stored_path = filesystem_path(path)
+        if (not stored_path.is_file() or stored_path.stat().st_size != item["bytes"]
+                or sha256(path) != item["sha256"]):
             raise RuntimeError(f"{edition['slug']} extracted member mismatch: {path}")
     print("HUASHU_CUP_STAGE_VERIFY_OK " + json.dumps({"edition": edition["slug"], **manifest["stats"]},
                                                      ensure_ascii=False))

@@ -43,8 +43,20 @@ from ..llm import (
     test_endpoint,
 )
 from ..privacy import privacy_settings_of
-from ..run_control import JUDGE_HISTORY_TURNS, action_events, run_control_step
-from ..schemas import ChatRequest, ChatTurnStartRequest, ChatTurnTraceRequest, LlmTestRequest
+from ..run_control import (
+    JUDGE_HISTORY_TURNS,
+    ControlPlan,
+    action_events,
+    execute_control_plan,
+    plan_control_step,
+)
+from ..schemas import (
+    ChatRequest,
+    ChatTurnFeedbackRequest,
+    ChatTurnStartRequest,
+    ChatTurnTraceRequest,
+    LlmTestRequest,
+)
 from ..usage import enforce_budget, record_stream_usage, record_usage
 from .task_runs import get_owned_run
 
@@ -386,8 +398,10 @@ def start_chat_turn(
     prepared = _prepare_call(body, ctx, db)
     record_outcome, record_stream_done = _usage_hooks(request, ctx.user.id)
 
-    # 对话即控制面（ADR-0018）：任务归属的追问先经运行控制步骤——识别「重试 / 用方案 B /
-    # 从数据准备重做」这类指令并真正执行，再把运行状态注入系统提示词。上一轮留下的
+    # 对话即控制面（ADR-0018 / ADR-0020）：任务归属的追问分两步经过运行控制——回复之前
+    # 只**计划**（识别「重试 / 用方案 B / 从数据准备重做」这类指令，把「回复结束后将执行
+    # 什么」注入系统提示词），回复结束后才**执行**并发出 action 回执。用户看到的顺序因此是
+    # 回复 → 动作回执 → 运行的执行步骤，而不是模型还在思考运行就已经重启了。上一轮留下的
     # 待确认提案（取消任务）要在这里带过去，下一句「确认」才有所指。
     control: Optional[dict[str, Any]] = None
     if body.scope_id.startswith("run_") and not body.opening and body.text.strip():
@@ -395,7 +409,6 @@ def start_chat_turn(
         control = {
             "session_factory": request.app.state.db.session_factory,
             "run_id": body.scope_id,
-            "user_id": ctx.user.id,
             "actor": ctx.user.email,
             "text": body.text,
             "config": prepared.gated,
@@ -407,13 +420,14 @@ def start_chat_turn(
                 if not turn.get("opening") and (turn.get("text") or turn.get("reply"))
             ][-JUDGE_HISTORY_TURNS:],
         }
+    # 计划在生成线程里定下、也在同一线程的收尾钩子里兑现：用一个格子传递
+    plan_slot: dict[str, ControlPlan] = {}
 
     def produce() -> Iterator[dict[str, Any]]:
         if control is not None:
-            result = run_control_step(
+            plan = plan_control_step(
                 control["session_factory"],
                 run_id=control["run_id"],
-                user_id=control["user_id"],
                 actor=control["actor"],
                 text=control["text"],
                 config=control["config"],
@@ -421,9 +435,10 @@ def start_chat_turn(
                 on_judge_usage=lambda outcome: record_outcome("route", outcome, None),
                 history=control["history"],
             )
-            yield from action_events(result)
-            if result.prompt_block and prepared.messages and prepared.messages[0]["role"] == "system":
-                prepared.messages[0]["content"] = f"{prepared.messages[0]['content']}\n\n{result.prompt_block}"
+            if plan is not None:
+                plan_slot["plan"] = plan
+                if plan.prompt_block and prepared.messages and prepared.messages[0]["role"] == "system":
+                    prepared.messages[0]["content"] = f"{prepared.messages[0]['content']}\n\n{plan.prompt_block}"
         chain, route_meta = _resolve_chain(prepared, record_outcome)
         yield from stream_events(
             prepared.gated,
@@ -434,6 +449,13 @@ def start_chat_turn(
             images=prepared.images,
         )
 
+    def before_finish(_terminal: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        # 回复已经说完（或出错收尾）：现在才真正执行计划里的动作。用户 stop 了不会走到这里。
+        plan = plan_slot.get("plan")
+        if plan is None or control is None:
+            return iter(())
+        return action_events(execute_control_plan(control["session_factory"], plan))
+
     view = hub.start(
         user_id=ctx.user.id,
         scope_id=body.scope_id,
@@ -443,6 +465,7 @@ def start_chat_turn(
         persist=bool(privacy_settings_of(ctx.user).get("save_history", True)),
         producer=produce,
         on_done=record_stream_done,
+        before_finish=before_finish,
     )
     return {"turn": view}
 
@@ -530,5 +553,19 @@ def patch_chat_turn(
 ):
     """补写页面侧回复轨迹行（附件解析、难度判定、生成耗时……），重进时照样回放。"""
     view = _turn_or_404(_hub(request).set_trace(db, ctx.user.id, turn_id, body.trace))
+    db.commit()
+    return {"turn": view}
+
+
+@chat_router.put("/turns/{turn_id}/feedback")
+def put_chat_turn_feedback(
+    turn_id: str,
+    body: ChatTurnFeedbackRequest,
+    request: Request,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """回复右下角的赞 / 踩：整体置值（up / down / null 撤回），幂等，只认本人的轮。"""
+    view = _turn_or_404(_hub(request).set_feedback(db, ctx.user.id, turn_id, body.feedback))
     db.commit()
     return {"turn": view}

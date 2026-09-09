@@ -348,6 +348,8 @@ class ChatTurnRow(Base):
     error_message: Mapped[Optional[str]] = mapped_column(String(2000))
     #: 页面侧回复轨迹行（附件解析、难度判定、生成计时……），回复完成后 PATCH 补写
     trace: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON)
+    #: 用户对这一轮回复的评价：up / down；None = 未评价或已撤回（PUT …/feedback）
+    feedback: Mapped[Optional[str]] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

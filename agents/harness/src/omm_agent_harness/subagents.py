@@ -27,7 +27,7 @@ from typing import Any
 from omm_agent_core.errors import AgentError, ErrorCode
 from omm_agent_core.models import ArtifactRef
 
-from .budget import RunBudget
+from .budget import RunBudget, is_unlimited
 from .gateway import Usage
 
 __all__ = [
@@ -179,7 +179,13 @@ class SubagentSupervisor:
             # 子代理拿到了哪些工具（空 = 纯推理）：审计「提议人能不能自己检索」
             "toolset": list(spec.toolset),
             "output_schema_id": spec.output_schema_id,
-            "budget_tokens": spec.budgets.max_total_tokens,
+            # 不设限的维度记 None：审计载荷会落进 JSON 列，inf 序列化出来的
+            # 裸 Infinity 不是合法 JSON，jsonb 会直接拒收整条事件。
+            "budget_tokens": (
+                None
+                if is_unlimited(spec.budgets.max_total_tokens)
+                else spec.budgets.max_total_tokens
+            ),
         })
 
         started = self._clock()

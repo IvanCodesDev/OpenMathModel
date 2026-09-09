@@ -11,6 +11,9 @@
   半截内容与 ``last_seq`` 原地续接。
 - ``stop`` 是真正的「暂停生成」：立即定格 stopped 并向观众发终态事件，工作线程在
   下一个上游事件到来时退出并关掉上游连接。
+- ``before_finish``（ADR-0020）：上游生成收尾之后、轮定格之前的一段收尾工作——对话即
+  控制面把「回复结束后才执行的运行动作」挂在这里，产出的 ``action`` 事件排在终态事件
+  之前。只在轮仍是 running 时调用：用户 stop 了就不再执行任何动作。
 - 终态后缓冲保留 ``LIVE_RETENTION_S`` 供迟到的附着回放，之后只剩库里的定格文本；
   进程重启时遗留 running 的行标 interrupted（生成确实丢了，如实告知）。
 
@@ -23,7 +26,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -55,6 +58,8 @@ INTERRUPTED_MESSAGE = "服务重启，本轮生成中断；需要完整回答请
 
 EventProducer = Callable[[], Iterator[dict[str, Any]]]
 DoneHook = Callable[[dict[str, Any], dict[str, Any]], None]
+#: 收尾钩子：拿到上游的终态事件（done / error，含合成的），返回要排在终态之前的事件。
+BeforeFinishHook = Callable[[dict[str, Any]], Iterable[dict[str, Any]]]
 
 
 def _utcnow() -> datetime:
@@ -91,6 +96,7 @@ class LiveTurn:
         self.meta: dict[str, Any] = {}
         self.error: Optional[dict[str, str]] = None
         self.trace: Optional[list[dict[str, Any]]] = None
+        self.feedback: Optional[str] = None
         self.created_at = _utcnow()
         self.updated_at = self.created_at
         self.ended_at: Optional[datetime] = None
@@ -140,6 +146,7 @@ class LiveTurn:
             "meta": dict(self.meta),
             "error": dict(self.error) if self.error else None,
             "trace": list(self.trace) if self.trace else None,
+            "feedback": self.feedback,
             # 附着直播的游标：视图里的 reply/reasoning 恰好包含前 last_seq 个事件。
             "last_seq": len(self.events),
             "live": True,
@@ -172,6 +179,7 @@ def row_view(row: ChatTurnRow) -> dict[str, Any]:
             else None
         ),
         "trace": list(row.trace) if row.trace else None,
+        "feedback": row.feedback,
         "last_seq": 0,
         "live": False,
         "persisted": True,
@@ -278,6 +286,7 @@ class ChatTurnHub:
         persist: bool,
         producer: EventProducer,
         on_done: Optional[DoneHook] = None,
+        before_finish: Optional[BeforeFinishHook] = None,
     ) -> dict[str, Any]:
         live = LiveTurn(
             turn_id=new_id("cturn"),
@@ -312,49 +321,46 @@ class ChatTurnHub:
             self._live[live.id] = live
         worker = threading.Thread(
             target=self._run,
-            args=(live, producer, on_done),
+            args=(live, producer, on_done, before_finish),
             name=f"chat-turn-{live.id[-8:]}",
             daemon=True,
         )
         worker.start()
         return live.snapshot()
 
-    def _run(self, live: LiveTurn, producer: EventProducer, on_done: Optional[DoneHook]) -> None:
+    def _run(
+        self,
+        live: LiveTurn,
+        producer: EventProducer,
+        on_done: Optional[DoneHook],
+        before_finish: Optional[BeforeFinishHook] = None,
+    ) -> None:
         iterator: Optional[Iterator[dict[str, Any]]] = None
         last_flush = time.monotonic()
+        # 上游给出（或这里合成）的终态事件；None = 观众已 stop / 对话已删除，轮早已定格，
+        # 不再有收尾工作——用户打断了这一轮，回复后才执行的动作随之作废。
+        terminal: Optional[dict[str, Any]] = None
         try:
             iterator = iter(producer())
             for event in iterator:
                 kind = event.get("type")
+                if kind in ("done", "error"):
+                    terminal = event
+                    break
                 with live.cond:
                     if live.status != RUNNING:
                         # 观众已 stop / 对话已删除：丢弃迟到的上游事件，退出并关连接。
                         break
-                    if kind == "done":
-                        live.meta["usage"] = dict(event.get("usage") or {})
-                        live.meta["elapsed_ms"] = int(event.get("elapsed_ms") or 0)
-                        live.finalize_locked(COMPLETED, terminal_event=event)
-                        break
-                    if kind == "error":
-                        self._fail_locked(
-                            live,
-                            code=str(event.get("code") or "CHAT_FAILED"),
-                            message=str(event.get("message") or "回复生成失败"),
-                        )
-                        break
                     if kind == "meta":
                         live.meta.update({k: v for k, v in event.items() if k != "type"})
                     elif kind == "action":
-                        # 运行控制回执（ADR-0018）：进 meta.actions 随轮落库，恢复时能重画
-                        # 轨迹行，下一轮据此知道有没有待确认的提案。
-                        actions = live.meta.setdefault("actions", [])
-                        actions.append({k: v for k, v in event.items() if k != "type"})
+                        self._record_action_locked(live, event)
                     elif kind == "reasoning":
                         live.reasoning += str(event.get("text") or "")
                     elif kind == "delta":
                         live.reply += str(event.get("text") or "")
                     if len(live.events) >= MAX_EVENTS:
-                        self._fail_locked(live, code="CHAT_STREAM_TOO_LONG", message="回复事件过多，已截断")
+                        terminal = {"type": "error", "code": "CHAT_STREAM_TOO_LONG", "message": "回复事件过多，已截断"}
                         break
                     live.append_locked(event)
                 if time.monotonic() - last_flush >= FLUSH_INTERVAL_S:
@@ -363,28 +369,68 @@ class ChatTurnHub:
             else:
                 # 上游静默收尾（没有 done / error）：有正文按完成，否则按空回复失败。
                 with live.cond:
-                    if live.status == RUNNING:
-                        if live.reply:
-                            live.finalize_locked(
-                                COMPLETED, terminal_event={"type": "done", "usage": {}, "elapsed_ms": 0}
-                            )
-                        else:
-                            self._fail_locked(live, code="EMPTY_REPLY", message="模型未返回内容")
+                    if live.reply:
+                        terminal = {"type": "done", "usage": {}, "elapsed_ms": 0}
+                    else:
+                        terminal = {"type": "error", "code": "EMPTY_REPLY", "message": "模型未返回内容"}
         except Exception as error:  # noqa: BLE001 - 任何异常都要定格成终态，观众不能永远等
             code = error.code if isinstance(error, ApiError) else "LLM_REQUEST_FAILED"
             message = error.message if isinstance(error, ApiError) else f"回复生成失败：{error}"
             logger.exception("chat turn %s 生成线程异常", live.id)
-            with live.cond:
-                if live.status == RUNNING:
-                    self._fail_locked(live, code=code, message=message)
+            terminal = {"type": "error", "code": code, "message": message}
         finally:
             if iterator is not None and hasattr(iterator, "close"):
                 try:
                     iterator.close()  # type: ignore[union-attr]  生成器 GeneratorExit → 关上游连接
                 except Exception:  # noqa: BLE001
                     logger.debug("chat turn %s 关闭上游迭代器失败", live.id, exc_info=True)
+            if terminal is not None:
+                self._finish(live, terminal, before_finish)
             self._flush(live)
             self._record_usage(live, on_done)
+
+    @staticmethod
+    def _record_action_locked(live: LiveTurn, event: dict[str, Any]) -> None:
+        """运行控制回执（ADR-0018）：进 meta.actions 随轮落库，恢复时能重画轨迹行，
+        下一轮据此知道有没有待确认的提案。"""
+        actions = live.meta.setdefault("actions", [])
+        actions.append({k: v for k, v in event.items() if k != "type"})
+
+    def _finish(
+        self,
+        live: LiveTurn,
+        terminal: dict[str, Any],
+        before_finish: Optional[BeforeFinishHook],
+    ) -> None:
+        """上游收尾 → 收尾钩子 → 定格。钩子在锁外跑（它会读写数据库），且只在轮仍是
+        running 时调用；钩子跑完若发现观众恰好在这几毫秒里 stop 了，动作已经发生，回执
+        照样记进 meta（刷新页面能看到），只是不再改终态。"""
+        tail: list[dict[str, Any]] = []
+        if before_finish is not None:
+            with live.cond:
+                still_running = live.status == RUNNING
+            if still_running:
+                try:
+                    tail = list(before_finish(terminal))
+                except Exception:  # noqa: BLE001 - 收尾工作出错不能让轮悬着
+                    logger.exception("chat turn %s 收尾钩子异常", live.id)
+        with live.cond:
+            for extra in tail:
+                if extra.get("type") == "action":
+                    self._record_action_locked(live, extra)
+                live.append_locked(extra)
+            if live.status != RUNNING:
+                return
+            if terminal.get("type") == "done":
+                live.meta["usage"] = dict(terminal.get("usage") or {})
+                live.meta["elapsed_ms"] = int(terminal.get("elapsed_ms") or 0)
+                live.finalize_locked(COMPLETED, terminal_event=terminal)
+            else:
+                self._fail_locked(
+                    live,
+                    code=str(terminal.get("code") or "CHAT_FAILED"),
+                    message=str(terminal.get("message") or "回复生成失败"),
+                )
 
     @staticmethod
     def _fail_locked(live: LiveTurn, *, code: str, message: str) -> None:
@@ -429,6 +475,7 @@ class ChatTurnHub:
                     "error_code": live.error["code"][:64] if live.error else None,
                     "error_message": live.error["message"][:2000] if live.error else None,
                     "trace": list(live.trace) if live.trace else None,
+                    "feedback": live.feedback,
                     "updated_at": live.updated_at,
                     "ended_at": live.ended_at,
                 }
@@ -528,6 +575,29 @@ class ChatTurnHub:
         if row is None or row.user_id != user_id:
             return None
         row.trace = list(trace)
+        row.updated_at = _utcnow()
+        session.flush()
+        return row_view(row)
+
+    def set_feedback(
+        self, session: Session, user_id: str, turn_id: str, feedback: Optional[str]
+    ) -> Optional[dict[str, Any]]:
+        """用户对一轮回复的评价（up / down / None 撤回）。
+
+        与 set_trace 同一套落点：还在内存里的轮（生成中或刚结束的缓冲期）先改内存
+        再回写，否则直接改库行。评价不参与生成，也不改 updated_at 之外的任何字段。
+        """
+        live = self.live_for(user_id, turn_id)
+        if live is not None:
+            with live.cond:
+                live.feedback = feedback
+                live.updated_at = _utcnow()
+            self._flush(live)
+            return live.snapshot()
+        row = session.get(ChatTurnRow, turn_id)
+        if row is None or row.user_id != user_id:
+            return None
+        row.feedback = feedback
         row.updated_at = _utcnow()
         session.flush()
         return row_view(row)

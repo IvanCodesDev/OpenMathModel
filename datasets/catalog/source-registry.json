@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-12",
+  "updated_at": "2026-09-08",
   "sources": [
     {
       "id": "huashu_cup_official",
@@ -22,13 +22,20 @@
         {
           "kind": "problems",
           "url": "https://m.saikr.com/contest/notice_detail/46038"
+        },
+        {
+          "kind": "results",
+          "url": "https://www.saikr.com/c/nd/44347"
         }
       ],
       "allowed_paths": [
         "/contest/notice_detail/44136",
         "/contest/notice_detail/46038",
+        "/contest/notice_detail/44347",
+        "/c/nd/44347",
         "/2026/06/17/contest/db2972cc3178e62f2e7d59f675302d2f1781688084526.zip",
-        "/contest/1786086963076/IkaHVScuDaJ97OPHF5R5RkiaFYXCVNo2.zip"
+        "/contest/1786086963076/IkaHVScuDaJ97OPHF5R5RkiaFYXCVNo2.zip",
+        "/2026/06/22/contest/4fdef20d540b9bb0b3e4df15ebae95d41782122066118.zip"
       ],
       "denied_paths": [
         "/login/",
@@ -57,7 +64,7 @@
         "notes": "The organiser account publishes each edition on the designated contest platform; local snapshots are checksum pinned."
       },
       "contact": "huashubei01@163.com",
-      "notes": "Two organiser-published bundles: the historical archive carries complete A/B/C statements and supporting data for 2020–2025, and the seventh edition adds 2026 A/B/C. The 2026 bundle was collected only after the contest closed on 2026-08-10, so no statement is mirrored while a contest is running."
+      "notes": "Three organiser-published bundles: the historical archive carries complete A/B/C statements and supporting data for 2020–2025, the seventh edition adds 2026 A/B/C, and the 「历年优秀论文」 notice carries eighteen award papers for 2023–2025. The 2026 bundle was collected only after the contest closed on 2026-08-10, so no statement is mirrored while a contest is running. Award papers stay in the local raw layer; the product publishes the parsed cover index and links back to the organiser notice."
     },
     {
       "id": "tipdm_cup_official",
@@ -68,7 +75,8 @@
       "competition": "“泰迪杯”数据挖掘挑战赛",
       "domains": [
         "www.tipdm.org",
-        "tipdm.org"
+        "tipdm.org",
+        "tdb.tipdm.net"
       ],
       "entrypoints": [
         {
@@ -82,11 +90,17 @@
         {
           "kind": "problems",
           "url": "https://www.tipdm.org:10010/api/competition/public/list"
+        },
+        {
+          "kind": "results",
+          "url": "https://tdb.tipdm.net/tzsdt/index.jhtml"
         }
       ],
       "allowed_paths": [
         "/tzjingsai/",
         "/tzbstysj/",
+        "/tzsdt/",
+        "/yxzp/",
         "/u/cms/www/",
         "/api/competition/public/",
         "/api/competition/question/public/"
@@ -121,7 +135,7 @@
         "notes": "Statement PDFs are served directly from the organiser's own domain; each staged file is pinned by size and SHA-256."
       },
       "contact": "jingsai@tipdm.com",
-      "notes": "Collected two ways. Eleven statements are PDFs from the CMS: 2015 (one combined paper), 2016, 2019 and 2020 A/B/C, plus the separately announced 2020 Nandu special problem. From 2021 the contest runs on the organiser's BdRace platform (www.tipdm.org:10010), whose public API serves each problem as rich text; 21 problems across eight editions of the challenge and skills tracks are snapshotted from it, but the platform cuts 20 of those bodies off with a row of dots or an invitation to fetch the rest from a WeChat account, so only the 2023 challenge A statement meets the complete-statement bar and reaches the library. 2017 and 2018 are absent entirely because those detail pages now redirect to the site root. Every data set is hosted on pan.baidu.com rather than an organiser domain, so none is mirrored."
+      "notes": "The contest site tdb.tipdm.net publishes award papers one by one under 优秀作品 (channel /tzsdt/), each linking a full-text PDF on the organiser's own CMS with a cover page that states 作品名称, 荣获奖项 and 作品单位; 95 papers from the first through the eleventh edition are staged and parsed, with 成员/指导老师 names left unread. One eleventh-edition entry (第三届 C4) has no full-text link and is recorded as missing. Statements are collected two ways. Eleven statements are PDFs from the CMS: 2015 (one combined paper), 2016, 2019 and 2020 A/B/C, plus the separately announced 2020 Nandu special problem. From 2021 the contest runs on the organiser's BdRace platform (www.tipdm.org:10010), whose public API serves each problem as rich text; 21 problems across eight editions of the challenge and skills tracks are snapshotted from it, but the platform cuts 20 of those bodies off with a row of dots or an invitation to fetch the rest from a WeChat account, so only the 2023 challenge A statement meets the complete-statement bar and reaches the library. 2017 and 2018 are absent entirely because those detail pages now redirect to the site root. Every data set is hosted on pan.baidu.com rather than an organiser domain, so none is mirrored."
     },
     {
       "id": "tjjmds_official",
@@ -338,19 +352,36 @@
       "competition": "APMCM 亚太地区大学生数学建模竞赛",
       "domains": [
         "www.apmcm.org",
-        "apmcm.org"
+        "apmcm.org",
+        "www.saikr.com",
+        "m.saikr.com",
+        "publicqn.saikr.com"
       ],
       "entrypoints": [
         {
           "kind": "problems",
           "url": "https://www.apmcm.org/list/problems"
+        },
+        {
+          "kind": "results",
+          "url": "https://www.saikr.com/c/nd/33722"
+        },
+        {
+          "kind": "results",
+          "url": "https://www.saikr.com/c/nd/31675"
         }
       ],
       "allowed_paths": [
         "/list/problems",
         "/detail/",
         "/article/",
-        "/uploads/"
+        "/uploads/",
+        "/c/nd/33722",
+        "/c/nd/31675",
+        "/contest/notice_detail/33722",
+        "/contest/notice_detail/31675",
+        "/2025/09/17/contest/af023705c9871be91f23cd3d694f02f41758072718312.zip",
+        "/2025/06/06/contest/1e468486597a382974e7f1e7503a6c341749202787507.zip"
       ],
       "denied_paths": [
         "/login/",
@@ -379,7 +410,7 @@
         "notes": "Collect metadata and internal snapshots; do not publish full text before review."
       },
       "contact": "apmcm@mathor.com",
-      "notes": "2015–2026 official APMCM statements. 2019, 2020 and 2025 are absent because those editions publish only through saikr.com / publicqn.saikr.com / pan.baidu.com / aic.modelers.cn rather than an official domain; 2017 ships only A and B officially."
+      "notes": "Award papers come from the organiser's own notices on the designated entry platform: the 「历年优秀论文」 bundle covers eighteen English-track papers for 2020–2024 and the 中文赛项 bundle adds six for 2024. Both bundles are checksum pinned in the local raw layer and never redistributed. 2015–2026 official APMCM statements. 2019, 2020 and 2025 are absent because those editions publish only through saikr.com / publicqn.saikr.com / pan.baidu.com / aic.modelers.cn rather than an official domain; 2017 ships only A and B officially."
     },
     {
       "id": "github_zhanwen_mathmodel",
@@ -427,6 +458,109 @@
       },
       "contact": "https://github.com/zhanwen/MathModel/issues",
       "notes": "User-designated community source for complete 2023–2024 CPMCM problem statements and supporting documents. Published provenance for the extracted statements points at the organiser's per-year notice on cpipc.acge.org.cn, never at this repository."
+    },
+    {
+      "id": "github_personqianduixue_math_model",
+      "name": "personqianduixue/Math_Model 社区仓库快照",
+      "tier": "T5",
+      "enabled": true,
+      "official_status": "community",
+      "competition": "全国大学生数学建模竞赛",
+      "domains": [
+        "github.com",
+        "raw.githubusercontent.com",
+        "api.github.com",
+        "cdn.jsdelivr.net"
+      ],
+      "entrypoints": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/personqianduixue/Math_Model"
+        }
+      ],
+      "allowed_paths": [
+        "/personqianduixue/Math_Model/"
+      ],
+      "denied_paths": [],
+      "year_range": {
+        "from": 1992,
+        "to": 2020
+      },
+      "crawl_policy": {
+        "requests_per_minute": 30,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 120
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "Repository contributors, the paper authors and the CUMCM organising committee",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Pinned Git commit snapshot; every staged paper keeps its Git blob hash and is only indexed, never redistributed."
+      },
+      "contact": "https://github.com/personqianduixue/Math_Model/issues",
+      "notes": "CUMCM award papers are published only through the contest's CNKI portal (login required) and printed 优秀论文选, so no official host serves a downloadable paper. This pinned community snapshot supplies 283 papers for 1992–2020; commentary, judging notes, statements and attachments are excluded, and so is every file whose name carries participant names. The 2019–2020 files are text-free scans, so their titles fall back to the problem title."
+    },
+    {
+      "id": "github_community_award_papers",
+      "name": "参赛队公开的近年获奖论文（GitHub）",
+      "tier": "T5",
+      "enabled": true,
+      "official_status": "community",
+      "competition": "全国大学生数学建模竞赛与中国研究生数学建模竞赛",
+      "domains": [
+        "github.com",
+        "raw.githubusercontent.com",
+        "cdn.jsdelivr.net",
+        "gcore.jsdelivr.net"
+      ],
+      "entrypoints": [
+        {
+          "kind": "archive",
+          "url": "https://github.com/yan-fanyu/CUMCM-Paper-And-SourceCode"
+        }
+      ],
+      "allowed_paths": [
+        "/yan-fanyu/CUMCM-Paper-And-SourceCode/",
+        "/CUMCM-2025B-Team/CUMCM-2025-Problem-B/",
+        "/Jackyleo-Zhao/cumcm-2025/",
+        "/Aiden-DUT/CUMCM2025-C-NIPT-Problem/",
+        "/firstlove-one/CUMCM-2025-Problem-C/",
+        "/Yipintianxia-MiddleRingRoad/2025CUMCM_Provincial_first_prize_YYL_ZCY_LJT/",
+        "/LY-zhang-yi-hao/Huawei_Mathcup_OpenAccess/",
+        "/HaoyuZhao31415/MathModel/"
+      ],
+      "denied_paths": [],
+      "year_range": {
+        "from": 2021,
+        "to": 2025
+      },
+      "crawl_policy": {
+        "requests_per_minute": 30,
+        "concurrency": 1,
+        "user_agent": "OpenMathModelDatasetBot/0.1 (+https://github.com/IvanCodesDev/OpenMathModel)",
+        "max_retries": 3,
+        "timeout_seconds": 120
+      },
+      "license_record": {
+        "status": "unknown",
+        "rights_holder": "各参赛队作者与竞赛组委会",
+        "license_text_url": null,
+        "allow_storage": true,
+        "allow_indexing": true,
+        "allow_redistribution": false,
+        "allow_derivatives": false,
+        "reviewed_at": null,
+        "notes": "Each paper is pinned to a specific commit and file path; only the parsed index is published and the file itself is never redistributed."
+      },
+      "contact": "https://github.com/IvanCodesDev/OpenMathModel/issues",
+      "notes": "Covers the years no public collection reaches: CUMCM 2021-2024 come from a community compilation, CUMCM 2025 and CPMCM 2024-2025 from the teams' own repositories. Every record carries the award level the source itself states (全国一等奖 / 全国二等奖 / 省级一等奖 / 华为专项二等奖); repositories that publish a paper without naming an award are not collected."
     },
     {
       "id": "cumcm_official",
@@ -486,18 +620,28 @@
       "domains": [
         "mathorcup.org",
         "www.mathorcup.org",
-        "files.mathorcup.org"
+        "files.mathorcup.org",
+        "www.saikr.com",
+        "m.saikr.com",
+        "publicqn.saikr.com"
       ],
       "entrypoints": [
         {
           "kind": "problems",
           "url": "https://mathorcup.org/prize"
+        },
+        {
+          "kind": "results",
+          "url": "https://www.saikr.com/c/nd/39400"
         }
       ],
       "allowed_paths": [
         "/prize",
         "/detail/",
-        "/uploads/files/"
+        "/uploads/files/",
+        "/c/nd/39400",
+        "/contest/notice_detail/39400",
+        "/2026/02/09/contest/a2314c164af9390e586c10b7b2e074051770637499572.rar"
       ],
       "denied_paths": [],
       "year_range": {
@@ -523,7 +667,7 @@
         "notes": "Official annual statement notices and checksum-pinned archives."
       },
       "contact": "mathorcup@mathor.com",
-      "notes": "Official archives remain downloadable for 2018, 2023, 2024 and 2026. Complete structured text is published for 2023 and 2026 only: the 2018 and 2024 PDFs have unusable custom-font text maps, while the 2015 links now return HTTP 404 and the other years point to offsite hosts. The corrected 2026 D archive supersedes the original D statement and data."
+      "notes": "The 「历年优秀论文」 notice on the designated entry platform carries fifty award papers for the eleventh through the fifteenth edition (2021–2025) in one RAR; it is checksum pinned locally and only the parsed cover index is published. Official archives remain downloadable for 2018, 2023, 2024 and 2026. Complete structured text is published for 2023 and 2026 only: the 2018 and 2024 PDFs have unusable custom-font text maps, while the 2015 links now return HTTP 404 and the other years point to offsite hosts. The corrected 2026 D archive supersedes the original D statement and data."
     }
   ]
 }

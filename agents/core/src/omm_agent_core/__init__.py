@@ -4,7 +4,7 @@
 SDK。工具、技能与执行环境通过端口注入，因此本包位于依赖图最底层。
 """
 
-from .engine import AdvanceOutcome, TaskRunEngine
+from .engine import INTERRUPTED_STEP_ERROR, AdvanceOutcome, TaskRunEngine
 from .errors import CATALOG, AgentError, Disposition, ErrorCode, ErrorInfo
 from .graph import (
     DEFAULT_GRAPH_MODE,
@@ -96,6 +96,7 @@ __all__ = [
     "GraphScheduler",
     "GraphSpec",
     "IterationRefused",
+    "INTERRUPTED_STEP_ERROR",
     "IdGenerator",
     "InMemoryArtifactStore",
     "InMemoryEventSink",

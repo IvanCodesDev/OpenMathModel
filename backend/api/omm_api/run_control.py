@@ -1,10 +1,19 @@
-"""对话即控制面（ADR-0018 / ADR-0019）：任务页聊天框里的一句话可以真正驱动运行。
+"""对话即控制面（ADR-0018 / ADR-0019 / ADR-0020）：任务页聊天框里的一句话可以真正驱动运行。
 
-托管对话轮（ADR-0016）在调用模型**之前**经过这里：读运行状态 → 算出当前状态下
-合法的动作集 → 意图判定（本地规则只做短句快路径；其余一律交池里最弱的模型带着
-最近几轮对话做一次限时 JSON 判定，模型拿不准再回落规则结果）→ 走
-``actions.execute_action`` / ``engine_glue.accept_revision`` / ``engine_glue.redo_run``
-/ 运行备注这几条**既有路径**执行 → 产出 ``action`` 事件与注入系统提示词的状态块。
+托管对话轮（ADR-0016）分两步经过这里：
+
+1. **回复之前只做计划**（``plan_control_step``）：读运行状态 → 算出当前状态下合法的
+   动作集 → 意图判定 → 把「回复结束后将执行什么」写进注入系统提示词的状态块。
+   这一步**不改运行状态、不发事件**——模型先带着计划把话说完。
+2. **回复结束后才执行**（``execute_control_plan``，由 ``ChatTurnHub`` 在上游终态之后、
+   轮定格之前调用）：按最新运行状态复核计划仍然合法，再走 ``actions.execute_action``
+   / ``engine_glue.accept_revision`` / ``engine_glue.redo_run`` / 运行备注这几条**既有路径**
+   执行，产出 ``action`` 事件。用户看到的顺序因此是：回复 → 动作回执 → 运行的执行步骤。
+
+意图判定（ADR-0020 修订 ADR-0019 §4）：本地词表只产生**候选**并作为参考信号交给判定
+模型，不再单独触发任何动作——「有关键字就执行」被推翻；判定一律由池里最弱的模型带着
+最近几轮对话做一次限时 JSON 判定。唯一的本地直判是对上一轮提案的「确认 / 算了」：那是
+在回答系统自己提出的是非题。
 
 设计红线：
 
@@ -12,7 +21,7 @@
 - 合法动作集只由状态机决定（与按钮同一套规则），模型只负责把意图归到枚举里；
 - 取消、从阶段重做这类不可逆 / 要重新花费的动作先发提案（``proposed``），下一轮
   「确认」才执行；
-- 备注保持静默（不发事件），只有真实动作才让页面渲染轨迹行。
+- 回复被用户暂停（stop）时计划作废：用户打断了这一轮，什么都不执行。
 """
 
 from __future__ import annotations
@@ -64,9 +73,6 @@ CONFIRM_REQUIRED = frozenset({"cancel", "redo"})
 
 JUDGE_READ_TIMEOUT_S = 10.0
 JUDGE_MAX_TOKENS = 200
-#: 规范化后不超过这么长的句子，本地规则命中即直判、不出网（「继续啊」「用方案 B」
-#: 「从数据准备重做」）；更长的话规则命中也只是候选，交判定模型带着上下文拍板。
-RULE_FAST_PATH_MAX_CHARS = 12
 #: 超过这个长度的消息不送判定：整段粘贴的材料是补充要求，不是命令（只落备注）。
 JUDGE_TEXT_LIMIT = 800
 #: 判定模型看到的最近对话轮数及每侧摘要长度。
@@ -553,7 +559,32 @@ def _stage_progress(context: RunControlContext) -> str:
     return " → ".join(parts)
 
 
-def _judge_prompt(text: str, context: RunControlContext, history: Optional[History] = None) -> str:
+def _hint_line(hint: Optional[ControlDecision]) -> str:
+    """本地词表的候选 → 给判定模型的参考信号。
+
+    词表只是提示，不是结论（ADR-0020）：「重试过几次了？」「按你说的重试就行」都会命中
+    「重试」，前者是提问、后者是命令——分辨这件事是判定模型的活。
+    """
+    if hint is None or hint.kind not in ACTION_KINDS:
+        return ""
+    detail = ""
+    if hint.option_id:
+        detail = f"（对应 option_id={hint.option_id}）"
+    elif hint.stage:
+        detail = f"（阶段 {hint.stage}）"
+    return (
+        f"参考信号：本地词表在这句话里匹配到动作 {hint.kind}{detail}。词表匹配不等于用户在下命令——"
+        "如果这句话只是在提问、讨论、表达情绪或提供信息，即使命中词表也返回 none；"
+        "只有确定用户是在要求系统执行时才返回它（或你认为更贴切的其它允许动作）。"
+    )
+
+
+def _judge_prompt(
+    text: str,
+    context: RunControlContext,
+    history: Optional[History] = None,
+    hint: Optional[ControlDecision] = None,
+) -> str:
     legal = context.legal
     lines = [
         "你是数学建模工作台的运行控制判定器。用户在任务页聊天框里发了一句话，"
@@ -587,6 +618,9 @@ def _judge_prompt(text: str, context: RunControlContext, history: Optional[Histo
                 lines.append(f"  用户：{user_text}")
             if reply:
                 lines.append(f"  助手：{reply}")
+    hint_line = _hint_line(hint)
+    if hint_line:
+        lines.append(hint_line)
     lines.append(f"用户这句话：{text[:JUDGE_TEXT_LIMIT]}")
     return "\n".join(lines)
 
@@ -639,8 +673,9 @@ def judge_intent(
     context: RunControlContext,
     on_usage: Optional[Callable[[ChatOutcome], None]] = None,
     history: Optional[History] = None,
+    hint: Optional[ControlDecision] = None,
 ) -> ControlDecision:
-    """弱模型判定：限时、只认合法集内的结果；任何异常返回 none（回落规则 / 对话）。"""
+    """弱模型判定：限时、只认合法集内的结果；任何异常返回 none（回落对话）。"""
     candidates = [
         endpoint for endpoint in config.endpoints if config.allow_proxy or not is_third_party_host(endpoint.host)
     ]
@@ -650,7 +685,7 @@ def judge_intent(
     try:
         outcome = complete_once(
             judge,
-            [{"role": "user", "content": _judge_prompt(text, context, history)}],
+            [{"role": "user", "content": _judge_prompt(text, context, history, hint)}],
             max_tokens=JUDGE_MAX_TOKENS,
             read_timeout=JUDGE_READ_TIMEOUT_S,
         )
@@ -665,7 +700,8 @@ def judge_intent(
     return _parse_judge_reply(outcome.text, context, user_text=text)
 
 
-Judge = Callable[[str, RunControlContext, Optional[History]], ControlDecision]
+#: 判定器签名：(用户这句话, 运行上下文, 最近对话, 本地词表候选) → 决定。
+Judge = Callable[[str, RunControlContext, Optional[History], ControlDecision], ControlDecision]
 
 
 def decide(
@@ -674,29 +710,26 @@ def decide(
     judge: Optional[Judge] = None,
     history: Optional[History] = None,
 ) -> ControlDecision:
-    """判定顺序（ADR-0019 §4）：提案回应 → 短句规则直判 → 判定模型 → 回落规则结果。
+    """判定顺序（ADR-0020 修订 ADR-0019 §4）：提案回应 → 判定模型（带词表候选作参考）。
 
-    规则只是快路径：规范化后不超过 ``RULE_FAST_PATH_MAX_CHARS`` 的句子命中词表才直接
-    采用；更长的话即便命中也只算候选，交模型带着最近对话拍板（「换成随机森林重新做」
-    里的「重新做」是 retry 词，但用户要的是从建模方案重做）。模型判成 none / 出错 /
-    不在合法集内时回落到规则结果——规则命中的仍会执行，什么都没命中才是普通对话。
-    超长文本不判定：那是粘贴进来的材料，只落备注。
+    本地词表**不再单独触发任何动作**：它命中什么只作为参考信号连同这句话与最近对话
+    一起交给判定模型，模型说是什么就是什么——说 none 就是普通对话，词表命中也不回落
+    执行。2026-09-08 用户实测：一句带「重试」字样的话在模型还在思考时就把运行重启了，
+    拍板「有关键字就触发肯定不行，要结合在一起判断」。
+
+    仍然本地直判的只有对上一轮提案的「确认 / 算了」——那是在回答系统自己提出的是非题，
+    不存在理解歧义。没有判定器（未配置接口）或没有合法动作时不出网、不执行；超长文本
+    不判定：那是粘贴进来的材料，只落备注。
     """
     local = decide_locally(text, context)
     if local.source == "proposal":
         return local
-    normalized = _normalize(text)
-    if local.kind != "none" and len(normalized) <= RULE_FAST_PATH_MAX_CHARS:
-        return local
     if judge is None or not context.legal:
-        return local
+        return NONE_DECISION
     stripped = text.strip()
     if len(stripped) > JUDGE_TEXT_LIMIT:
         return NONE_DECISION
-    judged = judge(stripped, context, history)
-    if judged.kind != "none":
-        return judged
-    return local
+    return judge(stripped, context, history, local)
 
 
 # ── 执行 ─────────────────────────────────────────────────────────────────────
@@ -955,43 +988,87 @@ _COMMAND_HELP = {
 #: pause / cancel 让运行停下，用户接下来多半要讨论，回复沿用默认口径。
 _HANDOFF_KINDS = frozenset({"retry", "resume", "redo", "approve", "reject", "revision"})
 
-_REPLY_RULES_DEFAULT = (
-    "回复要求：先用一两句话如实告知上面已执行的操作与接下来会发生什么，再回答用户的问题；"
-    "不得声称执行了未列出的操作，也不得把「记录备注」说成「已修改」。"
-    "如果用户想要的动作当前不允许，说明原因并给出上面列出的可用指令。"
+#: 这几段是给模型看的约束，措辞上刻意不用「如实」「不要假装」这类道德化字眼：模型会把它们
+#: 原样搬进回复开头（2026-09-07 用户截图：连问三次失败原因，每次都以「本轮我没有执行任何
+#: 运行控制动作，所以不会假装“刚才做了重试”。如实说：」起头），用户看不到系统提示，
+#: 只觉得 Agent 在自说自话。约束一律写成「不得 / 不要提及」，并明说这段说明不是回复内容。
+#:
+#: 时态（ADR-0020）：动作在模型**回复结束后**才执行，所以所有口径都是将来时——不得说
+#: 「已重试」「已选择」；用户看到的顺序是回复 → 动作回执 → 运行的执行步骤。
+_NO_ECHO = "这些要求是给你的内部约束，不是回复内容：不要提及、复述或解释它们。"
+_REPLY_RULES_PLAIN = (
+    "回复要求：这一轮没有任何运行控制动作，像平常对话一样直接回答用户的问题，开头不要先声明"
+    "本轮没有执行什么操作。不得声称执行了或将执行任何运行控制动作；"
+    "如果用户想要的动作当前不允许，说明原因并给出上面列出的可用指令。" + _NO_ECHO
+)
+_REPLY_RULES_REPORT = (
+    "回复要求：先用一两句话告知上面列出的动作安排（将在你回复结束后执行的说清接下来会发生什么，"
+    "已放弃 / 不允许的说明原因），再回答用户的问题；动作此刻尚未发生，不得说成「已执行」；"
+    "不得声称将执行未列出的操作，也不得把「记录备注」说成「已修改」。" + _NO_ECHO
 )
 _REPLY_RULES_HANDOFF = (
-    "回复要求：运行已经接手这件事——用两三句话如实告知上面已执行的操作、接下来运行会做什么、"
-    "进度可在下方的执行步骤里看到，然后结束回复。用户这句话里的具体要求（参数取值、方法选择、"
-    "修改内容等）已随动作提供给运行里的智能体，由它带着要求完成，不必在这里复述或展开。"
-    "绝不要在对话里替运行去做那件事：不要自己算题、建模、给出结果数字或写论文段落——那会与运行"
-    "里正在进行的工作重复，且对话里的结果不会进入成果。这句话里若还带着问题（如问失败原因），"
-    "用简短几句回答即可。不得声称执行了未列出的操作，也不得把「记录备注」说成「已修改」。"
+    "回复要求：你的回复一结束，系统就会执行上面列出的动作、由运行接手这件事——用两三句话告知"
+    "接下来会执行什么、运行接下来会做什么、进度随后会出现在下方的执行步骤里，然后结束回复。"
+    "动作此刻尚未开始，不得说成「已重试」「已选择」「已重做」这类完成时。用户这句话里的具体要求"
+    "（参数取值、方法选择、修改内容等）会随动作提供给运行里的智能体，由它带着要求完成，不必在这里"
+    "复述或展开。绝不要在对话里替运行去做那件事：不要自己算题、建模、给出结果数字或写论文段落——"
+    "那会与运行接下来的工作重复，且对话里的结果不会进入成果。这句话里若还带着问题（如问失败原因），"
+    "用简短几句回答即可。不得声称将执行未列出的操作，也不得把「记录备注」说成「已修改」。" + _NO_ECHO
 )
 _REPLY_RULES_PROPOSED = (
-    "回复要求：上面的提案尚未执行——用一两句话说明将要执行什么、有什么代价，请用户回复「确认」"
-    "或点下方按钮；不得声称已经执行，也不要在对话里替运行去做那件事（不要自己算题、建模或写论文段落）。"
-    "这句话里若还带着问题，用简短几句回答即可。"
+    "回复要求：上面的提案尚未执行，也不会在本轮执行——用一两句话说明将要执行什么、有什么代价，"
+    "请用户回复「确认」或点下方按钮；不得声称已经执行，也不要在对话里替运行去做那件事"
+    "（不要自己算题、建模或写论文段落）。这句话里若还带着问题，用简短几句回答即可。" + _NO_ECHO
 )
+
+_ACTION_STATUS_LABELS = {
+    "planned": "将在你回复结束后执行",
+    "executed": "已执行",
+    "proposed": "待用户确认",
+    "rejected": "未执行（当前状态不允许）",
+    "dismissed": "已放弃",
+}
 
 
 def reply_rules(actions: list[dict[str, Any]]) -> str:
-    """按本轮动作决定回复口径：交接（运行已接手）/ 提案待确认 / 默认（问答为主）。
+    """按本轮动作安排决定回复口径：交接（运行将接手）/ 提案待确认 / 有安排要交代 / 纯问答。
 
-    「按典型参数继续」这类话在 FAILED 上会真的 retry；若仍按默认口径「再回答用户的问题」，
+    「按典型参数继续」这类话在 FAILED 上会 retry；若仍按问答口径「再回答用户的问题」，
     模型会把它当成「把典型参数下的结果算出来」，在对话里与运行并行解同一道题
     （2026-09-07 用户截图：回复气泡里逐项算分，下方执行步骤同时在跑）。
+
+    没有任何动作的一轮（问失败原因、聊方案）走纯问答口径：此前它与「有动作要交代」共用一条
+    「先告知已执行的操作」，没有动作时模型便逐字汇报「本轮没有执行任何运行控制动作」——
+    一句用户根本没问的开场白，每问一次失败原因都要先听一遍。
+
+    ``actions`` 是计划描述（``status`` 为 planned / proposed / dismissed）：回复时动作还没
+    发生，executed / rejected 只会出现在回复之后的回执里，不会进提示词。
     """
-    executed_kinds = {str(action.get("kind") or "") for action in actions if action.get("status") == "executed"}
-    if executed_kinds & _HANDOFF_KINDS:
+    if not actions:
+        return _REPLY_RULES_PLAIN
+    planned_kinds = {
+        str(action.get("kind") or "")
+        for action in actions
+        if action.get("status") in ("planned", "executed")
+    }
+    if planned_kinds & _HANDOFF_KINDS:
         return _REPLY_RULES_HANDOFF
     if any(action.get("status") == "proposed" for action in actions):
         return _REPLY_RULES_PROPOSED
-    return _REPLY_RULES_DEFAULT
+    return _REPLY_RULES_REPORT
 
 
-def prompt_block(context: RunControlContext, actions: list[dict[str, Any]]) -> str:
-    """注入系统提示词的状态块：模型据此知道运行在哪、本轮做了什么、用户还能说什么。"""
+def prompt_block(
+    context: RunControlContext,
+    actions: list[dict[str, Any]],
+    *,
+    note_planned: bool = False,
+) -> str:
+    """注入系统提示词的状态块：模型据此知道运行在哪、本轮安排了什么、用户还能说什么。
+
+    ``note_planned``：这句话不触发动作、但会在回复结束后记为运行备注——告诉模型这件事，
+    它才不会把「记录」说成「已修改」，也不会对用户的补充要求装作没听见。
+    """
     lines = ["【当前运行状态】"]
     status_label = _STATUS_LABELS.get(context.status, context.status)
     if context.status == TaskRunStatus.COMPLETED.value:
@@ -1018,88 +1095,270 @@ def prompt_block(context: RunControlContext, actions: list[dict[str, Any]]) -> s
     elif context.status == TaskRunStatus.COMPLETED.value:
         lines.append("- 修订轮数已用完，没有可执行的动作；如需继续请基于当前结果新建任务")
 
-    lines.append("【本轮已执行的操作】")
+    # 标题不叫「已执行的操作」：这里列的是**安排**——将在回复后执行的、待确认的、已放弃的，
+    # 逐条标状态；没有动作时只写一个「无」——「不要声称做了」这类叮嘱放进回复要求，不在这里
+    # 给模型一句可抄的话
+    lines.append("【本轮运行控制动作】")
     if actions:
         for action in actions:
-            lines.append(f"- {action.get('message') or action.get('kind')}")
+            status = str(action.get("status") or "")
+            label = _ACTION_STATUS_LABELS.get(status, status)
+            lines.append(f"- {label}：{action.get('message') or action.get('kind')}")
+    elif note_planned:
+        lines.append(
+            "- 无动作；这句话会在你回复结束后记为运行备注，供后续阶段的智能体执行时读到"
+            "（只是记录下来，不是已经修改）"
+        )
     else:
-        lines.append("- 无（本轮没有执行任何运行控制动作；不要声称做了）")
+        lines.append("- 无（这一轮是普通问答，运行状态没有变化）")
     lines.append(reply_rules(actions))
     return "\n".join(lines)
 
 
-# ── 托管轮接线 ───────────────────────────────────────────────────────────────
+# ── 托管轮接线：先计划、回复后执行（ADR-0020） ───────────────────────────────
+
+
+def _effective_kind(decision: ControlDecision, context: RunControlContext) -> str:
+    """这条决定真正要执行的动作：「确认」执行的是上一轮提案里的那个。"""
+    if decision.kind == "confirm":
+        return str((context.pending_proposal or {}).get("kind") or "")
+    return decision.kind
+
+
+def describe_plan(
+    decision: ControlDecision, text: str, context: RunControlContext
+) -> list[dict[str, Any]]:
+    """判定 → 给模型看的动作安排（将来时）。
+
+    不改状态的结果（提案 / 放弃）在这里就已定型，``status`` 沿用 proposed / dismissed；
+    要改运行状态的动作标 ``planned``，文案与 ``execute`` 的回执一一对应，只是时态不同。
+    """
+    if not decision.actionable:
+        return []
+    if decision.kind == "deny" or (
+        decision.kind in CONFIRM_REQUIRED and decision.source != "proposal"
+    ):
+        # execute 对这两类不碰数据库，直接拿它的结果当安排
+        settled = execute_dry(decision, text, context)
+        return [settled] if settled else []
+    kind = _effective_kind(decision, context)
+    if kind not in ACTION_KINDS:
+        return []
+    stage_label = context.stage_label
+    if kind == "retry":
+        message = f"重试「{stage_label}」阶段" + (
+            "，并把用户这句话作为备注注入该阶段的执行提示词" if text.strip() else ""
+        )
+    elif kind == "resume":
+        message = f"恢复任务，从「{stage_label}」阶段的检查点继续执行"
+    elif kind == "pause":
+        message = f"暂停任务，保留「{stage_label}」阶段的检查点"
+    elif kind == "cancel":
+        message = "取消任务（不可恢复；已生成的历史记录和产物仍可查看）"
+    elif kind in ("approve", "reject"):
+        option_id = REJECT_OPTION_ID if kind == "reject" else decision.option_id
+        option = context.option(option_id)
+        label = option.label if option else (option_id or "")
+        message = f"在「{context.approval_title}」中选择「{label}」"
+    elif kind == "revision":
+        stage = decision.stage or suggest_revision_stage(text)
+        label = STAGE_LABELS.get(stage, stage)
+        message = (
+            f"受理第 {context.revision_rounds + 1} 轮修改要求并打开修订门，建议从「{label}」重做并预选；"
+            "用户随后回复「确认」或在待确认事项中点一下才开始重跑"
+        )
+    else:  # redo（来自已确认的提案）
+        proposal = context.pending_proposal or {}
+        stage = str(decision.stage or proposal.get("stage") or context.node)
+        label = STAGE_LABELS.get(stage, stage)
+        message = (
+            f"从「{label}」重做，该阶段及其之后的阶段整段重跑；用户的要求作为备注提供给重做的智能体，"
+            "上游阶段的成果保留"
+        )
+    return [{"kind": kind, "status": "planned", "message": message}]
+
+
+def execute_dry(
+    decision: ControlDecision, text: str, context: RunControlContext
+) -> Optional[dict[str, Any]]:
+    """``execute`` 里不碰数据库的两条分支（提案 / 放弃），供计划阶段直接取用。"""
+    if decision.kind == "deny":
+        proposal = context.pending_proposal or {}
+        return {
+            "kind": str(proposal.get("kind") or "cancel"),
+            "status": "dismissed",
+            "message": f"已放弃{_proposal_label(proposal)}，运行状态不变。",
+        }
+    if decision.kind in CONFIRM_REQUIRED and decision.source != "proposal":
+        return _proposal_for(decision, text, context)
+    return None
 
 
 @dataclass
-class ControlResult:
-    actions: list[dict[str, Any]]
+class ControlPlan:
+    """一轮对话的运行控制计划：回复之前定下来，回复结束后由 ``execute_control_plan`` 兑现。"""
+
+    run_id: str
+    actor: str
+    text: str
+    decision: ControlDecision
+    #: 判定时的运行快照（含上一轮提案）；执行时会按最新状态复核。
+    context: RunControlContext
+    #: 回复之前就已定型、不改运行状态的回执（提案 / 放弃）：回复结束后原样发出。
+    settled: list[dict[str, Any]]
+    #: 这句话不触发动作、但要在回复结束后记为运行备注。
+    note_planned: bool
     prompt_block: str
 
+    @property
+    def deferred(self) -> bool:
+        """回复结束后有没有真正要改运行状态的动作。"""
+        return self.decision.actionable and not self.settled and self.decision.kind != "deny"
 
-def run_control_step(
+
+def plan_control_step(
     session_factory: sessionmaker[Session],
     *,
     run_id: str,
-    user_id: str,
     actor: str,
     text: str,
     config: LlmConfig,
     previous_actions: Optional[list[dict[str, Any]]],
     on_judge_usage: Optional[Callable[[ChatOutcome], None]] = None,
     history: Optional[History] = None,
-) -> ControlResult:
-    """托管轮后台线程里的控制步骤：判定 + 执行在一个事务里完成，返回事件与提示词块。
+) -> Optional[ControlPlan]:
+    """回复之前的计划步骤：读状态 + 判定，**不执行、不发事件、不写库**。
 
-    任何异常都不允许让对话轮失败：记日志，回落成「没有动作」的普通对话。
+    返回 None 表示这一轮不经过控制面（运行不存在 / 计划步骤自身出错）——任何异常都
+    不允许让对话轮失败，回落成普通对话。
     """
     session = session_factory()
     try:
         run = session.get(TaskRunRow, run_id)
         if run is None:
-            return ControlResult(actions=[], prompt_block="")
+            return None
         context = load_context(session, run, previous_actions)
 
         def judge(
-            question: str, ctx: RunControlContext, recent: Optional[History]
+            question: str,
+            ctx: RunControlContext,
+            recent: Optional[History],
+            hint: ControlDecision,
         ) -> ControlDecision:
-            return judge_intent(config, question, ctx, on_usage=on_judge_usage, history=recent)
+            return judge_intent(
+                config, question, ctx, on_usage=on_judge_usage, history=recent, hint=hint
+            )
 
         decision = decide(text, context, judge=judge, history=history)
-        actions: list[dict[str, Any]] = []
-        if decision.actionable:
-            outcome = execute(session, run, decision, text, context, actor=actor)
-            if outcome is not None:
-                actions.append(outcome)
-        elif run.status not in _TERMINAL and text.strip() and not is_inquiry(text):
-            # 没有动作的普通补充要求：照旧落成备注（静默，不发事件）；问句不进备注——
-            # 「为什么这么慢」出现在节点提示词的「用户补充要求」里只会误导智能体
-            record_run_note(session, run, text.strip())
-        session.commit()
+        planned = describe_plan(decision, text, context)
+        settled = [action for action in planned if action.get("status") in ("proposed", "dismissed")]
+        note_planned = (
+            not decision.actionable
+            and run.status not in _TERMINAL
+            and bool(text.strip())
+            and not is_inquiry(text)
+        )
         logger.info(
-            "run control run=%s status=%s decision=%s source=%s actions=%s",
+            "run control plan run=%s status=%s decision=%s source=%s planned=%s note=%s",
             run_id,
             context.status,
             decision.kind,
             decision.source,
-            [f"{item.get('kind')}:{item.get('status')}" for item in actions],
+            [f"{item.get('kind')}:{item.get('status')}" for item in planned],
+            note_planned,
         )
-        # 执行后状态已变（如 FAILED → RUNNING）：状态块按最新快照写，模型别再说「失败中」
-        session.refresh(run)
-        context = load_context(session, run, None)
-        if actions and actions[-1].get("status") == "proposed":
-            context.pending_proposal = actions[-1]
-        return ControlResult(actions=actions, prompt_block=prompt_block(context, actions))
+        return ControlPlan(
+            run_id=run_id,
+            actor=actor,
+            text=text,
+            decision=decision,
+            context=context,
+            settled=settled,
+            note_planned=note_planned,
+            prompt_block=prompt_block(context, planned, note_planned=note_planned),
+        )
     except Exception:  # noqa: BLE001 - 控制面出错不能拖垮对话
-        session.rollback()
-        logger.exception("run control step failed for %s", run_id)
-        return ControlResult(actions=[], prompt_block="")
+        logger.exception("run control planning failed for %s", run_id)
+        return None
     finally:
         session.close()
 
 
-def action_events(result: ControlResult) -> Iterator[dict[str, Any]]:
-    for action in result.actions:
+_KIND_LABELS = {
+    "retry": "重试阶段",
+    "resume": "恢复任务",
+    "pause": "暂停任务",
+    "cancel": "取消任务",
+    "approve": "选定审批选项",
+    "reject": "退回待确认事项",
+    "revision": "受理修改要求",
+    "redo": "从阶段重做",
+}
+
+
+def _state_changed_rejection(kind: str, context: RunControlContext) -> dict[str, Any]:
+    status_label = _STATUS_LABELS.get(context.status, context.status)
+    return {
+        "kind": kind,
+        "status": "rejected",
+        "code": "RUN_STATE_CHANGED",
+        "message": (
+            f"回复期间运行状态已变为「{status_label}」，「{_KIND_LABELS.get(kind, kind)}」不再适用；"
+            "请按当前状态重新下达指令"
+        ),
+    }
+
+
+def execute_control_plan(
+    session_factory: sessionmaker[Session], plan: ControlPlan
+) -> list[dict[str, Any]]:
+    """回复结束后兑现计划：复核合法性 → 执行 / 落备注 → 返回全部回执（含计划阶段定型的）。
+
+    回复要生成几秒到几十秒，期间用户可能点了按钮、运行可能自己走到了别的状态：所以不
+    沿用计划时的快照，而是重新读一遍——动作不再合法就如实回一条 ``rejected``，绝不按
+    过期状态硬执行。任何异常都只记日志，不影响这一轮对话的收尾。
+    """
+    actions: list[dict[str, Any]] = list(plan.settled)
+    session = session_factory()
+    try:
+        run = session.get(TaskRunRow, plan.run_id)
+        if run is None:
+            return actions
+        context = load_context(session, run, None)
+        context.pending_proposal = plan.context.pending_proposal
+        if plan.deferred:
+            kind = _effective_kind(plan.decision, context)
+            gate_changed = (
+                kind in ("approve", "reject") and context.approval_id != plan.context.approval_id
+            )
+            if kind not in context.legal or gate_changed:
+                actions.append(_state_changed_rejection(kind, context))
+            else:
+                outcome = execute(session, run, plan.decision, plan.text, context, actor=plan.actor)
+                if outcome is not None:
+                    actions.append(outcome)
+        elif plan.note_planned and run.status not in _TERMINAL:
+            # 没有动作的普通补充要求：落成备注（问句不进备注——「为什么这么慢」出现在
+            # 节点提示词的「用户补充要求」里只会误导智能体，计划阶段已排除）
+            record_run_note(session, run, plan.text.strip())
+        session.commit()
+        logger.info(
+            "run control executed run=%s decision=%s actions=%s",
+            plan.run_id,
+            plan.decision.kind,
+            [f"{item.get('kind')}:{item.get('status')}" for item in actions],
+        )
+        return actions
+    except Exception:  # noqa: BLE001 - 控制面出错不能拖垮对话
+        session.rollback()
+        logger.exception("run control execution failed for %s", plan.run_id)
+        return actions
+    finally:
+        session.close()
+
+
+def action_events(actions: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    for action in actions:
         yield {"type": "action", **action}
 
 
@@ -1108,24 +1367,25 @@ __all__ = [
     "CONFIRM_REQUIRED",
     "JUDGE_HISTORY_TURNS",
     "JUDGE_TEXT_LIMIT",
-    "RULE_FAST_PATH_MAX_CHARS",
     "ControlDecision",
-    "ControlResult",
+    "ControlPlan",
     "GateOption",
     "History",
     "RunControlContext",
     "action_events",
     "decide",
     "decide_locally",
+    "describe_plan",
     "execute",
+    "execute_control_plan",
     "explicit_stage",
     "judge_intent",
     "legal_actions",
     "load_context",
     "match_option",
     "pending_proposal_of",
+    "plan_control_step",
     "prompt_block",
     "record_run_note",
     "reply_rules",
-    "run_control_step",
 ]

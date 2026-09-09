@@ -9,10 +9,12 @@ run_inner_loop（L-I 内环引擎，§5.2/§5.3）与 ContextAssembler（分节�
 
 from .budget import (
     SUBAGENT_MAX_FRACTION,
+    UNLIMITED,
     BudgetGovernor,
     LoopBudget,
     NodeBudget,
     RunBudget,
+    is_unlimited,
 )
 from .context import (
     STANDARD_SECTION_ORDER,
@@ -56,6 +58,7 @@ __all__ = [
     "MAX_SUBAGENT_CONCURRENCY",
     "SUBAGENT_MAX_FRACTION",
     "STANDARD_SECTION_ORDER",
+    "UNLIMITED",
     "AssembledPrompt",
     "AssemblyError",
     "BudgetGovernor",
@@ -85,6 +88,7 @@ __all__ = [
     "TransportFailure",
     "Usage",
     "httpx_sender",
+    "is_unlimited",
     "request_fingerprint",
     "run_inner_loop",
     "run_sandbox_task",

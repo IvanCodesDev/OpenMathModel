@@ -739,10 +739,11 @@ html[data-theme="dark"] .recent::-webkit-scrollbar-thumb:hover { background: #5a
 .method-tree { padding: 34px 22px; border-right: 1px solid var(--line); overflow: auto; }
 .method-layout.tree-collapsed .method-tree { padding-right: 0; padding-left: 0; border-right: 0; overflow: hidden; }
 
-/* 折叠把手贴在两栏交界处，收起后自动滑到最左，始终可点 */
-.method-tree-toggle { position: absolute; top: 40px; left: var(--tree-w); z-index: 5; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--muted); font-size: 12px; cursor: pointer; transform: translateX(-50%); transition: left .18s ease, transform .18s ease, color .12s ease, border-color .12s ease, box-shadow .12s ease; }
+/* 折叠把手贴在两栏交界处并垂直居中：离开顶部的搜索框与标题行，避免和它们抢视线；
+   收起后自动滑到最左，高度不变，始终可点 */
+.method-tree-toggle { position: absolute; top: 50%; left: var(--tree-w); z-index: 5; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--muted); font-size: 12px; cursor: pointer; transform: translate(-50%, -50%); transition: left .18s ease, transform .18s ease, color .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .method-tree-toggle:hover { background: #fff; border-color: #d9d9d5; color: var(--ink); box-shadow: 0 1px 4px rgba(20, 20, 18, .10); }
-.method-layout.tree-collapsed .method-tree-toggle { transform: translateX(10px); }
+.method-layout.tree-collapsed .method-tree-toggle { transform: translate(10px, -50%); }
 .method-tree .search-box { margin-bottom: 8px; }
 .method-search-status { margin: 0 2px 17px; color: #8a8a86; font-size: 12px; }
 .method-no-results { margin: 24px 0; color: var(--muted); font-size: 13px; text-align: center; }
@@ -751,12 +752,11 @@ html[data-theme="dark"] .recent::-webkit-scrollbar-thumb:hover { background: #5a
 .tree-group-title:hover { background: #f0f0ed; color: #20201e; }
 .tree-group-title i { font-size: 14px; color: #8a8a85; transition: color .13s ease; }
 .tree-group-title:hover i { color: #55554f; }
-/* 子项沿一条参考线排布，当前项用短竖条标记位置（同 experiment-tabs 的黑条语言） */
+/* 子项沿一条参考线排布，当前项只用字色与字重区分，不加左侧竖条与选中底色 */
 .tree-children { margin-left: 17px; padding-left: 11px; border-left: 1px solid #ececea; }
 .tree-child { position: relative; display: block; height: 34px; padding: 8px 11px; border-radius: 7px; color: #55554f; transition: background .13s ease, color .13s ease; }
 .tree-child:hover { background: #f0f0ed; color: #20201e; }
-.tree-child.active { background: #ececea; color: #20201e; font-weight: 600; }
-.tree-child.active::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 2px; border-radius: 2px; background: #20201e; }
+.tree-child.active { background: transparent; color: #20201e; font-weight: 600; }
 .method-content { overflow: auto; padding: 32px 46px 52px; color: #222; }
 /* 超宽屏限制阅读行长，正文不至于拉满整个内容区 */
 .method-content > .method-heading, .method-content > .method-table { max-width: 1120px; }
@@ -1099,20 +1099,33 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
   background: #fff;
 }
 
+/* 与紧邻的 .nav-item 完全同款：38px 盒高 + 8px 圆角 + 10px 内边距 + 18px 图标 +
+   10px 间距，底色也走同一套「选中才填充」的语义——停在首页/任务页时它是当前位置，
+   亮起底色；点开「我的项目」等导航项后由那一项亮，它退回透明，整列永远只有一个盒子
+   亮着。此前它是常驻底色，与导航项的选中态打架（两个盒子同时亮）。
+   强调另由字重承担（不加大字号：基础层留下的 16px 会让它比整列导航都大一号）。
+   底色与圆角都要显式写：基础层的 #151515 黑底与 6px 圆角不覆盖就会漏出来。
+   下边距 2px = .sidebar-nav 的 gap，让它与下面的导航项等距排布。 */
 .new-task-button {
-  height: 40px;
-  margin: 0 0 19px;
-  padding: 0 12px;
+  height: 38px;
+  margin: 0 0 2px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   text-align: left;
   border: 0;
-  background: #eaeae7;
+  border-radius: 8px;
+  background: transparent;
   color: var(--ink);
+  font-size: 15px;
   font-weight: 550;
 }
 
-.new-task-button:hover { background: #dfdfdc; color: var(--ink); }
-.new-task-button.active { background: #deded9; }
-.primary-nav { margin-top: -8px; }
+.new-task-button > i { width: 18px; font-size: 18px; }
+.new-task-button:hover { background: #f0f0ed; color: var(--ink); }
+/* 选中态与 .nav-item.active 同一个灰：两个盒子轮流亮，深浅必须一致 */
+.new-task-button.active { background: #e8e8e5; }
 
 .nav-section-label {
   margin: 12px 10px 5px;
@@ -1124,8 +1137,9 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
 .resource-label { margin-top: 17px; }
 .sidebar-nav { gap: 2px; }
 
+/* 盒高与 .new-task-button 一致（38px）：两者上下紧邻，差一点点最扎眼 */
 .nav-item {
-  height: 36px;
+  height: 38px;
   padding: 0 10px;
   gap: 10px;
   border-radius: 8px;
@@ -1706,18 +1720,6 @@ html[data-theme="dark"] .sidebar-search-empty strong { color: #c9c9c4; }
 }
 /* 无思考内容时的等待占位：同一款 shimmer */
 .thinking-plain { margin: 0; }
-/* 「允许使用第三方中转站」透明度行：发送前展示本次请求的实际域名（不含模型名） */
-.chat-transparency {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 10px;
-  font-size: 12.5px;
-  line-height: 18px;
-  color: color-mix(in srgb, #a1a1a1 82%, transparent);
-}
-.chat-transparency i { font-size: 14px; line-height: 1; }
-html[data-theme="dark"] .chat-transparency { color: #737373; }
 html[data-theme="dark"] .thinking-label { color: #737373; }
 html[data-theme="dark"] .thinking-verb { color: #a3a3a3; }
 html[data-theme="dark"] .thinking-chevron { color: #737373; }
@@ -1733,7 +1735,7 @@ html[data-reduce-motion="on"] .thinking-shimmer {
   background: none;
 }
 
-/* 回复右下角操作区：复制按钮 */
+/* 回复右下角操作区：复制 + 赞 / 踩（integration/reply-actions，任务页与首页共用） */
 .reply-actions {
   display: flex;
   justify-content: flex-end;
@@ -1754,8 +1756,13 @@ html[data-reduce-motion="on"] .thinking-shimmer {
 }
 .reply-action-button:hover { background: #f0f0ed; border-color: transparent; color: #55554f; }
 .reply-action-button i { font-size: 15px !important; }
+/* 已评价的那个保持按下态（实心图标 + 深色），再点撤回 */
+.reply-action-button[aria-pressed="true"] { color: #1f1f1d; }
+.reply-action-button[aria-pressed="true"]:hover { background: #f0f0ed; color: #1f1f1d; }
 html[data-theme="dark"] .reply-action-button { color: #8a8a85; }
 html[data-theme="dark"] .reply-action-button:hover { background: #2e2e2c; color: #c9c9c4; }
+html[data-theme="dark"] .reply-action-button[aria-pressed="true"],
+html[data-theme="dark"] .reply-action-button[aria-pressed="true"]:hover { color: #f0f0ec; }
 
 /* 对话回复的 Markdown 子集（text/markdown.ts 输出） */
 /* 标题不得小于正文 16px，否则模型分了节也压不住层级 */
@@ -1771,27 +1778,122 @@ html[data-theme="dark"] .reply-action-button:hover { background: #2e2e2c; color:
   color: #5d5d58;
 }
 .analysis-copy hr { margin: 12px 0; border: 0; border-top: 1px solid #e3e3df; }
+/* 代码：与页面同一族暖灰，不另起色相——此前试过石板蓝，冷色压在暖灰页面上显得外来。
+   区分度交给形（标题带 + 两级底色 + 等宽字）与克制的 token 配色，而不是底色换色相。
+   底色取现成的表面色阶：正文 = 表头/用户气泡那一档，标题带 = 导航选中态那一档。
+   调子集中在 .md-code 的几个变量里，要换只改那里。 */
 .analysis-copy .md-inline-code {
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 5px;
   background: #efefeb;
-  font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
-  font-size: 0.88em;
+  color: #3b3b38;
+  font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.86em;
 }
-.analysis-copy pre.md-code {
-  margin: 0 0 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #f4f4f1;
-  border: 1px solid #e5e5e1;
+/* 代码块 = 标题带 + 正文两级底色，无外描边、12px 圆角。结构由 text/markdown 给出
+   （.md-code[data-lang][data-label] > pre > code），标题带用 ::before 画、标签取 data-label
+   （每一块都有：没标语言的按 Text），复制按钮由 text/code-blocks 插进容器右上角。 */
+.analysis-copy .md-code {
+  --code-bg: #f6f6f3;
+  --code-head: #ebebe7;
+  --code-label: #6f6f6b;
+  --code-ink: #20201e;
+  --code-hover: rgba(32, 32, 30, .08);
+  --code-scrollbar: #cfcfca;
+  position: relative;
+  margin: 14px 0 18px;
+  border-radius: 12px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.analysis-copy .md-code::before {
+  content: attr(data-label);
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 14px;
+  background: var(--code-head);
+  color: var(--code-label);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  line-height: 1;
+}
+.analysis-copy .md-code pre {
+  margin: 0;
+  padding: 14px 16px 15px;
   overflow-x: auto;
-  line-height: 1.55;
+  border: 0;
+  background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--code-scrollbar) transparent;
 }
-.analysis-copy pre.md-code code {
-  font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
-  font-size: 12.5px;
+.analysis-copy .md-code pre code {
+  display: block;
+  color: var(--code-ink);
+  font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.75px;
+  line-height: 1.7;
   white-space: pre;
+  tab-size: 4;
+  font-variant-ligatures: none;
 }
+.analysis-copy .md-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--code-label);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.analysis-copy .md-code-copy:hover { background: var(--code-hover); color: var(--code-ink); }
+.analysis-copy .md-code-copy:active { transform: none; }
+.analysis-copy .md-code-copy i { font-size: 13px !important; }
+.analysis-copy .md-code-copy.is-copied,
+.analysis-copy .md-code-copy.is-copied:hover { color: #2c6650; }
+
+/* highlight.js token 配色：以墨色为主，只给四类语义上色，且都从页面已有的点色里取——
+   绿 = 方法库"修正"那一支（#2c6650），赭 = 收藏星的金（#9a7b12）压暗，陶土 = 危险色
+   （#b3402e）降饱和，紫灰只给装饰器一处。函数名不上色、加半档字重（等宽字宽度不变，
+   对齐不受影响）。只写本产品语法会产出的类。 */
+.analysis-copy .md-code .hljs-comment,
+.analysis-copy .md-code .hljs-quote { color: #8f8f8a; }
+.analysis-copy .md-code .hljs-keyword,
+.analysis-copy .md-code .hljs-selector-tag,
+.analysis-copy .md-code .hljs-type { color: #a04e33; }
+.analysis-copy .md-code .hljs-literal,
+.analysis-copy .md-code .hljs-number,
+.analysis-copy .md-code .hljs-symbol { color: #8a6a1f; }
+.analysis-copy .md-code .hljs-string,
+.analysis-copy .md-code .hljs-regexp,
+.analysis-copy .md-code .hljs-addition { color: #2f6e52; }
+.analysis-copy .md-code .hljs-title,
+.analysis-copy .md-code .hljs-section { color: var(--code-ink); font-weight: 500; }
+.analysis-copy .md-code .hljs-built_in,
+.analysis-copy .md-code .hljs-name { color: #3d6a78; }
+.analysis-copy .md-code .hljs-attr,
+.analysis-copy .md-code .hljs-attribute,
+.analysis-copy .md-code .hljs-variable,
+.analysis-copy .md-code .hljs-template-variable,
+.analysis-copy .md-code .hljs-property { color: #55554f; }
+.analysis-copy .md-code .hljs-meta,
+.analysis-copy .md-code .hljs-meta .hljs-keyword { color: #6e5f8c; }
+.analysis-copy .md-code .hljs-operator,
+.analysis-copy .md-code .hljs-punctuation { color: #6f6f6b; }
+.analysis-copy .md-code .hljs-deletion { color: #b3402e; }
+.analysis-copy .md-code .hljs-strong { font-weight: 500; }
+.analysis-copy .md-code .hljs-params { color: inherit; }
 .analysis-copy .md-table {
   width: 100%;
   margin: 0 0 10px;
@@ -1813,8 +1915,42 @@ html[data-theme="dark"] .reply-action-button:hover { background: #2e2e2c; color:
   text-align: center;
 }
 .analysis-copy .md-math .katex { font-size: 1.02em; }
-html[data-theme="dark"] .analysis-copy .md-inline-code { background: #2e2e2c; }
-html[data-theme="dark"] .analysis-copy pre.md-code { background: #262624; border-color: #3a3a37; }
+html[data-theme="dark"] .analysis-copy .md-inline-code { background: #2e2e2c; color: #d6d5cf; }
+html[data-theme="dark"] .analysis-copy .md-code {
+  --code-bg: #262624;
+  --code-head: #2f2f2d;
+  --code-label: #8a8a85;
+  --code-ink: #e2e1dc;
+  --code-hover: rgba(255, 255, 255, .08);
+  --code-scrollbar: #4a4a46;
+}
+html[data-theme="dark"] .analysis-copy .md-code-copy.is-copied,
+html[data-theme="dark"] .analysis-copy .md-code-copy.is-copied:hover { color: #8fcf9f; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-comment,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-quote { color: #7f7f7a; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-keyword,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-selector-tag,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-type { color: #e0997c; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-literal,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-number,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-symbol { color: #d6b56a; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-string,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-regexp,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-addition { color: #8fcf9f; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-title,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-section { color: #f2f1ec; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-built_in,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-name { color: #86bdc9; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-attr,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-attribute,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-variable,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-template-variable,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-property { color: #c4c3bc; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-meta,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-meta .hljs-keyword { color: #b9a9d9; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-operator,
+html[data-theme="dark"] .analysis-copy .md-code .hljs-punctuation { color: #a3a39e; }
+html[data-theme="dark"] .analysis-copy .md-code .hljs-deletion { color: #e08a80; }
 html[data-theme="dark"] .analysis-copy .md-table th { background: #2b2b29; }
 html[data-theme="dark"] .analysis-copy .md-table th,
 html[data-theme="dark"] .analysis-copy .md-table td { border-color: #3a3a37; }
@@ -2382,6 +2518,7 @@ html[data-theme="dark"] .settings-range {
 }
 
 html[data-theme="dark"] .nav-item:hover,
+html[data-theme="dark"] .new-task-button:hover,
 html[data-theme="dark"] .recent-link:hover,
 html[data-theme="dark"] .settings-nav button:hover,
 html[data-theme="dark"] .composer-shortcuts button:hover,
@@ -6393,10 +6530,6 @@ html[data-theme="dark"] .settings-footer .primary {
   margin: 0;
   line-height: 20px;
   text-align: center;
-}
-
-.app-shell.sidebar-collapsed .primary-nav {
-  margin-top: 0;
 }
 
 .app-shell.sidebar-collapsed .profile-row {

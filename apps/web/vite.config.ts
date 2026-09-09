@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
-import { mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,8 +20,21 @@ const mcmPaperCacheRoot = resolve(
   "datasets/raw/sources/github/Jackksonns-MCM-ICM-Outstanding-Papers/papers",
 );
 const mcmPaperSourceRevision = "d29267cb9e993419749e6111981b30a44183fdf8";
+// 第二批赛事（国赛、华数杯、亚太赛、MathorCup、泰迪杯）的论文由采集脚本落到原始层：
+// 主办方只发布整包压缩文件，没有单篇公网地址，因此这里只从磁盘读，不做按需回源。
+const archivePaperRoot = resolve(workspaceRoot, "datasets/raw/sources/paper-archives");
+const archivePaperRoutePrefix = "archive";
 // 各镜像域名的 DNS 解析在部分开发网络下会间歇失效，官方备用域一并列入候选。
 const jsDelivrHosts = ["cdn.jsdelivr.net", "gcore.jsdelivr.net", "testingcf.jsdelivr.net"];
+// LaTeX 排版的中文论文用 Fandol 等 CID 字体，字形要靠预定义 CMap 才能取到；缺了这批
+// .bcmap，pdf.js 会在 translateFont 阶段失败，整页中文渲染成空白（拉丁字母照常显示）。
+// 未内嵌的 Times/Helvetica 则需要 standard_fonts。两份资源都随 pdfjs-dist 发布，
+// 这里在开发期直接从 node_modules 提供，构建时原样拷进产物。
+const pdfjsAssetRoutePrefix = "/pdfjs/";
+const pdfjsAssetDirectories = { cmaps: "cmaps", "standard_fonts": "standard_fonts" } as const;
+const pdfjsPackageRoot = dirname(
+  createRequire(import.meta.url).resolve("pdfjs-dist/package.json"),
+);
 
 function sendGuestAccount(res: ServerResponse): void {
   const body = JSON.stringify({ code: "UNAUTHENTICATED", message: "请先登录" });
@@ -188,30 +202,44 @@ async function serveCachedPaper(
     res.writeHead(400).end();
     return;
   }
+  const isArchive = segments[0] === archivePaperRoutePrefix;
   const isMcm = segments[0] === "mcm";
-  const [year, problemGroup, filename] = isMcm ? segments.slice(1) : segments;
+  const competition = isArchive ? segments[1] : "";
+  const [year, problemGroup, filename] = isArchive
+    ? segments.slice(2)
+    : isMcm ? segments.slice(1) : segments;
+  const expectedSegments = isArchive ? 5 : isMcm ? 4 : 3;
   if (
-    segments.length !== (isMcm ? 4 : 3)
+    segments.length !== expectedSegments
+    || (isArchive && !/^[a-z][a-z-]{1,20}$/.test(competition))
     || !/^\d{4}$/.test(year ?? "")
-    || !(isMcm ? /^[A-FX]$/i : /^[A-F]$/i).test(problemGroup ?? "")
+    || !(isMcm || isArchive ? /^[A-FTX]$/i : /^[A-F]$/i).test(problemGroup ?? "")
     || !filename
-    || !/\.pdf$/i.test(filename)
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.pdf$/i.test(filename)
   ) {
     res.writeHead(404).end();
     return;
   }
 
-  const cacheRoot = isMcm ? mcmPaperCacheRoot : paperCacheRoot;
+  const cacheRoot = isArchive
+    ? resolve(archivePaperRoot, competition)
+    : isMcm ? mcmPaperCacheRoot : paperCacheRoot;
   // 采集脚本对无题组目录的 2013–2015 年美赛论文使用 "_" 作为本地缓存目录。
   const cacheGroup = isMcm && problemGroup.toUpperCase() === "X" ? "_" : problemGroup.toUpperCase();
   const filePath = resolve(cacheRoot, year, cacheGroup, filename);
-  if (!filePath.startsWith(`${cacheRoot}${sep}`)) {
+  if (!filePath.startsWith(`${cacheRoot}${sep}`) || (isArchive && !filePath.startsWith(`${archivePaperRoot}${sep}`))) {
     res.writeHead(404).end();
     return;
   }
 
   try {
     let info = await stat(filePath).catch(() => null);
+    if (!info?.isFile() && isArchive) {
+      // 这批论文没有可回源的单篇地址，缺文件说明采集脚本还没跑过。
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" })
+        .end(`论文尚未落到本地原始层：请先运行 datasets/recipes 中对应的采集脚本（${competition}）`);
+      return;
+    }
     if (!info?.isFile()) {
       const upstreamUrls = isMcm
         ? mcmPaperUpstreamUrls(year, problemGroup.toUpperCase(), filename)
@@ -245,6 +273,27 @@ async function serveCachedPaper(
   }
 }
 
+async function servePdfjsAsset(res: ServerResponse, pathname: string): Promise<void> {
+  const [directory, filename] = pathname.slice(pdfjsAssetRoutePrefix.length).split("/");
+  // 名字不合法就直接 404：让它落到 SPA 兜底会把 index.html 当字体喂给 pdf.js。
+  if (!(directory in pdfjsAssetDirectories) || !filename || !/^[\w.-]+$/.test(filename)) {
+    res.writeHead(404).end();
+    return;
+  }
+  const filePath = resolve(pdfjsPackageRoot, directory, filename);
+  try {
+    const body = await readFile(filePath);
+    res.writeHead(200, {
+      "Cache-Control": "public, max-age=86400",
+      "Content-Length": body.byteLength,
+      "Content-Type": filename.endsWith(".bcmap") ? "application/octet-stream" : "font/otf",
+    });
+    res.end(body);
+  } catch {
+    res.writeHead(404).end();
+  }
+}
+
 function localDevelopmentResources(): Plugin {
   const middleware = (
     req: IncomingMessage,
@@ -257,6 +306,10 @@ function localDevelopmentResources(): Plugin {
       void serveAccountMe(req, res);
       return;
     }
+    if (pathname.startsWith(pdfjsAssetRoutePrefix)) {
+      void servePdfjsAsset(res, pathname);
+      return;
+    }
     void serveCachedPaper(req, res, pathname, next);
   };
   return {
@@ -266,6 +319,19 @@ function localDevelopmentResources(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(middleware);
+    },
+    // 构建产物必须自带同一批 CMap 与标准字体，否则线上打开中文论文又会白页。
+    async generateBundle() {
+      for (const directory of Object.values(pdfjsAssetDirectories)) {
+        const sourceDirectory = resolve(pdfjsPackageRoot, directory);
+        for (const filename of await readdir(sourceDirectory)) {
+          this.emitFile({
+            type: "asset",
+            fileName: `pdfjs/${directory}/${filename}`,
+            source: await readFile(resolve(sourceDirectory, filename)),
+          });
+        }
+      }
     },
   };
 }

@@ -404,6 +404,8 @@ interface AgentStreamState {
   pending: Map<string, PendingStreamRow>;
   /** 当前处理的是首连回放的历史事件（决定落点，见 resolveStreamHost）。 */
   replaying: boolean;
+  /** 回放中的这条历史事件的服务端时间：按它决定落在哪一轮对话之后（historyTraceHost）。 */
+  replayAtMs: number | null;
   /** 已受理的修订轮次（ADR-0013）：0 = 首轮；之后进入的阶段都属于第 N 轮修改的重做。 */
   revisionRound: number;
 }
@@ -413,7 +415,14 @@ const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
 function streamState(root: HTMLElement): AgentStreamState {
   let state = streamByRoot.get(root);
   if (!state) {
-    state = { host: null, seen: new Set(), pending: new Map(), replaying: false, revisionRound: 0 };
+    state = {
+      host: null,
+      seen: new Set(),
+      pending: new Map(),
+      replaying: false,
+      replayAtMs: null,
+      revisionRound: 0,
+    };
     streamByRoot.set(root, state);
   }
   return state;
@@ -467,8 +476,9 @@ function replyRunTraceHost(replyBlock: HTMLElement): HTMLElement {
  *  - 尾部是用户消息等其它元素 → 另起一个与首条 Agent 消息同构的轨迹块
  *    （署名 + 折叠头 + 活动流）。
  *  三条规则合起来保证执行过程与对话在页面上严格按发生顺序交替，且 Agent 不会
- *  连着出现两个署名。 */
-function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLElement | null {
+ *  连着出现两个署名。署名从所在对话面板里现成的 Agent 署名克隆（总览页是首气泡的，
+ *  阶段页左栏是面板顶部的）。 */
+function tailTraceHost(scroll: HTMLElement): HTMLElement | null {
   const tail = scroll.lastElementChild;
   if (tail instanceof HTMLElement) {
     if (tail.classList.contains("agent-activity-block")) {
@@ -478,7 +488,8 @@ function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLEl
   }
   const block = document.createElement("div");
   block.className = "assistant-block follow-up-reply agent-activity-block";
-  const identity = identitySource.querySelector<HTMLElement>(".assistant-id");
+  const identity = scroll.closest<HTMLElement>(".chat-pane")?.querySelector<HTMLElement>(".assistant-id")
+    ?? scroll.querySelector<HTMLElement>(".assistant-id");
   if (identity) block.append(identity.cloneNode(true));
   const host = document.createElement("div");
   host.className = "agent-stream";
@@ -487,17 +498,114 @@ function tailTraceHost(scroll: HTMLElement, identitySource: HTMLElement): HTMLEl
   return host;
 }
 
-/** 解析本条过程行的落点：
- *  - 聚焦布局（无对话流）或首条消息未封口：锚定在摘要之后——开场分析结束前
- *    保持隐藏，揭示时与计划一起放行（先思考 → 再计划 → 后过程）；
- *  - 首条消息封口后：写入对话末尾的执行轨迹块，与后续对话按时间交替；
- *  - 首连回放的历史事件例外：它们属于「过去」，即使首气泡此刻已经封口也要落回
- *    首气泡的活动流，否则重进任务时整段执行轨迹会排到后来的对话气泡后面。 */
-function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElement | null {
-  const scroll = root.querySelector<HTMLElement>(".chat-scroll");
-  if (scroll && !state.replaying) {
+/** 首连回放的历史事件按发生时间落位：找最后一条发起时间不晚于该事件的对话轮
+ *  （重建的用户气泡带 data-turn-at，服务端时间），事件写进它的回复块内部的运行
+ *  步骤区——与这条事件当初实时到达时的落点完全一致。早于全部追问的事件（或页面
+ *  上没有带时间戳的轮）返回 null，由调用方落回首气泡 / 摘要下方的活动流。
+ *
+ *  此前历史事件一律落回首气泡：用户在对话里说「重试」后切到别的阶段页再回来（整页
+ *  导航），重试的新进度全在页面顶端，底部的对话看不到任何动静，得往上翻几屏才找到
+ *  （2026-09-07 用户报障）。 */
+function historyTraceHost(scroll: HTMLElement, atMs: number | null): HTMLElement | null {
+  if (atMs === null) return null;
+  let anchor: HTMLElement | null = null;
+  for (const message of scroll.querySelectorAll<HTMLElement>(":scope > .user-message[data-turn-at]")) {
+    const turnAt = parseIso(message.dataset.turnAt);
+    if (turnAt === null) continue;
+    if (turnAt > atMs) break; // 轮按发起时间升序重建，后面的只会更晚
+    anchor = message;
+  }
+  const reply = anchor?.nextElementSibling;
+  if (!(reply instanceof HTMLElement) || !reply.classList.contains("follow-up-reply")) return null;
+  return replyRunTraceHost(reply);
+}
+
+/** 对话区：任务总览页是 .chat-scroll，五个阶段页的左栏是 .focused-agent-scroll。 */
+function conversationScroll(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
+}
+
+interface PrimaryActionSlot {
+  /** 真实运行的主操作按钮（总览页首气泡末尾的 .running-live-cta / 阶段页左栏的 .focused-stage-cta）。 */
+  cta: HTMLElement;
+  /** 按钮的老家：紧跟原位的隐藏占位，对话被清空时按钮退回这里，绝不随某个块一起消失。 */
+  home: HTMLElement;
+}
+
+const primaryActionSlots = new WeakMap<HTMLElement, PrimaryActionSlot>();
+
+function primaryActionSlot(root: HTMLElement): PrimaryActionSlot | null {
+  const existing = primaryActionSlots.get(root);
+  if (existing?.home.isConnected) return existing;
+  const cta = [...root.querySelectorAll<HTMLElement>("[data-agent-cta]")]
+    .find(element => !element.closest("[data-demo-only]"));
+  if (!cta) return null;
+  const home = document.createElement("span");
+  home.hidden = true;
+  home.dataset.agentCtaHome = "true";
+  // 放在按钮之后而不是之前：renderApprovalOptions 靠 cta.previousElementSibling 找已有的
+  // 选项列表，前面多一个占位会让它每次刷新都再建一份
+  cta.insertAdjacentElement("afterend", home);
+  const slot = { cta, home };
+  primaryActionSlots.set(root, slot);
+  return slot;
+}
+
+/** 主操作按钮随对话尾部走（2026-09-07 用户明确要求：像执行进度一样跟到最新对话的最下面，
+ *  不是另做一颗镜像放进面板）。对话里最后一条 Agent 消息（回复块或轨迹块）存在时，把审批
+ *  选项列表与按钮一起搬到它的末尾——用户停在底部就能看到「前往实验与验证」「重试当前阶段」，
+ *  不必往上翻回首气泡；没有对话（或对话被清空）时按钮回到原位。搬的是按钮本体：文案、
+ *  禁用态、点击处理与幂等 token 全部沿用，两个地方不会分叉。演示夹具的 CTA 不动。 */
+function followConversationTail(root: HTMLElement): void {
+  const scroll = conversationScroll(root);
+  if (!scroll) return;
+  const slot = primaryActionSlot(root);
+  if (!slot) return;
+  const { cta, home } = slot;
+  const previous = cta.previousElementSibling;
+  const options = previous instanceof HTMLElement && previous.dataset.approvalOptions !== undefined
+    ? previous
+    : null;
+  const movable = options ? [options, cta] : [cta];
+  const blocks = scroll.querySelectorAll<HTMLElement>(":scope > .assistant-block.follow-up-reply");
+  const tail = blocks[blocks.length - 1];
+  if (!tail) {
+    if (home.previousElementSibling !== cta) home.before(...movable);
+    return;
+  }
+  if (tail.lastElementChild !== cta) tail.append(...movable);
+}
+
+/** 实时事件是否该排到对话末尾（而不是摘要下方的固定活动流）。
+ *  - 总览页：首条 Agent 消息封口之后（开场分析结束、计划已揭示）；
+ *  - 阶段页左栏没有首气泡与开场分析：计划揭示且**已经有对话**时才排到末尾——没有
+ *    对话时保持「摘要 → 步骤 → 主操作」的固定形态，不为一条步骤另立署名块。 */
+function liveEventsFlowToTail(root: HTMLElement, scroll: HTMLElement): boolean {
+  if (scroll.classList.contains("chat-scroll")) {
     const { block, sealed } = firstAssistantMessage(root, scroll);
-    if (block && sealed) return tailTraceHost(scroll, block);
+    return block !== null && sealed;
+  }
+  const tail = scroll.lastElementChild;
+  return root.dataset.planPhase === "revealed"
+    && tail instanceof HTMLElement
+    && (tail.classList.contains("user-message") || tail.classList.contains("follow-up-reply"));
+}
+
+/** 解析本条过程行的落点：
+ *  - 首条消息未封口（或阶段页还没有对话）：锚定在摘要之后——开场分析结束前
+ *    保持隐藏，揭示时与计划一起放行（先思考 → 再计划 → 后过程）；
+ *  - 实时事件：写入对话末尾的执行轨迹块，与后续对话按时间交替；
+ *  - 首连回放的历史事件：按发生时间落到对应对话轮的回复块之后（historyTraceHost），
+ *    早于全部追问的仍落回首气泡——重进任务时页面与当初实时看到的一模一样。 */
+function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElement | null {
+  const scroll = conversationScroll(root);
+  if (scroll) {
+    if (state.replaying) {
+      const host = historyTraceHost(scroll, state.replayAtMs);
+      if (host) return host;
+    } else if (liveEventsFlowToTail(root, scroll)) {
+      return tailTraceHost(scroll);
+    }
   }
   if (state.host?.isConnected) return state.host;
   const anchor = root.querySelector<HTMLElement>("[data-agent-summary]");
@@ -525,6 +633,8 @@ function streamAppend(root: HTMLElement, node: HTMLElement): void {
   // 而不是一条条动画重演；只有实时新事件才浮现入场。
   if (!state.replaying) node.classList.add("stream-in");
   host.append(node);
+  // 步骤区可能刚在尾部回复块里新建（replyRunTraceHost 追加在块末）：主操作按钮要重新压到最后
+  followConversationTail(root);
   if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
 }
 
@@ -607,6 +717,7 @@ function appendGrouped(root: HTMLElement, item: HTMLElement, group: StreamRowGro
   body.append(item);
   const badge = body.parentElement?.querySelector<HTMLElement>(".stream-group-count");
   if (badge) badge.textContent = `×${body.children.length}`;
+  followConversationTail(root);
   if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
 }
 
@@ -833,9 +944,10 @@ function ingestStreamEvent(
   const state = streamState(root);
   if (!Number.isFinite(sequence) || state.seen.has(sequence)) return;
   state.seen.add(sequence);
-  state.replaying = replay;
   const payload = event.payload ?? {};
   const eventMs = parseIso(event.created_at ?? null);
+  state.replaying = replay;
+  state.replayAtMs = replay ? eventMs : null;
 
   switch (event.type) {
     case "run.node_changed": {
@@ -968,9 +1080,14 @@ function ingestStreamEvent(
         if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
         return;
       }
-      if (kind === "task_renamed" || kind === "budget_limit" || kind === "user_note") {
-        // 有现成人话 message 的运营事件（改名 / 预算 / 用户补充要求已落成运行备注）：
-        // 以叙述行呈现，不落进原始 JSON 兜底——兜底会把备注全文连 note_id 一起摊开
+      if (
+        kind === "task_renamed" || kind === "budget_limit" || kind === "user_note"
+        || kind === "executor_restarted"
+      ) {
+        // 有现成人话 message 的运营事件（改名 / 预算 / 用户补充要求已落成运行备注 /
+        // 后端进程中途重启打断了在途调用并自动重试）：以叙述行呈现，不落进原始
+        // JSON 兜底——兜底会把备注全文连 note_id 一起摊开。executor_restarted 紧跟
+        // 在被打断的思考行（标「本次调用中断」）之后，说明中断原因不是用户的操作。
         const message = String(payload.message ?? "").trim();
         if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
         return;
@@ -1314,6 +1431,10 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
       || (action.kind === "approve" && action.option_id === null);
     cta.hidden = planning || Boolean(openingPending);
   });
+  // 主操作随对话尾部走：对话一长首气泡就在几屏之上，「前往实验与验证」这类按钮得往上
+  // 翻才够得着（2026-09-07 报障）。选项列表刚由 renderApprovalOptions 摆在按钮上方，
+  // 一起搬。
+  followConversationTail(root);
 }
 
 function formatBytes(value: number | null): string {
@@ -1916,6 +2037,17 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   root.addEventListener("click", onClick, true);
   root.addEventListener("keydown", onKeyDown, true);
 
+  // 对话层新增的轮（用户气泡 + 回复块）由页面层直接写进对话区，控制器没有回调可接，
+  // 只能观察对话区直接子节点的增减，据此把主操作按钮搬到新的尾部（followConversationTail）。
+  // 只看直接子节点：按钮搬进块内是孙节点变化，不会反过来触发自己。
+  const conversationHost = conversationScroll(root);
+  const tailObserver = conversationHost && typeof MutationObserver !== "undefined"
+    ? new MutationObserver(() => {
+        if (!disposed) followConversationTail(root);
+      })
+    : undefined;
+  if (conversationHost && tailObserver) tailObserver.observe(conversationHost, { childList: true });
+
   // 进行中阶段的耗时实时走秒（0.1s 精度由 formatElapsed 决定，500ms 刷新足够平滑）
   const elapsedTicker = window.setInterval(() => {
     root.querySelectorAll<HTMLElement>("[data-elapsed-since]").forEach(cell => {
@@ -1932,6 +2064,7 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
     if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
     window.clearInterval(elapsedTicker);
+    tailObserver?.disconnect();
     document.removeEventListener("omm:stage-shown", onStageShown);
     document.removeEventListener("omm:opening-analysis-done", onOpeningDone);
     document.removeEventListener("omm:run-reopened", onRunReopened);

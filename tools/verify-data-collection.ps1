@@ -18,6 +18,11 @@ $required = @(
     'datasets/recipes/stage_mathorcup_archives.py',
     'datasets/recipes/discover_electric_cup.py',
     'datasets/recipes/stage_huashu_cup_archive.py',
+    'datasets/recipes/paper_covers.py',
+    'datasets/recipes/ingest_cumcm_paper_fulltext.py',
+    'datasets/recipes/ingest_community_award_papers.py',
+    'datasets/recipes/stage_award_paper_bundles.py',
+    'datasets/recipes/stage_tipdm_award_papers.py',
     'datasets/recipes/image_guard.py',
     'apps/web/src/data/knowledge-library.json',
     'apps/web/src/legacy/openmathmodel-ui.ts',
@@ -45,6 +50,16 @@ python -m py_compile datasets/recipes/stage_huashu_cup_archive.py
 if ($LASTEXITCODE -ne 0) { throw 'Huashu Cup staging recipe compilation failed' }
 python -m py_compile datasets/recipes/image_guard.py
 if ($LASTEXITCODE -ne 0) { throw 'Image guard compilation failed' }
+python -m py_compile datasets/recipes/paper_covers.py
+if ($LASTEXITCODE -ne 0) { throw 'Paper cover parser compilation failed' }
+python -m py_compile datasets/recipes/ingest_cumcm_paper_fulltext.py
+if ($LASTEXITCODE -ne 0) { throw 'CUMCM award paper ingester compilation failed' }
+python -m py_compile datasets/recipes/ingest_community_award_papers.py
+if ($LASTEXITCODE -ne 0) { throw 'Community award paper ingester compilation failed' }
+python -m py_compile datasets/recipes/stage_award_paper_bundles.py
+if ($LASTEXITCODE -ne 0) { throw 'Award paper bundle staging recipe compilation failed' }
+python -m py_compile datasets/recipes/stage_tipdm_award_papers.py
+if ($LASTEXITCODE -ne 0) { throw 'TipDM award paper staging recipe compilation failed' }
 python datasets/recipes/collect_official_problems.py validate
 if ($LASTEXITCODE -ne 0) { throw 'Source registry validation failed' }
 
@@ -52,7 +67,7 @@ Get-Content -LiteralPath 'datasets/catalog/source-registry.schema.json' -Raw -En
 Get-Content -LiteralPath 'datasets/catalog/source-snapshot.schema.json' -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 Get-Content -LiteralPath 'datasets/catalog/knowledge-library.schema.json' -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 $registry = Get-Content -LiteralPath 'datasets/catalog/source-registry.json' -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($registry.sources.Count -ne 8) { throw "Expected 8 registered sources, found $($registry.sources.Count)" }
+if ($registry.sources.Count -ne 12) { throw "Expected 12 registered sources, found $($registry.sources.Count)" }
 if (($registry.sources.id | Sort-Object -Unique).Count -ne $registry.sources.Count) { throw 'Duplicate source id' }
 foreach ($source in $registry.sources) {
     if ($source.license_record.PSObject.Properties.Name.Count -lt 8) { throw "Incomplete LicenseRecord: $($source.id)" }
@@ -61,19 +76,42 @@ foreach ($source in $registry.sources) {
 $library = Get-Content -LiteralPath 'apps/web/src/data/knowledge-library.json' -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($library.stats.problem_count -ne $library.problems.Count) { throw 'Problem count does not match frontend data' }
 if ($library.stats.paper_count -ne $library.papers.Count) { throw 'Paper count does not match frontend data' }
-if ($library.problems.Count -ne 169) { throw "Expected 169 complete problems, found $($library.problems.Count)" }
-if ($library.papers.Count -lt 906) { throw "Expected at least 906 structured paper records, found $($library.papers.Count)" }
+if ($library.problems.Count -ne 189) { throw "Expected 189 complete problems, found $($library.problems.Count)" }
+if ($library.papers.Count -lt 1608) { throw "Expected at least 1608 structured paper records, found $($library.papers.Count)" }
+# 第二批赛事的论文：国赛 283 + 近年 17、泰迪杯 95、MathorCup 50、亚太赛 24、华数杯 18、
+# 华为杯近两届 2（后三项与国赛近年论文同属逐篇登记的社区来源）。
+foreach ($expected in @(@('github_personqianduixue_math_model', 283), @('tipdm_cup_official', 95), @('github_community_award_papers', 19))) {
+    $actual = @($library.papers | Where-Object { $_.source_id -eq $expected[0] }).Count
+    if ($actual -ne $expected[1]) { throw "Expected $($expected[1]) award papers for $($expected[0]), found $actual" }
+}
+$stagedPapers = @($library.papers | Where-Object { $_.local_pdf_path })
+if ($stagedPapers.Count -ne 489) { throw "Expected 489 locally staged award papers, found $($stagedPapers.Count)" }
+# 国赛与华为杯的近年缺口必须真的被补上，而不是只多了几条记录。
+foreach ($year in 2021..2025) {
+    if (-not @($library.papers | Where-Object { $_.competition -eq '全国大学生数学建模竞赛' -and $_.year -eq $year }).Count) {
+        throw "No CUMCM award paper for $year"
+    }
+}
+foreach ($year in 2024, 2025) {
+    if (-not @($library.papers | Where-Object { $_.competition -eq '中国研究生数学建模竞赛' -and $_.year -eq $year }).Count) {
+        throw "No CPMCM award paper for $year"
+    }
+}
+foreach ($paper in $stagedPapers) {
+    if ($paper.local_pdf_path -notmatch '^/paper-files/archive/[a-z-]+/\d{4}/[A-FTX]/[^/]+\.pdf$') { throw "Staged paper route is malformed: $($paper.id)" }
+    if ($paper.access_scope -ne 'linked_content') { throw "Staged paper is not readable: $($paper.id)" }
+}
 if (($library.problems.id | Sort-Object -Unique).Count -ne $library.problems.Count) { throw 'Duplicate problem id' }
 if (($library.papers.id | Sort-Object -Unique).Count -ne $library.papers.Count) { throw 'Duplicate paper id' }
 $repositoryPapers = @($library.papers | Where-Object { $_.source_id -eq 'github_zhanwen_mathmodel' })
 if ($repositoryPapers.Count -ne 685) { throw "Expected 685 repository paper records, found $($repositoryPapers.Count)" }
 $fullProblems = @($library.problems | Where-Object { $_.content_status -eq 'complete' })
-if ($fullProblems.Count -ne 169) { throw "Expected every frontend problem to be complete, found $($fullProblems.Count)" }
+if ($fullProblems.Count -ne 189) { throw "Expected every frontend problem to be complete, found $($fullProblems.Count)" }
 # Layout-aware extraction excludes page numbers, running heads and footer boilerplate,
 # so the published character total sits below the raw text-layer length.
 if (($fullProblems | Measure-Object content_character_count -Sum).Sum -lt 555000) { throw 'Complete problem text is unexpectedly short' }
 if (($fullProblems | Measure-Object content_block_count -Sum).Sum -lt 4350) { throw 'Complete problem block count is unexpectedly low' }
-foreach ($expected in @(@('comap_mcm_icm',44), @('apmcm_problems',32), @('cumcm_official',51), @('mathorcup_official',9), @('huashu_cup_official',21), @('github_zhanwen_mathmodel',12))) {
+foreach ($expected in @(@('comap_mcm_icm',44), @('apmcm_problems',32), @('cumcm_official',51), @('mathorcup_official',9), @('huashu_cup_official',21), @('github_zhanwen_mathmodel',12), @('tipdm_cup_official',12), @('tjjmds_official',8))) {
     $actual = @($fullProblems | Where-Object { $_.source_id -eq $expected[0] }).Count
     if ($actual -ne $expected[1]) { throw "Expected $($expected[1]) complete problems for $($expected[0]), found $actual" }
 }

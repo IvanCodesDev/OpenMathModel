@@ -14,6 +14,12 @@
  * 时随 run 交接的「浏览器解析摘录」（见 persistTaskAttachmentExcerpts），保证
  * 首条回复不会对着三个字的任务名说「没收到题面」；权威全文就绪后仍会并入
  * 后续轮次。
+ *
+ * 归属隔离：附件属于对话**绑定的**那个运行，由调用方（agent-chat）显式传入
+ * run id；本模块不再自己去猜「当前任务是谁」。此前从标签页级的
+ * sessionStorage `openmathmodel.activeRunId` 取身份，首页新开的对话会把上一个
+ * 任务页留下的附件正文并进第一条消息——用户实测「新开对话却延续了上一个
+ * 任务」的来源。清单缓存按 run 分键，换了运行自动作废。
  */
 
 export interface TaskAttachmentContext {
@@ -32,7 +38,6 @@ const LATER_WAIT_MS = 2_500;
 const TEXT_TIMEOUT_MS = 180_000;
 
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/;
-const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
 /** 任务创建时交接的浏览器解析摘录（按 run 隔离，sessionStorage）。 */
 const EXCERPT_HANDOFF_PREFIX = "openmathmodel.taskAttachmentExcerpts.";
 /** 单条摘录与合计的存储预算：与任务草稿的摘要上限（4000/24000）一致。 */
@@ -65,23 +70,12 @@ interface ExcerptRecord {
   characters?: number;
 }
 
+/** 清单缓存归哪个运行；换运行时整套状态（清单 / 等待预算 / 摘录标记）一起作废。 */
+let entriesRunId: string | null = null;
 let entriesPromise: Promise<Entry[] | null> | null = null;
 let firstCollect = true;
 /** 已用摘录顶上的附件名：摘录不重复注入；权威全文就绪后照常并入。 */
 const excerptInjectedNames = new Set<string>();
-
-function activeRunId(): string | null {
-  const params = new URL(window.location.href).searchParams;
-  if (params.get("demo") === "1") return null;
-  const fromQuery = params.get("run_id") ?? "";
-  if (RUN_ID_PATTERN.test(fromQuery)) return fromQuery;
-  try {
-    const saved = sessionStorage.getItem(ACTIVE_RUN_KEY) ?? "";
-    return RUN_ID_PATTERN.test(saved) ? saved : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 任务创建成功后调用（task-start-controller）：把浏览器解析出的正文摘录按
@@ -170,9 +164,7 @@ function fetchEntryText(entry: Entry): void {
 }
 
 /** 返回 null = 工作台读取失败（与「确实没有附件」区分，失败不缓存）。 */
-async function loadEntries(): Promise<Entry[] | null> {
-  const runId = activeRunId();
-  if (!runId) return [];
+async function loadEntries(runId: string): Promise<Entry[] | null> {
   const view = await fetchJson<{ artifacts?: WorkspaceArtifact[] }>(
     `/api/v1/task-runs/${encodeURIComponent(runId)}/workspace`,
   );
@@ -216,13 +208,20 @@ function excerptSectionOf(record: ExcerptRecord, budget: number): string {
 }
 
 /**
- * 取本轮可并入的任务附件上下文。没有新内容（无任务、无附件、都已并入、
- * 都还没解析完且没有摘录兜底）时返回 null；调用方在消息发送成功后执行 commit()。
+ * 取本轮可并入的任务附件上下文。runId 必须是对话当前绑定的运行；不是运行归属
+ * （首页对话 chat_…、演示态）时返回 null 且不发任何请求。没有新内容（无附件、
+ * 都已并入、都还没解析完且没有摘录兜底）时同样返回 null；调用方在消息发送
+ * 成功后执行 commit()。
  */
-export async function collectTaskAttachmentContext(): Promise<TaskAttachmentContext | null> {
-  const runId = activeRunId();
-  if (!runId) return null;
-  entriesPromise ??= loadEntries();
+export async function collectTaskAttachmentContext(runId: string): Promise<TaskAttachmentContext | null> {
+  if (!RUN_ID_PATTERN.test(runId)) return null;
+  if (entriesRunId !== runId) {
+    // 换了运行：上一个运行的清单、「首轮多等一会」预算与摘录标记全部作废，
+    // 否则要么把别人的附件带过来，要么永远拿不到自己的。
+    resetTaskAttachmentContext();
+    entriesRunId = runId;
+  }
+  entriesPromise ??= loadEntries(runId);
   const entries = await entriesPromise;
   // 读取失败或列表为空时不缓存：失败要重试（否则整个页面会话都静默丢附件），
   // 空列表也可能是附件对话框稍后补传，下一轮重新拉取的成本只是一个 GET。
@@ -313,8 +312,12 @@ export async function collectTaskAttachmentContext(): Promise<TaskAttachmentCont
   };
 }
 
-/** 切换任务/页面时重置缓存（与 resetConversation 配套；当前按页面刷新自然重置）。 */
+/**
+ * 清掉附件上下文的全部页面态：对话换绑归属时由 agent-chat.configureConversation
+ * 调用；collectTaskAttachmentContext 发现 run 变了也会自动调用。
+ */
 export function resetTaskAttachmentContext(): void {
+  entriesRunId = null;
   entriesPromise = null;
   firstCollect = true;
   excerptInjectedNames.clear();

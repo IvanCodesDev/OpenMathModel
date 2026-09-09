@@ -34,7 +34,7 @@ export interface ConversationLogEntry {
   opening?: boolean;
   /** 随消息发送的附件名，恢复时重建气泡下的纸夹徽标。 */
   attachments?: string[];
-  /** 回复的执行轨迹（读取上下文/附件解析/难度路由/生成计时等真实过程）。 */
+  /** 回复的执行轨迹（附件解析/难度路由/运行控制回执等真实过程）。 */
   trace?: ConversationTraceRow[];
   /**
    * 回复的思考过程（推理型模型）：只用于恢复「已思考」回看盒，不回传模型
@@ -49,6 +49,12 @@ export interface ConversationLogEntry {
    */
   interrupted?: boolean;
   note?: string;
+  /**
+   * 服务端托管轮的 id 与用户评价（赞 / 踩）：只有由 entryFromTurn 映射来的条目才有，
+   * 回复右下角的评价按钮据此回显并回写；本机旧记录没有服务端实体，不带这两项。
+   */
+  turnId?: string;
+  feedback?: "up" | "down" | null;
 }
 
 /** 轨迹上限：行数与字段长度都收口（服务端 PATCH 与本机旧记录同一口径）。 */

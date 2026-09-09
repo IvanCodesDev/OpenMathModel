@@ -22,6 +22,14 @@ FULL_PROBLEMS_PATH = ROOT / "datasets" / "interim" / "github_zhanwen_mathmodel" 
 ARCHIVE_FULL_PROBLEMS_PATH = ROOT / "datasets" / "interim" / "full_problem_sources" / "problems.json"
 CPMCM_PAPER_FULLTEXT_PATH = ROOT / "datasets" / "interim" / "cpmcm_paper_fulltext" / "papers.json"
 MCM_PAPER_FULLTEXT_PATH = ROOT / "datasets" / "interim" / "mcm_paper_fulltext" / "papers.json"
+#: 第二批赛事的优秀论文：国赛、华数杯、亚太赛、MathorCup 与泰迪杯，各自由
+#: 专用 recipe 采集与解析，这里只做合并与赛题挂接。
+AWARD_PAPER_PATHS = (
+    ROOT / "datasets" / "interim" / "cumcm_paper_fulltext" / "papers.json",
+    ROOT / "datasets" / "interim" / "award_paper_bundles" / "papers.json",
+    ROOT / "datasets" / "interim" / "tipdm_award_papers" / "papers.json",
+    ROOT / "datasets" / "interim" / "community_award_papers" / "papers.json",
+)
 
 
 def strip_tags(value: str) -> str:
@@ -363,6 +371,51 @@ def apply_mcm_fulltext(papers: list[dict[str, Any]], problem_titles: dict[str, s
     return upgraded, len(remaining)
 
 
+#: 每份来源清单在发布层的 provenance 标注：合集来自主办方报名平台的公告附件，
+#: 泰迪杯取自主办方官网逐篇发布的 PDF，国赛论文只有固定提交的社区快照可用。
+AWARD_PAPER_SOURCE_STATUS = {
+    "github_personqianduixue_math_model": "community_repository_snapshot",
+    "github_community_award_papers": "community_repository_snapshot",
+    "tipdm_cup_official": "official_site_snapshot",
+}
+PUBLISHED_PAPER_FIELDS = (
+    "title", "record_type", "problem_code", "competition", "category", "year", "award",
+    "distinctions", "institution", "team_id", "models", "innovation", "summary",
+    "page_count", "source_id", "source_url", "full_text_url", "local_pdf_path",
+    "source_file_bytes", "source_sha256", "source_git_blob_sha",
+)
+
+
+def award_papers(problem_titles: dict[str, str]) -> list[dict[str, Any]]:
+    """Fold the per-competition award-paper indexes into publishable records.
+
+    赛题挂接只在赛题库真的收录了那道题时才建立：国赛论文可追溯到 1992 年，而完整
+    题面从 2015 年起才有，挂一个不存在的 problem_id 只会在详情页留下死链。
+    """
+    papers: list[dict[str, Any]] = []
+    for path in AWARD_PAPER_PATHS:
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Missing award-paper index: {path}. See datasets/README.md for the recipe that builds it."
+            )
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for paper_id, record in data["papers"].items():
+            published = {"id": paper_id}
+            published.update({key: record[key] for key in PUBLISHED_PAPER_FIELDS if key in record})
+            # 个别扫描件读不出页数，与其发布一个 0 页，不如让阅读器自己数。
+            if not published.get("page_count"):
+                published.pop("page_count", None)
+            problem_id = record.get("problem_id")
+            published["problem_id"] = problem_id if problem_id in problem_titles else None
+            published.setdefault("full_text_url", record.get("bundle_url"))
+            published["source_status"] = AWARD_PAPER_SOURCE_STATUS.get(
+                record["source_id"], "organiser_bundle_snapshot"
+            )
+            published["access_scope"] = "linked_content"
+            papers.append(published)
+    return papers
+
+
 def repository_full_problems() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not FULL_PROBLEMS_PATH.exists():
         raise FileNotFoundError(
@@ -401,6 +454,9 @@ def build() -> dict[str, Any]:
     print(f"CPMCM_FULLTEXT_ENRICHED {enriched_count}/{len(full_problem_data['papers'])}")
     upgraded_count, appended_count = apply_mcm_fulltext(papers, problem_titles)
     print(f"MCM_FULLTEXT_UPGRADED {upgraded_count} APPENDED {appended_count}")
+    second_wave = award_papers(problem_titles)
+    papers += second_wave
+    print(f"AWARD_PAPERS_APPENDED {len(second_wave)}")
     # 列表页按数组顺序渲染并标注“按年份从新到旧”；多来源拼接后统一排序兑现该承诺。
     papers.sort(key=lambda item: (-item["year"], item["problem_code"], str(item.get("team_id") or ""), item["id"]))
     latest_time = max(
@@ -410,9 +466,11 @@ def build() -> dict[str, Any]:
     )
     fingerprint_input = json.dumps({"problems": problems, "papers": papers}, ensure_ascii=False, sort_keys=True).encode("utf-8")
     version = hashlib.sha256(fingerprint_input).hexdigest()[:12]
+    # 来源数按实际出现的 source_id 现算：第二批论文接进来之后，写死的 9 已经不成立。
+    source_count = len({item["source_id"] for item in problems} | {item["source_id"] for item in papers})
     return {
         "schema_version": "1.0.0", "dataset_version": f"wave-a-{version}", "generated_at": latest_time,
-        "stats": {"problem_count": len(problems), "paper_count": len(papers), "source_count": 9},
+        "stats": {"problem_count": len(problems), "paper_count": len(papers), "source_count": source_count},
         "problems": problems, "papers": papers,
     }
 

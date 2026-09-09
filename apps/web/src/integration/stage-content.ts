@@ -861,7 +861,8 @@ function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
   };
 
   // 行结构与演示行同构（radio + 标题 + 三个摘要 + 展开箭头）：
-  // 网格模板是 6 列，少一个子项会让「主要风险」掉进最窄的列、行尾留空。
+  // CSS 按子项顺序摆位（第一行标题 / 核心方法 / 步骤数，第二行整行主要风险），
+  // 少一个子项会让「主要风险」跑到第一行、第二行空掉。
   list.replaceChildren(
     ...proposal.plans.map(plan => {
       const row = el("button", "focused-plan-row");
@@ -880,14 +881,16 @@ function renderModelPanel(root: HTMLElement, proposal: PlanProposal): void {
       const small = el("small", adopted ? "stage-plan-adopted" : "", role);
       if (adopted) small.dataset.stagePlanAdopted = decision.optionId;
       title.append(small);
-      // R1：行内摘要只放第一句，全文在下方方案详情（三行截断兜底仍在 CSS）
-      const [riskLead] = leadSentence(plan.risks[0] ?? "—", 48);
+      // R1：行内摘要只放第一句，全文在下方方案详情；风险独占第二行，单行省略兜底在 CSS
+      const [riskLead] = leadSentence(plan.risks[0] ?? "—", 90);
       const riskCell = el("span", "", `${t("主要风险")}：${riskLead}`);
       if (plan.risks[0]) riskCell.title = plan.risks.join("\n");
+      const methodCell = el("span", "", `${t("核心方法")}：${plan.name}`);
+      methodCell.title = plan.name;
       row.append(
         el("span", "plan-radio"),
         title,
-        el("span", "", `${t("核心方法")}：${plan.name}`),
+        methodCell,
         el("span", "", `${t("实验步骤")}：${plan.steps.length}`),
         riskCell,
         icon(selected ? "caret-up" : "caret-down"),
@@ -1506,6 +1509,8 @@ interface DraftBlock {
   element: HTMLElement;
   /** 归属大纲条目序号（正文标题/关键词行为 null），流式过程中用于同步大纲状态。 */
   outlineIndex: number | null;
+  /** 论文头部（标题 / 摘要 / 关键词）：分章直播从不推送这些块，终稿接管直播进度时据此对齐。 */
+  head?: boolean;
 }
 
 interface OutlineEntry {
@@ -1517,23 +1522,23 @@ interface OutlineEntry {
 function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries: OutlineEntry[] } {
   const blocks: DraftBlock[] = [];
   const entries: OutlineEntry[] = [];
-  blocks.push({ element: el("h1", "", draft.title), outlineIndex: null });
+  blocks.push({ element: el("h1", "", draft.title), outlineIndex: null, head: true });
   if (draft.abstract) {
     const abstractIndex = entries.length;
     entries.push({ href: "#section-abstract", label: t("摘要") });
     const heading = el("h2", "paper-abstract-heading", t("摘要"));
     heading.id = "section-abstract";
-    blocks.push({ element: heading, outlineIndex: abstractIndex });
-    blocks.push({ element: el("p", "paper-abstract", draft.abstract), outlineIndex: abstractIndex });
+    blocks.push({ element: heading, outlineIndex: abstractIndex, head: true });
+    blocks.push({ element: el("p", "paper-abstract", draft.abstract), outlineIndex: abstractIndex, head: true });
     if (draft.keywords.length) {
       const keywords = el("p", "paper-keywords");
       keywords.append(el("strong", "", `${t("关键词")}：`), document.createTextNode(draft.keywords.join("；")));
-      blocks.push({ element: keywords, outlineIndex: abstractIndex });
+      blocks.push({ element: keywords, outlineIndex: abstractIndex, head: true });
     }
   } else if (draft.keywords.length) {
     const keywords = el("p", "paper-keywords");
     keywords.append(el("strong", "", `${t("关键词")}：`), document.createTextNode(draft.keywords.join("；")));
-    blocks.push({ element: keywords, outlineIndex: null });
+    blocks.push({ element: keywords, outlineIndex: null, head: true });
   }
   // 真实图件：正文 `![图 N 标题](文件名)` 只在文件名命中 DocumentDraft.figures（本次运行
   // 采集到的图件、有产物 id）时解析成同源产物下载链接出图；其余图片语法保持纯文本
@@ -1546,9 +1551,20 @@ function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries
     blocks.push({ element: heading, outlineIndex });
     const body = el("div");
     body.innerHTML = renderMarkdown(section.content, { resolveImage });
+    wrapWideTables(body);
     [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
   });
   return { blocks, entries };
+}
+
+/** 正文表格套一层横向滚动容器：多列数字表的最小宽度常超过纸面，不套的话整张纸面
+ *  跟着出横向滚动条；套上后表格在自己的框里滚，纸面与其它段落纹丝不动。 */
+function wrapWideTables(scope: HTMLElement): void {
+  scope.querySelectorAll<HTMLTableElement>(":scope > table.md-table").forEach(table => {
+    const wrap = el("div", "md-table-wrap");
+    table.replaceWith(wrap);
+    wrap.append(table);
+  });
 }
 
 function rebuildPaperOutline(root: HTMLElement, entries: OutlineEntry[]): HTMLAnchorElement[] {
@@ -1620,132 +1636,234 @@ function refreshPaperWordCount(editor: HTMLElement): void {
   counter.textContent = `${count.toLocaleString()} 字`;
 }
 
-interface PaperStream {
-  cancel: () => void;
-  /** 立即整段放行余下内容并触发收尾（追加新章前对上一章调用）。 */
-  flush: () => void;
-}
+// ── 论文正文打字机：分章直播与终稿共用同一条队列 ────────────────────────────
+//
+// 「一个字一个字出现」是论文页的核心观感，但正文往往在用户停留于别的阶段面板时
+// 到达（分章事件与终稿投影都不挑时机）。旧实现只在编辑器当下可见时才播动画，
+// 藏在别的面板后面就整段直落——用户切回论文页看到的永远是「直接出现」。
+// 现在改成：内容先入队，编辑器不可见时暂停（低频探可见性），切回来才开始逐字
+// 上屏；多章排队按顺序播；节奏按积压量自适应；用户一开始编辑立即整段放行。
 
-const activePaperStreams = new WeakMap<HTMLElement, PaperStream>();
+const activePaperStreams = new WeakMap<HTMLElement, PaperTypewriter>();
 /** 每个（运行, 版本）只播一次流式动画：阶段间软切换来回不重播。 */
 const streamedDraftKeys = new Set<string>();
 /** 只对新鲜产出（论文刚写完）做流式呈现，重开历史任务时直接完整渲染。 */
 const STREAM_FRESH_WINDOW_MS = 10 * 60_000;
 
-interface StreamOptions {
-  /** true（默认）= 清空编辑器整篇播放；false = 追加模式（分章直播）。 */
-  replace?: boolean;
-  /** 播完后大纲高亮落点：first = 回到首项（整篇模式）；keep = 停在当前章。 */
-  activeOnSettle?: "first" | "keep";
+/** 打字节奏（字/秒）：积压越多越快、尾段放慢到逐字可辨；上限约每帧五字，仍看得出是在打字。 */
+const TYPING_MIN_CPS = 48;
+const TYPING_MAX_CPS = 320;
+/** 速度 = 积压字数 / 该系数（再夹到上下限之间）：一万五千字的终稿约一分半播完，单章半分钟上下。 */
+const TYPING_BACKLOG_DIVISOR = 24;
+/** 编辑器被别的阶段面板挡着时，按此间隔探一次可见性。 */
+const TYPING_HIDDEN_POLL_MS = 200;
+/** 从后台标签切回时两帧间隔可达数秒，不能一口气补上那么多字。 */
+const TYPING_MAX_FRAME_MS = 100;
+/** 打字过程中字数统计的刷新间隔（帧）：innerText 触发排版，不能每帧算。 */
+const TYPING_WORDCOUNT_EVERY = 30;
+
+interface TypingUnit { node: Text; full: string; }
+interface TypingBlock { block: DraftBlock; units: TypingUnit[]; }
+interface TypingJob {
+  blocks: TypingBlock[];
+  onSettled: () => void;
+  /** 播完后大纲高亮落点：first = 回到首项（整篇）；keep = 停在当前章（分章）。 */
+  activeOnSettle: "first" | "keep";
+  /** 轮到它时整段直落：SSE 重放的历史章节排在正在打字的章节之后，只保顺序不播动画。 */
+  instant: boolean;
 }
 
-/**
- * 把论文正文按打字机节奏渐进呈现：块按顺序入文、文本逐字浮现、大纲随章节
- * 完成打勾；用户一旦开始编辑立即整段放行，绝不吃掉输入。
- * 整篇模式（replace）用于定稿一次性到达；追加模式用于分章直播
- * （run.log 的 paper_section 事件逐章推送）。
- */
-function streamDraftIntoEditor(
-  editor: HTMLElement,
-  blocks: DraftBlock[],
-  links: HTMLAnchorElement[],
-  onSettled: () => void,
-  options: StreamOptions = {},
-): void {
-  const { replace = true, activeOnSettle = "first" } = options;
-  interface TypingUnit { node: Text; full: string; }
-  const plan = blocks.map(block => {
-    const walker = document.createTreeWalker(block.element, NodeFilter.SHOW_TEXT);
-    const units: TypingUnit[] = [];
-    while (walker.nextNode()) {
-      const node = walker.currentNode as Text;
-      units.push({ node, full: node.data });
-      node.data = "";
-    }
-    return { block, units };
-  });
-  const totalChars = plan.reduce(
-    (sum, item) => sum + item.units.reduce((n, unit) => n + unit.full.length, 0),
-    0,
-  );
-  // 全文约 8 秒播完：短文逐字可辨，长文自动加速，每帧至少 3 字。
-  const charsPerTick = Math.max(3, Math.ceil(totalChars / 500));
-  const caret = el("span", "editor-stream-caret");
-  caret.setAttribute("contenteditable", "false");
-  caret.setAttribute("aria-hidden", "true");
+interface EnqueueOptions {
+  activeOnSettle?: "first" | "keep";
+  instant?: boolean;
+  /** 开头这么多字不打、直接放出（仅对空队列有意义）：终稿接管分章直播时已看过的部分不重播。 */
+  skipChars?: number;
+}
 
-  if (replace) editor.replaceChildren();
-  editor.dataset.streaming = "true";
-  let blockIndex = 0;
-  let unitIndex = 0;
-  let timer = 0;
+class PaperTypewriter {
+  private readonly jobs: TypingJob[] = [];
+  private readonly caret: HTMLElement;
+  private blockIndex = 0;
+  private unitIndex = 0;
+  /** 时间预算换算成字数后的小数余量，跨帧累积保证平均速度准确。 */
+  private carry = 0;
+  private lastTick = 0;
+  private ticks = 0;
+  private frame = 0;
+  private hiddenTimer = 0;
+  private pendingChars = 0;
+  private revealedChars = 0;
+  private detached = false;
 
-  const finishSection = (index: number | null): void => {
-    if (index !== null) markOutlineDone(links[index]);
-  };
-  const activateSection = (index: number | null): void => {
-    if (index !== null) setOutlineActive(links, links[index]);
-  };
-  const settleActive = (): void => {
-    if (activeOnSettle === "first") setOutlineActive(links, links[0]);
-  };
-  const detach = (): void => {
-    window.clearInterval(timer);
-    caret.remove();
-    delete editor.dataset.streaming;
-    editor.removeEventListener("beforeinput", flush);
-    activePaperStreams.delete(editor);
-  };
-  /** 用户开始编辑（或下一章到达）时：余下内容立即整段放行，再交还控制权。 */
-  const flush = (): void => {
-    for (; blockIndex < plan.length; blockIndex += 1) {
-      const item = plan[blockIndex];
-      for (; unitIndex < item.units.length; unitIndex += 1) {
-        item.units[unitIndex].node.data = item.units[unitIndex].full;
+  constructor(private readonly editor: HTMLElement) {
+    this.caret = el("span", "editor-stream-caret");
+    this.caret.setAttribute("contenteditable", "false");
+    this.caret.setAttribute("aria-hidden", "true");
+    editor.dataset.streaming = "true";
+    editor.addEventListener("beforeinput", this.flush);
+  }
+
+  /** 还没上屏的字数（含排队章节）。 */
+  get pending(): number {
+    return this.pendingChars;
+  }
+
+  /** 已上屏的字数（逐字与直落都算）。 */
+  get revealed(): number {
+    return this.revealedChars;
+  }
+
+  enqueue(blocks: DraftBlock[], onSettled: () => void, options: EnqueueOptions = {}): void {
+    const typing = blocks.map(block => {
+      const walker = document.createTreeWalker(block.element, NodeFilter.SHOW_TEXT);
+      const units: TypingUnit[] = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        units.push({ node, full: node.data });
+        this.pendingChars += node.data.length;
+        node.data = "";
       }
-      unitIndex = 0;
-      if (!item.block.element.isConnected) editor.append(item.block.element);
-      finishSection(item.block.outlineIndex);
-    }
-    settleActive();
-    detach();
-    onSettled();
-  };
-  activePaperStreams.set(editor, { cancel: detach, flush });
-  editor.addEventListener("beforeinput", flush);
+      return { block, units };
+    });
+    this.jobs.push({
+      blocks: typing,
+      onSettled,
+      activeOnSettle: options.activeOnSettle ?? "keep",
+      instant: options.instant ?? false,
+    });
+    if (options.skipChars) this.advance(options.skipChars, false);
+    this.schedule();
+  }
 
-  timer = window.setInterval(() => {
-    // 跟随写入进度吸底；用户主动上滚查看时不打扰
-    const stick = editor.scrollHeight - editor.scrollTop - editor.clientHeight < 140;
-    let budget = charsPerTick;
-    while (budget > 0 && blockIndex < plan.length) {
-      const item = plan[blockIndex];
+  /** 用户开始编辑（beforeinput）：余下内容立即整段放行，再交还控制权，绝不吃掉输入。 */
+  readonly flush = (): void => {
+    this.advance(Number.POSITIVE_INFINITY, false);
+    this.detach();
+  };
+
+  /** 丢弃队列（正文即将被整体替换）；已上屏的部分原样留在编辑器里。 */
+  cancel(): void {
+    this.jobs.length = 0;
+    this.detach();
+  }
+
+  private outlineLinks(): HTMLAnchorElement[] {
+    // 分章直播过程中大纲会被按需补挂，链接必须现取而不是入队时快照
+    const outline = this.editor.closest(".editor-layout")?.querySelector(".outline");
+    return outline ? [...outline.querySelectorAll<HTMLAnchorElement>("a")] : [];
+  }
+
+  /** 按预算放出字符；预算耗尽前处理完的章节立即收尾。instant 章节不计预算。 */
+  private advance(budget: number, animate: boolean): void {
+    const editor = this.editor;
+    while (this.jobs.length) {
+      const job = this.jobs[0];
+      const item = job.blocks[this.blockIndex];
+      if (!item) {
+        this.jobs.shift();
+        this.blockIndex = 0;
+        this.unitIndex = 0;
+        if (job.activeOnSettle === "first") {
+          const links = this.outlineLinks();
+          setOutlineActive(links, links[0]);
+        }
+        job.onSettled();
+        continue;
+      }
+      if (budget <= 0 && !job.instant) break;
       if (!item.block.element.isConnected) {
-        item.block.element.classList.add("stream-in");
+        if (animate) item.block.element.classList.add("stream-in");
         editor.append(item.block.element);
-        item.block.element.insertAdjacentElement("afterend", caret);
-        activateSection(item.block.outlineIndex);
+        item.block.element.insertAdjacentElement("afterend", this.caret);
+        if (item.block.outlineIndex !== null) {
+          const links = this.outlineLinks();
+          setOutlineActive(links, links[item.block.outlineIndex]);
+        }
       }
-      const unit = item.units[unitIndex];
+      const unit = item.units[this.unitIndex];
       if (!unit) {
-        finishSection(item.block.outlineIndex);
-        blockIndex += 1;
-        unitIndex = 0;
+        if (item.block.outlineIndex !== null) markOutlineDone(this.outlineLinks()[item.block.outlineIndex]);
+        this.blockIndex += 1;
+        this.unitIndex = 0;
         continue;
       }
       const remaining = unit.full.length - unit.node.data.length;
-      const step = Math.min(budget, remaining);
+      const step = job.instant ? remaining : Math.min(budget, remaining);
       unit.node.data = unit.full.slice(0, unit.node.data.length + step);
       budget -= step;
-      if (unit.node.data.length >= unit.full.length) unitIndex += 1;
+      this.pendingChars -= step;
+      this.revealedChars += step;
+      if (unit.node.data.length >= unit.full.length) this.unitIndex += 1;
     }
+  }
+
+  private schedule(): void {
+    if (this.detached || this.frame || this.hiddenTimer) return;
+    this.frame = window.requestAnimationFrame(this.tick);
+  }
+
+  private readonly tick = (now: number): void => {
+    this.frame = 0;
+    if (this.detached) return;
+    const editor = this.editor;
+    if (editor.offsetParent === null) {
+      // 编辑器被别的阶段面板挡着：暂停，切回论文页再从当前位置继续，不追赶
+      this.lastTick = 0;
+      this.hiddenTimer = window.setTimeout(() => {
+        this.hiddenTimer = 0;
+        this.schedule();
+      }, TYPING_HIDDEN_POLL_MS);
+      return;
+    }
+    const elapsed = this.lastTick ? Math.min(now - this.lastTick, TYPING_MAX_FRAME_MS) : 16;
+    this.lastTick = now;
+    const cps = Math.min(TYPING_MAX_CPS, Math.max(TYPING_MIN_CPS, this.pendingChars / TYPING_BACKLOG_DIVISOR));
+    this.carry += (cps * elapsed) / 1000;
+    const budget = Math.floor(this.carry);
+    this.carry -= budget;
+    // 跟随写入进度吸底；用户主动上滚查看时不打扰
+    const stick = editor.scrollHeight - editor.scrollTop - editor.clientHeight < 140;
+    this.advance(budget, true);
     if (stick) editor.scrollTop = editor.scrollHeight;
-    if (blockIndex >= plan.length) {
-      settleActive();
-      detach();
-      onSettled();
+    this.ticks += 1;
+    if (this.ticks % TYPING_WORDCOUNT_EVERY === 0) refreshPaperWordCount(editor);
+    if (!this.jobs.length) {
+      this.detach();
+      return;
     }
-  }, 16);
+    this.schedule();
+  };
+
+  private detach(): void {
+    if (this.detached) return;
+    this.detached = true;
+    if (this.frame) window.cancelAnimationFrame(this.frame);
+    if (this.hiddenTimer) window.clearTimeout(this.hiddenTimer);
+    this.frame = 0;
+    this.hiddenTimer = 0;
+    this.caret.remove();
+    delete this.editor.dataset.streaming;
+    this.editor.removeEventListener("beforeinput", this.flush);
+    if (activePaperStreams.get(this.editor) === this) activePaperStreams.delete(this.editor);
+  }
+}
+
+/** 取编辑器上正在播的打字机，没有就新建一台。 */
+function typewriterFor(editor: HTMLElement): PaperTypewriter {
+  let typewriter = activePaperStreams.get(editor);
+  if (!typewriter) {
+    typewriter = new PaperTypewriter(editor);
+    activePaperStreams.set(editor, typewriter);
+  }
+  return typewriter;
+}
+
+/** 论文头部（标题 / 摘要 / 关键词）的字数：终稿接管直播进度时用来对齐偏移。 */
+function headChars(blocks: DraftBlock[]): number {
+  return blocks.reduce(
+    (sum, block) => (block.head ? sum + (block.element.textContent ?? "").length : sum),
+    0,
+  );
 }
 
 // ── 分章直播（run.log 的 paper_outline / paper_section 事件 → 编辑器实时上屏） ──
@@ -1781,6 +1899,7 @@ export function preparePaperOutline(
   }));
   const links = rebuildPaperOutline(root, entries);
   bindOutlineNavigation(editor, links);
+  activePaperStreams.get(editor)?.cancel();
   editor.replaceChildren();
   refreshPaperWordCount(editor);
 }
@@ -1825,16 +1944,19 @@ export function appendPaperSection(
   const blocks: DraftBlock[] = [{ element: heading, outlineIndex }];
   const body = el("div");
   body.innerHTML = renderMarkdown(payload.content);
+  wrapWideTables(body);
   [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
 
   const settle = (): void => {
     typesetMath(editor);
     refreshPaperWordCount(editor);
   };
-  // 上一章还在打字：先整段放行，直播永远按章节顺序推进
-  activePaperStreams.get(editor)?.flush();
-  if (animate && editor.offsetParent !== null && !reduceMotion()) {
-    streamDraftIntoEditor(editor, blocks, links, settle, { replace: false, activeOnSettle: "keep" });
+  const typed = animate && !reduceMotion();
+  if (typed || activePaperStreams.has(editor)) {
+    // 排进打字机队列：上一章还在打字时本章等它打完再开始，直播永远按章节顺序推进；
+    // 编辑器藏在别的面板后面时先攒着，用户切回论文页才开始逐字出现。
+    // 重放的历史章节若排在正在打字的章节之后，轮到时整段直落（只保顺序）。
+    typewriterFor(editor).enqueue(blocks, settle, { activeOnSettle: "keep", instant: !typed });
     return;
   }
   blocks.forEach(block => editor.append(block.element));
@@ -1850,7 +1972,6 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
   if (editor.dataset.stageDraftVersion === String(draft.version)) return;
   if (hasUserPaperDraft()) return;
   editor.dataset.stageDraftVersion = String(draft.version);
-  activePaperStreams.get(editor)?.cancel();
 
   const { blocks, entries } = buildDraftBlocks(draft);
   const links = rebuildPaperOutline(root, entries);
@@ -1861,24 +1982,35 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
     refreshPaperWordCount(editor);
   };
 
-  // 分章直播已经把各章打字上屏：终稿只需一次性补齐标题/摘要/关键词并对齐
-  // 全文（内容与直播一致），不再重播整篇动画。
+  // 分章直播的进度：直播是否已把章节送进编辑器、其中还有多少字没打出来
   const live = livePaperState.get(editor);
   const liveRendered = Boolean(live && live.rendered.size > 0);
   livePaperState.delete(editor);
+  const typewriter = activePaperStreams.get(editor);
+  const livePending = typewriter?.pending ?? 0;
+  const liveRevealed = typewriter?.revealed ?? 0;
+  typewriter?.cancel();
 
   const streamKey = `${draft.run_id}:${draft.version}`;
   const updatedMs = new Date(draft.updated_at).getTime();
   const fresh = Number.isFinite(updatedMs) && Date.now() - updatedMs < STREAM_FRESH_WINDOW_MS;
-  const animate = fresh
-    && !liveRendered
-    && !streamedDraftKeys.has(streamKey)
-    && editor.offsetParent !== null
-    && !reduceMotion();
+  const motion = !reduceMotion();
+  let typed: boolean;
+  let skipChars = 0;
+  if (liveRendered) {
+    // 直播章节全打完：静默换成终稿（正文一致，只是补齐标题 / 摘要 / 关键词与图件）。
+    // 还有章节没打完（多半是用户一直没停在论文页）：终稿接着打——头部与已看过的
+    // 部分直接放出，从直播停下的位置继续逐字出现，不重播、也不整篇直落。
+    typed = livePending > 0 && motion;
+    if (typed && liveRevealed > 0) skipChars = headChars(blocks) + liveRevealed;
+  } else {
+    typed = fresh && !streamedDraftKeys.has(streamKey) && motion;
+  }
   streamedDraftKeys.add(streamKey);
 
-  if (animate) {
-    streamDraftIntoEditor(editor, blocks, links, settle);
+  editor.replaceChildren();
+  if (typed) {
+    typewriterFor(editor).enqueue(blocks, settle, { activeOnSettle: "first", skipChars });
     return;
   }
   editor.replaceChildren(...blocks.map(block => block.element));

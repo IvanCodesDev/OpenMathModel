@@ -10,6 +10,10 @@ import "@phosphor-icons/web/regular";
 import "@phosphor-icons/web/fill";
 // 建模工作台右侧文档区的西文/数字字体（astryx neutral 主题基线）；同样随包自托管。
 import "@fontsource-variable/figtree";
+// 代码块与行内代码的等宽字体：只带 latin 子集的 400 / 500 两个字重（各约 21 KB woff2），
+// 中文注释按字体栈回落系统字体。样式表里早就写着这个名字，此前一直没有随包发布。
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-500.css";
 import "./styles.css";
 import "./workflow-refresh.css";
 import "./attachments/attachments.css";

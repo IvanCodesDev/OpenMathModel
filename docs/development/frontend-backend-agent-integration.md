@@ -103,6 +103,7 @@ project_id? / run_request_token?
 - `agent-chat.ts` 的 `sendConversationTurn({ attachmentContext })` 只把上下文块并入请求内容，不进气泡展示；用户气泡下方以纸夹徽标展示附件名。发送成功后清空托盘，失败保留以便重试。
 - §2.4 的单模态提醒在对话框内同样生效。首页新建任务的附件仍走 §2.2 上传建产物链路，两条链路互不影响。
 - **任务附件同样进入对话**：`attachments/task-attachment-context.ts` 读取工作台 `artifacts` 中无 `producer_node` 的 READY 产物，取 `GET /artifacts/{id}/text` 权威正文（与随消息附件同预算），按解析就绪进度逐轮并入运行页对话（含开场分析）；发送成功才标记已注入，未就绪的附件在上下文中如实标注「仍在本机解析中」。图片/扫描件的解析全部发生在本机 API 进程（可选 VL），不出网。
+- **任务附件只属于对话绑定的运行（2026-09-07 修）**：`sendConversationTurn` 仅在当前归属是 `run_…` 时调用 `collectTaskAttachmentContext(runId)`，run id 显式传入；首页对话（`chat_…`）与演示态不带任务附件。清单缓存按 run 分键，`configureConversation` 换绑时 `resetTaskAttachmentContext()`。此前该模块自己从标签页级 `sessionStorage.openmathmodel.activeRunId` 取身份，首页新开对话会把上一个任务页的附件正文并进第一条消息（见变更日志 2026-09-07 第二条）。
 
 ## 3. 工作台契约
 
@@ -270,10 +271,11 @@ sequenceDiagram
 | `GET` | `/api/chat/turns/{id}/events?after=N` | SSE：`id: <seq>` / `data: {...,"seq"}`；事件与 `/api/chat` 同形（`meta → delta*/reasoning* → done | error`），`: ping` 心跳；非直播中的轮只回一个合成终态事件 |
 | `POST` | `/api/chat/turns/{id}/stop` | 停止生成，半截正文保留（`stopped`） |
 | `GET` / `PATCH` | `/api/chat/turns/{id}` | 轮视图 / 补写页面侧执行轨迹行 `{trace}` |
+| `PUT` | `/api/chat/turns/{id}/feedback` | 回复右下角的赞 / 踩：`{feedback: "up" | "down" | null}` 整体置值（null 撤回），幂等，只认本人的轮；返回 `{turn}`（2026-09-07） |
 | `GET` | `/api/chat/scopes/{scope}/turns` | 该归属全部轮（按时间；`running` 的带半截 `reply/reasoning` 与 `last_seq`） |
 | `DELETE` | `/api/chat/scopes/{scope}` | 删该归属全部轮，运行中的先停 |
 
-轮视图字段：`id, scope_id, status(running|completed|failed|stopped|interrupted), opening, text, attachments, reply, reasoning, meta{host,model,route,usage,elapsed_ms,error?}, error{code,message}?, trace, last_seq, live, persisted, created_at, updated_at, ended_at`。
+轮视图字段：`id, scope_id, status(running|completed|failed|stopped|interrupted), opening, text, attachments, reply, reasoning, meta{host,model,route,usage,elapsed_ms,error?}, error{code,message}?, trace, feedback(up|down|null), last_seq, live, persisted, created_at, updated_at, ended_at`。
 
 服务端行为：正文/思考每秒批量回写库；终态后事件缓冲保留 10 分钟供续接；`stop` 立即定格并关闭上游连接；进程启动时把遗留的 `running` 标成 `interrupted`（服务重启是唯一会中断生成的情形）；用量记账只在正常完成时发生。
 
@@ -945,6 +947,122 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 - 不动：受保护入口、路由、DOM 槽位类名、`/actions` 与轮视图契约（`action` 事件形状不变）、刷新重进路径（历史事件仍回放到首气泡、对话轮在其后重建）。
 
 当日执行并通过：`pytest backend/api/tests/test_run_control.py` 29 项；`npm run check`；`npm run build`（index 745.58 kB）；`node --test "src/**/*.test.mjs"` 137/137。浏览器验收待用户（本环境无浏览器）：失败态回一句让运行继续的话 → 只有**一个** Agent 气泡：轨迹行「已重试阶段 · 实验运行」→ 简短交接回复（不再自己算题）→ 复制按钮 → 「收起执行步骤」+ 第二次尝试的步骤在同一气泡里往下走；点折叠头只收起步骤区、回复轨迹行不受影响；「已记录补充要求…」为一行叙述、无 JSON 展开；再发一条消息后新的步骤落到新回复块里。已知但未动：首气泡封口后（题意解析完成）没有对话时，后续阶段的步骤仍按既有设计另起一个「收起执行步骤」轨迹块，与首气泡相邻——属 2026-08-21 起的既有形态，如需一并合并再议。
+
+### 2026-09-07 报障修复：首页新开对话「延续」了上一个任务（任务附件串台）
+
+用户从任务「机器人竞技攻击策略优化」页回到首页，新开对话只问了一句「今天是什么日子」，Agent 却回「您上传的是 B 题：机器人竞技策略的优化问题，我已经读取并梳理了题目内容」并开始分解问题。
+
+根因不在服务端隔离（`chat_…` 归属按 user 隔离、不注入任何运行上下文；对话历史也已由 `configureConversation` 换绑清空），而在前端拼上下文：`sendConversationTurn` 对**任何归属**都调用任务附件收集器，而 `task-attachment-context.ts` 判断「当前任务是谁」不看对话绑定的归属，读的是 URL `run_id`、没有则退回**标签页级**的 `sessionStorage.openmathmodel.activeRunId`——这个键在每次打开任务页时写入、只在任务被删 / 404 时清。首页没有 `run_id`，于是拿着上一个任务的 run 拉 `/workspace` 的上传附件，把题面 PDF 全文以「用户为本任务上传了附件，内容如下：【任务附件：…】」并进了新对话的第一条消息。连带一个缓存缺陷：附件清单缓存 `entriesPromise` 模块级、不按 run 分键，`resetTaskAttachmentContext()` 定义了但无人调用——同一标签页从任务 A 切到任务 B 不刷新时，B 的对话要么带上 A 的附件、要么（A 的都已注入过时）永远拿不到 B 自己的附件。
+
+- **前端** `attachments/task-attachment-context.ts`：`collectTaskAttachmentContext(runId)` 改为显式接收对话绑定的运行，不再读 URL / sessionStorage 猜身份（删 `activeRunId()` 与 `ACTIVE_RUN_KEY`）；不是 `run_…` 直接返回 null 且不发请求；清单缓存记 `entriesRunId`，run 变了整套状态（清单 / 首轮等待预算 / 摘录标记）自动作废。`integration/agent-chat.ts`：只在 `turnScope` 是 `run_…` 时收集任务附件；`configureConversation` 换绑时调用 `resetTaskAttachmentContext()`。新增 `attachments/task-attachment-context.test.mjs` 3 项（非运行归属不产生附件也不读残留身份；换运行清单作废、切回重新并入；摘录兜底按运行隔离）。
+- 不动：`taskGoal()` 在**无归属**（演示态）时读全局 `openmathmodelPrompt` 的既有兜底——有归属时本就只认 `scopeGoal`，首页对话不受影响；服务端 `CHAT_SYSTEM_PROMPT` 未加当前日期（「今天是什么日子」答成 5 月 7 日是模型不知道日期，用户暂不要求改）。
+
+当日执行并通过：`npm run check`；`npm run build`（index 751.02 kB）；`node --test "src/**/*.test.mjs"` 145/146——唯一失败项 `paper-figures.test.mjs` 读的 `packages/contracts/fixtures/v1/valid/document-draft.4.json` 正被另一条切片线程改动中，与本修复无关。浏览器验收待用户：从任意任务页回首页新开对话问一句无关的话，回复不应提到该任务的附件 / 题面；任务页对话仍能在开场分析与追问里看到自己的附件；同一标签页从任务 A 切到任务 B（不刷新）追问时，B 的回复引用的是 B 的附件。
+
+### 2026-09-07 报障修复：首页对话的回复没有复制按钮；回复右下角新增赞 / 踩
+
+用户在首页对话里看不到回复右下角的复制按钮，以为是回归。核对代码与 `git log`：复制按钮（`appendReplyActions`）自 2026-08-13 起只挂在任务页的回复块上（`legacy/openmathmodel-ui.ts`），首页对话的回复由 `integration/home-chat.ts` 渲染，从未挂过操作区——不是丢了，是首页从来没有。顺带按用户要求加评价按钮；用户拍板：赞 + 踩一对、落服务端对话轮、首页与任务页都加。
+
+- **后端**：`chat_turns.feedback`（`String(8)` 可空：`up` / `down` / NULL）—— ORM + Alembic `0020_chat_turn_feedback`（SQLite 开发库由 `_add_missing_sqlite_columns` 自动补列）；`ChatTurnHub.set_feedback` 与 `set_trace` 同一套落点（内存里的轮先改内存再回写，否则直接改库行）；`PUT /api/chat/turns/{id}/feedback`（`ChatTurnFeedbackRequest{feedback: up|down|null}`，非法值 422，别人的轮 404）；轮视图（内存快照 / 库行）多出 `feedback`。`test_chat_turns.py` +3：置值 / 改评 / 撤回三处一致且不碰正文与轨迹；内存缓冲已回收只剩库行的轮也能评；非本人 404。OpenAPI 基线随之重导（+1 路径、+1 schema）。
+- **前端**：新增 `integration/reply-actions.ts`——两页共用的操作区（复制 + 赞 + 踩），紧跟 `.analysis-copy` 之后插入；纯逻辑（`replyActionsMarkup` / `nextFeedback` / `createFeedbackController`：先按下再落库、失败退回原状并 toast、落库期间的点击忽略、以服务端确认值为准）与 DOM 挂载（`mountReplyActions`）分开，`reply-actions.test.mjs` 4 项覆盖前者。没有服务端轮 id 的回复（本机旧记录、无状态通道）只显示复制——评价没有落点就不摆出来。`legacy/openmathmodel-ui.ts` 的 `appendReplyActions` 改为委托该模块，四处调用（重建追问 / 重建开场 / 续接直播 / 首发）都把轮 id 与已有评价传进去；`home-chat.ts` 的 `presentReply` 收尾与 `appendSettledReply` 重建同样挂上。`chat-turns-api.ts`：`ChatTurnView.feedback?` + `setChatTurnFeedback`；`agent-chat.ts` `entryFromTurn` 的条目带 `turnId` / `feedback`（`ConversationLogEntry` 新增两个可选字段，只由服务端轮映射产生，本机旧记录不带）。`styles.css`：`.reply-action-button[aria-pressed="true"]` 按下态（实心图标 + 深色，含暗色主题）；`en-US.ts` +3 词条。
+- 不动：受保护入口、页面结构与路由；`.reply-actions` 位置与既有复制交互不变。
+
+当日执行并通过：`pytest backend/api/tests` 427 passed / 2 skipped；`export_openapi.py --check` 重导后一致；`npm run check`；`npm run build`（index 753.18 kB）；`node --test "src/**/*.test.mjs"` 150/150。浏览器验收待用户：首页对话与任务页的每条已完成回复右下角都有「复制 · 赞 · 踩」三颗按钮；点赞后图标实心、刷新 / 重进仍保持；再点一次撤回、点另一个改评价；后端不可达时按钮退回原状并提示「反馈保存失败」。
+
+### 2026-09-07 报障修复：过程行展开无限高；「一切页任务就失败」的真实原因
+
+用户两条报障：（1）活动流里「深度思考 · 实验执行」等小标题下的盒子展开后高度无限，要和聊天思考块一样限高、内部滚动；（2）明明还在思考中，一退出建模页 / 切别的对话，运行就变成「执行失败」。
+
+（1）是既有设计的有意选择（`workflow-refresh.css` 原注释「展开详情是用户主动要读全文：内容多长就多高」），按用户要求改掉：`.stream-detail pre` 统一 `max-height: min(260px, 40vh) + overflow: auto`（首版取聊天思考块的 380px，用户复验后要求再矮一点，压到约 10 行），细滚动条贴容器底色；生成中的实时区仍是 220px 矮窗吸底。覆盖思考 / 阶段产出 / 沙盒执行 / `ws_list`·`env_probe` 原始日志 / 回复轨迹行，前端零逻辑改动。
+
+（2）查库复盘 `run_4c9db02321d344c8998ab9a0aa805619`，**与切页无关**——前端切页只关 SSE、中止本页 fetch，服务端 `cancel_run` / `pause_run` 只由显式动作触发；真实链路是两件事叠加：
+
+- 开发者以 `uvicorn omm_api.asgi:app --reload …` 在 `backend/api` 起 API 却没加 `--reload-dir`（README 早已标注「必带」）：watchfiles 默认监视 cwd 下全部 `*.py`，沙盒第一次 `python_run` 写出 `data/workspaces/<run>/steps/<step>/main.py`（21:49:45）即触发重载，18 秒后新进程的 `heal_interrupted` 把在途步骤判成 `interrupted: executor lost before completion`（TRANSIENT）——页面上就是「深度思考 · 实验执行（本次调用中断）18s」。这种配置下实验阶段每次尝试都会在第一次 python_run 后被打断，永远跑不完。
+- 第 2 次尝试里 DeepSeek 实验模型（`deepseek-v4-flash-vision-exp`）两次把完整的 `{"tool": "python_run", …}` 信封写进 `reasoning_content`、`content` 为空（同一运行五次沙盒调用有三次如此），`chat_text` 原样把空串交给内环 → 「输出未通过结构校验」修复梯 → 仍为空 → `experiment sandbox failed … 0 run(s): 尚未用 python_run 运行任何代码`，运行 FAILED。
+
+改动：
+
+- **后端** `llm.py`：新增 `salvage_answer_from_reasoning`——正文为空且思考以 `}` 收尾时，从最后一个 `}` 往前找第一个能把尾巴整体解析成 JSON 对象的 `{`（容忍末尾 ``` 围栏），`_account_and_emit` 以之为答案返回并在 `llm_call` 事件打 `answer_from_reasoning: true` 审计标记、日志 warning；正文非空时思考一字不掺。`engine_glue.advance_run`：`heal_interrupted` 真修复到步骤时调用 `_note_executor_restart`——落 `run.log{kind:"executor_restarted", message:"后端进程在「X」执行中途重启，进行中的模型调用被打断；已自动作为第 N 次尝试重跑该阶段"}` 并在 omm.engine 日志给出 `--reload-dir` 修正命令。新增 `tests/test_llm_reasoning_salvage.py` 8 项、`tests/test_executor_restart_note.py` 2 项（用 BaseException 穿透推进链复现悬挂 RUNNING 步骤；断言叙述事件落在 `step.failed` 之后、第 2 次 `step.started` 之前，正常推进零叙述）。
+- **前端** `modeling-workspace-controller.ts`：`executor_restarted` 并入「有现成人话 message → 叙述行」分支，不落原始 JSON 兜底。
+- **工具链**：新增 `tools/dev-api.mjs` 与根 `npm run dev:api`——README「手动双终端」那条命令的封装（`--reload-dir backend/api/omm_api --reload-dir agents --timeout-graceful-shutdown 5`），附加参数透传 uvicorn；两份 README 的手动命令上方都改为先推荐它。
+- 不动：受保护入口、路由、DOM 槽位；`heal_interrupted` 语义（仍然失败重跑）；沙盒工作区位置。
+
+当日执行并通过：`pytest backend/api/tests` 435 passed / 2 skipped / 1 deselected（唯一剔除项 `test_stage_outputs.py::test_references_projection_…` 依赖正被另一条切片线程改动中的 `stage_outputs.py`，与本修复无关）；`npm run check`；`npm run build`（index 755.67 kB）；`node --test "src/**/*.test.mjs"` 150/150；`npm run dev:api -- --port 8011` 实机启动日志 `Will watch for changes in these directories: [agents, backend/api/omm_api]`、`/api/health` ok。浏览器验收待用户（本环境无浏览器）：任务页展开任意「深度思考 / 阶段产出 / 已在沙箱执行实验代码 / ws_list」行，盒子最高约 260px（约 10 行）、内部出现细滚动条、对话不再被推走；用 `npm run dev:api` 重启 API 后重跑实验阶段，python_run 之后不再出现「本次调用中断」；若仍以旧命令启动，活动流会在中断行下方补一句「后端进程在「实验运行」执行中途重启…」说明原因。
+
+### 2026-09-07 报障修复：对话里说「重试」后新进度只在页面顶端；黑色主操作贴着下一条用户气泡
+
+用户截图：在对话里让 Agent 重试（ADR-0018），回复「已重试阶段 · 实验运行」落在底部，但重试后的 ws_list / env_probe / 「深度思考 · 实验执行 1m 8s」全在页面顶端的首气泡里，底部看不到任何动静，得往上翻几屏才找到；另外首气泡末尾的黑色「Agent 正在执行」几乎贴着下一条用户气泡。
+
+根因：实时事件自 2026-08-21 起已经按「首气泡封口后流向对话末尾」排布（`tailTraceHost`），但**重进 / 整页导航**（切阶段页、切别的任务再回来）时 `hydrateHistory` 回放的历史事件一律落回首气泡（`resolveStreamHost` 的 replay 分支），而对话轮由 `omm:conversation-restore` 重建在其后——重试是在对话里触发的，用户随后切页几乎是必然的，于是每次回来都是「进度在顶、对话在底」。阶段页左栏（`.focused-agent-scroll`）更进一步：`resolveStreamHost` 只认 `.chat-scroll`，那里连实时事件都一律堆在摘要下方。间距：`.user-message` 只有 4px 上边距，Agent 块 → 用户气泡之间没有任何规则补齐（反向的用户气泡 → Agent 回复是 24px）。
+
+- **前端** `integration/modeling-workspace-controller.ts`：`AgentStreamState` 新增 `replayAtMs`（回放中这条事件的服务端时间）；新增 `historyTraceHost(scroll, atMs)`——找最后一条 `data-turn-at` 不晚于事件时间的用户气泡，事件写进它紧随的回复块内部的运行步骤区（`replyRunTraceHost`，与实时到达时同一落点），早于全部追问的仍落回首气泡；`conversationScroll` 同时认 `.chat-scroll` 与 `.focused-agent-scroll`；`liveEventsFlowToTail`：总览页沿用「首气泡封口」判定，阶段页左栏在计划揭示且**已有对话**时才把实时事件排到末尾（没有对话时保持「摘要 → 步骤 → 主操作」，不为一条步骤另立署名块）；`tailTraceHost` 的署名改从所在 `.chat-pane` 里克隆（阶段页取面板顶部的 Agent 署名）。`legacy/openmathmodel-ui.ts`：`appendRestoredUserBubble` 多收 `createdAt`，服务端轮重建（含在途轮续接）时写 `data-turn-at`；本机旧记录无服务端时间，不带标记、仍在所有轮之前。
+- **样式** `workflow-refresh.css` revision 40：`.chat-scroll .assistant-block + .user-message`、`.focused-agent-scroll .assistant-block + .user-message`、`.focused-agent-scroll [data-agent-cta] + .user-message` 补 24px 上间距，与「用户气泡 → Agent 回复」同一节奏；首页对话线程自带 `.assistant-block` 下边距，不受影响。
+- 不动：受保护入口、路由、DOM 槽位；实时事件在总览页的既有落点；`step.*` 仍不进活动流。
+
+当日执行并通过：`npm run check`；`npm run build`（index 756.49 kB）；`node --test "src/**/*.test.mjs"` 150/150。浏览器验收待用户（本环境无浏览器）：任务页对话里说「重试」→ 切到实验页再切回（或刷新）→ 重试后的 ws_list / env_probe / 深度思考行应出现在「已重试阶段 · 实验运行」那条回复的下方（「收起执行步骤」折叠头之后），页面停在底部即可看到，首气泡里只剩重试之前的轨迹；阶段页左栏有对话时新步骤同样排在最后一条回复之下、没有对话时仍在摘要下方；首气泡黑色主操作与下一条用户气泡之间约 24px。
+
+### 2026-09-07 报障修复：任务总览页的「前往 X」主操作也在页面顶端，得往上翻才够得着
+
+同一条报障的延伸：首气泡末尾那颗黑色主操作（`[data-agent-cta]`，总览页是「前往实验与验证」这类跳转、阶段页左栏是重试 / 确认方案）随首气泡一起被对话推到几屏之上。第一版把它镜像成一枚小药丸放进输入框上方「执行计划」面板的头部，用户否决（位置不好看）——**要的是和执行进度一样，跟到最新一条对话的最下面**。镜像方案已整体撤回，改为搬按钮本体：
+
+- **前端** `integration/modeling-workspace-controller.ts`：新增 `followConversationTail(root)`——对话区里最后一条 `.assistant-block.follow-up-reply`（回复块或轨迹块）存在时，把审批选项列表（`renderApprovalOptions` 摆在按钮前面的 `[data-approval-options]`）与按钮一起 `append` 到它的末尾；没有对话时退回原位。搬的是按钮本体：文案、禁用态、`onClick` 处理与幂等 token 全部沿用，不存在两处分叉。原位留一个隐藏占位 `[data-agent-cta-home]`（放在按钮之后而不是之前——`renderApprovalOptions` 靠 `cta.previousElementSibling` 找已有选项，前面多个占位会让它每次刷新再建一份），块被移除时按钮退回占位、绝不随块消失。触发点三处：`renderAgent`（每次快照刷新，选项列表刚摆好一起搬）、`streamAppend` / `appendGrouped`（`replyRunTraceHost` 在尾部回复块末尾新建步骤区会排到按钮之后，追加后把按钮重新压到最后）、对话区直接子节点的 `MutationObserver`（用户新发一轮由页面层直接写进对话区，控制器没有回调可接；只看直接子节点，按钮搬进块内是孙节点变化不会触发自己；`cleanup` 里 `disconnect`）。演示夹具（`[data-demo-only]`）里的 CTA 不动。
+- **样式** `workflow-refresh.css` revision 41：`.follow-up-reply > .running-live-cta / .focused-stage-cta` 12px 上间距；紧跟 `.agent-stream`（自带 10px 下边距）时 2px、紧跟 `.approval-options`（自带 12px）时 0，与它在首气泡里的间距一致。revision 40 的「Agent 块 → 用户气泡 24px」补一条 `[data-agent-cta-home] + .user-message`（阶段页左栏按钮搬走后占位顶替它的位置）。
+- 撤回：`task-todo-panel.ts` 的 `.todo-head-row` / `.todo-action` / `renderTaskTodoAction` 与对应样式、控制器里的镜像同步与 `[data-todo-action]` 点击分支——面板恢复原样。
+- 不动：按钮的动作语义、审批选项列表的渲染与滚入视野、受保护入口与 DOM 槽位。
+
+当日执行并通过：`npm run check`；`npm run build`（index 757.40 kB）；`node --test "src/**/*.test.mjs"` 150/150。浏览器验收待用户（本环境无浏览器）：任务总览页对话拉长后，黑色「前往实验与验证」应出现在最后一条 Agent 回复的最下方（复制 / 赞 / 踩那一行或「收起执行步骤」步骤区之后），再发一条消息它跟到新回复的下方，首气泡末尾不再有按钮；阶段页左栏同理（失败态「重试当前阶段」、待确认「确认 Agent 当前方案并继续」及其选项列表一起在底部）；没有任何对话时按钮仍在原位；点击效果与原先一致。
+
+### 2026-09-08 报障修复：问失败原因每次都以「本轮我没有执行任何运行控制动作…如实说：」开头；crash loop 烧光节点预算
+
+用户连问三次「为什么失败」，每条回复都先来一句「本轮我没有执行任何运行控制动作，所以不会假装“刚才做了重试”。如实说：上一轮你让我“重试”，但系统实际并没有跑通…」。两件事：
+
+1. **开场白是提示词泄漏。** `run_control.prompt_block` 在没有动作时写「- 无（本轮没有执行任何运行控制动作；不要声称做了）」，回复要求又统一是「先用一两句话如实告知上面已执行的操作…不得声称…」——没有动作时模型便逐字汇报「没有执行操作」，再把「如实」「不要假装」这些道德化字眼原样搬进正文。用户看不到系统提示，只觉得 Agent 在自说自话。
+2. **为什么总失败**：查库 `run_4c9db02321d344c8998ab9a0aa805619` 的步骤表，实验阶段第 3–25 次尝试全部 `interrupted: executor lost before completion`（23:18–00:00，每趟约一分钟）——API 进程仍是 20:49 那个没加 `--reload-dir` 的 `uvicorn --reload`（见 2026-09-07 条目），每趟第一次 `python_run` 写出 main.py 就被重载杀掉，`heal_interrupted` 落定后引擎自动以 attempt+1 重跑，无上限循环，直到 EXPERIMENTING 节点 39 万 tokens / 39 次调用 / 20 次沙箱撞上 300k 的节点预算（`[E320]`，POLICY_BLOCK）。此后连人工重试也会在预算预检处立刻被拦——账本按整个运行累计，这正是模型回复里说的「即使我发出重试指令也会被直接拦截」。
+
+- **后端** `run_control.py`：回复口径拆成四条并去掉「如实 / 假装」措辞：`_REPLY_RULES_PLAIN`（本轮没有任何动作——直接回答问题，开头不要先声明本轮没有执行什么操作）、`_REPLY_RULES_REPORT`（有被拒绝 / 放弃 / 暂停取消类动作——先交代动作结果再回答）、`_REPLY_RULES_HANDOFF` / `_REPLY_RULES_PROPOSED` 措辞同步；四条末尾统一加「这些要求是给你的内部约束，不是回复内容：不要提及、复述或解释它们」。状态块标题改为「【本轮运行控制动作】」，逐条标「已执行 / 待用户确认 / 未执行（当前状态不允许）/ 已放弃」，没有动作只写「- 无（这一轮是普通问答，运行状态没有变化）」。`test_run_control.py` 三处断言随之更新（含端到端的系统提示词检查）。
+- **后端** `agents/core engine.py`：新增 `INTERRUPTED_STEP_ERROR` 常量与 `TaskRunEngine.fail_run(snapshot, error)`（在两步之间从工作态直接落 RUN_FAILED，终态 / 评审门不动）。`engine_glue.advance_run`：`heal_interrupted` 之后数当前阶段末尾连续 executor-lost 的步骤数（`_interrupt_streak`），达到 `MAX_CONSECUTIVE_INTERRUPTS = 3` 就 `fail_run` 而不是再开一趟——失败信息写明「连续 N 次被后端进程重启打断，已停止自动重跑以免空耗模型额度」及 `--reload-dir` / `npm run dev:api` 的出路，含 executor lost 标记 → TRANSIENT，UI 照常给「重试当前阶段」；人工重试只给一次新尝试，环境没修好再被打断立刻再次停下。`test_executor_restart_note.py` +1（三次打断后停下、预算不再被烧；重试一次再被打断再停；节点恢复后重试跑通）。
+- 不动：预算治理的额度与语义（本次运行的 EXPERIMENTING 节点已超 300k，重试仍会被 E320 拦下——需启动 API 前设 `OMM_NODE_MAX_TOKENS` 提高上限，或新建任务）；对话控制面的动作判定与执行。
+
+当日执行并通过：`pytest backend/api/tests` 440 passed / 2 skipped / 1 deselected（同一条被另一会话改动中的 `stage_outputs` 用例）；`pytest agents/core backend/worker` 169 passed。浏览器验收待用户：在失败的任务里问「为什么失败」，回复应直接从原因说起，不再有「本轮我没有执行任何运行控制动作 / 如实说」开场；让 API 反复重启的环境下，实验阶段最多连续 3 趟被打断即停在 FAILED，失败信息里能看到 `--reload-dir` 的提示。
+
+### 2026-09-08 拍板：四项资源预算默认取消上限
+
+上一条的收尾是「不动：预算治理的额度与语义」，用户看到实验阶段又被 `[E320]` 拦下后拍板推翻——**默认不要上限**。这次改的是默认值与"无上限"这件事能不能被表达，不是把闸门删掉。
+
+改的理由（一句话：保护弱、副作用重）：额度原本挡的失控是「进程反复重启 → 阶段无上限重跑」，那条已由上一条的 `MAX_CONSECUTIVE_INTERRUPTS = 3` 在源头掐断，不再需要拿钱包当刹车；而额度一旦烧光是**整个运行不可逆地卡死**——账本按 run 累计、预检在调用之前，人工点「重试当前阶段」也会立刻被拦，用户只能弃掉这个 run 重开（2026-09-07 的 `run_4c9db023…` 正是如此）。
+
+- **harness** `budget.py`：新增一等值 `UNLIMITED`（= `math.inf`）与 `is_unlimited()`，四个维度（run tokens / 调用次数 / 沙箱次数 / 墙钟）以及节点 tokens 在无上限时跳过越线检查，**账本照记**——报告与错误上下文里的用量始终是真数。取 `inf` 而不是 `-1` 之类的负数哨兵：下游有 `budgets.max_sandbox_runs < 1`（实验节点判断"够不够复跑核对"）、`min(6, budgets.max_sandbox_runs)`、`thread.join(max_wall_clock_s)` 这类裸比较，负数会被读成"一次都不给"而静默跳过复跑，`inf` 则让每处比较天然成立。`0` 保持原义（真实额度"一次都不给"，`subagent_slice` 在父预算耗尽时就切出 0，下游靠它跳过工作），没有被并进"无上限"。
+- **harness** 同文件：`BudgetGovernor` 增 `default_node_budget`。此前 `check_llm_call` 对没 `open_node` 过的节点回落到 `NodeBudget()` 即 §4.7 的 30 万，执行面只 open `_PROMPT_NODE_IDS` 里的节点，任何表外节点都会绕过本地配置在 30 万处被硬停。`subagent_slice` 逐维度传递无上限（四分之一的无穷还是无穷）；`snapshot()["limits"]` 与 `subagents.py` 的 spawn 审计把非有限值报成 `null`——两处都会进 JSON / `jsonb` 列，`json.dumps(inf)` 出来的裸 `Infinity` 会让整条事件被拒收。`RunBudget` / `NodeBudget` 的字段类型随之改成 `int | float`，**§4.7 那张表的数字原样保留**（设计契约不动，由执行面决定传什么）。
+- **执行面** `engine_glue.py`：`_env_int` → `_env_limit`，默认返回 `UNLIMITED`，只有正整数才恢复硬闸（`0` / 负数 / 非数字 / 不填都是关闭——手敲环境变量的人写 0 想表达的是"别限"，与治理器里的 0 语义不同，注释已写明）；`_scaled_limit` 让修订轮追加配额对无上限维度成为空操作；`_build_budget_governor` 同时把节点预算传给 `open_node` 与 `default_node_budget`。`_budget_stop_message` 改口径：默认不设限，出现这条说明本机显式配了额度，指引改为"调高或删除对应环境变量（置 0 即关闭）后重启 API"。
+- **文档**：`backend/api/README.md` 环境变量表补四行 + 一段说明（含"用量监控的月度费用预算与硬限制是另一套闸门，仍然生效"）；`.env.example` 补一组注释掉的示例值。
+- 不动：`LoopBudget` 的 `max_turns` / `repairs` / `no_progress_k` / `tool_fail_m`（E330–E332）与 `MAX_CONSECUTIVE_INTERRUPTS`、`MAX_REVISION_ROUNDS`、子代理并发上限——这些是**进展**护栏不是钱包护栏，去掉就真的没有停机条件了；设置中心「用量监控」的月度费用预算与硬限制（`usage.py`）也不动。
+
+当日执行并通过：`pytest backend/api/tests` 444 passed / 2 skipped；`pytest agents` 618 passed。新增用例：harness 5 条（无上限不停但照记账 / 表外节点用调用方给的回落值 / `0` 仍是真实额度 / 切片保持无上限且不误触发 `<1` / limits 报 `null` 且 `json.dumps(allow_nan=False)` 不炸），后端 3 条（不配环境变量四项全 `inf`、`0` 即关闭、正整数恢复并按轮追加；默认治理器放行 80 万 tokens / 80 次调用 / 50 次沙箱且含表外节点）。`test_run_revisions.py::test_each_round_appends_one_more_quota` 补 `setenv`——默认无上限下 `inf * 3 == inf` 会让原断言恒真、守卫失效。**改动只在 API 进程内生效，用户需重启后端**；已卡在 `[E320]` 的历史运行重启后点「重试当前阶段」即可继续（账本仍在，但不再有线可撞）。
+
+### 2026-09-08 报障修复：模型还在思考、运行就已重启——对话控制动作改为回复结束后执行（ADR-0020）
+
+用户带图报障：在失败的任务里发了一句带「重试」的话，模型还在「思考中」，回复块下方的执行步骤区（`ws_list` / `env_probe` / 深度思考·实验执行）就已经出现并开始滚动，回复随后才说「已按你的指令重试当前阶段」。拍板两条：**「模型回答完了之后，再出现下面这些执行的」**；**「有关键字了就直接触发重新执行肯定不行，要结合在一起的」**。查明是两处设计叠加：`routers/chat.py` 的 producer 在调用模型之前就跑 `run_control_step`（判定 + 立刻 `execute_action`），运行一变 RUNNING 工作台就重接事件流、在尾部回复块里长执行步骤；`run_control.decide` 又把规范化后 ≤12 字的短句词表命中直判、长句判定模型说 none 时回落词表结果——两条路都是「有关键字就执行」。
+
+- **后端** `run_control.py`：`run_control_step` 拆成 `plan_control_step`（回复前：读状态 + 判定 + 生成将来时的状态块，不改状态、不写库、不发事件）与 `execute_control_plan`（回复后：重读运行状态复核合法性 → 执行 / 落备注 → 回执）。复核失败（回复期间用户点了按钮、待审批门换了）回 `action{status:"rejected", code:"RUN_STATE_CHANGED"}`，不按过期快照硬执行。新增 `ControlPlan` / `describe_plan`（将来时安排，与 `execute` 回执一一对应）/ `execute_dry`（提案与放弃这两条不碰库的分支）。`decide`：删掉 `RULE_FAST_PATH_MAX_CHARS` 短句直判与「模型 none 回落规则」，词表候选作为「参考信号」一行随判定提示词下发（明写「词表匹配不等于用户在下命令」）；仍本地直判的只有对上一轮提案的「确认 / 算了」。`Judge` 签名加第四参 `hint`。`reply_rules` 四档口径全改将来时并禁止「已重试」「已选择」；`prompt_block` 加 `note_planned`（不触发动作但会落备注的一轮，说明「只是记录，不是修改」）。
+- **后端** `chat_turns.py`：`ChatTurnHub.start` 增 `before_finish` 钩子；`_run` 重构为「所有终态路径（上游 done / error、静默收尾、事件超限、线程异常）汇到 `_finish`」——钩子在锁外跑、只在轮仍 running 时调用，产出的 `action` 事件排在终态之前并记进 `meta.actions`；钩子跑完若观众恰好 stop 了，动作已经发生，回执照样进 meta（刷新可见）、只不再改终态。用户 stop 后生成线程按原样 break、`terminal` 为 None、钩子不跑——被打断的轮不执行任何动作。
+- **后端** `routers/chat.py`：producer 只做计划并注入提示词，`before_finish` 里 `execute_control_plan` → `action_events`。
+- **前端** `openmathmodel-ui.ts`：回复呈现器的 `onAction` 不再插到生成行之前，改为追加在末尾，并攒进 `tailRows`；`settleGeneratingRow` 增第五参，在「已生成回复」落定之后再把它们接进 `traceLog`（轨迹日志顺序与页面一致，重建不会把回执排到生成行前面）。`agent-chat.ts` 注释随语义更新。`run-control-view.ts` 纯函数不变。
+- **文档**：新增 ADR-0020；ADR-0018 / ADR-0019 状态行标注被修订的条目。
+- 不动：`/actions`、闸门、引擎状态矩阵；判定模型仍是池里最弱的一个、按 `route` 记账；受保护入口与 DOM 槽位。
+
+当日执行并通过：`pytest backend/api/tests` **453 passed / 2 skipped**；`npm run check`；`node --test "src/**/*.test.mjs"` 155/155。`test_run_control.py` 重写为 35 条：事件顺序断言从「首条是 action」改为「全部 delta → action → 终态」（`_assert_actions_after_reply`），mock 判定器按「用户这句话」查表作答（词表不再直判，每句都出网）；新增 5 条——对话 SSE 正文两个分块之间探运行状态仍是 FAILED、判定说 none 时「重试」「继续啊」「再跑一次」都只是对话、慢流中 stop 后运行不动 / 不落备注 / 无回执且再说一次即正常执行、回复期间点了按钮则回执 `RUN_STATE_CHANGED`、回复模型 500 时动作照样执行且回执排在 error 之前。**后端需重启**。浏览器验收待用户（本环境无浏览器）：失败任务里说「重试」→ 回复先逐字说完（内容应是「接下来会重试…」而非「已重试」）→ 回复下方出现「已重试阶段 · 实验运行」一行 → 执行步骤区才开始滚动；回复期间按暂停键 → 运行保持失败、不出现回执；「重试过几次了？」这类问句不触发动作。
+
+### 2026-09-07 复验修复：建模流程页文字穿盒 / 拥挤；论文正文逐字流式；论文大纲栏
+
+用户带图复验三条：（1）建模流程页仍有「字穿过盒子」与「非常拥挤」；（2）论文页右侧正文要一个字一个字出现，不能直接整篇出现；（3）论文页左侧目录栏难看。用真实产出（`run_4c9db02321d344c8998ab9a0aa805619` 的三案方案、两篇万字终稿）经 Playwright 路由拦截灌进测试运行复现，1280–1920 四档视口逐一探测横向溢出。
+
+- **穿盒的真实原因在论文纸面**：`.editor-page` 是 flex 列容器里 `margin: 0 auto` 的项，不被拉伸、宽度按内容 min-content 算——朱诺论文里一条宽公式（`.md-math-block` min-content 753px）把纸面撑到 917px 而容器只有 823px，右侧正文被外层 `overflow: hidden` 切掉。修：`.paper-only-editor .editor-page { width: 100% }`（1060 上限与居中不变），公式在自己的块里横向滚动；多列数字表（min-content 724px）在 `stage-content.ts` 里套 `.md-table-wrap`（`overflow-x: auto`）自行滚动，纸面不再出横向滚动条。
+- **拥挤在方案行**：`.focused-plan-row` 原是六列一行（标题 205px 定宽 + 三段摘要按比例分），真实产出的核心方法与主要风险都是长句，摘要列三行截断把行高撑得参差、1366 宽下省略号里夹半个字。改成两行卡片：第一行 radio / 标题 / 核心方法（弹性列、单行省略、悬停全名）/ 步骤数，第二行整行主要风险（首句上限 48→90 字，单行省略、悬停全部风险）；卡片高度恒定，1280–1920 全档不再拥挤；≤820px 手机档沿用 revision 32 逐行堆叠（`grid-row: auto` 复位）。方案详情表标签列 128→136px、行内距 15→18px、列表项间距 6→8px；左栏审批选项卡说明字号 12→12.5px / 行距 1.65、长标识符允许折行。顺带修 `agents/skills nodes.py::_plan_blurb`：首句自带的「；」再接「；实现语言」出现「；；」，先去掉首句句读。
+- **逐字流式没生效的原因**：`renderEditorPanel` / `appendPaperSection` 都以 `editor.offsetParent !== null` 为动画前提；合并工作台里五个阶段面板同存、论文面板在用户停留于别的阶段时是隐藏的，正文（分章事件与终稿）恰恰都在那时到达，于是整段直落并把版本记成「已播过」，用户切回论文页永远是「直接出现」。旧实现另有 16ms `setInterval` + `max(3, 总字数/500)` 字/帧，万字论文 8 秒播完，看起来是整段整段蹦。重写为 `PaperTypewriter`（每台编辑器一台，分章直播与终稿共用一条队列）：`requestAnimationFrame` 驱动、按时间折算字数预算（帧率无关，后台标签切回单帧最多补 100ms）；速度随积压自适应（积压 / 24，夹在 48–320 字/秒：一万五千字终稿约一分半，单章半分钟上下，尾段逐字可辨）；编辑器不可见时暂停（200ms 探一次可见性），切回论文页才从停下的位置继续、不追赶不重播；多章按到达顺序排队，SSE 重放的历史章节若排在正在打字的章节之后轮到时整段直落只保顺序；终稿在直播未打完时到达 → 头部（标题 / 摘要 / 关键词）与已看过的字数直接放出、从直播停下的位置接着打（`skipChars = headChars + revealed`），直播已全部打完 → 静默换成终稿（原行为）；`beforeinput` 整段放行、`stream-in` 入场、光标、吸底跟随、`reduceMotion` 跳过、用户草稿主权、每 30 帧刷新字数统计均保留。大纲链接改为使用时现取（分章直播会按需补挂链接）。
+- **大纲栏**：列宽 190→212px（≤700px 容器 160→172px）；首版做成「状态点 + 标题」（已写完绿底勾、当前章节左侧主色粗标 + 加粗），用户复验明确不要——改为一列干净的目录：状态点留在 DOM（直播打勾逻辑不动）但 `display: none`，不画左标、不加粗，当前章节只用浅底（字重 500），未写完的章节用淡一档字色（`a:has(.outline-status:not(.done))`）示意进度；字号 12.5 / 行高 1.5、`overflow-wrap: anywhere`；`.focused-stage-pane` 令牌层与暗色主题同步。
+- 不动：受保护入口、页面模板与路由、DOM 槽位（方案行仍是 radio / strong / 三个 span / i 的既有结构，CSS 按序摆位）。
+
+当日执行并通过：`agents/skills` `pytest tests/test_nodes.py` 161 passed；`npm run check`；`npm run build`（index 755.67 kB）；`node --test "src/**/*.test.mjs"` 150/150；Playwright 实机：方案页 1280 / 1366 / 1440 / 1536 / 1920 五档探针「scrollWidth > clientWidth」元素 0 个；论文页纸面 `scrollWidth == clientWidth`；打字机脚本——终稿在论文面板隐藏时到达 4.5s 后正文 0 字、`data-streaming=true`，切到论文页 0.8s 后 356 字 / 3.3s 后 1563 字，切走 2.5s 内字数不增长，切回继续，键入一字后整段放行、`data-streaming` 撤销、大纲 8 项全部打勾。截图存 `audit-current/stage-polish-2026-09-07/`（`*-before*` / `*-after*` / `typewriter-*.png`）。浏览器验收待用户：方案页方案卡两行（标题 + 核心方法 + 步骤数 / 主要风险）不再拥挤；论文页右侧正文不再被右边裁掉；停留在别的阶段等论文写完再切到论文页，正文应从头逐字打出，中途切走再切回从原处继续，开始编辑立即全文放出；左侧大纲是一列纯文字目录（无勾、无左标、不加粗），当前章节浅底、未写完的章节淡灰。
 
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 

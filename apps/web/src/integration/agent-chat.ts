@@ -15,7 +15,7 @@
  */
 
 import type { ChatImagePayload } from "../attachments/image-passthrough";
-import { collectTaskAttachmentContext } from "../attachments/task-attachment-context";
+import { collectTaskAttachmentContext, resetTaskAttachmentContext } from "../attachments/task-attachment-context";
 import { loadConversationLog, type ConversationLogEntry } from "../tasks/conversation-log";
 import { currentChatMode } from "./chat-mode";
 import {
@@ -48,8 +48,8 @@ export interface ChatHandlers {
   /** 托管轮建立（拿到服务端轮 id）时回调：页面层据此在回复完成后补写轨迹行。 */
   onTurnStarted?: (turn: ChatTurnView) => void;
   /**
-   * 服务端在生成回复前执行 / 提议的运行控制动作（ADR-0018），每条回调一次，
-   * 先于任何正文；重进续接时按视图里已有的 meta.actions 逐条重放。
+   * 服务端在**回复结束后**执行 / 提议的运行控制动作（ADR-0018 / ADR-0020），每条回调一次，
+   * 晚于全部正文、早于终态；重进续接时按视图里已有的 meta.actions 逐条重放。
    */
   onAction?: (action: RunControlAction) => void;
 }
@@ -119,6 +119,8 @@ export function configureConversation(runId: string | null, goal = ""): void {
   scopeGoal = goal;
   history.length = 0;
   routeState = null;
+  // 任务附件的清单缓存与「已注入」标记也是上一个归属的页面态，一并清掉。
+  resetTaskAttachmentContext();
   if (!runId) return;
   const entries = loadConversationLog(runId);
   for (let index = 0; index < entries.length; index += 1) {
@@ -194,6 +196,8 @@ export function entryFromTurn(turn: ChatTurnView): ConversationLogEntry {
   return {
     role: "assistant",
     text: turn.reply || "",
+    turnId: turn.id,
+    feedback: turn.feedback ?? null,
     ...(turn.opening ? { opening: true } : {}),
     ...(turn.reasoning ? { reasoning: turn.reasoning } : {}),
     ...(trace.length ? { trace } : {}),
@@ -302,7 +306,11 @@ export async function sendConversationTurn(
   const goal = history.length === 0 ? taskGoal() : "";
   // 任务附件（首页上传的项目产物）与随消息附件（对话框托盘）是互补的两条来源：
   // 前者按解析就绪进度逐轮并入，后者由调用方通过 attachmentContext 传入。
-  const taskAttachments = await collectTaskAttachmentContext();
+  // 任务附件只属于任务归属（run_…）：首页对话与演示态没有任务，也绝不能去读
+  // 标签页里上一个任务页留下的身份——那正是「新开对话却延续了上一个任务」的来源。
+  const taskAttachments = turnScope !== null && turnScope.startsWith("run_")
+    ? await collectTaskAttachmentContext(turnScope)
+    : null;
   const parts: string[] = [];
   if (goal) parts.push(`【当前建模任务】${goal}`);
   if (taskAttachments) parts.push(taskAttachments.block);
@@ -521,8 +529,8 @@ async function followTurn(turn: ChatTurnView, handlers: ChatHandlers, signal?: A
     terminal: null,
   };
   // 重新附着时 meta 事件与已生成的那截早已过去：先把视图里的 meta（路由行、域名行）
-  // 与半截思考/正文交给页面层上屏，随后的事件从 last_seq 起接。运行控制回执
-  // 发生在生成之前，同样只能从视图重放。
+  // 与半截思考/正文交给页面层上屏，随后的事件从 last_seq 起接。运行控制回执在回复
+  // 结束后才发出（ADR-0020）：仍在生成的轮视图里通常还没有，已定格的轮从视图重放。
   for (const action of turn.meta?.actions ?? []) handlers.onAction?.(action);
   if (Object.keys(turn.meta ?? {}).length > 0) handlers.onMeta?.(state.meta);
   if (state.reasoning) handlers.onReasoning?.(state.reasoning, state.reasoning);

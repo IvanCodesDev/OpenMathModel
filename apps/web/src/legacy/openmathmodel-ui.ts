@@ -21,6 +21,7 @@ import { ROUTING_FIELDS, normalizeTaskRoutes, routingValueFromEndpointId } from 
 import { OPENING_ANALYSIS_PROMPT, attachConversationTurn, conversationSnapshot, entryFromTurn, sendConversationTurn } from "../integration/agent-chat";
 import { CONFIRM_REPLY_TEXT, actionTraceRow, actionTraceTitle, isExecutedAction, lastPendingProposal } from "../integration/run-control-view";
 import { patchChatTurnTrace } from "../integration/chat-turns-api";
+import { mountReplyActions } from "../integration/reply-actions";
 import { CHAT_MODES, currentChatMode, saveChatMode } from "../integration/chat-mode";
 import {
   addComposerReference,
@@ -86,6 +87,7 @@ import { guardRunBoundRoute } from "../integration/auth-guard";
 import { mountSidebarSearch } from "../integration/sidebar-search";
 import { hydrateRecentTasks } from "../integration/recent-tasks";
 import { hydrateProjectsPage } from "../integration/projects-page";
+import { decorateCodeBlocks } from "../text/code-blocks";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
 import {
@@ -1031,6 +1033,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
   };
   const localPaperPdfUrl = paper => {
+    // 主办方合集里的论文（华数杯 / 亚太赛 / MathorCup）没有单篇公网地址，采集脚本
+    // 解压后按 /paper-files/archive/… 归档，开发服务器据此直接从本地原始层读取。
+    const staged = String(paper?.local_pdf_path || "").trim();
+    if (staged.startsWith("/paper-files/")) return staged;
     const source = String(paper?.full_text_url || "").trim();
     if (!source || !/\.pdf(?:$|[?#])/i.test(source)) return "";
     if (source.startsWith("/")) return source;
@@ -1110,15 +1116,28 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   };
   // 奖项名本身看不出比赛（"优秀论文" 是研究生赛的、"Outstanding Winner" 是美赛的），
   // 所以比赛必须作为独立的第一维度显式给出，而不是让读者从奖项去反推。
+  // 比赛名到页签的归并：同一赛事换过名字（MathorCup 高校数学建模挑战赛 → 数学应用
+  // 挑战赛）或分了赛项（亚太赛中文赛项）时，页签仍按赛事本身归为一类。
+  const PAPER_COMPETITION_KEYS = [
+    [/^全国大学生数学建模竞赛|高教社杯/, "国赛"],
+    [/^COMAP MCM\/ICM$/, "美赛"],
+    [/^中国研究生数学建模竞赛$/, "研究生赛"],
+    [/^华数杯/, "华数杯"],
+    [/^APMCM/, "亚太赛"],
+    [/^MathorCup/, "MathorCup"],
+    [/泰迪杯/, "泰迪杯"],
+  ];
   const paperCompetitionKey = paper => {
     const competition = String(paper.competition || "").trim();
-    if (competition === "COMAP MCM/ICM") return "美赛";
-    if (competition === "中国研究生数学建模竞赛") return "研究生赛";
-    return competition || "其他";
+    const matched = PAPER_COMPETITION_KEYS.find(([pattern]) => pattern.test(competition));
+    return matched ? matched[1] : (competition || "其他");
   };
   const PAPER_COMPETITION_LABELS = {
+    "国赛": "国赛（CUMCM）",
     "研究生赛": "研究生赛（华为杯）",
     "美赛": "美赛（MCM/ICM）",
+    "亚太赛": "亚太赛（APMCM）",
+    "泰迪杯": "泰迪杯（数据挖掘）",
   };
   const paperCompetitionLabel = key => PAPER_COMPETITION_LABELS[key] || key;
   // 美赛的 A/B/C 属 MCM、D/E/F 属 ICM，选中美赛后按真实赛别命名题组；
@@ -1141,13 +1160,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }))
     .filter(({ paper }) => paper.record_type === "paper" && paper.access_scope === "linked_content" && paperPdfUrl(paper));
   const paperCompetitionTabs = () => {
-    const pinned = ["研究生赛", "美赛"];
+    const pinned = ["国赛", "美赛", "研究生赛"];
     const seen = [...new Set(paperEntries().map(({ competition }) => competition))];
     return [...pinned.filter(key => seen.includes(key)), ...seen.filter(key => !pinned.includes(key))];
   };
   const paperAwardTabs = () => {
     const awards = [...new Set(paperEntries().map(({ award }) => award))].filter(Boolean);
-    const pinned = ["优秀论文", "Outstanding Winner", "数模之星提名奖"];
+    const pinned = ["优秀论文", "Outstanding Winner", "优秀作品", "数模之星提名奖"];
     return ["全部", ...pinned.filter(award => awards.includes(award)), ...awards.filter(award => !pinned.includes(award))];
   };
   // 奖项/题组/年份都只存在于某一个比赛下，渲染时把各选项的归属比赛写进 data-paper-scope，
@@ -2161,7 +2180,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                 <div class="api-actions"><button type="button" data-settings-action="test-api">${icon("pulse")} 测试连接</button><button type="button" data-settings-action="cancel-endpoint-edit" data-endpoint-edit-cancel hidden>取消编辑</button><button type="button" class="primary-small" data-settings-action="add-endpoint"><span data-endpoint-save-label>${icon("plus")} 保存为新接口</span></button></div>
               </div>
               <div class="settings-section">
-                ${settingsToggle("allowProxyApi", "允许使用第三方中转站", "发送请求前显示实际域名，并记录接口用量", true)}
+                ${settingsToggle("allowProxyApi", "允许使用第三方中转站", "放行非官方域名，并在本机记录接口用量（对话里不显示）", true)}
                 ${settingsToggle("streamResponse", "流式输出", "支持时逐步显示模型回复，降低首字等待时间", true)}
                 ${settingsToggle("fallbackApi", "失败时自动切换备用接口", "主接口超时、限流或余额不足时触发", true)}
               </div>
@@ -3131,13 +3150,19 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     });
   });
 
-  /** 重建一条用户气泡（历史记录恢复 / 续接服务端在途轮共用）。 */
-  function appendRestoredUserBubble(scroll, text, attachments = []) {
+  /**
+   * 重建一条用户气泡（历史记录恢复 / 续接服务端在途轮共用）。
+   * createdAt 是服务端轮的发起时间：写成 data-turn-at，控制器回放执行轨迹时据此把
+   * 这一轮之后发生的运行事件排在它的回复块里（与实时到达时同一落点），而不是一律
+   * 堆回页面顶端的首气泡。本机旧记录没有服务端时间，不带这个标记。
+   */
+  function appendRestoredUserBubble(scroll, text, attachments = [], createdAt = "") {
     const chips = attachments.length
       ? `<div class="user-attachment-chips">${attachments.map(name =>
         `<span class="user-attachment-chip">${icon("paperclip")}${escapeHtml(name)}</span>`).join("")}</div>`
       : "";
-    scroll.insertAdjacentHTML("beforeend", `<div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>`);
+    const stamp = createdAt ? ` data-turn-at="${escapeHtml(createdAt)}"` : "";
+    scroll.insertAdjacentHTML("beforeend", `<div class="user-message"${stamp}><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>`);
   }
 
   /**
@@ -3177,8 +3202,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
     scroll.append(replyBlock);
     renderFormulas($(".analysis-copy", replyBlock));
+    decorateCodeBlocks($(".analysis-copy", replyBlock));
     // 一字未收的中断回复没有可复制的内容，不挂复制按钮
-    if (entry.text) appendReplyActions(replyBlock, entry.text);
+    if (entry.text) appendReplyActions(replyBlock, entry.text, entry);
     return replyBlock;
   }
 
@@ -3195,7 +3221,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     if (anchor) anchor.insertAdjacentElement("afterend", host);
     else stepsBlock.prepend(host);
     renderFormulas(host);
-    appendReplyActions(host, entry.text);
+    decorateCodeBlocks(host);
+    appendReplyActions(host, entry.text, entry);
     stepsBlock.dataset.openingState = "done";
     // 已恢复的开场分析不再自动重发（规划阶段重进页面时防重复扣费）。
     try { sessionStorage.setItem(`openmathmodelOpeningReply.${runId}`, "1"); } catch {}
@@ -3217,7 +3244,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
   /** 服务端仍在生成的追问轮：用户气泡 + 与首发同构的回复块，原地续接直播。 */
   function resumeFollowUpTurn(scroll, turn) {
-    appendRestoredUserBubble(scroll, turn.text, turn.attachments ?? []);
+    appendRestoredUserBubble(scroll, turn.text, turn.attachments ?? [], turn.created_at ?? "");
     const replyId = `reply-${turn.id}`;
     scroll.insertAdjacentHTML("beforeend", `
       <div class="assistant-block follow-up-reply" id="${replyId}">
@@ -3279,7 +3306,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         resumeFollowUpTurn(scroll, turn);
         continue;
       }
-      appendRestoredUserBubble(scroll, turn.text, turn.attachments ?? []);
+      appendRestoredUserBubble(scroll, turn.text, turn.attachments ?? [], turn.created_at ?? "");
       const entry = entryFromTurn(turn);
       const replyBlock = appendRestoredReply(scroll, entry);
       // 最后一轮留下的待确认提案（ADR-0018）在重进时仍可一键确认：提案只对紧接着的
@@ -3318,10 +3345,10 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       : "";
     const replyId = `reply-${Date.now()}`;
     // 每条回复的结构：执行过程区（.reply-trace，本轮真实发生的附件解析/
-    // 难度路由/生成计时）→ 思考块 → 正文。过程行由 streamAssistantReply
-    // 按实际发生顺序写入。「收起执行步骤」折叠头已按用户要求撤下——修剪后
-    // 过程行只剩少数几条，直接显示比多一层折叠更干净（首条 Agent 消息的
-    // 六阶段长时间线仍保留折叠头，那里有真实收纳需求）。
+    // 难度路由/运行控制回执）→ 思考块 → 正文。过程行由 streamAssistantReply
+    // 按实际发生顺序写入；生成本身不写行，普通一问一答的过程区是空的（:empty 自动隐藏）。
+    // 「收起执行步骤」折叠头已按用户要求撤下——修剪后过程行只剩少数几条，直接显示
+    // 比多一层折叠更干净（首条 Agent 消息的六阶段长时间线仍保留折叠头，那里有真实收纳需求）。
     scroll.insertAdjacentHTML("beforeend", `
       <div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>
       <div class="assistant-block follow-up-reply" id="${replyId}">
@@ -3403,33 +3430,30 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   /**
    * 已撤下的轨迹样板行（用户要求）：每轮内容雷同、无增量信息的固定标题。
    * 新回复不再生成；旧对话记录里已落盘的同名行在恢复重建时一并过滤。
+   * 「已暂停（保留部分回复）」同样撤下——这件事现在由正文尾部那句灰字说明
+   * （entryFromTurn 的 note），留着会和它重复。
    */
-  const RETIRED_TRACE_TITLES = new Set(["已读取任务与对话上下文", "已同步给执行中的智能体"]);
-
-  /** 回复轨迹的耗时文本：与工作台时间线同一节奏（<10s 一位小数，<60s 整秒，更长分+秒）。 */
-  function formatTraceElapsed(ms) {
-    const clamped = Math.max(0, ms);
-    if (clamped < 10_000) return `${(clamped / 1000).toFixed(1)}s`;
-    if (clamped < 60_000) return `${Math.round(clamped / 1000)}s`;
-    const minutes = Math.floor(clamped / 60_000);
-    const seconds = Math.round((clamped % 60_000) / 1000);
-    return `${minutes}m ${seconds}s`;
-  }
+  const RETIRED_TRACE_TITLES = new Set([
+    "已读取任务与对话上下文",
+    "已同步给执行中的智能体",
+    "已生成回复",
+    "已暂停（保留部分回复）",
+  ]);
 
   /**
    * 回复内的执行过程行：与工作台执行轨迹同构（stream-item 结构与交互），
-   * 承载本轮真实发生的过程（上下文读取、附件解析、Auto 难度路由、生成计时），
+   * 只承载**已经发生**的事实（附件解析、Auto 难度路由、运行控制回执），
    * 出现在思考块与正文之前。标签与后缀分节点写入，便于语言切换逐段翻译。
-   * waiting=true 时本地走秒，settle() 落定图标与最终耗时；before 指定插入
-   * 位置以保持与服务端实际发生顺序一致。返回 {element, settle}。
-   * animate=false 用于恢复历史（重进对话时轨迹应当「本来就在」，不重演入场）。
-   * startedAt 让续接的轮从服务端建轮时刻起走秒，而不是从重进页面那一刻。
+   * 生成本身不再写行（正文的流式输出就是进度），所以这里不需要走秒与落定：
+   * elapsed 由调用方给定文本（历史记录里落盘的最终耗时）。
+   * before 指定插入位置以保持与服务端实际发生顺序一致；animate=false 用于恢复历史
+   * （重进对话时轨迹应当「本来就在」，不重演入场）。返回 {element}。
    */
-  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", waiting = false, before = null, animate = true, startedAt = Date.now() }) {
+  function appendReplyTraceRow(replyBlock, { icon: iconName, title, suffix = "", detail = "", elapsed = "", before = null, animate = true }) {
     const trace = $(".reply-trace", replyBlock);
     if (!trace) return null;
     const item = document.createElement("div");
-    item.className = `stream-item${animate ? " stream-in" : ""}${waiting ? " is-waiting" : ""}`;
+    item.className = `stream-item${animate ? " stream-in" : ""}`;
     item.innerHTML = `
       <div class="stream-row">
         ${icon(iconName)}
@@ -3464,29 +3488,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
     if (before && before.parentElement === trace) trace.insertBefore(item, before);
     else trace.append(item);
-    const timeCell = $(".stream-elapsed", item);
-    const titleLabel = $(".stream-title > span", item);
-    let ticker = null;
-    if (waiting) {
-      timeCell.textContent = formatTraceElapsed(Date.now() - startedAt);
-      ticker = window.setInterval(() => {
-        timeCell.textContent = formatTraceElapsed(Date.now() - startedAt);
-      }, 1000);
-    }
-    return {
-      element: item,
-      settle({ title: settledTitle = "", elapsedMs = null, failed = false } = {}) {
-        if (ticker !== null) {
-          window.clearInterval(ticker);
-          ticker = null;
-        }
-        item.classList.remove("is-waiting");
-        if (settledTitle) titleLabel.textContent = settledTitle;
-        timeCell.textContent = formatTraceElapsed(elapsedMs ?? Date.now() - startedAt);
-        const iconEl = $(".stream-row > i", item);
-        if (iconEl) iconEl.className = failed ? "ph-fill ph-x-circle" : "ph-fill ph-check-circle";
-      },
-    };
+    return { element: item };
   }
 
   /**
@@ -3514,7 +3516,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
 
   /**
    * 运行控制回执 → 轨迹行（含提案的确认按钮；已生效的动作让工作台立刻重拉快照
-   * 并重接事件流——运行到终态时事件流已收尾，控制器不再自己重连）。
+   * 并重接事件流——运行到终态时事件流已收尾，控制器不再自己重连）。回执在回复结束后
+   * 才到（ADR-0020），所以行默认追加在末尾、执行步骤区随后才在回复块里长出来。
    * 首发、续接与历史恢复三条路径共用；traceLog 为 null 表示恢复态（行已落盘，不再记）。
    */
   function presentRunControlAction(replyBlock, action, { before = null, traceLog = null, animate = true } = {}) {
@@ -3529,47 +3532,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     return handle;
   }
 
-  /** 回复右下角操作区：复制原始回复文本（Markdown 源码，便于粘贴到论文与笔记）。
-   *  紧跟正文插入而不是追加到块尾：对话触发的运行动作（ADR-0018）会让工作台控制器
-   *  在这条回复块内部续写执行步骤，步骤往往比回复先到——按钮要贴着正文，不能掉到
-   *  步骤区下面。 */
-  function appendReplyActions(replyBlock, replyText) {
-    const actions = document.createElement("div");
-    actions.className = "reply-actions";
-    actions.innerHTML = `<button type="button" class="reply-action-button" data-reply-copy title="复制回复" aria-label="复制回复">${icon("copy")}</button>`;
-    const copy = $(".analysis-copy", replyBlock);
-    if (copy) copy.insertAdjacentElement("afterend", actions);
-    else replyBlock.appendChild(actions);
-    const button = $("[data-reply-copy]", actions);
-    let resetTimer = null;
-    button.addEventListener("click", async () => {
-      const copied = await copyTextToClipboard(replyText);
-      button.innerHTML = icon(copied ? "check" : "copy");
-      toast(t(copied ? "回复已复制" : "复制失败，请手动选择文本"));
-      clearTimeout(resetTimer);
-      resetTimer = setTimeout(() => { button.innerHTML = icon("copy"); }, 1400);
-    });
-  }
-
-  /** 「发送请求前显示实际域名」：按当前模型选择解析本次对话将请求的接口域名。
-   *  指定接口/默认主接口时目标确定；Auto 多接口时由服务端难度判定，
-   *  实际域名以 meta 事件为准（返回 auto 标记先显示路由中）。 */
-  async function expectedChatTarget() {
-    let raw = "auto";
-    try {
-      raw = localStorage.getItem("openmathmodelSelectedModel") || "auto";
-    } catch {
-      // 存储不可用时按 Auto 处理，与发送通道的路由取值保持一致
-    }
-    const config = await fetchLlmConfig();
-    if (!config || config.endpoints.length === 0) return null;
-    if (raw.startsWith("endpoint-")) {
-      const endpoint = config.endpoints.find(item => item.id === raw.slice("endpoint-".length));
-      return endpoint ? { auto: false, host: endpointHost(endpoint.base_url) } : null;
-    }
-    if (raw === "auto" && config.endpoints.length > 1) return { auto: true, host: "" };
-    const active = config.endpoints.find(item => item.id === config.active_endpoint_id) || config.endpoints[0];
-    return active ? { auto: false, host: endpointHost(active.base_url) } : null;
+  /** 回复右下角操作区：复制原文 + 赞 / 踩，与首页对话共用 integration/reply-actions。
+   *  评价落在服务端托管的这一轮上，所以要把轮 id 传进去；没有轮 id（本机旧记录、
+   *  无状态通道）只显示复制。 */
+  function appendReplyActions(replyBlock, replyText, turn = {}) {
+    mountReplyActions(replyBlock, { text: replyText, turnId: turn.turnId ?? null, feedback: turn.feedback ?? null });
   }
 
   // ── 暂停生成：回复流式期间发送键变为暂停键，点击中止当前这轮生成 ──────────
@@ -3593,51 +3560,35 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   }
 
   /**
-   * 回复气泡的呈现器：思考块 + 流式 Markdown 正文 + 域名透明行 + Auto 难度行。
+   * 回复气泡的呈现器：思考块 + 流式 Markdown 正文 + Auto 难度行。
    * 首发（streamAssistantReply）与重进续接（attachAssistantReply）共用同一套，
    * 半截续上的回复与从头看着生成的回复长得一样。
-   * 对话页不暴露模型名；接口域名随「允许使用第三方中转站」开关：开启时在
-   * 发送前显示本次请求的预期域名，meta 到达后以实际为准（含中转/备用标记）。
+   * 对话页不暴露任何接口信息：模型名、实际域名、中转/备用标记都不出现在回复里，
+   * 「允许使用第三方中转站」的透明化只体现为设置中心的本机用量记录。
    */
-  function createReplyPresenter(replyBlock, copy, scroll, { generatingRow = null, traceLog = null } = {}) {
+  function createReplyPresenter(replyBlock, copy, scroll, { traceLog = null } = {}) {
     const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
     // 流式正文渲染：节流 + 块级增量上屏（stream-render），公式排版随之削峰。
     // 旧写法逐增量整段重建 innerHTML + 全量排版，长回复（尤其多公式）明显卡顿。
     const renderer = createStreamingMarkdownRenderer(copy, { stickTo: scroll });
-    const transparency = proxyTransparencyEnabled();
-    let transparencySettled = false;
     let difficultyShown = false;
     let thinking = null;
     let answerStarted = false;
-    const renderTransparency = html => {
-      let line = replyBlock.querySelector(".chat-transparency");
-      if (!line) {
-        line = document.createElement("p");
-        line.className = "chat-transparency";
-        copy.insertAdjacentElement("beforebegin", line);
-      }
-      line.innerHTML = `${icon("globe")}<span>${html}</span>`;
-    };
-    if (transparency) {
-      void expectedChatTarget().then(target => {
-        if (transparencySettled || !target) return;
-        renderTransparency(
-          target.auto
-            ? t("自动路由选择接口中…")
-            : `${t("请求发送至")} ${escapeHtml(target.host)}`,
-        );
-      });
-    }
+    // 回复结束后才执行的运行控制回执（ADR-0020）：DOM 上追加在轨迹末尾，轨迹日志里也要排在
+    // 本轮已有的过程行之后，所以先攒着，由调用方在回复收尾时一并接上（tailRows）。
+    const tailRows = [];
     return {
+      tailRows,
       handlers: {
-        // 行⓪：服务端在生成前执行 / 提议的运行控制动作（ADR-0018）——「继续」真的
-        // 重试了阶段、「用方案 B」真的选了选项。发生在模型调用之前，插在生成行之前。
+        // 行⓪'：服务端在**回复结束后**执行 / 提议的运行控制动作（ADR-0018 / ADR-0020）——
+        // 「继续」重试了阶段、「用方案 B」选了选项。回复说完才发生，追加在轨迹末尾，
+        // 用户看到的顺序是：回复正文 → 动作回执 → 运行的执行步骤。
         onAction: action => {
-          presentRunControlAction(replyBlock, action, { before: generatingRow?.element ?? null, traceLog });
+          presentRunControlAction(replyBlock, action, { traceLog: tailRows });
         },
         onMeta: current => {
           // 行②：Auto 路由真实发生的难度判定（详情 = 判定理由；继承/短路轮
-          // judged=false 不出现，不制造噪音）。服务端先判定后生成，插在生成行之前。
+          // judged=false 不出现，不制造噪音）。接口域名与模型名一律不落地到回复里。
           if (!difficultyShown && current.route?.judged && typeof current.route.difficulty === "number") {
             difficultyShown = true;
             const row = {
@@ -3646,17 +3597,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
               suffix: ` ${current.route.difficulty}/5`,
               detail: current.route.reason || "",
             };
-            appendReplyTraceRow(replyBlock, { ...row, before: generatingRow?.element ?? null });
+            appendReplyTraceRow(replyBlock, row);
             traceLog?.push(row);
           }
-          // 实际域名以服务端 meta 为准：Auto 路由结果、备用切换都在这里如实反映
-          if (!transparency || !current.host) return;
-          transparencySettled = true;
-          const badges = [
-            current.third_party ? t("第三方中转站") : "",
-            current.fallback_used ? t("已切换备用接口") : "",
-          ].filter(Boolean).map(tag => ` · ${escapeHtml(tag)}`).join("");
-          renderTransparency(`${t("请求发送至")} ${escapeHtml(current.host)}${badges}`);
         },
         onReasoning: (_piece, full) => {
           const stick = nearBottom();
@@ -3685,26 +3628,30 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     };
   }
 
-  /** 生成计时行落定 + 轨迹落定行：首发与续接共用。 */
-  function settleGeneratingRow(generatingRow, meta, startedAt, traceLog) {
-    if (!generatingRow) return;
-    // 优先用服务端整程耗时（meta.elapsed_ms），本地走秒兜底
-    const generateElapsedMs = typeof meta.elapsed_ms === "number" ? meta.elapsed_ms : Date.now() - startedAt;
-    const settledTitle = meta.stopped ? "已暂停（保留部分回复）" : "已生成回复";
-    generatingRow.settle({ title: settledTitle, elapsedMs: generateElapsedMs });
-    traceLog.push({ icon: "check-circle", title: settledTitle, elapsed: formatTraceElapsed(generateElapsedMs) });
+  /** 回复收尾：首发与续接共用。
+   *  生成过程本身不再写任何过程行——正文的流式输出与「思考中…」占位已经说明它在跑，
+   *  说完了正文就是证据（同 RETIRED_TRACE_TITLES 那几条样板行的理由）。
+   *  唯一的例外是被用户暂停：只收到半截必须讲清楚，在正文尾部补一句灰字，
+   *  与刷新后由 entryFromTurn 重建出来的那句完全一致（同一个 .reply-interrupted 形态）。
+   *  tailRows 是回复结束后才到的运行控制回执（ADR-0020），接在轨迹末尾，顺序与页面一致。 */
+  function settleReplyTail(copy, meta, traceLog, tailRows = []) {
+    if (meta.stopped) {
+      copy.insertAdjacentHTML(
+        "beforeend",
+        `<p class="muted reply-interrupted">${t("已暂停生成，以上为暂停前已生成的部分。")}</p>`,
+      );
+    }
+    traceLog.push(...tailRows);
   }
 
-  /** 回复失败态的统一收口：暂停安静收尾；不可用且允许移除则整块消失；否则如实说明。 */
-  function presentReplyFailure(error, { replyBlock, copy, scroll, generatingRow, removeOnUnavailable }) {
+  /** 回复失败态的统一收口：暂停安静收尾；不可用且允许移除则整块消失；否则如实说明。
+   *  原因一律写在正文里（生成过程不再有过程行可落定）。 */
+  function presentReplyFailure(error, { replyBlock, copy, scroll, removeOnUnavailable }) {
     // 用户主动暂停且一字未收：安静收尾，不按错误渲染
     if (error?.code === "GENERATION_STOPPED") {
-      generatingRow?.settle({ title: "已暂停生成" });
       copy.innerHTML = `<p class="muted">${t("已暂停生成。")}</p>`;
       return;
     }
-    // 失败也要把生成行落定为中断态，不留走秒残影
-    generatingRow?.settle({ title: "回复生成中断", failed: true });
     const unavailable = error?.code === "LLM_NOT_CONFIGURED" || error?.code === "AUTH_REQUIRED" || error?.code === "NETWORK_ERROR";
     if (removeOnUnavailable && unavailable) {
       replyBlock.remove();
@@ -3724,7 +3671,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   /**
    * 重进页面时续接一轮服务端仍在生成的托管轮（ADR-0016）：生成从未中断，这里只是
    * 从视图里的半截正文/思考接着看。附件解析等过程行发生在发起那一页，不重演；
-   * 轨迹只剩生成计时一行，耗时从服务端建轮时刻起算。
+   * 续上的这一轮不再补任何过程行，页面形态与从头看着生成的完全一样。
    * 返回是否拿到了完整回复。
    */
   async function attachAssistantReply(turn, replyId, scroll, options = {}) {
@@ -3732,24 +3679,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const copy = replyBlock?.querySelector(".analysis-copy");
     if (!replyBlock || !copy) return false;
     const traceLog = [];
-    const startedAt = Date.parse(turn.created_at) || Date.now();
-    const generatingRow = options.opening
-      ? null
-      : appendReplyTraceRow(replyBlock, { icon: "circle-notch", title: "正在生成回复", waiting: true, startedAt });
-    const presenter = createReplyPresenter(replyBlock, copy, scroll, { generatingRow, traceLog });
+    const presenter = createReplyPresenter(replyBlock, copy, scroll, { traceLog });
     // 暂停键对续接的轮同样生效：让服务端停，不是不看了
     const abortController = new AbortController();
     setComposerGenerating(abortController);
     try {
       const { text: reply, meta } = await attachConversationTurn(turn, presenter.handlers, abortController.signal);
       presenter.finish(reply);
-      settleGeneratingRow(generatingRow, meta, startedAt, traceLog);
-      appendReplyActions(replyBlock, reply);
+      settleReplyTail(copy, meta, traceLog, presenter.tailRows);
+      appendReplyActions(replyBlock, reply, { turnId: turn.id, feedback: turn.feedback ?? null });
       if (!options.opening && traceLog.length) void patchChatTurnTrace(turn.id, traceLog).catch(() => undefined);
       return true;
     } catch (error) {
       presenter.cancel();
-      presentReplyFailure(error, { replyBlock, copy, scroll, generatingRow, removeOnUnavailable: options.removeOnUnavailable });
+      presentReplyFailure(error, { replyBlock, copy, scroll, removeOnUnavailable: options.removeOnUnavailable });
       return false;
     } finally {
       if (activeChatAbort === abortController) setComposerGenerating(null);
@@ -3767,9 +3710,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const replyBlock = document.getElementById(replyId);
     const copy = replyBlock?.querySelector(".analysis-copy");
     if (!replyBlock || !copy) return false;
-    // 生成计时行与轨迹提升到 try 外：失败路径也要把它落定为中断态
-    let generatingRow = null;
-    let startedGeneratingAt = Date.now();
     const traceLog = [];
     // 服务端轮 id：建轮即回调，回复完成后把页面侧轨迹行补写到这一轮
     let turnId = null;
@@ -3837,15 +3777,12 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         appendReplyTraceRow(replyBlock, row);
         traceLog.push(row);
       }
-      // 绑定真实运行的追问不再由页面先 POST 一条备注：服务端托管轮在生成前经
-      // 运行控制步骤（ADR-0018）——识别「重试 / 用方案 B / 从数据准备重做」并真正
+      // 绑定真实运行的追问不再由页面先 POST 一条备注：服务端托管轮先经运行控制**计划**
+      // （ADR-0018 / ADR-0020）——识别「重试 / 用方案 B / 从数据准备重做」，回复说完才真正
       // 执行，普通补充要求照旧落成备注注入后续节点，页面只负责渲染 action 回执。
-      // 生成回复行实时走秒；action / 难度判定行到达时插到它前面（服务端先判定后生成）
-      generatingRow = options.opening
-        ? null
-        : appendReplyTraceRow(replyBlock, { icon: "circle-notch", title: "正在生成回复", waiting: true });
-      startedGeneratingAt = Date.now();
-      presenter = createReplyPresenter(replyBlock, copy, scroll, { generatingRow, traceLog });
+      // 生成本身不写过程行（正文流式输出就是进度）；难度判定行到达时追加，
+      // action 回执在回复结束后到达、排在它后面。
+      presenter = createReplyPresenter(replyBlock, copy, scroll, { traceLog });
       const { text: reply, meta, turnId: startedTurnId } = await sendConversationTurn(text, {
         ...presenter.handlers,
         onTurnStarted: turn => { turnId = turn.id; },
@@ -3862,8 +3799,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       store?.clear();
       if (references.length) clearComposerReferences();
       presenter.finish(reply);
-      settleGeneratingRow(generatingRow, meta, startedGeneratingAt, traceLog);
-      // 对话页不显示模型名；「记录接口用量」随开关开启才落本机记录
+      settleReplyTail(copy, meta, traceLog, presenter.tailRows);
+      // 对话页不显示任何接口信息；「记录接口用量」随开关开启才落本机记录（仅设置中心可查）
       if (proxyTransparencyEnabled() && (meta.host || meta.endpoint)) {
         recordLlmUsage({
           ts: Date.now(),
@@ -3878,7 +3815,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           difficulty: meta.route?.difficulty,
         });
       }
-      appendReplyActions(replyBlock, reply);
+      appendReplyActions(replyBlock, reply, { turnId });
       // 页面侧轨迹行补写到服务端这一轮（记录本身已由服务端落库）：重进时原样重建。
       // 「保存任务历史」关闭时服务端只在内存里保留这一轮，PATCH 同样只改内存视图。
       if (!options.opening && turnId && traceLog.length) {
@@ -3888,7 +3825,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       return true;
     } catch (error) {
       presenter?.cancel();
-      presentReplyFailure(error, { replyBlock, copy, scroll, generatingRow, removeOnUnavailable: options.removeOnUnavailable });
+      presentReplyFailure(error, { replyBlock, copy, scroll, removeOnUnavailable: options.removeOnUnavailable });
       return false;
     } finally {
       if (activeChatAbort === abortController) setComposerGenerating(null);
@@ -5317,11 +5254,20 @@ async function initPaperPdfReader(): Promise<void> {
       import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
     ]);
     GlobalWorkerOptions.workerSrc = workerUrl;
+    // LaTeX 中文论文的 CID 字体要靠预定义 CMap 取字形，未内嵌的 Times/Helvetica 要靠
+    // 标准字体数据；两者缺一，pdf.js 只会在控制台报 translateFont 失败，页面上表现为
+    // 中文整片消失、只剩数字和拉丁字母。资源由 vite 配置从 pdfjs-dist 一并发布。
+    const pdfAssetBase = `${import.meta.env.BASE_URL}pdfjs/`;
     let pdf = null;
     let lastError: unknown;
     for (const source of pdfSources) {
       try {
-        pdf = await getDocument({ url: source }).promise;
+        pdf = await getDocument({
+          url: source,
+          cMapUrl: `${pdfAssetBase}cmaps/`,
+          cMapPacked: true,
+          standardFontDataUrl: `${pdfAssetBase}standard_fonts/`,
+        }).promise;
         break;
       } catch (error) {
         lastError = error;

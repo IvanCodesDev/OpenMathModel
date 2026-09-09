@@ -28,6 +28,7 @@ import {
   touchChatSession,
 } from "../tasks/chat-sessions";
 import { loadConversationLog, type ConversationLogEntry } from "../tasks/conversation-log";
+import { decorateCodeBlocks } from "../text/code-blocks";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
 import {
@@ -48,9 +49,48 @@ import {
   type ChatTurnResult,
 } from "./agent-chat";
 import { hydrateRecentTasks } from "./recent-tasks";
+import { mountReplyActions } from "./reply-actions";
 
 const AGENT_ID_HTML =
   '<img class="project-logo assistant-logo" src="/assets/OpenMathModel_IP_Crop.png" alt="" aria-hidden="true"><span>Agent</span>';
+
+/** 最后一段回复与输入区上沿之间的呼吸距（执行页 chat-scroll 的口径约 20–28px）。 */
+const DOCK_GAP_PX = 24;
+
+/**
+ * 对话态里线程铺满整个主区、输入区（composer-area + 免责声明）浮在它上面
+ * （与执行页 .chat-scroll + .chat-composer 同一手法，滚动条才能从顶到底）。
+ * 因此要把「输入区顶边到主区底边」的实际高度让给线程的 padding-bottom /
+ * scroll-padding-bottom（CSS 变量 --home-chat-dock），否则最后一段回复会被
+ * 输入框盖住。附件托盘、接待状态行都会改变输入区高度，所以按实际几何量、
+ * 并随尺寸变化重算——与执行计划面板（task-todo-panel）的让位逻辑同模式。
+ */
+function reserveDockSpace(root: HTMLElement, composerArea: HTMLElement): void {
+  const rootRect = root.getBoundingClientRect();
+  const areaRect = composerArea.getBoundingClientRect();
+  if (rootRect.height === 0 || areaRect.height === 0) return;
+  const reserved = Math.round(rootRect.bottom - areaRect.top + DOCK_GAP_PX);
+  root.style.setProperty("--home-chat-dock", `${reserved}px`);
+}
+
+function observeDock(root: HTMLElement, thread: HTMLElement, composerArea: HTMLElement): void {
+  const update = (): void => reserveDockSpace(root, composerArea);
+  update();
+  if (typeof ResizeObserver === "undefined") {
+    window.addEventListener("resize", update);
+    return;
+  }
+  const observer = new ResizeObserver(() => {
+    // 整页重渲染后旧线程被丢弃：随之停表，不给已脱离文档的节点白算
+    if (!thread.isConnected) {
+      observer.disconnect();
+      return;
+    }
+    update();
+  });
+  observer.observe(composerArea);
+  observer.observe(root);
+}
 
 function ensureThread(root: HTMLElement): HTMLElement | null {
   const existing = root.querySelector<HTMLElement>("[data-home-chat-thread]");
@@ -61,10 +101,11 @@ function ensureThread(root: HTMLElement): HTMLElement | null {
   thread.className = "home-chat-thread";
   thread.dataset.homeChatThread = "true";
   composerArea.insertAdjacentElement("beforebegin", thread);
+  observeDock(root, thread, composerArea);
   return thread;
 }
 
-function appendUserBubble(thread: HTMLElement, text: string, referenceTitles: string[]): void {
+function appendUserBubble(thread: HTMLElement, text: string, referenceTitles: string[]): HTMLElement {
   const message = document.createElement("div");
   message.className = "user-message";
   const bubble = document.createElement("div");
@@ -85,6 +126,7 @@ function appendUserBubble(thread: HTMLElement, text: string, referenceTitles: st
   }
   message.append(bubble);
   thread.append(message);
+  return message;
 }
 
 /** 与执行页同构的回复块：Agent 头 + （思考块占位）+ 「思考中…」扫光正文。 */
@@ -221,6 +263,9 @@ function appendSettledReply(thread: HTMLElement, entry: ConversationLogEntry): v
     copy.append(note);
   }
   typesetMath(copy);
+  decorateCodeBlocks(copy);
+  // 一字未收的中断回复没有可复制的内容，不挂操作区（与任务页同口径）
+  if (entry.text) mountReplyActions(block, { text: entry.text, turnId: entry.turnId, feedback: entry.feedback });
 }
 
 /**
@@ -287,11 +332,51 @@ function setSendButtonGenerating(root: HTMLElement, on: boolean): void {
   });
 }
 
+/**
+ * 发送瞬间先落地的一对「用户气泡 + 思考中占位」：接待判定还在后台跑，页面已经有反应。
+ * 判定为对话 → 交给 runHomeChatTurn 在同一个占位块里续写；判定放行任务 → 过场遮罩接管、
+ * 随后跳转，占位无需处置；需要登录 / 出错 → discard() 撤回，页面回到发送前的样子。
+ */
+export interface PendingHomeTurn {
+  readonly thread: HTMLElement;
+  readonly block: HTMLElement;
+  discard(): void;
+}
+
+export function beginHomeChatTurn(
+  root: HTMLElement,
+  text: string,
+  referenceTitles: string[] = [],
+): PendingHomeTurn | null {
+  const thread = ensureThread(root);
+  if (!thread) return null;
+  const wasChatting = root.dataset.homeChat === "on";
+  root.dataset.homeChat = "on";
+  const message = appendUserBubble(thread, text, referenceTitles);
+  const block = appendAssistantBlock(thread);
+  scrollIntoView(block);
+  return {
+    thread,
+    block,
+    discard() {
+      message.remove();
+      block.remove();
+      // 这一对是欢迎态下的第一条：撤回后线程空了，把 hero 也还回来
+      if (!wasChatting && !thread.querySelector(".user-message, .assistant-block")) {
+        thread.remove();
+        delete root.dataset.homeChat;
+      }
+    },
+  };
+}
+
 export interface HomeChatTurnOptions {
   /** @ 引用资料的上下文块（composerReferenceBlock）：只进请求正文，不进气泡。 */
   referenceContext?: string;
   /** 引用标题：气泡下方的 @ 徽标如实标注。 */
   referenceTitles?: string[];
+  /** 发送瞬间已落地的占位（beginHomeChatTurn）：回复写进它，不再另起一对。 */
+  pending?: PendingHomeTurn | null;
 }
 
 /**
@@ -320,7 +405,7 @@ async function presentReply(
   activeAbort = abort;
   setSendButtonGenerating(root, true);
   try {
-    const { text: reply } = await run(
+    const { text: reply, turnId } = await run(
       {
         onReasoning: (_delta, full) => {
           // 思考流入场也跟随滚动（与执行页同节奏）：用户已在底部才吸底，翻上去回看不打扰
@@ -349,6 +434,8 @@ async function presentReply(
     // 收尾不再强制滚到底：跟随交给 stickTo 的近底吸附——用户翻上去回看时，
     // 回复完成不该把视口拽走（执行页同语义）。
     renderer.finish(reply);
+    // 回复右下角：复制 + 赞 / 踩（评价落在这一轮托管对话上；与任务页同一组件）
+    if (reply) mountReplyActions(block, { text: reply, turnId });
     return true;
   } catch (error) {
     state.thinking?.finish();
@@ -387,12 +474,12 @@ export async function runHomeChatTurn(
   text: string,
   options: HomeChatTurnOptions = {},
 ): Promise<boolean> {
-  const thread = ensureThread(root);
-  if (!thread) return false;
-  root.dataset.homeChat = "on";
-  appendUserBubble(thread, text, options.referenceTitles ?? []);
-  const block = appendAssistantBlock(thread);
-  scrollIntoView(block);
+  let pending = options.pending?.block.isConnected ? options.pending : null;
+  if (!pending) {
+    pending = beginHomeChatTurn(root, text, options.referenceTitles ?? []);
+    if (!pending) return false;
+  }
+  const { thread, block } = pending;
   // 领身份期间发送键就已是暂停键（与之前的节奏一致）
   setSendButtonGenerating(root, true);
   // 归属要在发送前定下：有归属这一轮才走服务端托管（生成与记录都在服务端）。
