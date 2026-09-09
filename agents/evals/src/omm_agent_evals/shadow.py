@@ -74,8 +74,16 @@ def snapshot_control_flow(snapshot: TaskRunSnapshot) -> dict[str, Any]:
 
 
 def failing_robustness_run():
-    """三项检查中 bootstrap 稳定性未过：验证阶段上 G3。"""
+    """三项检查中 bootstrap 稳定性未过：验证阶段上 G3（1/3 未过 → 系统推荐「接受并记录局限」）。"""
     checks = [dict(check) for check in FULL_CHAIN_ROBUSTNESS_CHECKS]
+    checks[1].update(passed=False, value=0.42, detail="重采样 RMSE 波动 42%，超出阈值")
+    return robustness_success(checks=checks)
+
+
+def redo_recommended_robustness_run():
+    """三项检查中两项未过（占比 ≥ 0.5）：G3 推荐「重做实验」——modeling-v2 的条件边据此自动回实验。"""
+    checks = [dict(check) for check in FULL_CHAIN_ROBUSTNESS_CHECKS]
+    checks[0].update(passed=False, value=0.35, detail="RMSE 相对退化 35%，超出阈值")
     checks[1].update(passed=False, value=0.42, detail="重采样 RMSE 波动 42%，超出阈值")
     return robustness_success(checks=checks)
 
@@ -262,6 +270,18 @@ SHADOW_SCENARIOS: tuple[ShadowScenario, ...] = (
 )
 
 
+def _g3_redo_recommended_kwargs() -> dict[str, Any]:
+    return {"validation_run": redo_recommended_robustness_run()}
+
+
+#: Graph v2 第三步（条件边）专用剧本：G3 推荐重做实验。同一份脚本在 off / linear-v1 下直接开 G3，
+#: 在 modeling-v2 下先自动回实验两轮再开 G3——控制流**有意**不等价，所以不进 SHADOW_SCENARIOS，
+#: 由专门的测试断言差异恰好是那两轮自动回退。
+CONDITION_EDGE_SCENARIO = ShadowScenario(
+    "g3_redo_recommended", drive_g3_accept, build_factory=_g3_redo_recommended_kwargs
+)
+
+
 def run_scenario(scenario: ShadowScenario, graph_mode: str) -> FullChainSession:
     """按档位装配并把场景开到底；返回会话供比对。"""
     session = scenario.build(graph_mode)
@@ -312,6 +332,7 @@ def scenario_names(scenarios: Sequence[ShadowScenario] = SHADOW_SCENARIOS) -> li
 
 
 __all__ = [
+    "CONDITION_EDGE_SCENARIO",
     "CONTROL_FLOW_FIELDS",
     "SHADOW_SCENARIOS",
     "ShadowReport",
@@ -319,6 +340,7 @@ __all__ = [
     "compare_scenario",
     "control_flow_trace",
     "failing_robustness_run",
+    "redo_recommended_robustness_run",
     "run_scenario",
     "scenario_names",
     "snapshot_control_flow",

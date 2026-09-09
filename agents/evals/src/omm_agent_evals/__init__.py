@@ -56,6 +56,7 @@ from .scenario import (
     canned_proposer,
 )
 from .shadow import (
+    CONDITION_EDGE_SCENARIO,
     CONTROL_FLOW_FIELDS,
     SHADOW_SCENARIOS,
     ShadowReport,
@@ -82,6 +83,7 @@ __all__ = [
     "CANNED_ROBUSTNESS",
     "CANNED_VALIDATION",
     "CANNED_VALIDATION_CODE",
+    "CONDITION_EDGE_SCENARIO",
     "CONTROL_FLOW_FIELDS",
     "EXPERIMENT_CODE",
     "FULL_CHAIN_CHAT_SEQUENCE",

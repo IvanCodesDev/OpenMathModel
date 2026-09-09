@@ -20,6 +20,8 @@ lane / iteration 才需要它们（D2.2，随 v2）。stdlib-only（core 依赖�
 
 from __future__ import annotations
 
+import ast
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -29,6 +31,9 @@ from .states import WORK_SEQUENCE, WORK_STATES, TaskState, next_work_state
 
 NODE_KINDS: tuple[str, ...] = ("agent", "gate", "map", "join", "subgraph")
 EDGE_KINDS: tuple[str, ...] = ("seq", "cond", "iter")
+#: 回环边：不参与入口 / 拓扑序 / 可达性 / reads 的前向结构。iter = 人工回退的许可（Graph v2
+#: 第一步），cond = 按本步结果自动回退（第三步）；两者都只允许指向源节点的上游或自身。
+LOOP_EDGE_KINDS: frozenset[str] = frozenset({"iter", "cond"})
 
 
 def stage_output_schema_id(state: TaskState) -> str:
@@ -153,6 +158,9 @@ class IterationLicense:
     graph: str
     taken: int
     limit: int
+    #: 条件边自动回退（第三步）时由调度器填好目标阶段，引擎不必再查图；人工回退的许可为 None
+    #: （目标是调用方自己给的）。
+    target_state: TaskState | None = None
 
     @property
     def iteration(self) -> int:
@@ -164,15 +172,151 @@ class IterationLicense:
 
     @property
     def via_edge(self) -> str:
-        return f"iter:{self.edge.source}->{self.edge.target}"
+        return f"{self.edge.kind}:{self.edge.source}->{self.edge.target}"
 
     def event_fields(self) -> dict[str, Any]:
-        return {
+        fields: dict[str, Any] = {
             "via_edge": self.via_edge,
             "iteration": self.iteration,
             "max_iters": self.limit,
             "graph": self.graph,
         }
+        if self.edge.kind == "cond" and self.edge.when:
+            fields["when"] = self.edge.when
+        return fields
+
+
+# ── 条件表达式（§6.2：``when`` 是基于 StageOutput 字段的纯表达式）────────────────────
+#
+# 白名单子集，stdlib ``ast`` 解析、不 eval：``and / or / not``、六种比较与 ``in / not in``、
+# 点路径 / 常量下标取值（缺键给 None、不抛）、字面量、``len()``。别的语法一律是装配缺陷
+# （E410，``GraphSpec.validate`` 时报），运行期求值异常按 False——条件不成立就不放行，
+# 一条写坏的条件边不能把运行拖进异常循环。
+
+_CONDITION_COMPARATORS: dict[type, Callable[[Any, Any], bool]] = {
+    ast.Eq: lambda a, b: a == b,
+    ast.NotEq: lambda a, b: a != b,
+    ast.Lt: lambda a, b: a < b,
+    ast.LtE: lambda a, b: a <= b,
+    ast.Gt: lambda a, b: a > b,
+    ast.GtE: lambda a, b: a >= b,
+    ast.In: lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+_CONDITION_CALLS: dict[str, Callable[[Any], Any]] = {"len": lambda value: len(value) if value is not None else 0}
+
+
+def _condition_tree(expression: str) -> ast.Expression:
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"条件表达式语法错误：{exc.msg}") from None
+    _check_condition_node(tree.body)
+    return tree
+
+
+def _check_condition_node(node: ast.AST) -> None:
+    if isinstance(node, ast.BoolOp):
+        for value in node.values:
+            _check_condition_node(value)
+        return
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        _check_condition_node(node.operand)
+        return
+    if isinstance(node, ast.Compare):
+        for op in node.ops:
+            if type(op) not in _CONDITION_COMPARATORS:
+                raise ValueError(f"条件表达式不支持比较符 {type(op).__name__}")
+        for value in (node.left, *node.comparators):
+            _check_condition_node(value)
+        return
+    if isinstance(node, ast.Constant):
+        if node.value is None or isinstance(node.value, (str, int, float, bool)):
+            return
+        raise ValueError(f"条件表达式不支持字面量 {node.value!r}")
+    if isinstance(node, (ast.Tuple, ast.List)):
+        for element in node.elts:
+            _check_condition_node(element)
+        return
+    if isinstance(node, ast.Name):
+        return
+    if isinstance(node, ast.Attribute):
+        _check_condition_node(node.value)
+        return
+    if isinstance(node, ast.Subscript):
+        if not isinstance(node.slice, ast.Constant):
+            raise ValueError("条件表达式的下标只能是常量")
+        _check_condition_node(node.value)
+        return
+    if isinstance(node, ast.Call):
+        if not (isinstance(node.func, ast.Name) and node.func.id in _CONDITION_CALLS) or node.keywords or len(node.args) != 1:
+            raise ValueError("条件表达式只允许调用 len(x)")
+        _check_condition_node(node.args[0])
+        return
+    raise ValueError(f"条件表达式不支持 {type(node).__name__}")
+
+
+def _lookup(value: Any, key: Any) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    if isinstance(value, (list, tuple)) and isinstance(key, int):
+        return value[key] if -len(value) <= key < len(value) else None
+    return getattr(value, str(key), None) if isinstance(key, str) and value is not None and not isinstance(value, (str, bytes)) else None
+
+
+def _eval_condition_node(node: ast.AST, context: Mapping[str, Any]) -> Any:
+    if isinstance(node, ast.BoolOp):
+        if isinstance(node.op, ast.And):
+            result: Any = True
+            for value in node.values:
+                result = _eval_condition_node(value, context)
+                if not result:
+                    return result
+            return result
+        result = False
+        for value in node.values:
+            result = _eval_condition_node(value, context)
+            if result:
+                return result
+        return result
+    if isinstance(node, ast.UnaryOp):
+        return not _eval_condition_node(node.operand, context)
+    if isinstance(node, ast.Compare):
+        left = _eval_condition_node(node.left, context)
+        for op, comparator in zip(node.ops, node.comparators):
+            right = _eval_condition_node(comparator, context)
+            if not _CONDITION_COMPARATORS[type(op)](left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return tuple(_eval_condition_node(element, context) for element in node.elts)
+    if isinstance(node, ast.Name):
+        return context.get(node.id)
+    if isinstance(node, ast.Attribute):
+        return _lookup(_eval_condition_node(node.value, context), node.attr)
+    if isinstance(node, ast.Subscript):
+        return _lookup(_eval_condition_node(node.value, context), node.slice.value)  # type: ignore[attr-defined]
+    if isinstance(node, ast.Call):
+        return _CONDITION_CALLS[node.func.id](_eval_condition_node(node.args[0], context))  # type: ignore[attr-defined]
+    raise ValueError(f"条件表达式不支持 {type(node).__name__}")
+
+
+def validate_condition(expression: str) -> None:
+    """装配期检查：语法 + 白名单；违约抛 ``ValueError``（调用方包成 E410）。"""
+    if not str(expression or "").strip():
+        raise ValueError("条件表达式为空")
+    _condition_tree(str(expression))
+
+
+def evaluate_condition(expression: str, context: Mapping[str, Any]) -> bool:
+    """运行期求值：真值按 Python 口径；缺键 / 类型不匹配等一切异常按 False（不放行）。"""
+    try:
+        return bool(_eval_condition_node(_condition_tree(str(expression)).body, context))
+    except Exception:  # noqa: BLE001 - 条件写坏只能让边不生效，不能让运行崩
+        return False
 
 
 @dataclass(frozen=True)
@@ -217,6 +361,15 @@ class GraphSpec:
     def iteration_edges(self) -> tuple[GraphEdge, ...]:
         return tuple(edge for edge in self.edges if edge.kind == "iter")
 
+    @property
+    def condition_edges(self) -> tuple[GraphEdge, ...]:
+        """条件边（Graph v2 第三步）：按声明顺序——同一节点多条条件边时先声明的先判。"""
+        return tuple(edge for edge in self.edges if edge.kind == "cond")
+
+    def forward_edges(self, node_id: str) -> tuple[GraphEdge, ...]:
+        """节点的前进出边（不含 iter / cond 回环边）。"""
+        return tuple(edge for edge in self.successors(node_id) if edge.kind not in LOOP_EDGE_KINDS)
+
     def iteration_edge(self, source_state: TaskState, target_state: TaskState) -> GraphEdge | None:
         """从 ``source_state`` 的节点回到 ``target_state`` 的节点的迭代边（没有就是不许回）。"""
         source = self.node_for_state(source_state)
@@ -229,8 +382,8 @@ class GraphSpec:
         return None
 
     def entry(self) -> GraphNode:
-        """唯一入口 = 没有非迭代入边的节点（``validate`` 保证恰好一个）。"""
-        targets = {edge.target for edge in self.edges if edge.kind != "iter"}
+        """唯一入口 = 没有前向入边（回环边不算）的节点（``validate`` 保证恰好一个）。"""
+        targets = {edge.target for edge in self.edges if edge.kind not in LOOP_EDGE_KINDS}
         entries = [node for node in self.nodes if node.id not in targets]
         if len(entries) != 1:
             raise _defect(
@@ -309,32 +462,41 @@ class GraphSpec:
                         f"图 {graph} 边 {edge.source}→{edge.target} 引用了不存在的节点 {endpoint!r}",
                         graph=graph, node_id=endpoint,
                     )
-            if edge.kind != "iter" and edge.source == edge.target:
+            if edge.kind not in LOOP_EDGE_KINDS and edge.source == edge.target:
                 raise _defect(
                     ErrorCode.GRAPH_ILLEGAL_TRANSITION,
-                    f"图 {graph} 节点 {edge.source} 有非迭代自环",
+                    f"图 {graph} 节点 {edge.source} 有非回环自环",
                     graph=graph, node_id=edge.source,
                 )
-            if edge.kind == "cond" and not edge.when:
+            if edge.kind == "cond":
+                if not edge.when:
+                    raise _defect(
+                        ErrorCode.GRAPH_ILLEGAL_TRANSITION,
+                        f"图 {graph} 条件边 {edge.source}→{edge.target} 缺 when",
+                        graph=graph,
+                    )
+                try:
+                    validate_condition(edge.when)
+                except ValueError as exc:
+                    raise _defect(
+                        ErrorCode.GRAPH_ILLEGAL_TRANSITION,
+                        f"图 {graph} 条件边 {edge.source}→{edge.target} 的 when 非法：{exc}",
+                        graph=graph, when=edge.when,
+                    ) from None
+            if edge.kind in LOOP_EDGE_KINDS and (edge.max_iters is None or edge.max_iters < 1):
                 raise _defect(
                     ErrorCode.GRAPH_ILLEGAL_TRANSITION,
-                    f"图 {graph} 条件边 {edge.source}→{edge.target} 缺 when",
-                    graph=graph,
-                )
-            if edge.kind == "iter" and (edge.max_iters is None or edge.max_iters < 1):
-                raise _defect(
-                    ErrorCode.GRAPH_ILLEGAL_TRANSITION,
-                    f"图 {graph} 迭代边 {edge.source}→{edge.target} 的 max_iters 须 ≥ 1",
+                    f"图 {graph} {'迭代' if edge.kind == 'iter' else '条件'}边 {edge.source}→{edge.target} 的 max_iters 须 ≥ 1",
                     graph=graph,
                 )
 
         entry = self.entry()
         forward = {node.id: [] for node in self.nodes}
         for edge in self.edges:
-            if edge.kind != "iter":
+            if edge.kind not in LOOP_EDGE_KINDS:
                 forward[edge.source].append(edge.target)
 
-        # 除迭代边外无环 + 全部节点从入口可达（不可达的节点永远不会跑，是缺陷不是配置）
+        # 除回环边外无环 + 全部节点从入口可达（不可达的节点永远不会跑，是缺陷不是配置）
         order = self._topological_order(forward, graph)
         reachable: set[str] = set()
         stack = [entry.id]
@@ -352,7 +514,17 @@ class GraphSpec:
                 graph=graph, unreachable=unreachable,
             )
 
-        # reads 可满足：每个读取的 schema_id 必须由某个上游（沿非迭代边）节点写出
+        # 条件边只支持回退（目标是源节点的上游或自身）：向前的条件分叉随后续步，装配期就拒绝
+        position = {node_id: index for index, node_id in enumerate(order)}
+        for edge in self.condition_edges:
+            if position[edge.target] > position[edge.source]:
+                raise _defect(
+                    ErrorCode.GRAPH_ILLEGAL_TRANSITION,
+                    f"图 {graph} 条件边 {edge.source}→{edge.target} 指向下游：条件边只支持回退（分叉随后续步）",
+                    graph=graph, node_id=edge.source,
+                )
+
+        # reads 可满足：每个读取的 schema_id 必须由某个上游（沿前向边）节点写出
         available: dict[str, set[str]] = {}
         nodes_by_id = {node.id: node for node in self.nodes}
         incoming: dict[str, list[str]] = {node.id: [] for node in self.nodes}
@@ -456,17 +628,27 @@ def linear_v1() -> GraphSpec:
 
 #: modeling-v2 迭代边的轮次上限：与控制面的修订轮数上限同一口径（三轮不成就该由人换路）。
 MODELING_V2_MAX_ITERS = 3
+#: modeling-v2 条件边（自动回实验）的轮次上限：设计文档 §9.1「validating → experimenting ≤ 2 自动回实验」。
+MODELING_V2_AUTO_REDO_ITERS = 2
+#: 自动回实验的触发条件：验证节点提的 G3 里系统自己推荐的就是「重做实验」（失败检查占比过半 /
+#: 实验审稿僵持）——图替人执行这条推荐，最多两轮，轮次用尽（E430）才开 G3 交人。
+MODELING_V2_AUTO_REDO_WHEN = "review.gate == 'G3' and review.impact.recommended == 'redo:EXPERIMENTING'"
 
 
 def modeling_v2() -> GraphSpec:
-    """Graph v2 第一步：linear-v1 的节点与顺序边 + **迭代边**（§6.2 ``iter``）。
+    """Graph v2：linear-v1 的节点与顺序边 + **迭代边**（第一步，``iter``）+ **条件边**（第三步，``cond``）。
 
     今天「退回重做」（G4 的 redo:PAPER_WRITING、G3 的 redo:EXPERIMENTING、跑完后的修订轮、
     对话面的任意状态从阶段重做）都是引擎按事件直接把状态搬回去，图对此一无所知。这里把
     「从哪个节点允许回到哪个节点、最多几轮」写成图的一等事实：每个节点到它自己及全部上游
     节点各一条迭代边（重做 = 回到某阶段再顺序往下走），``max_iters`` 统一取修订轮数上限。
     调度器据此**放行或拒绝**回退（没有边 = E410；轮次用尽 = E430 强制交人裁），前进路径与
-    linear-v1 逐字相同——影子等价证据照样成立。lane / join / cond 仍是后续步。
+    linear-v1 逐字相同——影子等价证据照样成立。
+
+    条件边 ``validating → experimenting``：验证节点要开 G3 且系统推荐「重做实验」时，图先自动
+    回实验（≤ ``MODELING_V2_AUTO_REDO_ITERS`` 轮），轮次用尽（E430）才把 G3 交给人——D2.1
+    「E430→G3」。推荐「接受并记录局限」的 G3 照旧直接开门（现有剧本控制流不变）。
+    lane / join 仍是后续步。
     """
     base = linear_v1()
     edges: list[GraphEdge] = list(base.edges)
@@ -475,6 +657,15 @@ def modeling_v2() -> GraphSpec:
             edges.append(
                 GraphEdge(source=source.id, target=target.id, kind="iter", max_iters=MODELING_V2_MAX_ITERS)
             )
+    edges.append(
+        GraphEdge(
+            source=TaskState.VALIDATING.value.lower(),
+            target=TaskState.EXPERIMENTING.value.lower(),
+            kind="cond",
+            when=MODELING_V2_AUTO_REDO_WHEN,
+            max_iters=MODELING_V2_AUTO_REDO_ITERS,
+        )
+    )
     return GraphSpec(id="modeling", version=2, nodes=base.nodes, edges=tuple(edges))
 
 
@@ -518,26 +709,76 @@ class LinearScheduler:
 
 
 class GraphScheduler:
-    """按 GraphSpec 选目标：前进只认顺序边（每节点至多一条），回退按迭代边放行 / 拒绝。
+    """按 GraphSpec 选目标：前进只认顺序边（每节点至多一条），回退按迭代边 / 条件边放行或拒绝。
 
     运行期不做 reads 检查：现引擎没有这一步，做了就不再等价；reads 可满足性在
-    ``GraphSpec.validate`` 装配期证明一次即可（E420）。条件边（cond）仍是后续步，装配期拒绝。
-    迭代边不参与前进选择（``select_target`` 与 linear-v1 逐字相同），只在引擎要把运行搬回
-    某阶段时经 ``check_iteration`` 裁定——没有迭代边的图（linear-v1）不裁，行为与今天一致。
+    ``GraphSpec.validate`` 装配期证明一次即可（E420）。向前的条件分叉仍是后续步，装配期拒绝。
+    回环边不参与前进选择（``select_target`` 与 linear-v1 逐字相同）：迭代边只在引擎要把运行
+    搬回某阶段时经 ``license_iteration`` 裁定，条件边在每步成功后经 ``auto_iteration`` 按本步
+    结果决定要不要自动回退——没有回环边的图（linear-v1）两者都不裁，行为与今天一致。
     """
 
     def __init__(self, spec: GraphSpec) -> None:
         spec.validate()
         for node in spec.nodes:
-            forward = [edge for edge in spec.successors(node.id) if edge.kind != "iter"]
+            forward = spec.forward_edges(node.id)
             if len(forward) > 1 or any(edge.kind != "seq" for edge in forward):
                 raise _defect(
                     ErrorCode.GRAPH_ILLEGAL_TRANSITION,
                     f"图调度器只支持每节点至多一条顺序出边，节点 {node.id} 不满足"
-                    "（条件边随 Graph v2 后续步）",
+                    "（条件分叉随 Graph v2 后续步）",
                     graph=spec.workflow_version, node_id=node.id,
                 )
         self.spec = spec
+
+    def auto_iteration(
+        self,
+        snapshot: TaskRunSnapshot,
+        state: TaskState,
+        outputs: Mapping[str, Any] | None = None,
+        review: Mapping[str, Any] | None = None,
+        attempt: int | None = None,
+    ) -> IterationLicense | None:
+        """一步成功之后、闸门 / 前进之前的裁定：有条件边为真就自动回退（纯函数、不改快照）。
+
+        按声明顺序看 ``state`` 节点的条件边，``when`` 在上下文 {outputs, review, state, attempt}
+        上求值（缺键给 None、异常按 False）；第一条为真的边放行——已走轮次沿用迭代边口径
+        （目标阶段已成功通过的次数 − 1，人工重做与自动回退共用一个有界计数），≥ ``max_iters``
+        抛 E430（引擎据此放过自动回退、照旧开闸门交人 = D2.1「E430→G3」）。没有条件边或
+        条件都不成立 → None。
+        """
+        node = self.spec.node_for_state(state)
+        if node is None:
+            return None
+        context = {
+            "outputs": dict(outputs or {}),
+            "review": dict(review or {}),
+            "state": state.value,
+            "attempt": attempt,
+        }
+        graph = self.spec.workflow_version
+        for edge in self.spec.condition_edges:
+            if edge.source != node.id or not evaluate_condition(str(edge.when), context):
+                continue
+            target = self.spec.node(edge.target).state
+            passes = sum(
+                1 for step in snapshot.steps
+                if step.state is target and step.status is StepStatus.SUCCEEDED
+            )
+            taken = max(0, passes - 1)
+            limit = int(edge.max_iters or 0)
+            if taken >= limit:
+                raise IterationRefused(
+                    ErrorCode.GRAPH_ITERATION_LIMIT,
+                    f"条件边 {state.value}→{target.value} 的 {limit} 轮自动回退已用尽"
+                    f"（{target.value} 已成功通过 {passes} 次），交闸门由人决定",
+                    context={
+                        "graph": graph, "from": state.value, "to": target.value,
+                        "max_iters": limit, "taken": taken, "when": edge.when,
+                    },
+                )
+            return IterationLicense(edge=edge, graph=graph, taken=taken, limit=limit, target_state=target)
+        return None
 
     def license_iteration(
         self, snapshot: TaskRunSnapshot, source_state: TaskState, target_state: TaskState
@@ -600,8 +841,8 @@ class GraphScheduler:
                 return snapshot.state
             latest = _latest_step(snapshot, snapshot.state)
             if latest is not None and latest.status is StepStatus.SUCCEEDED:
-                # 只沿顺序边前进：迭代边是回退的许可，不是下一步
-                out = [edge for edge in self.spec.successors(node.id) if edge.kind != "iter"]
+                # 只沿顺序边前进：迭代边 / 条件边是回退的许可，不是下一步
+                out = self.spec.forward_edges(node.id)
                 if not out:
                     return TaskState.COMPLETED
                 return self.spec.node(out[0].target).state
@@ -771,15 +1012,20 @@ __all__ = [
     "IterationRefused",
     "IterationLicense",
     "LINEAR_V1_GATES",
+    "LOOP_EDGE_KINDS",
     "LinearScheduler",
+    "MODELING_V2_AUTO_REDO_ITERS",
+    "MODELING_V2_AUTO_REDO_WHEN",
     "MODELING_V2_MAX_ITERS",
     "NODE_KINDS",
     "Scheduler",
     "SchedulingDivergence",
     "ShadowComparator",
+    "evaluate_condition",
     "linear_v1",
     "modeling_v2",
     "resolve_graph_mode",
     "schedulers_for_mode",
     "stage_output_schema_id",
+    "validate_condition",
 ]

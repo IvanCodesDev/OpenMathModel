@@ -26,6 +26,7 @@ from typing import Any
 
 from .graph import (
     DivergenceHook,
+    IterationRefused,
     LinearScheduler,
     Scheduler,
     SchedulingDivergence,
@@ -208,6 +209,23 @@ class TaskRunEngine:
                 },
                 events,
             )
+            # Graph v2 条件边：本步结果满足某条回退条件 → 图替人自动回退（RUN_REDO 带许可），
+            # 先于闸门与前进；轮次用尽（E430）→ 放过，照旧开闸门交人（D2.1「E430→G3」）。
+            # 没有条件边的图（linear-v1）什么都不发生，payload 逐字不变。
+            auto_license, auto_refused = self._auto_iteration(snapshot, target, result, attempt)
+            if auto_license is not None:
+                redo_payload: dict[str, Any] = {
+                    "target_state": auto_license.target_state.value,
+                    "from_state": target.value,
+                    "reason": (
+                        f"图 {auto_license.graph} 条件边自动回退："
+                        + (result.review_reason or f"条件 {auto_license.edge.when} 成立")
+                    ),
+                    "auto": True,
+                }
+                redo_payload.update(auto_license.event_fields())
+                self._record(snapshot, EventType.RUN_REDO, redo_payload, events)
+                return AdvanceOutcome(AdvanceOutcome.ADVANCED, snapshot, events)
             if result.status == NodeResult.NEEDS_REVIEW:
                 review_payload: dict[str, Any] = {
                     "reason": result.review_reason or "review requested",
@@ -218,6 +236,9 @@ class TaskRunEngine:
                     # 闸门元数据（闸门号/选项/证据）只在节点声明时携带；
                     # 缺省时载荷与历史版本逐字节一致（金轨迹稳定）。
                     review_payload["gate"] = dict(result.review_meta)
+                if auto_refused is not None:
+                    # 自动回退的轮次已用尽：闸门卡片上要看得到「图已替你重做过几轮」
+                    review_payload["iteration"] = {"code": auto_refused.code.value, **auto_refused.context}
                 gate_id = (result.review_meta or {}).get("gate")
                 self._shadow.check_gate(
                     snapshot, target, str(gate_id) if gate_id is not None else None
@@ -451,6 +472,22 @@ class TaskRunEngine:
         return events
 
     # -- internals ----------------------------------------------------------
+
+    def _auto_iteration(
+        self, snapshot: TaskRunSnapshot, state: TaskState, result: NodeResult, attempt: int
+    ) -> tuple[Any, Any]:
+        """一步成功后问调度器要不要按条件边自动回退：(许可 | None, E430 拒绝 | None)。
+
+        只有会裁的调度器（``auto_iteration``）参与；影子不问（裁定可能抛异常改主路径）。
+        E430 不是错误而是「自动轮次用尽、交人」——原样带回给闸门 payload。
+        """
+        judge = getattr(self._scheduler, "auto_iteration", None)
+        if not callable(judge):
+            return None, None
+        try:
+            return judge(snapshot, state, result.outputs, result.review_meta, attempt), None
+        except IterationRefused as exc:
+            return None, exc
 
     def _license_iteration(
         self, snapshot: TaskRunSnapshot, source: TaskState, target: TaskState
