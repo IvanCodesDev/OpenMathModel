@@ -6351,6 +6351,31 @@ html[data-theme="dark"] .stage-note-list li { color: #b3b3ae; }
 .focused-workspace .stage-field-table td:first-child { white-space: nowrap; font-variant-ligatures: none; }
 .focused-workspace .stage-field-table th:nth-child(2) { width: 46%; }
 
+/* 「清洗数据」分页（真实内容）：状态徽标失败态、产物表（哈希等宽、不可下载行变灰）、
+   结论条目的 info 态与空态提示。骨架沿用 focused-template，这里只补真实内容多出来的几种状态 */
+.focused-template-status.is-failed { color: #b3382c; background: #fbeae7; }
+.clean-data-template .focused-template-metrics small { display: block; margin-top: 4px; color: #6a6a65; font-size: 12px; }
+.focused-workspace .clean-data-outputs th { white-space: nowrap; }
+.focused-workspace .clean-data-outputs td { vertical-align: middle; white-space: nowrap; }
+.focused-workspace .clean-data-outputs tr.is-pending td { color: #8a8a85; }
+.focused-workspace .clean-data-outputs .clean-data-hash {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: 12px;
+  color: #6a6a65;
+}
+.clean-data-download { font-weight: 600; color: #1f5f8b; text-decoration: underline; text-underline-offset: 3px; }
+.clean-data-unavailable { color: #8a8a85; font-size: 12px; }
+.clean-data-empty-outputs { margin: 8px 0 0; color: #6a6a65; font-size: 13px; }
+.clean-data-empty span { line-height: 1.6; }
+.stage-note-list li.is-info > i { color: #4a6fa5; }
+.focused-stage-pane .stage-note-list li.is-info > i { color: var(--ax-accent, #4a6fa5); }
+html[data-theme="dark"] .focused-template-status.is-failed { color: #e29a6a; background: #3a2622; }
+html[data-theme="dark"] .clean-data-download { color: #8ec5ea; }
+html[data-theme="dark"] .clean-data-template .focused-template-metrics small,
+html[data-theme="dark"] .focused-workspace .clean-data-outputs .clean-data-hash,
+html[data-theme="dark"] .clean-data-empty-outputs { color: #a8a8a3; }
+html[data-theme="dark"] .stage-note-list li.is-info > i { color: #8fb3e6; }
+
 /* 方案页真实假设表 / 符号表：假设与定义列折行显示全文（演示表的定宽截断在这里
    会把「15 分钟内区域需求…」这类正文吃掉），编号 / 符号列不折行 */
 .focused-workspace .assumption-table th,

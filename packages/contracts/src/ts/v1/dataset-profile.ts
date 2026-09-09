@@ -14,6 +14,10 @@ export type CleaningStatus = "passed" | "failed";
  */
 export type ReviewVerdict = "accept" | "reject";
 /**
+ * 产物在清洗里的角色：cleaned_data 清洗后数据表（cleaned/ 下的 table）/ script 清洗脚本（cleaning.py）/ other 其余登记产物（日志等）。
+ */
+export type CleaningOutputRole = "cleaned_data" | "script" | "other";
+/**
  * UTC ISO-8601，统一以 Z 结尾。
  */
 export type Timestamp = string;
@@ -116,6 +120,14 @@ export interface CleaningReport {
    * 清洗脚本的独立审稿结论（生成者-评审者环：节点确定性复跑核对 + 只读审稿子代理；驳回退修、修不动即僵持交 G2 裁定，僵持时推荐改用原始数据）。首波未过验收、未执行、或审稿环之前的运行时为 null。
    */
   review: null | ReviewReport;
+  /**
+   * 清洗产出的文件：cleaned/ 下的清洗后数据表与清洗脚本 cleaning.py（数据准备节点最近一趟登记的产物；投影按产物登记表确定性填，不经模型）。未执行为空列表。可选字段：该字段出现之前的消费者可忽略。
+   */
+  outputs?: CleaningOutput[];
+  /**
+   * G2 数据确认闸门对这一版清洗的人工决策（采用清洗结果 / 改用原始数据 / 退回调整）。闸门未触发（影响面在阈值内且审稿未僵持）、仍挂起、或未执行清洗时为 null。可选字段：该字段出现之前的消费者可忽略。
+   */
+  decision?: null | CleaningDecision;
 }
 export interface ReviewReport {
   /**
@@ -176,4 +188,50 @@ export interface ReviewFinding {
    * 修法建议；无则空串。
    */
   fix_hint: string;
+}
+export interface CleaningOutput {
+  /**
+   * 产物 id（/api/v1/artifacts/{id}/download 的主键）。
+   */
+  artifact_id: string;
+  /**
+   * 文件名（内容 URI 尾部的真实文件名）。
+   */
+  name: string;
+  role: CleaningOutputRole;
+  /**
+   * 登记的媒体类型；未知为 application/octet-stream。
+   */
+  media_type: string;
+  /**
+   * 登记大小；未知为 null。
+   */
+  size_bytes: number | null;
+  /**
+   * 登记的内容摘要（下载端点按同一值核验）；未登记为 null。
+   */
+  sha256: string | null;
+  /**
+   * 可下载时的相对地址（/api/v1/artifacts/{id}/download）；内容对象缺失或产物未就绪为 null。
+   */
+  download_url: string | null;
+}
+export interface CleaningDecision {
+  /**
+   * G2 审批请求 id（/task-runs/{run_id}/approvals 里的那条）。
+   */
+  approval_id: string;
+  /**
+   * 所选选项 id：adopt_cleaned 采用清洗结果 / use_raw 改用原始数据 / reject 退回调整（节点声明的选项，消费者须容忍新增取值）。
+   */
+  option_id: string;
+  /**
+   * 拍板人（账户标识原值；无登录信息时为 user）。
+   */
+  actor: string;
+  /**
+   * 拍板时的备注；无则 null。
+   */
+  comment: string | null;
+  resolved_at: Timestamp;
 }

@@ -233,7 +233,92 @@ def _non_negative_int(value: Any) -> int:
     return max(0, int(value))
 
 
-def _cleaning_report(raw: Any) -> Optional[dict[str, Any]]:
+#: 清洗产物角色（契约 enum cleaning_output_role）与清洗脚本的登记文件名（nodes.py 发布回调同一口径）。
+_CLEANING_ROLE_DATA = "cleaned_data"
+_CLEANING_ROLE_SCRIPT = "script"
+_CLEANING_ROLE_OTHER = "other"
+_CLEANING_SCRIPT_NAME = "cleaning.py"
+#: G2 数据确认闸门在审批表里的样子（nodes.py `_g2_review` 的 review_meta：evidence.gate = "G2"）。
+_G2_GATE = "G2"
+
+
+def _cleaning_output_role(row: ArtifactRow) -> str:
+    name = str(row.name or "").rsplit("/", 1)[-1]
+    if row.kind == "code" or name == _CLEANING_SCRIPT_NAME:
+        return _CLEANING_ROLE_SCRIPT
+    if row.kind == "table":
+        return _CLEANING_ROLE_DATA
+    return _CLEANING_ROLE_OTHER
+
+
+def _cleaning_outputs(
+    rows: Iterable[ArtifactRow], blobs: Optional[ArtifactBlobStore]
+) -> list[dict[str, Any]]:
+    """数据准备节点登记的产物 → 契约 ``cleaning_output[]``：清洗后数据表在前、脚本其后、其余最后；
+    同角色按登记顺序。下载地址与成果清单同一判定（READY 且内容对象可读）。"""
+    entries: list[tuple[int, int, dict[str, Any]]] = []
+    order = {_CLEANING_ROLE_DATA: 0, _CLEANING_ROLE_SCRIPT: 1, _CLEANING_ROLE_OTHER: 2}
+    for index, row in enumerate(rows):
+        role = _cleaning_output_role(row)
+        downloadable = (
+            blobs is not None
+            and row.status == "READY"
+            and has_readable_local_content(blobs, row.uri, row.sha256)
+        )
+        entries.append((order[role], index, {
+            "artifact_id": row.id,
+            "name": str(row.name or "").rsplit("/", 1)[-1] or row.id,
+            "role": role,
+            "media_type": row.media_type or "application/octet-stream",
+            "size_bytes": row.size_bytes,
+            "sha256": _registered_sha256(row.sha256),
+            "download_url": f"/api/v1/artifacts/{row.id}/download" if downloadable else None,
+        }))
+    return [entry for _, _, entry in sorted(entries, key=lambda item: (item[0], item[1]))]
+
+
+def _cleaning_decision(
+    state: StageState, approvals: Iterable[ApprovalRequestRow]
+) -> Optional[dict[str, Any]]:
+    """这一版清洗的 G2 决策（dataset-profile.v1 ``cleaning.decision``）。
+
+    只认 ``evidence.gate == "G2"`` 且 ``requested_by_step`` 指向产出这一版的那一趟 step、
+    已解决的审批；仍挂起 / 闸门未触发 → None。多条（理论上）取最晚解决的。
+    """
+    if not state.step_id:
+        return None
+    candidates: list[tuple[str, ApprovalRequestRow, dict[str, Any]]] = []
+    for approval in approvals:
+        if approval.status != ApprovalStatus.RESOLVED.value:
+            continue
+        evidence = approval.evidence if isinstance(approval.evidence, dict) else {}
+        if str(evidence.get("gate") or "") != _G2_GATE:
+            continue
+        if str(evidence.get("requested_by_step") or "") != state.step_id:
+            continue
+        resolution = approval.resolution if isinstance(approval.resolution, dict) else {}
+        option_id = str(resolution.get("option_id") or "")
+        if not option_id:
+            continue
+        candidates.append((str(resolution.get("resolved_at") or ""), approval, resolution))
+    if not candidates:
+        return None
+    resolved_at, approval, resolution = max(candidates, key=lambda item: item[0])
+    comment = resolution.get("comment")
+    return {
+        "approval_id": approval.id,
+        "option_id": str(resolution["option_id"]),
+        "actor": str(resolution.get("actor") or "user"),
+        "comment": comment.strip() if isinstance(comment, str) and comment.strip() else None,
+        "resolved_at": resolved_at or iso_z(as_utc(approval.requested_at)),
+    }
+
+
+def _cleaning_report(
+    raw: Any,
+    outputs: Optional[list[dict[str, Any]]] = None,
+    decision: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
     """数据节点的 ``cleaning`` 输出 → 契约 ``cleaning_report``（dataset-profile.v1）。
 
     节点写的是过程全貌（llm_calls / target_columns / 产物引用 / 波次…），契约只要
@@ -245,6 +330,8 @@ def _cleaning_report(raw: Any) -> Optional[dict[str, Any]]:
       status null、数字 0、列表空、summary 空、review null，reason 原样保留；
     - 执行：数字按标记行取非负整数，删行比例缺失时按前后行数重算并夹到 [0, 1]；
       status 越界归 failed；review 走 ``_review_report``；
+    - ``outputs``（清洗产物：登记表确定性推导）与 ``decision``（G2 决策）由调用方算好传入：
+      执行过才带产物，决策有就带（未执行时两者分别为空表 / null）；
     - 该字段出现之前的运行 / 模拟节点没有该键 → None（契约 null）。
     """
     if not isinstance(raw, dict):
@@ -263,6 +350,8 @@ def _cleaning_report(raw: Any) -> Optional[dict[str, Any]]:
             "imputed_target_columns": [],
             "summary": "",
             "review": None,
+            "outputs": [],
+            "decision": None,
         }
     rows_before = _non_negative_int(raw.get("rows_before"))
     rows_after = _non_negative_int(raw.get("rows_after"))
@@ -284,10 +373,18 @@ def _cleaning_report(raw: Any) -> Optional[dict[str, Any]]:
         ],
         "summary": str(raw.get("summary") or ""),
         "review": _review_report(raw.get("review")),
+        "outputs": list(outputs or []),
+        "decision": decision,
     }
 
 
-def _dataset_profile(run_id: str, state: Optional[StageState]) -> Optional[DatasetProfile]:
+def _dataset_profile(
+    run_id: str,
+    state: Optional[StageState],
+    artifact_rows: Iterable[ArtifactRow] = (),
+    blobs: Optional[ArtifactBlobStore] = None,
+    approvals: Iterable[ApprovalRequestRow] = (),
+) -> Optional[DatasetProfile]:
     if state is None:
         return None
     outputs = state.outputs
@@ -314,8 +411,13 @@ def _dataset_profile(run_id: str, state: Optional[StageState]) -> Optional[Datas
         missing_value_strategy=outputs.get("missing_value_strategy"),
         outlier_strategy=outputs.get("outlier_strategy"),
         derived_features=_strs(outputs.get("derived_features")),
-        # 清洗执行结论 + 独立审稿（§8.4 第三个沙盒消费方）；该字段出现之前的运行 → null
-        cleaning=_cleaning_report(outputs.get("cleaning")),
+        # 清洗执行结论 + 独立审稿（§8.4 第三个沙盒消费方）；该字段出现之前的运行 → null。
+        # 清洗产物（cleaned/ 数据表 + cleaning.py）与 G2 决策由登记表 / 审批表确定性推导。
+        cleaning=_cleaning_report(
+            outputs.get("cleaning"),
+            outputs=_cleaning_outputs(artifact_rows, blobs),
+            decision=_cleaning_decision(state, approvals),
+        ),
         updated_at=iso_z(state.at),
     )
 
@@ -1171,10 +1273,18 @@ def build_stage_outputs(
         ).scalars()
     )
 
+    # 清洗产物 = 数据准备节点最近一趟登记的产物（cleaned/ 数据表、cleaning.py）
+    cleaning_rows = [
+        row for row in artifact_rows
+        if step_nodes.get(row.producer_step or "") == _DATA_PREPARATION
+    ]
+
     return StageOutputs(
         run_id=run.id,
         problem_frame=_problem_frame(run.id, stages.get(_PROBLEM_ANALYSIS)),
-        dataset_profile=_dataset_profile(run.id, stages.get(_DATA_PREPARATION)),
+        dataset_profile=_dataset_profile(
+            run.id, stages.get(_DATA_PREPARATION), cleaning_rows, blobs, approvals
+        ),
         plan_proposal=_plan_proposal(run.id, stages.get(_MODEL_PLANNING), approvals),
         experiment_summary=_experiment_summary(
             run.id, stages.get(_EXPERIMENTING), stages.get(_VALIDATING)

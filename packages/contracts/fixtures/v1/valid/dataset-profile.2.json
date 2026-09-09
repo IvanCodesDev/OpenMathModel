@@ -55,6 +55,42 @@
       "stalemate": true,
       "rerun_consistent": true,
       "reason": "审稿 2 轮后仍有阻断性意见未解决"
+    },
+    "outputs": [
+      {
+        "artifact_id": "art_c1e2a3d4b5f60718",
+        "name": "orders.csv",
+        "role": "cleaned_data",
+        "media_type": "text/csv",
+        "size_bytes": 48211,
+        "sha256": "9b3f0c2a6d5e4f7183920a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3",
+        "download_url": "/api/v1/artifacts/art_c1e2a3d4b5f60718/download"
+      },
+      {
+        "artifact_id": "art_c1e2a3d4b5f60719",
+        "name": "stations.csv",
+        "role": "cleaned_data",
+        "media_type": "text/csv",
+        "size_bytes": 3120,
+        "sha256": null,
+        "download_url": null
+      },
+      {
+        "artifact_id": "art_c1e2a3d4b5f6071a",
+        "name": "cleaning.py",
+        "role": "script",
+        "media_type": "text/x-python",
+        "size_bytes": 2048,
+        "sha256": "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+        "download_url": "/api/v1/artifacts/art_c1e2a3d4b5f6071a/download"
+      }
+    ],
+    "decision": {
+      "approval_id": "apr_7d8e9f0a1b2c3d4e",
+      "option_id": "use_raw",
+      "actor": "user",
+      "comment": "审稿僵持，先用原始数据建模",
+      "resolved_at": "2026-09-06T12:05:00.000000Z"
     }
   },
   "updated_at": "2026-09-06T12:00:00.000000Z"

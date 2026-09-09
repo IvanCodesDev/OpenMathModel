@@ -20,6 +20,7 @@ import type {
 import { currentLocale, t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
+import { describeCleanData } from "./clean-data";
 import { deliveryPackageUrl, describeDelivery } from "./delivery-record";
 import type { DeliveryView } from "./delivery-record";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
@@ -207,15 +208,16 @@ const STAGE_TAB_PLAN: Array<{
   demo: string[];
   fillable: string[];
 }> = [
-  { workspace: ".data-report-workspace", primary: "data-report", demo: ["raw-data", "clean-data"], fillable: ["field-guide"] },
+  // 清洗数据自 H4 切片 s23 起有真实数据源（dataset-profile.cleaning + outputs / decision）
+  { workspace: ".data-report-workspace", primary: "data-report", demo: ["raw-data"], fillable: ["clean-data", "field-guide"] },
   // 模型假设 / 符号表自 H3 切片 2 起有真实数据源（plan-proposal.assumptions / symbols）
   { workspace: ".model-plan-workspace", primary: "model-plan", demo: [], fillable: ["assumptions", "symbols", "implementation"] },
 ];
 
 /**
- * 真实运行的子分页纪律（R4）：进入真实任务即撤走纯演示分页（原始数据、
- * 清洗数据——当前契约下没有它们的真实数据源），可填充分页（字段说明、
- * 模型假设、符号表、实现计划）先藏起，等对应阶段的真实内容渲染后再放出。
+ * 真实运行的子分页纪律（R4）：进入真实任务即撤走纯演示分页（原始数据——当前契约下
+ * 没有它的真实数据源），可填充分页（清洗数据、字段说明、模型假设、符号表、实现计划）
+ * 先藏起，等对应阶段的真实内容渲染后再放出。
  * 幂等，控制器每次快照刷新都可安全调用；演示页（无运行身份）不受影响。
  */
 export function prepareStageTabs(root: HTMLElement): void {
@@ -400,10 +402,142 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
     preview.hidden = false;
   }
 
-  // 字段说明页用真实字段填充（纯演示分页由 prepareStageTabs 统一撤走）
+  // 字段说明 / 清洗数据两个可填充分页用真实内容填充（纯演示分页由 prepareStageTabs 统一撤走）
   renderFieldGuidePanel(root, profile);
+  renderCleanDataPanel(root, profile);
   settleClamps(panel);
   typesetMath(panel);
+}
+
+// ── 「清洗数据」分页（DatasetProfile.cleaning + outputs / decision → clean-data 面板，H4 切片 s23） ──
+//
+// 演示分页的骨架（focused-template：页头 + 状态 / 三个指标 / 小节 + 表）照用，内容全换成契约事实：
+// 保留 / 删行 / 插补三个数字来自清洗脚本的标记行（G2 判定依据）、清洗产物逐行带大小 / 短哈希 / 下载
+// 链接（/api/v1/artifacts/{id}/download，同产物下载一条校验路径）、清洗自述 / 独立审稿 / G2 决策各一条。
+// 没有清洗（未下发数据 / 跳过）→ 诚实空态：只说没跑与原因，不摆假数字；该字段出现之前的运行 → 分页不出现。
+
+function cleanDataMetric(label: string, value: string, note: string): HTMLElement {
+  const article = el("article");
+  article.append(el("span", "", label), el("strong", "", value), el("small", "", note));
+  return article;
+}
+
+function renderCleanDataPanel(root: HTMLElement, profile: DatasetProfile): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="clean-data"]');
+  if (!panel) return;
+  const view = describeCleanData(profile);
+  if (view.kind === "absent") return;
+  panel.dataset.stageContentSource = "api";
+
+  const template = el("section", "focused-template clean-data-template");
+  const header = el("header", "focused-template-heading");
+  const heading = el("div");
+  heading.append(el("h1", "", t("清洗数据")));
+  header.append(heading);
+
+  if (view.kind === "skipped") {
+    heading.append(el("p", "", t("本次运行没有执行数据清洗")));
+    header.append(el("span", "focused-template-status neutral", t("未执行")));
+    const notice = el("div", "focused-conclusion-strip focused-template-notice clean-data-empty");
+    notice.append(icon("info"), el("span", "", `${t("未执行原因")}：${view.reason}。${t("后续阶段直接使用 data/ 下的原始文件。")}`));
+    template.append(header, notice);
+    panel.replaceChildren(template);
+    revealWorkspaceTab(root, "clean-data");
+    return;
+  }
+
+  heading.append(el("p", "", t("清洗脚本的执行结果、清洗后数据与独立审稿")));
+  const status = el("span", `focused-template-status${view.passed ? "" : " is-failed"}`);
+  status.append(icon(view.passed ? "check-circle" : "x-circle"), document.createTextNode(` ${t(view.statusLabel)} · ${view.attempts} ${t("波")}`));
+  header.append(status);
+
+  const metrics = el("section", "focused-metrics three focused-template-metrics");
+  metrics.append(
+    cleanDataMetric(t("保留记录"), view.rowsAfterText, `${t("清洗前")} ${view.rowsBeforeText} · ${view.retainedRatio}`),
+    cleanDataMetric(t("删行比例"), view.deletedRatio, view.deletionOverThreshold ? t("超过 G2 阈值 5%") : t("在 G2 阈值 5% 以内")),
+    cleanDataMetric(
+      t("插补列"),
+      String(view.imputed.length),
+      view.imputed.length
+        ? `${view.imputed.join("、")}${view.imputedTargets.length ? `（${t("含目标列")} ${view.imputedTargets.join("、")}）` : ""}`
+        : t("未插补"),
+    ),
+  );
+
+  const outputsSection = el("section", "focused-template-section");
+  const outputsTitle = el("div", "focused-template-section-title");
+  outputsTitle.append(
+    el("h2", "", t("清洗产物")),
+    el("span", "", `${view.dataOutputs.length} ${t("个数据表")}${view.script ? ` · ${t("含清洗脚本")}` : ""}`),
+  );
+  outputsSection.append(outputsTitle);
+  if (view.outputs.length) {
+    const wrap = el("div", "focused-table-wrap");
+    const table = el("table", "focused-table focused-template-table clean-data-outputs");
+    const thead = el("thead");
+    const headRow = el("tr");
+    [t("文件"), t("角色"), t("大小"), t("SHA-256"), t("下载")].forEach(label => headRow.append(el("th", "", label)));
+    thead.append(headRow);
+    const tbody = el("tbody");
+    for (const row of view.outputs) {
+      const tr = el("tr", row.downloadUrl ? "" : "is-pending");
+      const nameCell = el("td");
+      nameCell.append(el("strong", "", row.name));
+      const downloadCell = el("td");
+      if (row.downloadUrl) {
+        const link = el("a", "clean-data-download", t("下载"));
+        link.href = row.downloadUrl;
+        link.dataset.artifactDownload = row.downloadUrl;
+        downloadCell.append(link);
+      } else {
+        downloadCell.append(el("span", "clean-data-unavailable", t("不可下载")));
+      }
+      tr.append(
+        nameCell,
+        el("td", "", t(row.roleLabel)),
+        el("td", "", row.size),
+        el("td", "clean-data-hash", row.hash),
+        downloadCell,
+      );
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    wrap.append(table);
+    outputsSection.append(wrap);
+  } else {
+    outputsSection.append(el("p", "clean-data-empty-outputs", t("没有登记到清洗产物（cleaned/ 目录为空或产物未采集）。")));
+  }
+
+  const notesSection = el("section", "focused-template-section");
+  const notesTitle = el("div", "focused-template-section-title");
+  notesTitle.append(el("h2", "", t("结论与决策")));
+  notesSection.append(notesTitle);
+  const notes = el("ul", "stage-note-list clean-data-notes");
+  if (view.summary) notes.append(noteItem("info", "chat-text", t("清洗工程师自述"), view.summary));
+  const review = reviewNoteItem("清洗脚本独立审稿", "清洗脚本独立审稿未执行", view.review);
+  if (review) notes.append(review);
+  if (view.decision) {
+    const when = localizedMoment(view.decision.resolvedAt);
+    const detail = `${t(view.decision.label)}（${view.decision.actor} · ${when}）`
+      + (view.decision.comment ? ` — ${view.decision.comment}` : "")
+      + (view.decision.usesCleaned === false ? `。${t("后续阶段使用 data/ 原始文件")}` : view.decision.usesCleaned ? `。${t("后续阶段使用 cleaned/ 清洗后数据")}` : "");
+    notes.append(noteItem(view.decision.usesCleaned === null ? "warn" : "pass", "gavel", t("G2 数据确认"), detail));
+  } else {
+    notes.append(noteItem(
+      "info",
+      "info",
+      t("G2 数据确认"),
+      view.deletionOverThreshold || view.imputedTargets.length
+        ? t("影响面超过阈值，等待人工确认数据处理方式")
+        : t("影响面在阈值内，未触发人工确认；后续阶段使用清洗后数据"),
+    ));
+  }
+  notesSection.append(notes);
+
+  template.append(header, metrics, outputsSection, notesSection);
+  panel.replaceChildren(template);
+  settleClamps(panel);
+  revealWorkspaceTab(root, "clean-data");
 }
 
 /** 「字段说明」分页：数据清单里的真实字段逐条列成表（名称/说明/所属数据集）。 */
