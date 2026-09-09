@@ -681,13 +681,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
    * 数据准备页。骨架（结论条 / 指标 / 数据清单表 / 准备步骤区）必须原样保留：
    * stage-content.ts 的 renderDataPanel 按 .focused-conclusion-strip、.focused-metrics、
    * .focused-section.compact 里的 table 与 .raw-preview-section 定位填真实画像。
-   * 「原始数据」分页当前契约下没有真实数据源，只在 `?demo=1` 存在；「清洗数据」有真实来源
-   * （DatasetProfile.cleaning + 清洗产物），真实运行里先藏起、由 renderCleanDataPanel 填好后放出。
+   * 「原始数据」（DatasetProfile.inputs + 表格产物预览）与「清洗数据」（DatasetProfile.cleaning + 清洗产物）
+   * 都有真实来源，真实运行里先藏起、由 renderRawDataPanel / renderCleanDataPanel 填好后放出。
    */
   function dataStageContent() {
     const demo = demoMode();
     const tabs = [["data-report", "数据报告", "file-text"]];
-    if (demo) tabs.push(["raw-data", "原始数据", "table"]);
+    tabs.push(["raw-data", "原始数据", "table", !demo]);
     tabs.push(["clean-data", "清洗数据", "sliders-horizontal", !demo]);
     // 字段说明有真实来源（DatasetProfile.datasets[].fields），先藏起，填好由渲染器放出
     tabs.push(["field-guide", "字段说明", "files", !demo]);
@@ -716,13 +716,13 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           <section class="focused-section compact" hidden><h2>数据清单与质量风险</h2><div class="focused-table-wrap"><table class="focused-table issue-table"></table></div></section>
           <section class="focused-section compact raw-preview-section" hidden></section>`}
         </div>
-        ${demo ? `<div class="focused-workspace-panel" data-workspace-panel="raw-data"><section class="focused-template">
+        <div class="focused-workspace-panel" data-workspace-panel="raw-data">${demo ? `<section class="focused-template">
           <header class="focused-template-heading"><div><h1>原始数据</h1><p>历史供需数据 · 只读预览</p></div><button type="button" data-action="download-data">${icon("download-simple")} 导出</button></header>
           <section class="focused-metrics three focused-template-metrics"><article><span>记录数</span><strong>12,480</strong><small>2024 Q4</small></article><article><span>数据表</span><strong>2</strong><small>订单 / 站点</small></article><article><span>更新时间</span><strong>10:32</strong><small>今天</small></article></section>
           <section class="focused-template-section"><div class="focused-template-section-title"><h2>历史供需数据</h2><span>前 8 行</span></div><div class="focused-table-wrap"><table class="focused-table focused-template-table"><thead><tr><th>时间</th><th>区域</th><th>投放点数</th><th>可用车辆</th><th>平均等待</th><th>订单量</th></tr></thead><tbody>
             <tr><td>2024-10-01 00:00</td><td>中心城区</td><td>128</td><td>356</td><td>7.2 min</td><td>442</td></tr><tr><td>2024-10-01 00:05</td><td>中心城区</td><td>128</td><td>—</td><td>6.8 min</td><td>419</td></tr><tr><td>2024-10-01 00:15</td><td>中心城区</td><td>128</td><td>312</td><td>—</td><td>461</td></tr><tr><td>2024-10-01 00:30</td><td>中心城区</td><td>128</td><td>298</td><td>8.1 min</td><td>506</td></tr><tr><td>2024-10-01 00:45</td><td>中心城区</td><td>128</td><td>410</td><td>7.5 min</td><td>473</td></tr><tr><td>2024-10-01 01:00</td><td>滨江新区</td><td>96</td><td>274</td><td>6.4 min</td><td>388</td></tr><tr><td>2024-10-01 01:15</td><td>滨江新区</td><td>96</td><td>266</td><td>6.7 min</td><td>401</td></tr><tr><td>2024-10-01 01:30</td><td>大学城</td><td>84</td><td>221</td><td>5.9 min</td><td>357</td></tr>
           </tbody></table></div><footer class="focused-template-footer"><span>共 12,480 条记录</span><span>数据版本 v1</span></footer></section>
-        </section></div>` : ""}
+        </section>` : ""}</div>
         <div class="focused-workspace-panel" data-workspace-panel="clean-data">${demo ? `<section class="focused-template">
           <header class="focused-template-heading"><div><h1>清洗数据</h1><p>规则执行结果与清洗后预览</p></div><span class="focused-template-status">${icon("check-circle")} 已完成</span></header>
           <section class="focused-metrics three focused-template-metrics"><article><span>保留记录</span><strong>12,436</strong><small>99.65%</small></article><article><span>缺失比例</span><strong>0.4%</strong><small>清洗前 2.7%</small></article><article><span>处理规则</span><strong>3</strong><small>全部通过</small></article></section>

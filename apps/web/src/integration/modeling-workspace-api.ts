@@ -114,6 +114,22 @@ export interface StageOutputsPayload {
   delivery_manifest: import("@openmathmodel/contracts").DeliveryManifest | null;
 }
 
+/** GET /artifacts/{id}/preview：表格产物的前 N 行（数据页「原始数据」/「清洗后预览」）。 */
+export interface ArtifactPreviewPayload {
+  artifact_id: string;
+  name: string;
+  media_type: string;
+  size_bytes: number | null;
+  sha256: string | null;
+  encoding: string;
+  delimiter: string;
+  columns: string[];
+  rows: string[][];
+  /** 数据行总数；服务端未全量计数（超大文件）时为 null。 */
+  row_count: number | null;
+  truncated: boolean;
+}
+
 export const modelingWorkspaceApi = {
   createProject(input: CreateProjectInput, signal?: AbortSignal): Promise<Project> {
     return request<Project>("/api/v1/projects", {
@@ -146,6 +162,15 @@ export const modelingWorkspaceApi = {
   getStageOutputs(runId: string, signal?: AbortSignal): Promise<StageOutputsPayload> {
     return request<StageOutputsPayload>(
       `/api/v1/task-runs/${encodeURIComponent(runId)}/stage-outputs`,
+      { signal },
+    );
+  },
+
+  /** 表格产物前 N 行（只做分隔符文本；非表格产物服务端 409 ARTIFACT_PREVIEW_UNSUPPORTED）。 */
+  getArtifactPreview(artifactId: string, rows = 20, signal?: AbortSignal): Promise<ArtifactPreviewPayload> {
+    const params = new URLSearchParams({ rows: String(rows) });
+    return request<ArtifactPreviewPayload>(
+      `/api/v1/artifacts/${encodeURIComponent(artifactId)}/preview?${params}`,
       { signal },
     );
   },

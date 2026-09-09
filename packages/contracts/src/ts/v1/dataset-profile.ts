@@ -55,6 +55,10 @@ export interface DatasetProfile {
    * 清洗脚本的执行结论（沙盒子代理按准备方案清洗 data/ → cleaned/：影响面统计由脚本标记行给出、节点只做除法与求交）与独立审稿结论（生成者-评审者环）。数据节点未产出该字段（该字段出现之前的运行、模拟节点）时为 null；执行被跳过时 executed=false 并给原因。可选字段：旧消费者可忽略。
    */
   cleaning?: null | CleaningReport;
+  /**
+   * 本次运行下发给数据阶段的原始数据文件（运行参数 attachment_metadata 里的附件，按登记顺序；投影按产物登记表确定性填，不经模型）。没有附件为空列表。可选字段：该字段出现之前的消费者可忽略。
+   */
+  inputs?: DataInput[];
   updated_at: Timestamp;
 }
 export interface DatasetEntry {
@@ -234,4 +238,34 @@ export interface CleaningDecision {
    */
   comment: string | null;
   resolved_at: Timestamp;
+}
+export interface DataInput {
+  /**
+   * 附件产物 id（/api/v1/artifacts/{id}/download 与 /preview 的主键）。
+   */
+  artifact_id: string;
+  /**
+   * 文件名（运行参数里登记的名字，取 basename）。
+   */
+  name: string;
+  /**
+   * 登记的媒体类型；产物不在登记表时为 application/octet-stream。
+   */
+  media_type: string;
+  /**
+   * 登记大小；未知为 null。
+   */
+  size_bytes: number | null;
+  /**
+   * 登记的内容摘要；未登记为 null。
+   */
+  sha256: string | null;
+  /**
+   * 可下载时的相对地址（/api/v1/artifacts/{id}/download）；产物缺失、不属于本项目或内容对象不可读为 null。
+   */
+  download_url: string | null;
+  /**
+   * 是否满足下发到沙盒工作区 data/ 的条件（.csv 文件、同项目产物、≤ 10 MB）——不满足的附件数据阶段看不到，只作附件摘要。
+   */
+  staged: boolean;
 }

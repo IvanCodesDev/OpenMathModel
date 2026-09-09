@@ -6465,6 +6465,31 @@ html[data-theme="dark"] .stage-note-list li { color: #b3b3ae; }
 .clean-data-empty span { line-height: 1.6; }
 .stage-note-list li.is-info > i { color: #4a6fa5; }
 .focused-stage-pane .stage-note-list li.is-info > i { color: var(--ax-accent, #4a6fa5); }
+
+/* 「原始数据」分页与表格产物预览（s27）：每个文件一节，标题行带大小 / 短哈希 / 下载 / 下发状态，
+   预览表横向滚动、单元格不折行；加载中 / 不支持 / 失败各一行状态文案 */
+.raw-data-template .raw-data-file .focused-template-section-title { align-items: baseline; }
+.raw-data-template .raw-data-facts { display: inline-flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 12px; color: #6a6a65; }
+.raw-data-template .raw-data-hash { font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; font-size: 12px; color: #6a6a65; }
+.raw-data-template .raw-data-download { font-weight: 600; color: #1f5f8b; text-decoration: underline; text-underline-offset: 3px; }
+.raw-data-template .raw-data-staged.is-yes { color: #2f7d4f; }
+.raw-data-template .raw-data-staged.is-no { color: #a8711c; }
+.raw-data-empty span { line-height: 1.6; }
+.table-preview-host { margin-top: 8px; }
+.table-preview-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 6px; font-size: 12px; color: #6a6a65; }
+.table-preview-status { margin: 6px 0 0; font-size: 13px; color: #6a6a65; }
+.table-preview-status.is-error { color: #b3382c; }
+.focused-workspace .table-preview th,
+.focused-workspace .table-preview td { white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.focused-workspace .table-preview td { font-size: 13px; }
+html[data-theme="dark"] .raw-data-template .raw-data-facts,
+html[data-theme="dark"] .raw-data-template .raw-data-hash,
+html[data-theme="dark"] .table-preview-meta,
+html[data-theme="dark"] .table-preview-status { color: #a8a8a3; }
+html[data-theme="dark"] .raw-data-template .raw-data-download { color: #8ec5ea; }
+html[data-theme="dark"] .raw-data-template .raw-data-staged.is-yes { color: #7fc39a; }
+html[data-theme="dark"] .raw-data-template .raw-data-staged.is-no { color: #e0b15c; }
+html[data-theme="dark"] .table-preview-status.is-error { color: #e29a6a; }
 html[data-theme="dark"] .focused-template-status.is-failed { color: #e29a6a; background: #3a2622; }
 html[data-theme="dark"] .clean-data-download { color: #8ec5ea; }
 html[data-theme="dark"] .clean-data-template .focused-template-metrics small,

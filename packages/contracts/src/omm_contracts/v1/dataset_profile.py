@@ -155,6 +155,32 @@ class CleaningDecision(BaseModel):
     resolved_at: Timestamp
 
 
+class DataInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    artifact_id: str = Field(
+        ...,
+        description="附件产物 id（/api/v1/artifacts/{id}/download 与 /preview 的主键）。",
+    )
+    name: str = Field(..., description="文件名（运行参数里登记的名字，取 basename）。")
+    media_type: str = Field(
+        ..., description="登记的媒体类型；产物不在登记表时为 application/octet-stream。"
+    )
+    size_bytes: conint(ge=0) | None = Field(..., description="登记大小；未知为 null。")
+    sha256: constr(pattern=r"^[0-9a-f]{64}$") | None = Field(
+        ..., description="登记的内容摘要；未登记为 null。"
+    )
+    download_url: str | None = Field(
+        ...,
+        description="可下载时的相对地址（/api/v1/artifacts/{id}/download）；产物缺失、不属于本项目或内容对象不可读为 null。",
+    )
+    staged: bool = Field(
+        ...,
+        description="是否满足下发到沙盒工作区 data/ 的条件（.csv 文件、同项目产物、≤ 10 MB）——不满足的附件数据阶段看不到，只作附件摘要。",
+    )
+
+
 class CleaningReport(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -235,5 +261,9 @@ class DatasetProfile(BaseModel):
     cleaning: CleaningReport | None = Field(
         None,
         description="清洗脚本的执行结论（沙盒子代理按准备方案清洗 data/ → cleaned/：影响面统计由脚本标记行给出、节点只做除法与求交）与独立审稿结论（生成者-评审者环）。数据节点未产出该字段（该字段出现之前的运行、模拟节点）时为 null；执行被跳过时 executed=false 并给原因。可选字段：旧消费者可忽略。",
+    )
+    inputs: list[DataInput] | None = Field(
+        None,
+        description="本次运行下发给数据阶段的原始数据文件（运行参数 attachment_metadata 里的附件，按登记顺序；投影按产物登记表确定性填，不经模型）。没有附件为空列表。可选字段：该字段出现之前的消费者可忽略。",
     )
     updated_at: Timestamp

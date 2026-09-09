@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from omm_contracts import ArtifactStatus
 
-from ..api_models import ArtifactText, AttachmentParseResult
+from ..api_models import ArtifactPreview, ArtifactText, AttachmentParseResult
 from ..blobstore import local_content_digest
 from ..config import Settings
 from ..db import get_session
@@ -22,6 +22,7 @@ from ..doc_text import OcrApi, extract_text
 from ..errors import ApiError, NotFoundError
 from ..orm import ArtifactRow, ArtifactTextRow, ProjectRow
 from ..serialize import as_utc, utcnow
+from ..table_preview import PREVIEW_DEFAULT_ROWS, PREVIEW_MAX_ROWS, is_previewable_table, parse_table_preview
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
 
@@ -187,6 +188,45 @@ def download_artifact(
             "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
             "X-Content-Sha256": row.sha256,
         },
+    )
+
+
+@router.get("/{artifact_id}/preview", response_model=ArtifactPreview)
+def preview_artifact_table(
+    artifact_id: str,
+    request: Request,
+    rows: int = PREVIEW_DEFAULT_ROWS,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: Session = Depends(get_session),
+) -> ArtifactPreview:
+    """表格产物的前 N 行（数据页「原始数据」/「清洗后预览」）。
+
+    只做分隔符文本（csv / tsv）；其余产物 409 ``ARTIFACT_PREVIEW_UNSUPPORTED``。内容与下载
+    走同一条归属 + 哈希核验路径；``rows`` 夹到 [1, 200]，不缓存（产物内容寻址、解析很快）。
+    """
+
+    row = _get_owned_artifact(session, ctx, artifact_id)
+    if not is_previewable_table(row.kind, row.name, row.media_type):
+        raise ApiError(
+            409,
+            "ARTIFACT_PREVIEW_UNSUPPORTED",
+            "只有分隔符文本表格（csv / tsv）支持预览",
+            {"artifact_id": artifact_id, "kind": row.kind, "media_type": row.media_type},
+        )
+    content = _load_content(request, row)
+    preview = parse_table_preview(content, row.name, max(1, min(rows, PREVIEW_MAX_ROWS)))
+    return ArtifactPreview(
+        artifact_id=row.id,
+        name=row.name,
+        media_type=row.media_type or "application/octet-stream",
+        size_bytes=row.size_bytes,
+        sha256=row.sha256,
+        encoding=preview.encoding,
+        delimiter=preview.delimiter,
+        columns=preview.columns,
+        rows=preview.rows,
+        row_count=preview.row_count,
+        truncated=preview.truncated,
     )
 
 

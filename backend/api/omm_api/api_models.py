@@ -172,6 +172,27 @@ class ArtifactText(BaseModel):
     text: str
 
 
+class ArtifactPreview(BaseModel):
+    """表格产物的前 N 行预览（数据页「原始数据 / 清洗后预览」用）。
+
+    只做分隔符文本（csv / tsv）：首行作表头、其后 ``rows`` 行原样字符串（单元格截到
+    200 字符）；``row_count`` 是数据行总数（内容 ≤ 10 MB 时全量计数，否则 null）；
+    ``truncated`` = 还有没展示的行。内容与下载走同一条归属 + 哈希核验路径。
+    """
+
+    artifact_id: str
+    name: str
+    media_type: str
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None
+    encoding: str
+    delimiter: str
+    columns: list[str]
+    rows: list[list[str]]
+    row_count: Optional[int] = None
+    truncated: bool
+
+
 class AttachmentParseResult(BaseModel):
     """对话附件的即席解析结果（ADR-0010 批次三）。
 

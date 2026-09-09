@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -379,12 +379,69 @@ def _cleaning_report(
     }
 
 
+#: 附件下发到工作区 data/ 的条件（与 engine_glue._stage_attachment_tables 同一口径）：.csv、同项目、≤ 10 MB。
+_STAGED_INPUT_SUFFIX = ".csv"
+_STAGED_INPUT_BYTES_LIMIT = 10 * 1024 * 1024
+
+
+def _data_inputs(
+    params: Any,
+    project_id: str,
+    rows_by_id: Mapping[str, ArtifactRow],
+    blobs: Optional[ArtifactBlobStore],
+) -> list[dict[str, Any]]:
+    """运行参数 ``attachment_metadata[]`` → 契约 ``data_input[]``（dataset-profile.v1 ``inputs``）。
+
+    按登记顺序、确定性填：产物行在且属于本项目才有大小 / 哈希 / 下载地址；``staged`` 复现
+    引擎下发到 ``data/`` 的三个条件（.csv 名、同项目产物、≤ 10 MB）——不满足的附件数据阶段
+    看不到，页面据此如实标「未下发到工作区」而不是装作分析过。
+    """
+    entries = (params or {}).get("attachment_metadata") if isinstance(params, dict) else None
+    if not isinstance(entries, list):
+        return []
+    inputs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        artifact_id = str(entry.get("artifact_id") or "").strip()
+        name = str(entry.get("name") or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+        if not artifact_id or artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        row = rows_by_id.get(artifact_id)
+        same_project = row is not None and row.project_id == project_id
+        downloadable = (
+            same_project
+            and blobs is not None
+            and row.status == "READY"
+            and has_readable_local_content(blobs, row.uri, row.sha256)
+        )
+        size = row.size_bytes if same_project else None
+        inputs.append({
+            "artifact_id": artifact_id,
+            "name": name or (row.name if same_project else "") or artifact_id,
+            "media_type": (row.media_type if same_project and row.media_type else None) or "application/octet-stream",
+            "size_bytes": size,
+            "sha256": _registered_sha256(row.sha256) if same_project else None,
+            "download_url": f"/api/v1/artifacts/{artifact_id}/download" if downloadable else None,
+            "staged": bool(
+                same_project
+                and name.lower().endswith(_STAGED_INPUT_SUFFIX)
+                and bool(row.sha256)
+                and (size or 0) <= _STAGED_INPUT_BYTES_LIMIT
+            ),
+        })
+    return inputs
+
+
 def _dataset_profile(
     run_id: str,
     state: Optional[StageState],
     artifact_rows: Iterable[ArtifactRow] = (),
     blobs: Optional[ArtifactBlobStore] = None,
     approvals: Iterable[ApprovalRequestRow] = (),
+    inputs: Optional[list[dict[str, Any]]] = None,
 ) -> Optional[DatasetProfile]:
     if state is None:
         return None
@@ -419,6 +476,8 @@ def _dataset_profile(
             outputs=_cleaning_outputs(artifact_rows, blobs),
             decision=_cleaning_decision(state, approvals),
         ),
+        # 下发给数据阶段的原始数据文件（运行参数附件 → 产物登记表；调用方算好传入，缺省空表）
+        inputs=list(inputs or []),
         updated_at=iso_z(state.at),
     )
 
@@ -1312,12 +1371,31 @@ def build_stage_outputs(
         row for row in artifact_rows
         if step_nodes.get(row.producer_step or "") == _DATA_PREPARATION
     ]
+    # 原始数据输入 = 运行参数里的附件（项目级产物，不在 run 的产物表里）
+    attachment_ids = [
+        str(entry.get("artifact_id") or "")
+        for entry in ((run.params or {}).get("attachment_metadata") or [])
+        if isinstance(entry, dict) and str(entry.get("artifact_id") or "").strip()
+    ]
+    attachment_rows: dict[str, ArtifactRow] = {}
+    if attachment_ids:
+        attachment_rows = {
+            row.id: row
+            for row in session.execute(
+                select(ArtifactRow).where(ArtifactRow.id.in_(attachment_ids))
+            ).scalars()
+        }
 
     return StageOutputs(
         run_id=run.id,
         problem_frame=_problem_frame(run.id, stages.get(_PROBLEM_ANALYSIS)),
         dataset_profile=_dataset_profile(
-            run.id, stages.get(_DATA_PREPARATION), cleaning_rows, blobs, approvals
+            run.id,
+            stages.get(_DATA_PREPARATION),
+            cleaning_rows,
+            blobs,
+            approvals,
+            inputs=_data_inputs(run.params, run.project_id, attachment_rows, blobs),
         ),
         plan_proposal=_plan_proposal(run.id, stages.get(_MODEL_PLANNING), approvals),
         experiment_summary=_experiment_summary(

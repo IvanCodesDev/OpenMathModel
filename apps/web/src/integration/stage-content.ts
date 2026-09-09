@@ -25,6 +25,7 @@ import { deliveryPackageUrl, describeDelivery } from "./delivery-record";
 import type { DeliveryView } from "./delivery-record";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
+import { modelingWorkspaceApi } from "./modeling-workspace-api";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 import {
   FINDING_KIND_REASONS,
@@ -36,6 +37,7 @@ import {
 import { figureImageResolver, summarizeFigures } from "./paper-figures";
 import { describePaperPackage, describeResultFigures } from "./result-figures";
 import type { FigureCard } from "./result-figures";
+import { delimiterLabel, describeRawData, isPreviewableName, previewTable } from "./table-preview";
 import { referenceRows, summarizeReferences } from "./paper-references";
 import type { PlanDecisionView } from "./plan-decision";
 import {
@@ -210,16 +212,17 @@ const STAGE_TAB_PLAN: Array<{
   demo: string[];
   fillable: string[];
 }> = [
-  // 清洗数据自 H4 切片 s23 起有真实数据源（dataset-profile.cleaning + outputs / decision）
-  { workspace: ".data-report-workspace", primary: "data-report", demo: ["raw-data"], fillable: ["clean-data", "field-guide"] },
+  // 清洗数据自 H4 切片 s23 起有真实数据源（dataset-profile.cleaning + outputs / decision）；
+  // 原始数据自 s27 起有（dataset-profile.inputs + 表格产物预览）——数据页不再有纯演示分页
+  { workspace: ".data-report-workspace", primary: "data-report", demo: [], fillable: ["raw-data", "clean-data", "field-guide"] },
   // 模型假设 / 符号表自 H3 切片 2 起有真实数据源（plan-proposal.assumptions / symbols）
   { workspace: ".model-plan-workspace", primary: "model-plan", demo: [], fillable: ["assumptions", "symbols", "implementation"] },
 ];
 
 /**
- * 真实运行的子分页纪律（R4）：进入真实任务即撤走纯演示分页（原始数据——当前契约下
- * 没有它的真实数据源），可填充分页（清洗数据、字段说明、模型假设、符号表、实现计划）
- * 先藏起，等对应阶段的真实内容渲染后再放出。
+ * 真实运行的子分页纪律（R4）：进入真实任务即撤走纯演示分页（今天已没有），可填充分页
+ * （原始数据、清洗数据、字段说明、模型假设、符号表、实现计划）先藏起，等对应阶段的真实
+ * 内容渲染后再放出。
  * 幂等，控制器每次快照刷新都可安全调用；演示页（无运行身份）不受影响。
  */
 export function prepareStageTabs(root: HTMLElement): void {
@@ -404,11 +407,136 @@ function renderDataPanel(root: HTMLElement, profile: DatasetProfile): void {
     preview.hidden = false;
   }
 
-  // 字段说明 / 清洗数据两个可填充分页用真实内容填充（纯演示分页由 prepareStageTabs 统一撤走）
+  // 字段说明 / 原始数据 / 清洗数据三个可填充分页用真实内容填充（先藏起、填好放出）
   renderFieldGuidePanel(root, profile);
+  renderRawDataPanel(root, profile);
   renderCleanDataPanel(root, profile);
   settleClamps(panel);
   typesetMath(panel);
+}
+
+// ── 表格产物预览（数据页「原始数据」分页 + 「清洗数据」分页的清洗后预览，H4 切片 s27） ──
+//
+// 预览走 GET /api/v1/artifacts/{id}/preview（服务端只做分隔符文本、前 N 行、单元格截断），页面先放占位、
+// 请求回来再填表；同一面板重渲染时取消上一轮请求（AbortController 挂在面板上），失败只在该文件下写一行原因，
+// 不阻塞数据页其余内容。只有可下载且是分隔符文本的产物才请求，其余如实写「不支持预览」。
+
+const PREVIEW_ROWS = 20;
+const previewControllers = new WeakMap<HTMLElement, AbortController>();
+
+function previewTableElement(table: ReturnType<typeof previewTable>): HTMLElement {
+  const wrap = el("div", "focused-table-wrap");
+  const element = el("table", "focused-table focused-template-table table-preview");
+  if (table.columns.length) {
+    const thead = el("thead");
+    const headRow = el("tr");
+    table.columns.forEach(column => headRow.append(el("th", "", column || "—")));
+    thead.append(headRow);
+    element.append(thead);
+  }
+  const tbody = el("tbody");
+  for (const row of table.rows) {
+    const tr = el("tr");
+    row.forEach(cell => tr.append(el("td", "", cell)));
+    tbody.append(tr);
+  }
+  element.append(tbody);
+  wrap.append(element);
+  return wrap;
+}
+
+function previewCountText(table: ReturnType<typeof previewTable>): string {
+  const shown = `${t("前")} ${table.shown} ${t("行")}`;
+  if (table.rowCount === null) return `${shown} · ${t("总行数未计")}`;
+  return `${shown} · ${t("共")} ${table.rowCount} ${t("行")}`;
+}
+
+/** 给一个容器挂上「加载中 → 表格 / 原因」的异步预览。 */
+function loadPreviewInto(host: HTMLElement, artifactId: string, signal: AbortSignal): void {
+  const status = el("p", "table-preview-status", t("正在读取前 20 行…"));
+  host.replaceChildren(status);
+  modelingWorkspaceApi.getArtifactPreview(artifactId, PREVIEW_ROWS, signal)
+    .then(payload => {
+      if (signal.aborted) return;
+      const table = previewTable(payload);
+      const meta = el("div", "table-preview-meta");
+      meta.append(
+        el("span", "", previewCountText(table)),
+        el("span", "", `${t("分隔符")}：${t(delimiterLabel(table.delimiter))}`),
+        el("span", "", `${t("编码")}：${table.encoding}`),
+      );
+      if (!table.columns.length && !table.rows.length) {
+        host.replaceChildren(el("p", "table-preview-status", t("文件为空，没有可预览的行")));
+        return;
+      }
+      host.replaceChildren(meta, previewTableElement(table));
+    })
+    .catch(error => {
+      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+      const reason = error instanceof Error ? error.message : String(error);
+      host.replaceChildren(el("p", "table-preview-status is-error", `${t("预览不可用")}：${reason}`));
+    });
+}
+
+function renderRawDataPanel(root: HTMLElement, profile: DatasetProfile): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="raw-data"]');
+  if (!panel) return;
+  const view = describeRawData(profile);
+  if (view.kind === "absent") return;
+  if (!shouldRender(panel, "raw-data", profile.updated_at)) return;
+  previewControllers.get(panel)?.abort();
+  const controller = new AbortController();
+  previewControllers.set(panel, controller);
+  panel.dataset.stageContentSource = "api";
+
+  const template = el("section", "focused-template raw-data-template");
+  const header = el("header", "focused-template-heading");
+  const heading = el("div");
+  heading.append(el("h1", "", t("原始数据")));
+  header.append(heading);
+
+  if (view.kind === "empty") {
+    heading.append(el("p", "", t("本次运行没有下发数据文件")));
+    header.append(el("span", "focused-template-status neutral", t("无数据文件")));
+    const notice = el("div", "focused-conclusion-strip focused-template-notice raw-data-empty");
+    notice.append(icon("info"), el("span", "", t("任务创建时未附带数据文件；数据阶段只做题面与附件摘要的画像，不执行清洗。")));
+    template.append(header, notice);
+    panel.replaceChildren(template);
+    revealWorkspaceTab(root, "raw-data");
+    return;
+  }
+
+  heading.append(el("p", "", t("任务创建时附带的数据文件，沙盒工作区 data/ 下的原始输入")));
+  header.append(el("span", "focused-template-status neutral", `${view.total} ${t("个数据文件")} · ${view.staged} ${t("个已下发")}`));
+  template.append(header);
+
+  for (const row of view.rows) {
+    const section = el("section", "focused-template-section raw-data-file");
+    const title = el("div", "focused-template-section-title");
+    const name = el("h2");
+    name.append(el("strong", "", row.name));
+    const facts = el("span", "raw-data-facts");
+    facts.append(el("span", "", row.size), el("code", "raw-data-hash", row.hash));
+    if (row.downloadUrl) {
+      const link = el("a", "raw-data-download", t("下载"));
+      link.href = row.downloadUrl;
+      link.dataset.artifactDownload = row.downloadUrl;
+      facts.append(link);
+    }
+    facts.append(el("span", `raw-data-staged is-${row.staged ? "yes" : "no"}`, t(row.staged ? "已下发到工作区" : "未下发到工作区")));
+    title.append(name, facts);
+    section.append(title);
+    const host = el("div", "table-preview-host");
+    section.append(host);
+    if (row.previewable) {
+      loadPreviewInto(host, row.artifactId, controller.signal);
+    } else {
+      host.append(el("p", "table-preview-status", t(row.downloadUrl ? "该格式不支持预览（只预览 csv / tsv）" : "产物不可下载，无法预览")));
+    }
+    template.append(section);
+  }
+  panel.replaceChildren(template);
+  revealWorkspaceTab(root, "raw-data");
 }
 
 // ── 「清洗数据」分页（DatasetProfile.cleaning + outputs / decision → clean-data 面板，H4 切片 s23） ──
@@ -510,6 +638,29 @@ function renderCleanDataPanel(root: HTMLElement, profile: DatasetProfile): void 
     outputsSection.append(el("p", "clean-data-empty-outputs", t("没有登记到清洗产物（cleaned/ 目录为空或产物未采集）。")));
   }
 
+  // 清洗后预览（s27）：每个可下载的清洗后数据表拉前 20 行；请求随面板重渲染取消
+  previewControllers.get(panel)?.abort();
+  const previewController = new AbortController();
+  previewControllers.set(panel, previewController);
+  const previewSections: HTMLElement[] = [];
+  for (const row of view.dataOutputs) {
+    if (!row.downloadUrl) continue;
+    const section = el("section", "focused-template-section clean-data-preview");
+    const title = el("div", "focused-template-section-title");
+    const heading2 = el("h2");
+    heading2.append(document.createTextNode(`${t("清洗后预览")} · `), el("strong", "", row.name));
+    title.append(heading2, el("span", "", `cleaned/${row.name}`));
+    section.append(title);
+    const host = el("div", "table-preview-host");
+    section.append(host);
+    if (isPreviewableName(row.name, null)) {
+      loadPreviewInto(host, row.artifactId, previewController.signal);
+    } else {
+      host.append(el("p", "table-preview-status", t("该格式不支持预览（只预览 csv / tsv）")));
+    }
+    previewSections.push(section);
+  }
+
   const notesSection = el("section", "focused-template-section");
   const notesTitle = el("div", "focused-template-section-title");
   notesTitle.append(el("h2", "", t("结论与决策")));
@@ -536,7 +687,7 @@ function renderCleanDataPanel(root: HTMLElement, profile: DatasetProfile): void 
   }
   notesSection.append(notes);
 
-  template.append(header, metrics, outputsSection, notesSection);
+  template.append(header, metrics, outputsSection, ...previewSections, notesSection);
   panel.replaceChildren(template);
   settleClamps(panel);
   revealWorkspaceTab(root, "clean-data");

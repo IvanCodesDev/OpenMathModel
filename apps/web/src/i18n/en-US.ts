@@ -667,6 +667,28 @@ const DATA_STAGE: Record<string, string> = {
   "后续阶段使用 cleaned/ 清洗后数据": "Later stages use the cleaned data under cleaned/",
   "影响面超过阈值，等待人工确认数据处理方式": "Impact exceeds the threshold; awaiting a decision on how to treat the data",
   "影响面在阈值内，未触发人工确认；后续阶段使用清洗后数据": "Impact within the threshold, no confirmation required; later stages use the cleaned data",
+  // 「原始数据」分页与表格产物预览（dataset-profile.inputs + /artifacts/{id}/preview，H4 切片 s27）
+  "本次运行没有下发数据文件": "No data files were provided for this task",
+  "无数据文件": "No data files",
+  "任务创建时未附带数据文件；数据阶段只做题面与附件摘要的画像，不执行清洗。": "The task was created without data files; the data stage only profiles the problem statement and attachment summaries and runs no cleaning.",
+  "任务创建时附带的数据文件，沙盒工作区 data/ 下的原始输入": "Data files attached when the task was created — the raw inputs under data/ in the sandbox workspace",
+  "个数据文件": "data file(s)",
+  "个已下发": "staged",
+  "已下发到工作区": "staged into the workspace",
+  "未下发到工作区": "not staged into the workspace",
+  "该格式不支持预览（只预览 csv / tsv）": "Preview is not available for this format (csv / tsv only)",
+  "产物不可下载，无法预览": "Artifact is not downloadable, so it cannot be previewed",
+  "正在读取前 20 行…": "Loading the first 20 rows…",
+  "前": "First",
+  "总行数未计": "total rows not counted",
+  "分隔符": "Delimiter",
+  "编码": "Encoding",
+  "逗号": "comma",
+  "分号": "semicolon",
+  "制表符": "tab",
+  "竖线": "pipe",
+  "文件为空，没有可预览的行": "The file is empty; there are no rows to preview",
+  "预览不可用": "Preview unavailable",
 };
 
 /** 建模方案页。 */
