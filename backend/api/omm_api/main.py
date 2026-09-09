@@ -24,6 +24,7 @@ from .routers import (
     artifacts,
     auth,
     chat,
+    delivery,
     events,
     intake,
     paper_exports,
@@ -142,6 +143,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.include_router(task_runs.router, prefix="/api")
     app.include_router(workspace.router, prefix="/api")
     app.include_router(stage_outputs.router, prefix="/api")
+    app.include_router(delivery.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
     app.include_router(paper_exports.router, prefix="/api")

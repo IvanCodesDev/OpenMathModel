@@ -3088,6 +3088,30 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   color: #6a6a65;
 }
 
+/* 交付包下载：一行链接 + 内容说明，跟在文件表后面 */
+.final-delivery-document .delivery-package {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.final-delivery-document .delivery-package-link {
+  font-weight: 650;
+  color: #1f5f8b;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.final-delivery-document .delivery-package-note {
+  color: #6a6a65;
+  font-size: 13px;
+}
+
+html[data-theme="dark"] .final-delivery-document .delivery-package-link { color: #8ec5ea; }
+html[data-theme="dark"] .final-delivery-document .delivery-package-note { color: #a8a8a3; }
+
 html[data-theme="dark"] .final-delivery-document .delivery-status.is-ok,
 html[data-theme="dark"] .final-delivery-document .delivery-checks li.is-passed > i { color: #7fc39a; }
 html[data-theme="dark"] .final-delivery-document .delivery-status.is-warn { color: #e0b15c; }

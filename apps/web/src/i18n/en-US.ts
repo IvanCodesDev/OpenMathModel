@@ -1202,6 +1202,9 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "个可下载": "downloadable",
   "个已登记 SHA-256": "with a registered SHA-256",
   "论文未做终稿审计": "The paper was not audited",
+  "下载交付包（zip）": "Download delivery package (zip)",
+  "下载交付包": "Download delivery package",
+  "manifest.json + SHA256SUMS + README + 全部可下载文件，逐文件哈希已核验": "manifest.json + SHA256SUMS + README + every downloadable file, each hash verified",
   // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」「交付状态」「文件」「个文件」已在其他词典里）
 };
 

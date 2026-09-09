@@ -1452,7 +1452,8 @@ function renderWorkspace(root: HTMLElement, screen: ScreenId, view: ModelingWork
     });
   }
   root.querySelectorAll<HTMLButtonElement>('[data-action="download-all"]').forEach(button => {
-    button.textContent = "导出文件清单";
+    // 交付记录分页一旦挂上交付包地址（真实论文在场），这颗按钮就是「下载交付包」；否则只导出文本清单
+    button.textContent = button.dataset.deliveryPackageUrl ? "下载交付包" : "导出文件清单";
     button.dataset.workspaceControlled = "true";
   });
 }
@@ -1786,6 +1787,11 @@ export function mountModelingWorkspace(screen: ScreenId): void {
     if (downloadAll && currentView) {
       event.preventDefault();
       event.stopPropagation();
+      // 有交付包（真实论文在场）就整包下载 zip；否则退回文本清单
+      if (downloadAll.dataset.deliveryPackageUrl) {
+        window.location.href = downloadAll.dataset.deliveryPackageUrl;
+        return;
+      }
       downloadArtifactManifest(currentView);
       return;
     }

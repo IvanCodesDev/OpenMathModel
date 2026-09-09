@@ -8,7 +8,9 @@ const source = await readFile(new URL("./delivery-record.ts", import.meta.url), 
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { DELIVERY_STATUS_LABELS, deliveryTone, describeDelivery, fileRows, shortHash, summarizeChecks } = await import(
+const {
+  DELIVERY_STATUS_LABELS, deliveryPackageFilename, deliveryPackageUrl, deliveryTone, describeDelivery, fileRows, shortHash, summarizeChecks,
+} = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
@@ -68,4 +70,11 @@ test("status labels, tones and unknown values", () => {
   assert.deepEqual(summarizeChecks([{ passed: true }, { passed: false }, { passed: false }]), { passed: 1, total: 3 });
   assert.equal(shortHash(null), "—");
   assert.equal(shortHash("abcdef0123456789ff"), "abcdef012345…");
+});
+
+test("deliveryPackageUrl / deliveryPackageFilename: same-origin endpoint and server-side file name", () => {
+  assert.equal(deliveryPackageUrl(fixture.run_id), `/api/v1/task-runs/${fixture.run_id}/delivery-package`);
+  assert.equal(deliveryPackageUrl("run x/y"), "/api/v1/task-runs/run%20x%2Fy/delivery-package");
+  assert.equal(deliveryPackageFilename(fixture.run_id), `delivery-${fixture.run_id.slice(0, 16)}.zip`);
+  assert.equal(deliveryPackageFilename("short"), "delivery-short.zip");
 });

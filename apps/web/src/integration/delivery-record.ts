@@ -62,6 +62,16 @@ export function fileRows(artifacts: readonly ManifestArtifact[]): FileRow[] {
   }));
 }
 
+/** 交付包（zip：manifest.json + SHA256SUMS + README + 全部可下载文件）的下载地址；同源整页导航。 */
+export function deliveryPackageUrl(runId: string): string {
+  return `/api/v1/task-runs/${encodeURIComponent(runId)}/delivery-package`;
+}
+
+/** 交付包文件名与服务端 Content-Disposition 一致（run id 前 16 位）。 */
+export function deliveryPackageFilename(runId: string): string {
+  return `delivery-${runId.slice(0, 16)}.zip`;
+}
+
 export interface DeliveryView {
   status: string;
   /** 中文源串（调用方 t()）；enum 外的状态原样。 */

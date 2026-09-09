@@ -7935,6 +7935,47 @@
         ]
       }
     },
+    "/api/v1/task-runs/{run_id}/delivery-package": {
+      "get": {
+        "operationId": "download_delivery_package_api_v1_task_runs__run_id__delivery_package_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "交付包 zip：manifest.json + SHA256SUMS + README.txt + package.json + files/"
+          },
+          "409": {
+            "description": "运行尚无可交付的论文成果（成果清单没有交付记录）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Delivery Package",
+        "tags": [
+          "delivery"
+        ]
+      }
+    },
     "/api/v1/task-runs/{run_id}/events": {
       "get": {
         "operationId": "stream_run_events_api_v1_task_runs__run_id__events_get",
