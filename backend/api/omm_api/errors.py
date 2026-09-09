@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from omm_agent_core import IterationRefused
+
 from .middleware import get_request_id
 
 logger = logging.getLogger("omm.api")
@@ -86,6 +88,23 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.http_status,
             content=_envelope(exc.code, exc.message, exc.details),
+        )
+
+    @app.exception_handler(IterationRefused)
+    async def handle_iteration_refused(request: Request, exc: IterationRefused) -> JSONResponse:
+        """图的迭代边不放行（Graph v2：没有这条边 E410 / 轮次用尽 E430）。
+
+        引擎在审批回退 / 修订 / 重做入口裁定并抛出；这是「不能这么做」的业务结论而不是缺陷，
+        所以给 409 与可判别的错误码，details 带图 / 起止阶段 / 上限 / 已走轮次，让页面能说清
+        「第几轮已用尽、还能怎么办」，而不是落到通用兜底变成「服务器内部错误」。
+        """
+        return JSONResponse(
+            status_code=409,
+            content=_envelope(
+                "GRAPH_ITERATION_REFUSED",
+                exc.detail,
+                {"code": exc.code.value, **exc.context},
+            ),
         )
 
     @app.exception_handler(RequestValidationError)

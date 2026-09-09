@@ -141,6 +141,41 @@ class IterationRefused(AgentError, ValueError):
 
 
 @dataclass(frozen=True)
+class IterationLicense:
+    """一次放行的回退：走的哪条迭代边、这是第几轮、上限多少（Graph v2 第二步，D2.2）。
+
+    ``taken`` = 目标阶段已成功通过的次数 − 1（已走轮次），``iteration`` = taken + 1（本次是第几轮），
+    ``remaining`` = 放行本次后还剩几轮。引擎把 ``event_fields()`` 记进触发回退的事件
+    （REVIEW_RESOLVED / REVISION_REQUESTED / RUN_REDO），v1 图没有许可、事件 payload 不变。
+    """
+
+    edge: GraphEdge
+    graph: str
+    taken: int
+    limit: int
+
+    @property
+    def iteration(self) -> int:
+        return self.taken + 1
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.iteration)
+
+    @property
+    def via_edge(self) -> str:
+        return f"iter:{self.edge.source}->{self.edge.target}"
+
+    def event_fields(self) -> dict[str, Any]:
+        return {
+            "via_edge": self.via_edge,
+            "iteration": self.iteration,
+            "max_iters": self.limit,
+            "graph": self.graph,
+        }
+
+
+@dataclass(frozen=True)
 class GraphSpec:
     """一张图 = 版本化的宏观事实：接下来做什么要么写在这里，要么由人决定（原则 11）。"""
 
@@ -504,14 +539,16 @@ class GraphScheduler:
                 )
         self.spec = spec
 
-    def check_iteration(
+    def license_iteration(
         self, snapshot: TaskRunSnapshot, source_state: TaskState, target_state: TaskState
-    ) -> GraphEdge | None:
+    ) -> IterationLicense | None:
         """把运行从 ``source_state`` 搬回 ``target_state`` 前的裁定（纯函数、不改快照）。
 
         图上没有迭代边（v1）→ 不裁，返回 None；有迭代边的图 → 必须存在这条边（E410），且
         已走过的轮次 < ``max_iters``（E430，强制交人在闸门另作决定）。已走轮次 = 目标阶段
         已成功通过的次数 − 1（第一次成功是正常前进，之后每次成功都是一轮重做的结果）。
+        放行时返回许可：这是第几轮、上限多少、走的哪条边——引擎把它记进触发回退的事件
+        （D2.2 的 ``via_edge / iteration``），重放与审计据此可数轮次。
         """
         if not self.spec.iteration_edges:
             return None
@@ -539,7 +576,14 @@ class GraphScheduler:
                     "max_iters": limit, "taken": taken,
                 },
             )
-        return edge
+        return IterationLicense(edge=edge, graph=graph, taken=taken, limit=limit)
+
+    def check_iteration(
+        self, snapshot: TaskRunSnapshot, source_state: TaskState, target_state: TaskState
+    ) -> GraphEdge | None:
+        """``license_iteration`` 的边视图：放行给边、不裁给 None、拒绝抛 ``IterationRefused``。"""
+        license = self.license_iteration(snapshot, source_state, target_state)
+        return license.edge if license is not None else None
 
     def select_target(self, snapshot: TaskRunSnapshot) -> TaskState:
         if snapshot.state is TaskState.CREATED:
@@ -725,6 +769,7 @@ __all__ = [
     "GraphScheduler",
     "GraphSpec",
     "IterationRefused",
+    "IterationLicense",
     "LINEAR_V1_GATES",
     "LinearScheduler",
     "MODELING_V2_MAX_ITERS",

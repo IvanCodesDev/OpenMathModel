@@ -344,10 +344,13 @@ class TaskRunEngine:
         if rerun is None:
             rerun = review.revision_round > 0 or resume is not review.resume_state
         if approved and rerun:
-            # 回退 / 原地重做是图的迭代边（Graph v2）：有迭代边的图放行或拒绝，v1 图不裁
+            # 回退 / 原地重做是图的迭代边（Graph v2）：有迭代边的图放行或拒绝，v1 图不裁；
+            # 放行的许可（哪条边 / 第几轮 / 上限）记进事件，v1 图没有许可、payload 不变
             source = WORK_SEQUENCE[-1] if review.revision_round > 0 else review.resume_state
-            self._license_iteration(snapshot, source, resume)
+            license = self._license_iteration(snapshot, source, resume)
             payload["rerun"] = True
+            if license is not None:
+                payload.update(license.event_fields())
         if review.revision_round > 0:
             # Which gate this was cannot be recovered from the pair of states
             # alone, and the projection layer needs to know: declining a
@@ -384,7 +387,7 @@ class TaskRunEngine:
         if target_state not in WORK_STATES:
             raise ValueError(f"{target_state.value} is not a work state")
         # 修订 = 从末节点回到目标阶段的迭代边：提出时就裁，不让人先答应再被拒
-        self._license_iteration(snapshot, WORK_SEQUENCE[-1], target_state)
+        license = self._license_iteration(snapshot, WORK_SEQUENCE[-1], target_state)
         payload: dict[str, Any] = {
             "target_state": target_state.value,
             "reason": reason,
@@ -392,6 +395,8 @@ class TaskRunEngine:
         }
         if note_id is not None:
             payload["note_id"] = note_id
+        if license is not None:
+            payload.update(license.event_fields())
         events: list[AgentEvent] = []
         self._record(snapshot, EventType.REVISION_REQUESTED, payload, events)
         return events
@@ -431,7 +436,7 @@ class TaskRunEngine:
             raise ValueError(f"{target_state.value} is not a work state")
         # 从当前所在阶段（失败 / 待审时取最近一步的阶段）回到目标阶段：按迭代边裁定
         source = snapshot.steps[-1].state if snapshot.steps else target_state
-        self._license_iteration(snapshot, source, target_state)
+        license = self._license_iteration(snapshot, source, target_state)
         payload: dict[str, Any] = {
             "target_state": target_state.value,
             "from_state": snapshot.state.value,
@@ -439,6 +444,8 @@ class TaskRunEngine:
         }
         if note_id is not None:
             payload["note_id"] = note_id
+        if license is not None:
+            payload.update(license.event_fields())
         events: list[AgentEvent] = []
         self._record(snapshot, EventType.RUN_REDO, payload, events)
         return events
@@ -447,14 +454,19 @@ class TaskRunEngine:
 
     def _license_iteration(
         self, snapshot: TaskRunSnapshot, source: TaskState, target: TaskState
-    ) -> None:
+    ) -> Any:
         """回退 / 原地重做前问调度器：有迭代边的图放行或拒绝（E410 / E430），其它调度器不裁。
 
+        放行时返回调度器给的许可（``IterationLicense``：边 / 第几轮 / 上限），不裁给 None。
         影子调度器不参与裁定：裁定会抛异常改主路径，而影子的纪律是永不改主路径。
         """
+        license = getattr(self._scheduler, "license_iteration", None)
+        if callable(license):
+            return license(snapshot, source, target)
         check = getattr(self._scheduler, "check_iteration", None)
         if callable(check):
             check(snapshot, source, target)
+        return None
 
     def _run_node(
         self, snapshot: TaskRunSnapshot, state: TaskState, step_id: str, attempt: int
