@@ -3112,6 +3112,102 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 html[data-theme="dark"] .final-delivery-document .delivery-package-link { color: #8ec5ea; }
 html[data-theme="dark"] .final-delivery-document .delivery-package-note { color: #a8a8a3; }
 
+/* 结果页「结果图表」/ 成果页「论文文件」的真实图件条与文献清单（H5 切片 s25）：
+   缩略图卡按 180px 网格铺开，图题 + 来源 + 已插入标记 + 下载；无产物 id 的图只给占位。
+   文献按编号列，出处是外链（新开页），来源 / 验证状态 / \cite key 作小字。 */
+.result-detail-document .result-figure-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 8px 0 0;
+}
+
+.result-detail-document .result-figure {
+  margin: 0;
+  border: 1px solid #e6e6e2;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.result-detail-document .result-figure-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 120px;
+  background: #f5f5f2;
+  color: #8a8a85;
+  font-size: 12px;
+}
+
+.result-detail-document .result-figure-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #fff;
+}
+
+.result-detail-document .result-figure figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.result-detail-document .result-figure-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 12px;
+  color: #6a6a65;
+}
+
+.result-detail-document .result-figure-name {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+}
+
+.result-detail-document .result-figure-inserted.is-yes { color: #2f7d4f; }
+.result-detail-document .result-figure-inserted.is-no { color: #a8711c; }
+.result-detail-document .result-figure-download { color: #1f5f8b; text-decoration: underline; text-underline-offset: 3px; }
+.result-detail-document .result-figure.is-missing .result-figure-media { border-bottom: 1px dashed #d8d8d3; }
+
+.result-detail-document .paper-reference-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  line-height: 1.6;
+}
+
+.result-detail-document .paper-reference-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 4px 0;
+}
+
+.result-detail-document .paper-reference-label { font-variant-numeric: tabular-nums; color: #6a6a65; }
+.result-detail-document .paper-reference-title { font-weight: 600; }
+.result-detail-document a.paper-reference-title { color: #1f5f8b; text-decoration: underline; text-underline-offset: 3px; }
+.result-detail-document .paper-reference-meta { flex-basis: 100%; font-size: 12px; color: #6a6a65; }
+.result-detail-document .paper-reference-list li.is-uncited .paper-reference-title { font-weight: 500; color: #6a6a65; }
+
+html[data-theme="dark"] .result-detail-document .result-figure { border-color: #3a3a37; background: #1f1f1d; }
+html[data-theme="dark"] .result-detail-document .result-figure-media { background: #2a2a28; color: #a8a8a3; }
+html[data-theme="dark"] .result-detail-document .result-figure-media img { background: #f5f5f2; }
+html[data-theme="dark"] .result-detail-document .result-figure-meta,
+html[data-theme="dark"] .result-detail-document .paper-reference-label,
+html[data-theme="dark"] .result-detail-document .paper-reference-meta,
+html[data-theme="dark"] .result-detail-document .paper-reference-list li.is-uncited .paper-reference-title { color: #a8a8a3; }
+html[data-theme="dark"] .result-detail-document .result-figure-inserted.is-yes { color: #7fc39a; }
+html[data-theme="dark"] .result-detail-document .result-figure-inserted.is-no { color: #e0b15c; }
+html[data-theme="dark"] .result-detail-document .result-figure-download,
+html[data-theme="dark"] .result-detail-document a.paper-reference-title { color: #8ec5ea; }
+
 html[data-theme="dark"] .final-delivery-document .delivery-status.is-ok,
 html[data-theme="dark"] .final-delivery-document .delivery-checks li.is-passed > i { color: #7fc39a; }
 html[data-theme="dark"] .final-delivery-document .delivery-status.is-warn { color: #e0b15c; }

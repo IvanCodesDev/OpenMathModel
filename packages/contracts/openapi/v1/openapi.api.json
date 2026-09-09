@@ -2203,6 +2203,60 @@
         "title": "DocumentDraft",
         "type": "object"
       },
+      "ExperimentFigure": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。",
+            "title": "Artifact Id"
+          },
+          "caption": {
+            "description": "画图工程师在终答里给的一句说明；未给为空串。",
+            "title": "Caption",
+            "type": "string"
+          },
+          "name": {
+            "description": "图件文件名（basename）。",
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "description": "全文统一编号「图 N」（实验图先、检验图后，文件名去重）。",
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "source_stage": {
+            "$ref": "#/components/schemas/ExperimentFigureStage"
+          }
+        },
+        "required": [
+          "number",
+          "name",
+          "artifact_id",
+          "caption",
+          "source_stage"
+        ],
+        "title": "ExperimentFigure",
+        "type": "object"
+      },
+      "ExperimentFigureStage": {
+        "description": "图件的来源阶段：实验运行沙盒 / 结果验证（稳健性复跑）沙盒。",
+        "enum": [
+          "EXPERIMENTING",
+          "VALIDATING"
+        ],
+        "title": "ExperimentFigureStage",
+        "type": "string"
+      },
       "ExperimentSummary": {
         "additionalProperties": false,
         "description": "实验与验证页正文投影：EXPERIMENTING 阶段真实节点（LLM 生成代码 + python 沙箱执行）的最新成功输出；validation 为同页 VALIDATING 阶段的检验报告，检验未完成时为 null。",
@@ -2216,6 +2270,21 @@
             "description": "实验过程摘要（思路 + 核心指标 + 产物文件），供检验与论文阶段引用。",
             "title": "Experiment Summary",
             "type": "string"
+          },
+          "figures": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ExperimentFigure"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实验 / 检验阶段沙盒真实落盘并被采集的图件清单（实验图先编号、检验图其后，与论文节点的图件清单同一编号规则；论文阶段补画的图不在此列）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。",
+            "title": "Figures"
           },
           "metrics": {
             "additionalProperties": true,

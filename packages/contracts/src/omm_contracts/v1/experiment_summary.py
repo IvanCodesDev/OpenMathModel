@@ -139,6 +139,33 @@ class ReviewReport(BaseModel):
     reason: str = Field(..., description="未执行或僵持的原因；正常通过时为空串。")
 
 
+class ExperimentFigureStage(Enum):
+    """
+    图件的来源阶段：实验运行沙盒 / 结果验证（稳健性复跑）沙盒。
+    """
+
+    EXPERIMENTING = "EXPERIMENTING"
+    VALIDATING = "VALIDATING"
+
+
+class ExperimentFigure(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    number: conint(ge=1) = Field(
+        ..., description="全文统一编号「图 N」（实验图先、检验图后，文件名去重）。"
+    )
+    name: str = Field(..., description="图件文件名（basename）。")
+    artifact_id: str | None = Field(
+        ...,
+        description="图件产物 id（/api/v1/artifacts/{id}/download 可取图）；未登记为 null，消费者不得拼下载链接。",
+    )
+    caption: str = Field(
+        ..., description="画图工程师在终答里给的一句说明；未给为空串。"
+    )
+    source_stage: ExperimentFigureStage
+
+
 class RobustnessReport(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -220,5 +247,9 @@ class ExperimentSummary(BaseModel):
     review: ReviewReport | None = Field(
         None,
         description="实验代码的独立审稿结论（生成者-评审者环：节点确定性复跑核对 + 只读审稿子代理；驳回退修、修不动即僵持交 G3 裁定）。实验节点未产出该字段（审稿环之前的运行、模拟节点）时为 null。可选字段：旧消费者可忽略。",
+    )
+    figures: list[ExperimentFigure] | None = Field(
+        None,
+        description="实验 / 检验阶段沙盒真实落盘并被采集的图件清单（实验图先编号、检验图其后，与论文节点的图件清单同一编号规则；论文阶段补画的图不在此列）。没有图件为空列表。可选字段：该字段出现之前的消费者可忽略。",
     )
     updated_at: Timestamp

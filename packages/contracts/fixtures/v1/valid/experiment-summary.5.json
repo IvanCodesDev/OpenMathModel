@@ -71,5 +71,28 @@
     "rerun_consistent": true,
     "reason": ""
   },
+  "figures": [
+    {
+      "number": 1,
+      "name": "fit_vs_baseline.png",
+      "artifact_id": "art_8f2a1c3d4e5b",
+      "caption": "贪心解与随机基线的目标值对比",
+      "source_stage": "EXPERIMENTING"
+    },
+    {
+      "number": 2,
+      "name": "convergence.svg",
+      "artifact_id": null,
+      "caption": "",
+      "source_stage": "EXPERIMENTING"
+    },
+    {
+      "number": 3,
+      "name": "sensitivity.png",
+      "artifact_id": "art_9a3b2d4e5f6c",
+      "caption": "需求率 ±20% 扰动下的 rmse 变化",
+      "source_stage": "VALIDATING"
+    }
+  ],
   "updated_at": "2026-09-06T12:00:00.000000Z"
 }

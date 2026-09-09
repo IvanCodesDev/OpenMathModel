@@ -34,6 +34,8 @@ import {
   summarizeFindingKinds,
 } from "./paper-audit";
 import { figureImageResolver, summarizeFigures } from "./paper-figures";
+import { describePaperPackage, describeResultFigures } from "./result-figures";
+import type { FigureCard } from "./result-figures";
 import { referenceRows, summarizeReferences } from "./paper-references";
 import type { PlanDecisionView } from "./plan-decision";
 import {
@@ -1079,6 +1081,126 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
   typesetMath(panel);
 }
 
+// ── 结果页「结果图表」分页 / 成果页「论文文件」分页（H5 切片 s25：真实图件与文献展示） ──
+//
+// 图源只有两处：experiment-summary.figures（实验 / 检验沙盒真实落盘并被采集的图，编号与论文清单一致）
+// 与 document-draft.figures / references（论文清单：含论文阶段补画的图与 inserted 标记；已验证引用库）。
+// 缩略图 = 同源产物下载地址（Cookie 鉴权、下载即哈希核验），没有产物 id 的图只列文字行，绝不拼 404；
+// 两个分页都只填 resultDocument 骨架的 .complete-project-name 与 .result-summary（.deliverables 文件表仍
+// 由工作台控制器按产物 kind 填）。
+
+/** 图件卡：缩略图（有产物 id）或占位、「图 N · 图题」、来源阶段、可选的「已插入 / 未插入」与下载。 */
+function figureCardElement(card: FigureCard): HTMLElement {
+  const figure = el("figure", `result-figure${card.imageUrl ? "" : " is-missing"}`);
+  const media = el("div", "result-figure-media");
+  if (card.imageUrl) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.src = card.imageUrl;
+    img.alt = `${card.label} ${card.caption}`;
+    media.append(img);
+  } else {
+    media.append(icon("image"), el("span", "", t("产物未登记")));
+  }
+  const caption = el("figcaption");
+  const title = el("strong", "", `${t("图")} ${card.number} · ${card.caption}`);
+  const meta = el("span", "result-figure-meta");
+  meta.append(el("span", "result-figure-stage", t(card.stage)), el("span", "result-figure-name", card.name));
+  if (card.inserted !== null) {
+    meta.append(el("span", `result-figure-inserted is-${card.inserted ? "yes" : "no"}`, t(card.inserted ? "已插入正文" : "未插入正文")));
+  }
+  if (card.imageUrl) {
+    const link = el("a", "result-figure-download", t("下载"));
+    link.href = card.imageUrl;
+    link.dataset.artifactDownload = card.imageUrl;
+    meta.append(link);
+  }
+  caption.append(title, meta);
+  figure.append(media, caption);
+  return figure;
+}
+
+function figureStrip(cards: readonly FigureCard[]): HTMLElement {
+  const strip = el("div", "result-figure-strip");
+  cards.forEach(card => strip.append(figureCardElement(card)));
+  return strip;
+}
+
+function renderResultFigures(root: HTMLElement, summary: ExperimentSummary): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="charts"]');
+  if (!panel) return;
+  const view = describeResultFigures(summary);
+  // 该字段出现之前的运行：分页保持骨架空态，不编一句「没有图」
+  if (view.kind === "absent" || !shouldRender(panel, "result-figures", summary.updated_at)) return;
+  const name = panel.querySelector<HTMLElement>(".complete-project-name");
+  const rows = panel.querySelector<HTMLElement>(".result-summary");
+  if (!name || !rows) return;
+  if (view.kind === "empty") {
+    name.textContent = t("本次实验与检验没有产出图件");
+    rows.replaceChildren(summaryRow(t("图件"), t("实验 / 检验脚本未落盘任何图件；论文阶段若按总编规划补画，图件见论文文件分页。")));
+    return;
+  }
+  name.textContent = `${t("实验图件")} ${view.total} ${t("张")}（${view.withImage} ${t("张可预览")}）`;
+  rows.replaceChildren(
+    summaryRow(t("图件来源"), view.stages.map(stage => t(stage)).join(" / ")),
+    summaryRow(t("图件"), figureStrip(view.cards)),
+  );
+}
+
+function renderPaperPackagePanel(root: HTMLElement, draft: DocumentDraft): void {
+  const panel = root.querySelector<HTMLElement>('[data-workspace-panel="paper-package"]');
+  if (!panel) return;
+  const view = describePaperPackage(draft);
+  // 图件清单与引用库都缺席（两个字段出现之前的运行）：分页保持骨架空态
+  if ((!view.figures && !view.references) || !shouldRender(panel, "paper-package", draft.updated_at)) return;
+  const name = panel.querySelector<HTMLElement>(".complete-project-name");
+  const rows = panel.querySelector<HTMLElement>(".result-summary");
+  if (!name || !rows) return;
+  name.textContent = draft.title;
+
+  const children: HTMLElement[] = [];
+  if (view.figures) {
+    const block = el("div");
+    block.append(el("div", "", `${view.figures.total} ${t("张")}（${t("已插入")} ${view.figures.inserted} ${t("张")}）`));
+    if (view.figures.cards.length) block.append(figureStrip(view.figures.cards));
+    children.push(summaryRow(t("论文附图"), block));
+  }
+  if (view.references) {
+    const block = el("div");
+    block.append(el("div", "", `${view.references.total} ${t("条")}（${t("已引用")} ${view.references.cited} ${t("条")}）`));
+    if (view.references.items.length) {
+      const list = el("ol", "paper-reference-list");
+      for (const item of view.references.items) {
+        const li = el("li", item.cited ? "is-cited" : "is-uncited");
+        const label = el("span", "paper-reference-label", item.label);
+        let titleNode: HTMLElement;
+        if (item.url) {
+          const link = el("a", "paper-reference-title", item.title);
+          link.href = item.url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          titleNode = link;
+        } else {
+          titleNode = el("span", "paper-reference-title", item.title);
+        }
+        const meta = el("span", "paper-reference-meta");
+        const facts = [t(item.source)];
+        if (item.verification) facts.push(t(item.verification));
+        if (item.key) facts.push(`\\cite{${item.key}}`);
+        facts.push(t(item.cited ? "已引用" : "未引用"));
+        meta.textContent = facts.join(" · ");
+        li.append(label, titleNode, meta);
+        li.title = item.text;
+        list.append(li);
+      }
+      block.append(list);
+    }
+    children.push(summaryRow(t("参考文献"), block));
+  }
+  rows.replaceChildren(...children);
+}
+
 // ── 论文编辑页（DocumentDraft → 编辑器正文；用户草稿优先，新到正文流式呈现） ──
 
 /** 只有用户亲手编辑过的现场才算本机草稿（task-autosave 落盘时带 user_edited
@@ -1819,10 +1941,14 @@ function renderDeliveryRecordPanel(root: HTMLElement, manifest: DeliveryManifest
 export function renderStageContent(root: HTMLElement, outputs: StageOutputsPayload): void {
   if (outputs.dataset_profile) renderDataPanel(root, outputs.dataset_profile);
   if (outputs.plan_proposal) renderModelPanel(root, outputs.plan_proposal);
-  if (outputs.experiment_summary) renderExperimentsPanel(root, outputs.experiment_summary);
+  if (outputs.experiment_summary) {
+    renderExperimentsPanel(root, outputs.experiment_summary);
+    renderResultFigures(root, outputs.experiment_summary);
+  }
   if (outputs.document_draft) {
     renderPaperAudit(root, outputs.document_draft);
     renderEditorPanel(root, outputs.document_draft);
+    renderPaperPackagePanel(root, outputs.document_draft);
   }
   if (outputs.delivery_manifest) {
     renderCompletePanel(root, outputs.delivery_manifest);

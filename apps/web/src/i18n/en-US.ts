@@ -1234,6 +1234,23 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "下载交付包（zip）": "Download delivery package (zip)",
   "下载交付包": "Download delivery package",
   "manifest.json + SHA256SUMS + README + 全部可下载文件，逐文件哈希已核验": "manifest.json + SHA256SUMS + README + every downloadable file, each hash verified",
+  // 结果页「结果图表」/ 成果页「论文文件」的真实图件与文献（H5 切片 s25）
+  "产物未登记": "No artifact registered",
+  "已插入正文": "inserted in the paper",
+  "未插入正文": "not inserted",
+  "本次实验与检验没有产出图件": "The experiment and validation produced no figures",
+  "图件": "Figures",
+  "实验 / 检验脚本未落盘任何图件；论文阶段若按总编规划补画，图件见论文文件分页。": "The experiment / validation scripts saved no figures; any figures drawn at the paper stage appear under Paper files.",
+  "实验图件": "Experiment figures",
+  "张": "figure(s)",
+  "张可预览": "with a preview",
+  "图件来源": "Figure sources",
+  "论文附图": "Paper figures",
+  "参考文献": "References",
+  "条": "entries",
+  "来源可核": "source verified",
+  "按标题匹配": "matched by title",
+  "未验证": "unverified",
   // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」「交付状态」「文件」「个文件」已在其他词典里）
 };
 

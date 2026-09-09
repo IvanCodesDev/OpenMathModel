@@ -22,6 +22,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from omm_agent_skills.figures import figure_inventory
 from omm_contracts import (
     ApprovalDecisionType,
     ApprovalStatus,
@@ -756,6 +757,37 @@ def _validation_report(state: Optional[StageState]) -> Optional[dict[str, Any]]:
     }
 
 
+#: 实验 / 检验图件的来源阶段（experiment-summary.v1 enum experiment_figure_stage）。
+_EXPERIMENT_FIGURE_STAGES = ("EXPERIMENTING", "VALIDATING")
+
+
+def _experiment_figures(
+    experimenting: StageState, validating: Optional[StageState]
+) -> list[dict[str, Any]]:
+    """实验 / 检验节点写在 outputs 里的真实图件 → 契约 ``experiment_figure[]``。
+
+    编号与论文节点的图件清单同一规则（``omm_agent_skills.figures.figure_inventory``：实验图先、
+    检验图后、文件名去重、先到先得），结果页与论文里的「图 N」因此指同一张图；论文阶段补画的图
+    不在实验投影里。artifact_id 空串归 null（页面据此不拼下载链接）；来源阶段越界的条目剔除。
+    """
+    prior = {"EXPERIMENTING": experimenting.outputs}
+    if validating is not None:
+        prior["VALIDATING"] = validating.outputs
+    figures: list[dict[str, Any]] = []
+    for item in figure_inventory(prior):
+        stage = str(item.get("source_stage") or "")
+        if stage not in _EXPERIMENT_FIGURE_STAGES:
+            continue
+        figures.append({
+            "number": int(item["number"]),
+            "name": str(item["name"]),
+            "artifact_id": str(item.get("artifact_id") or "").strip() or None,
+            "caption": str(item.get("caption") or ""),
+            "source_stage": stage,
+        })
+    return figures
+
+
 def _experiment_summary(
     run_id: str,
     experimenting: Optional[StageState],
@@ -778,6 +810,8 @@ def _experiment_summary(
         validation=validation,
         # 实验代码的独立审稿结论（§8.4 生成者-评审者环）；审稿环之前的运行 → null
         review=_review_report(outputs.get("review")),
+        # 实验 / 检验沙盒真实落盘的图件（结果页图件展示的唯一图源）
+        figures=_experiment_figures(experimenting, validating),
         updated_at=iso_z(updated_at),
     )
 
