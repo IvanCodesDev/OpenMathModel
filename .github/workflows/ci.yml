@@ -59,12 +59,22 @@ jobs:
           else
             echo "backend/api not present on this ref; skipped"
           fi
+      # H7 多语言 Runner（设计 §7.4）：装 R 让 agents/tools 的真 R 用例在 CI 上真跑而不是 skip
+      # ——Rscript --vanilla 全链、同种子冷启动可复现、超时杀整棵进程树的 POSIX killpg 路径
+      # （本地开发机是 Windows，走的是 taskkill /T）。装 R 放在 API tests 之后：上面那步
+      # 与 api-postgres job 里的 backend/api 用例都在无 R 环境跑，env_probe 探不到就如实报
+      # unavailable，那也是要覆盖的口径。
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+      - run: Rscript --version
       - name: Agent runtime tests (activates once agents/core lands)
         run: |
           if [ -f agents/core/pyproject.toml ]; then
             pip install -e agents/core -e agents/harness -e agents/tools -e agents/skills -e backend/worker -e agents/evals pytest
             for pkg in agents/core agents/harness agents/tools agents/skills backend/worker agents/evals; do
-              (cd "$pkg" && python -m pytest tests -q)
+              # -rs：把 skip 及原因打进日志，真 R 用例是否真跑一眼可见
+              (cd "$pkg" && python -m pytest tests -q -rs)
             done
           else
             echo "agent runtime not present on this ref; skipped"
