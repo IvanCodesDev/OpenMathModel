@@ -62,7 +62,7 @@ export function fileRows(artifacts: readonly ManifestArtifact[]): FileRow[] {
   }));
 }
 
-/** 交付包（zip：manifest.json + SHA256SUMS + README + 全部可下载文件）的下载地址；同源整页导航。 */
+/** 交付包（zip：manifest.json + SHA256SUMS + README（中英）+ verification-report.md + 全部可下载文件）的下载地址；同源整页导航。 */
 export function deliveryPackageUrl(runId: string): string {
   return `/api/v1/task-runs/${encodeURIComponent(runId)}/delivery-package`;
 }

@@ -1255,7 +1255,7 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "论文未做终稿审计": "The paper was not audited",
   "下载交付包（zip）": "Download delivery package (zip)",
   "下载交付包": "Download delivery package",
-  "manifest.json + SHA256SUMS + README + 全部可下载文件，逐文件哈希已核验": "manifest.json + SHA256SUMS + README + every downloadable file, each hash verified",
+  "manifest.json + SHA256SUMS + README（中英）+ 校验报告 + 全部可下载文件，逐文件哈希已核验": "manifest.json + SHA256SUMS + bilingual README + verification report + every downloadable file, each hash verified",
   // 结果页「结果图表」/ 成果页「论文文件」的真实图件与文献（H5 切片 s25）
   "产物未登记": "No artifact registered",
   "已插入正文": "inserted in the paper",

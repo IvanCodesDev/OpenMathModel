@@ -2174,7 +2174,7 @@ function renderDeliveryRecordPanel(root: HTMLElement, manifest: DeliveryManifest
   }
   files.append(list);
 
-  // 交付包：服务端把 manifest.json + SHA256SUMS + README + 全部可下载文件打成一个 zip
+  // 交付包：服务端把 manifest.json + SHA256SUMS + README（中英）+ 校验报告 + 全部可下载文件打成一个 zip
   // （逐文件哈希核验，对不上的不进包）。链接与产物下载走同一条 [data-artifact-download]
   // 拦截（同源整页导航）；成果页的「下载全部」按钮同时改指向这个包。
   const packageUrl = deliveryPackageUrl(manifest.run_id);
@@ -2184,7 +2184,7 @@ function renderDeliveryRecordPanel(root: HTMLElement, manifest: DeliveryManifest
   const packageRow = el("div", "delivery-package");
   packageRow.append(
     packageLink,
-    el("span", "delivery-package-note", t("manifest.json + SHA256SUMS + README + 全部可下载文件，逐文件哈希已核验")),
+    el("span", "delivery-package-note", t("manifest.json + SHA256SUMS + README（中英）+ 校验报告 + 全部可下载文件，逐文件哈希已核验")),
   );
   files.append(packageRow);
   root.querySelectorAll<HTMLButtonElement>('[data-action="download-all"]').forEach(button => {
