@@ -2,8 +2,8 @@
 id: paper_outline.default
 stage: PAPER_WRITING
 variant: outline
-version: 8
-input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures", "available_references"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}, "available_references": {"type": "string"}, "data_files": {"type": "string"}}}
+version: 9
+input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures", "available_references"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}, "available_references": {"type": "string"}, "data_files": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "notation", "chapters"], "properties": {"title": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "notation": {"type": "string"}, "chapters": {"type": "array", "items": {"type": "object", "required": ["heading", "brief", "target_chars"], "properties": {"heading": {"type": "string"}, "brief": {"type": "string"}, "target_chars": {"type": "integer"}, "source_keys": {"type": "array", "items": {"type": "string"}}}}}, "figures_wanted": {"type": "array", "items": {"type": "object", "required": ["file", "title", "chapter", "source", "spec"], "properties": {"file": {"type": "string"}, "title": {"type": "string"}, "chapter": {"type": "string"}, "source": {"type": "string"}, "spec": {"type": "string"}}}}}}
 ---
 你是数学建模竞赛论文的总编，写作范式对标国赛/研赛优秀论文与 MCM/ICM Outstanding 论文。现在只做规划不写正文：基于整条任务链的真实产出，产出论文的章节骨架、全文统一的符号约定与每章写作指令。后续每章会由独立调用按你的指令撰写，规划质量直接决定全文的结构与一致性。
@@ -52,6 +52,10 @@ output_schema: {"type": "object", "required": ["title", "notation", "chapters"],
 
 {{data_files}}
 
+## 上一轮反馈（回退重写时非「无」：上一轮草稿已作废的审计事实与回退原因）
+
+{{previous_round}}
+
 ## 输出要求
 
 只输出一个 JSON 对象，不要任何解释文字或 Markdown 代码围栏，字段如下：
@@ -69,3 +73,4 @@ output_schema: {"type": "object", "required": ["title", "notation", "chapters"],
 - `figures_wanted`（可选，最多 3 项）：论文还缺、且能用「可用数据文件」/ 实验核心指标 / 数字冻结清单里的**真实数据**画出来的图——每项 `file`（英文短语文件名 `.png`，如 `sensitivity_curve.png`）、`title`（图题）、`chapter`（所属章标题，须与 chapters 里某章一致）、`source`（数据来源：只能是「可用数据文件」里的一个文件名，或 `metrics` / `frozen_numbers`）、`spec`（一句话画法：横纵轴、系列、图型）。可用图件清单已够用、或「可用数据文件」为「无」且指标不足以成图时，不写这一项；补图成功后会追加进图件清单并续编号，对应章的 brief 可写「若补图成功则插入」。禁止规划需要新数据、模拟数据或估计值的图。
 - 引用与参考文献：「可引用文献表」非「无」时，最后一章必须是「参考文献」（不带编号或按序编号均可，标题里须含「参考文献」），其 brief 写明「按可引用文献表逐条写 `[n] 条目`，编号与条目正文逐字照抄、不得增删改、不加评述」，`target_chars` 按条目数估（每条约 80 字）；正文章节的 brief 可要求「引用 [n]」以指明借鉴的先例（n 只能取表中编号，写清引哪条、在哪里引）。表为「无」时不要规划「参考文献」章，brief 也不得要求引用文献——终稿会逐条核对图表引用与文献引用（编号与条目正文都核），虚构的一律记为审计发现。表格可以规划（写手用 Markdown 表格并配表题）。
 - 数据准备与清洗结论决定正文的样本口径：数据预处理小节按其中的清洗策略与执行结论描述（清洗未执行就写按原始数据建模，不得虚构清洗过程）；清洗脚本独立审稿未解决的意见、以及用户在数据确认闸门的决策所要求的说明，必须规划进相应章节的 brief，不得淡化。
+- 「上一轮反馈」非「无」时：这是回退后的重写，规划必须逐条规避其中点名的审计发现（幽灵图 / 表、未验证引用、无出处数值出现过的章要在 brief 里写明从源头避免的做法）；其中列出的违规样本数字不得作为本轮数值来源；用户在对话备注里的修改要求（若有）逐条落实进对应章的 brief。上一轮草稿已作废，不得要求「沿用上一稿的某段」。

@@ -3955,6 +3955,52 @@ _MAX_LENGTH_REVISIONS = 2
 _MAX_TARGETED_REWRITES = 2
 _TARGETED_KINDS = frozenset({FINDING_PHANTOM_FIGURE, FINDING_PHANTOM_TABLE, FINDING_UNVERIFIED_CITATION})
 _SCOPE_CHAPTER = re.compile(r"^第(\d+)章《")
+def paper_redo_note(ctx: NodeContext) -> str:
+    """回退重写论文时的「上一轮反馈」材料（G4 退回 / 修订轮 / 对话 redo 到论文阶段）；没有回退 → 「无」。
+
+    反馈包（``ctx.iteration_feedback``）里被丢弃的上一轮草稿事实：回退原因、上一轮标题、终稿审计
+    发现（按类计数 + 逐条 scope / detail / 违规样本）、质量告警。用户修改要求的原话经运行备注通道
+    随每次调用注入（§11.3），这里不重复转述——只给事实，让总编与写手从源头规避上一轮被点名的问题。
+    """
+    feedback = ctx.iteration_feedback
+    if not feedback or str(feedback.get("target_state") or "") != ctx.state.value:
+        return "无"
+    previous = (feedback.get("superseded") or {}).get(TaskState.PAPER_WRITING.value)
+    previous = previous if isinstance(previous, Mapping) else {}
+    lines = ["本轮是回退后的重写（上一轮草稿已作废，不得照搬、不得要求沿用上一稿的段落）："]
+    reason = str(feedback.get("reason") or "").strip()
+    if reason:
+        lines.append(f"- 回退原因：{reason}")
+    title = str(previous.get("title") or "").strip()
+    if title:
+        lines.append(f"- 上一轮标题：《{title}》（可沿用或另拟）")
+    findings = [item for item in (previous.get("audit_findings") or []) if isinstance(item, Mapping)]
+    if findings:
+        lines.append(
+            f"- 上一轮终稿审计发现 {len(findings)} 处（{summarize_kinds(findings)}）。本轮从源头避免："
+            "数字只引冻结清单与材料、图件只按可用图件清单引用与插入、文献只写可引用文献表的 [n]；"
+            "下列违规样本不得再出现在正文："
+        )
+        for finding in findings[:_REDO_FINDINGS_LIMIT]:
+            scope = str(finding.get("scope") or "").strip() or "（未标注位置）"
+            tokens = "、".join(str(token) for token in (finding.get("numbers") or [])[:4])
+            lines.append(
+                f"  - {scope}：{str(finding.get('detail') or '').strip()}"
+                + (f"（涉及：{tokens}）" if tokens else "")
+            )
+        if len(findings) > _REDO_FINDINGS_LIMIT:
+            lines.append(f"  - （其余 {len(findings) - _REDO_FINDINGS_LIMIT} 处从略，类别同上）")
+    warnings = [str(item).strip() for item in (previous.get("quality_warnings") or []) if str(item).strip()]
+    if warnings:
+        lines.append("- 上一轮质量告警：" + "；".join(warnings[:_REDO_WARNINGS_LIMIT]))
+    lines.append("- 用户在对话备注里的修改要求（若有）逐条落实后再统稿。")
+    return "\n".join(lines)
+
+
+#: 「上一轮反馈」里逐条点名的审计发现 / 质量告警上限：给规避用的样本，不是搬运整份审计报告。
+_REDO_FINDINGS_LIMIT = 5
+_REDO_WARNINGS_LIMIT = 4
+
 #: source_keys 的合法取值与材料标题（总编给每章指定材料，缺失时给全量）。
 _MATERIAL_LABELS = {
     "problem_analysis": "问题分析结果（JSON）",
@@ -3967,10 +4013,12 @@ _MATERIAL_LABELS = {
     "frozen_numbers": "数字冻结清单（正文数值只准引用此表与上述材料中的数字）",
     "available_figures": "可用图件清单（本次运行真实产出的图；插图只准从此表选、编号固定）",
     "available_references": "可引用文献表（本次运行可核实的引用条目；引用只准写表中 [n]、参考文献章逐条照抄）",
+    "previous_round": "上一轮反馈（回退重写时非「无」：作废草稿的审计事实与回退原因，逐条规避；其中的违规样本数字不得作为数值来源）",
 }
 #: 冻结清单、图件清单与文献表不受总编的 source_keys 路由影响：每章都必须看到它们（§9 硬规则：
-#: 数字只准引冻结值、图只准引真实图件、引用只准来自已验证条目——漏发给某一章，那章就会凭空写）。
-_ALWAYS_MATERIAL_KEYS = ("frozen_numbers", "available_figures", "available_references")
+#: 数字只准引冻结值、图只准引真实图件、引用只准来自已验证条目——漏发给某一章，那章就会凭空写）；
+#: 「上一轮反馈」同理：规避对象漏发给某一章，那章就会重蹈上一轮的发现。
+_ALWAYS_MATERIAL_KEYS = ("frozen_numbers", "available_figures", "available_references", "previous_round")
 #: 叙述材料（审计允许集的文本来源；冻结清单本身按值进允许集）。两表也算：
 #: 假设文本与符号取值里的数字（「删行 ≤ 5%」「{0,1}」）是有出处的；图件说明里的
 #: 数字（「RMSE 0.12 vs 基线 0.30」）与实验摘要同一先例——画图的人写的、随图进材料；
@@ -4302,6 +4350,9 @@ class PaperWritingNode(LlmSkillNode):
             "available_references": render_reference_material(
                 reference_inventory(ctx.prior_outputs, plan.get("id"))
             ),
+            # 上一轮反馈（s36）：回退重写时把作废草稿的审计事实与回退原因交给总编与每章写手
+            # 逐条规避；参与输入指纹——重做轮的检查点绝不与上一轮混用。
+            "previous_round": paper_redo_note(ctx),
         }
 
     @staticmethod

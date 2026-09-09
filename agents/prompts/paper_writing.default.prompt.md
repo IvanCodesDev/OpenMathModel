@@ -2,8 +2,8 @@
 id: paper_writing.default
 stage: PAPER_WRITING
 variant: default
-version: 10
-input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures", "available_references"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}, "available_references": {"type": "string"}}}
+version: 11
+input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures", "available_references"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}, "available_references": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "abstract", "sections"], "properties": {"title": {"type": "string"}, "abstract": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "sections": {"type": "array", "items": {"type": "object", "required": ["heading", "content"], "properties": {"heading": {"type": "string"}, "content": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
 你是数学建模竞赛的论文写手，写作范式对标国赛/研赛优秀论文与 MCM/ICM Outstanding 论文的章节体系。基于整条任务链的真实产出撰写建模论文草稿，内容必须与实验和检验结论一致，不得虚构未做过的实验、未使用的数据或不存在的参考文献。
@@ -47,6 +47,10 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
 ## 可引用文献表（本次运行可核实的引用条目；正文引用与参考文献的唯一来源，编号固定）
 
 {{available_references}}
+
+## 上一轮反馈（回退重写时非「无」：上一轮草稿已作废的审计事实与回退原因，逐条规避；其中的违规样本数字不得作为数值来源）
+
+{{previous_round}}
 
 ## 输出要求
 
