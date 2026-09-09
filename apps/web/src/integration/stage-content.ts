@@ -20,6 +20,7 @@ import type {
 import { currentLocale, t } from "../i18n/locale";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
+import { approvalEvidenceStamp, describeApprovalEvidence } from "./approval-evidence";
 import { describeCleanData } from "./clean-data";
 import { deliveryPackageUrl, describeDelivery } from "./delivery-record";
 import type { DeliveryView } from "./delivery-record";
@@ -1352,6 +1353,119 @@ function renderPaperPackagePanel(root: HTMLElement, draft: DocumentDraft): void 
   rows.replaceChildren(...children);
 }
 
+// ── G4 定稿闸门卡片的内嵌证据（H5 切片 s30） ────────────────────────────────────────
+//
+// 审批选项（控制器渲染的 .approval-options[data-approval-options=<id>]）摆在用户面前时，同一屏给出决定所需的事实：
+// 终稿审计分类计数 + 前几处发现、已插入论文附图的缩略图、参考文献引用计数、交付记录五项一致性检查的未过项。
+// 证据块是选项列表的前一个兄弟节点（控制器只认「CTA 的前一个兄弟」是选项列表，所以只能插在选项之前）；
+// 只有成果清单的交付记录处于「等待确认交付」且 approval_id 与卡片一致才挂，门一解决就摘掉。
+
+const APPROVAL_EVIDENCE_ATTR = "data-approval-evidence";
+
+function evidenceSection(key: string, label: string, body: HTMLElement | string): HTMLElement {
+  const section = el("div", "approval-evidence-section");
+  section.dataset.evidenceSection = key;
+  section.append(el("strong", "approval-evidence-label", label));
+  if (typeof body === "string") section.append(el("span", "", body));
+  else section.append(body);
+  return section;
+}
+
+function renderApprovalEvidence(root: HTMLElement, outputs: StageOutputsPayload): void {
+  const hosts = [...root.querySelectorAll<HTMLElement>("[data-approval-options]")];
+  const evidence = describeApprovalEvidence(outputs.document_draft, outputs.delivery_manifest);
+  // 不是挂起的 G4（没门 / 已解决 / 模拟链）：摘掉遗留的证据块
+  if (!evidence || !outputs.delivery_manifest) {
+    root.querySelectorAll<HTMLElement>(`[${APPROVAL_EVIDENCE_ATTR}]`).forEach(node => node.remove());
+    return;
+  }
+  const stamp = approvalEvidenceStamp(evidence, outputs.document_draft, outputs.delivery_manifest);
+  for (const host of hosts) {
+    if (host.dataset.approvalOptions !== evidence.approvalId) continue;
+    const previous = host.previousElementSibling;
+    const existing = previous instanceof HTMLElement && previous.hasAttribute(APPROVAL_EVIDENCE_ATTR) ? previous : null;
+    if (existing?.dataset.approvalEvidenceStamp === stamp) {
+      existing.hidden = host.hidden;
+      continue;
+    }
+    const block = existing ?? el("div", "approval-evidence");
+    block.setAttribute(APPROVAL_EVIDENCE_ATTR, evidence.approvalId);
+    block.dataset.approvalEvidenceStamp = stamp;
+    block.hidden = host.hidden;
+    const children: HTMLElement[] = [el("p", "approval-evidence-title", t("定稿前的事实核对"))];
+
+    if (evidence.audit) {
+      const body = el("div");
+      if (evidence.audit.total === 0) {
+        body.append(el("span", "approval-evidence-ok", t("数值、图表与引用审计全部通过")));
+      } else {
+        body.append(el("span", "approval-evidence-warn", `${t("终稿审计发现")} ${evidence.audit.total} ${t("处")}（${evidence.audit.kinds.map(kind => `${kind.count} ${t(kind.label)}`).join("、")}）`));
+        const list = el("ul", "approval-evidence-findings");
+        for (const finding of evidence.audit.top) {
+          const item = el("li");
+          item.append(el("span", "approval-evidence-scope", finding.scope));
+          finding.numbers.forEach(token => item.append(el("code", "approval-evidence-token", token)));
+          item.append(el("span", "approval-evidence-reason", t(finding.reason)));
+          list.append(item);
+        }
+        if (evidence.audit.more > 0) {
+          list.append(el("li", "approval-evidence-more", `${t("另有")} ${evidence.audit.more} ${t("处，见论文页「终稿审计」")}`));
+        }
+        body.append(list);
+      }
+      children.push(evidenceSection("audit", t("终稿审计"), body));
+    } else {
+      children.push(evidenceSection("audit", t("终稿审计"), t("论文未做终稿审计")));
+    }
+
+    if (evidence.figures) {
+      const body = el("div");
+      body.append(el("span", "", `${evidence.figures.total} ${t("张")}（${t("已插入")} ${evidence.figures.inserted} ${t("张")}）`));
+      if (evidence.figures.cards.length) {
+        const strip = el("div", "approval-evidence-figures");
+        for (const card of evidence.figures.cards) {
+          const figure = el("figure", `approval-evidence-figure${card.inserted ? " is-inserted" : ""}`);
+          const img = document.createElement("img");
+          img.loading = "lazy";
+          img.decoding = "async";
+          img.src = card.imageUrl ?? "";
+          img.alt = `${card.label} ${card.caption}`;
+          const caption = el("figcaption", "", `${t("图")} ${card.number} · ${card.caption}${card.inserted ? "" : `（${t("未插入正文")}）`}`);
+          figure.append(img, caption);
+          strip.append(figure);
+        }
+        body.append(strip);
+        if (evidence.figures.more > 0) body.append(el("span", "approval-evidence-more", `${t("另有")} ${evidence.figures.more} ${t("张，见成果页「论文文件」")}`));
+      } else if (evidence.figures.total > 0) {
+        body.append(el("span", "approval-evidence-more", t("图件没有登记产物，无法预览")));
+      }
+      children.push(evidenceSection("figures", t("论文附图"), body));
+    }
+
+    if (evidence.references) {
+      children.push(evidenceSection("references", t("参考文献"), `${evidence.references.total} ${t("条")}（${t("已引用")} ${evidence.references.cited} ${t("条")}）`));
+    }
+
+    if (evidence.checks) {
+      const body = el("div");
+      body.append(el("span", evidence.checks.failed.length ? "approval-evidence-warn" : "approval-evidence-ok", `${evidence.checks.passed} / ${evidence.checks.total} ${t("项通过")}`));
+      if (evidence.checks.failed.length) {
+        const list = el("ul", "approval-evidence-findings");
+        for (const check of evidence.checks.failed) {
+          const item = el("li");
+          item.append(el("span", "approval-evidence-scope", `${t(CHECK_LABELS[check.id] ?? check.label)}：`), el("span", "approval-evidence-reason", check.detail));
+          list.append(item);
+        }
+        body.append(list);
+      }
+      children.push(evidenceSection("checks", t("一致性检查"), body));
+    }
+
+    block.replaceChildren(...children);
+    if (!existing) host.insertAdjacentElement("beforebegin", block);
+  }
+}
+
 // ── 论文编辑页（DocumentDraft → 编辑器正文；用户草稿优先，新到正文流式呈现） ──
 
 /** 只有用户亲手编辑过的现场才算本机草稿（task-autosave 落盘时带 user_edited
@@ -2105,4 +2219,6 @@ export function renderStageContent(root: HTMLElement, outputs: StageOutputsPaylo
     renderCompletePanel(root, outputs.delivery_manifest);
     renderDeliveryRecordPanel(root, outputs.delivery_manifest);
   }
+  // G4 挂起时把定稿证据挂到审批卡上；不挂 / 已解决则摘掉
+  renderApprovalEvidence(root, outputs);
 }

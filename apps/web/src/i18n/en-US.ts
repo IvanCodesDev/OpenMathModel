@@ -1273,6 +1273,14 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "来源可核": "source verified",
   "按标题匹配": "matched by title",
   "未验证": "unverified",
+  // G4 定稿闸门卡片的内嵌证据（H5 切片 s30）
+  "定稿前的事实核对": "Facts to check before final approval",
+  "终稿审计发现": "Final-draft audit found",
+  "处": "finding(s)",
+  "另有": "Plus",
+  "处，见论文页「终稿审计」": "more — see “Final-draft audit” on the paper page",
+  "张，见成果页「论文文件」": "more figure(s) — see “Paper files” on the results page",
+  "图件没有登记产物，无法预览": "Figures have no registered artifacts and cannot be previewed",
   // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」「交付状态」「文件」「个文件」已在其他词典里）
 };
 
