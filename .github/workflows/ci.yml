@@ -67,7 +67,7 @@ jobs:
             # 于本仓库，必须与 contracts/core 一样以可编辑方式一并安装，否则 pip
             # 会去 PyPI 找。
             pip install -e packages/contracts -e agents/core -e agents/harness -e agents/skills -e agents/tools -e "backend/api[dev]"
-            python -c "import omm_api; from omm_api.main import app; assert app is not None"
+            python -c "import omm_api; from omm_api.main import create_app; assert callable(create_app)"
             python packages/contracts/scripts/export_openapi.py --check
           else
             echo "backend/api not present on this ref; skipped"
