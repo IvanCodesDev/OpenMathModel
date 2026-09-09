@@ -30,6 +30,10 @@ class NodeContext:
     #: value — e.g. the G2 data-gate choice ("adopt_cleaned"/"use_raw") made
     #: after DATA_PREPARATION succeeded. Empty for runs without resolved gates.
     review_decisions: Mapping[str, str] = field(default_factory=dict)
+    #: 最近一次回退留下的反馈包（``TaskRunSnapshot.iteration_feedback``）：目标阶段 / 原因 /
+    #: 是否图自动回退 / 被丢弃的上一轮产出。只有 ``target_state`` 等于本节点状态时才是给
+    #: 本节点的重做反馈；没有回退过为 None。
+    iteration_feedback: Mapping[str, Any] | None = None
 
     @staticmethod
     def for_step(
@@ -44,6 +48,9 @@ class NodeContext:
             inputs=dict(snapshot.inputs),
             prior_outputs={key: dict(value) for key, value in snapshot.outputs.items()},
             review_decisions=dict(snapshot.review_decisions),
+            iteration_feedback=(
+                dict(snapshot.iteration_feedback) if snapshot.iteration_feedback else None
+            ),
         )
 
 

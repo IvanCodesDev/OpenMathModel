@@ -2640,6 +2640,81 @@ def _run_review_loop(
     return review, (report, capture, final_answer)
 
 
+def redo_feedback_note(ctx: NodeContext) -> str | None:
+    """回退重做时给生成者的「上一轮反馈」段（进沙盒任务说明）；不是本节点的回退 → None。
+
+    反馈包（``ctx.iteration_feedback``，引擎在回退落地时打包）里有回退原因（闸门选项 / 用户原话 /
+    图的条件边）与被丢弃的上一轮产出：本阶段上一轮的方法摘要与指标、实验审稿未解决的阻断意见、
+    检验阶段未通过的稳健性检查（逐项实测值 / 阈值 / 对应假设）与检验审稿意见。全部是事实转述，
+    数字原样——目的是让重做针对问题改，而不是对着同一张任务卡再跑一遍。
+    """
+    feedback = ctx.iteration_feedback
+    if not feedback or str(feedback.get("target_state") or "") != ctx.state.value:
+        return None
+    superseded = feedback.get("superseded") or {}
+    auto = bool(feedback.get("auto"))
+    iteration = feedback.get("iteration")
+    origin = "图按条件边自动回退" if auto else "用户 / 闸门决定回退"
+    round_text = (
+        f"第 {iteration} 轮自动回退" if auto and isinstance(iteration, int) else f"本阶段第 {ctx.attempt} 次尝试"
+    )
+    lines = [f"## 上一轮反馈（{origin}；{round_text}）——请针对以下问题改进，不要原样重跑"]
+    reason = str(feedback.get("reason") or "").strip()
+    if reason:
+        lines.append(f"- 回退原因：{reason}")
+    previous = superseded.get(ctx.state.value) or {}
+    if isinstance(previous, Mapping):
+        approach = str(previous.get("approach_summary") or "").strip()
+        if approach:
+            lines.append(f"- 上一轮方法摘要：{approach}")
+        metrics = previous.get("metrics")
+        if isinstance(metrics, Mapping) and metrics:
+            lines.append(f"- 上一轮指标：{json.dumps(dict(metrics), ensure_ascii=False)}")
+        blockers = _unresolved_blockers(previous.get("review"))
+        if blockers:
+            lines.append(
+                "- 上一轮实验审稿未解决的阻断性意见："
+                + "；".join(
+                    f"{str(b.get('location') or '').strip() + '：' if b.get('location') else ''}{b.get('issue')}"
+                    for b in blockers
+                )
+            )
+    validation = superseded.get(TaskState.VALIDATING.value) or {}
+    if isinstance(validation, Mapping):
+        robustness = validation.get("robustness") or {}
+        failed = [c for c in (robustness.get("failed_checks") or []) if isinstance(c, Mapping)]
+        if failed:
+            total = robustness.get("checks_total")
+            lines.append(
+                f"- 上一轮稳健性检查{f' {total} 项中' if total else ''} {len(failed)} 项未通过（数字原样，不得改阈值）："
+            )
+            for check in failed:
+                name = str(check.get("name") or check.get("id") or "检查")
+                bits = [str(check.get("detail") or "").strip()]
+                if check.get("value") is not None:
+                    bits.append(f"实测 {check.get('value')}")
+                if check.get("threshold") is not None:
+                    bits.append(f"阈值 {check.get('threshold')}")
+                if check.get("assumption_id"):
+                    bits.append(f"对应假设 {check.get('assumption_id')}")
+                lines.append(f"  - {name}：{'；'.join(bit for bit in bits if bit)}")
+        checks_blockers = _unresolved_blockers(robustness.get("review"))
+        if checks_blockers:
+            lines.append(
+                "- 上一轮检验脚本审稿未解决的阻断性意见："
+                + "；".join(str(b.get("issue")) for b in checks_blockers)
+            )
+        summary = str(validation.get("validation_summary") or "").strip()
+        if summary:
+            lines.append(f"- 上一轮检验结论：{summary}")
+    lines.append(
+        "改进要求：修正导致检查未过或审稿驳回的建模 / 数值 / 实现问题（约束、参数、数值方法、遗漏步骤），"
+        "保留同一套指标口径以便对比；不得删掉检查、不得为通过而改阈值、不得只调换随机种子；"
+        "若你判断问题出在方案而非实现，在 approach_summary 里如实说明并给出证据。"
+    )
+    return "\n".join(lines)
+
+
 class ExperimentExecutionNode(LlmSkillNode):
     """实验阶段 = 沙盒 Agent 执行体（H3 前置刀：迁移自单发生成+私有重试环）+ 独立审稿（§8.4）。
 
@@ -2817,7 +2892,9 @@ class ExperimentExecutionNode(LlmSkillNode):
             )
             return report, capture, final_answer
 
-        report, capture, final_answer = sandbox_wave(None, self.max_sandbox_runs)
+        # 回退重做（人工 redo:EXPERIMENTING / 修订轮 / 图条件边自动回实验）：首波任务说明带
+        # 「上一轮反馈」——上一轮方法与指标、未过的稳健性检查、审稿阻断意见，针对性改而不是原样重跑
+        report, capture, final_answer = sandbox_wave(redo_feedback_note(ctx), self.max_sandbox_runs)
         usage = {
             "runs": int(report["usage"]["runs"]),
             "waves": int(report["attempts"]),

@@ -189,6 +189,38 @@ def _discard_from(snapshot: TaskRunSnapshot, start: TaskState) -> None:
         snapshot.review_decisions.pop(state.value, None)
 
 
+def _capture_feedback(
+    snapshot: TaskRunSnapshot,
+    target: TaskState,
+    *,
+    reason: Any,
+    from_state: Any,
+    auto: bool,
+    via_edge: Any,
+    iteration: Any,
+) -> None:
+    """回退落地前把即将丢弃的那几段产出连同回退原因打成反馈包（``iteration_feedback``）。
+
+    重做的节点读它来针对性改进（上一轮的方法摘要 / 检验未过项 / 审稿阻断意见），而不是
+    对着同一张任务卡原样重跑；``prior_outputs`` 仍按丢弃后的口径给，两者不混。只快照
+    ``target`` 及其下游有产出的阶段；上游不在丢弃范围、也不是反馈。
+    """
+    superseded = {
+        state.value: dict(snapshot.outputs[state.value])
+        for state in WORK_SEQUENCE[WORK_SEQUENCE.index(target) :]
+        if state.value in snapshot.outputs
+    }
+    snapshot.iteration_feedback = {
+        "target_state": target.value,
+        "from_state": str(from_state) if from_state else None,
+        "reason": str(reason) if reason else None,
+        "auto": bool(auto),
+        "via_edge": str(via_edge) if via_edge else None,
+        "iteration": int(iteration) if isinstance(iteration, int) and not isinstance(iteration, bool) else None,
+        "superseded": superseded,
+    }
+
+
 def _on_review_resolved(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     # Both branches are folded into ONE event so a crash can never leave the
     # run stuck between "review cleared" and "state moved".
@@ -206,6 +238,16 @@ def _on_review_resolved(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
             # _select_target 会把它读成「做完了、往下走」，必须显式要求重跑，
             # 否则「退回建模方案」的实际效果是直接跳到实验，等于什么都没重做。
             snapshot.force_rerun = True
+            # 反馈包：闸门拍板的选项 id（如 redo:EXPERIMENTING）或修订轮的用户原话
+            _capture_feedback(
+                snapshot,
+                resume,
+                reason=payload.get("reason") or review.reason,
+                from_state=(WORK_SEQUENCE[-1] if review.revision_round > 0 else review.resume_state).value,
+                auto=False,
+                via_edge=payload.get("via_edge"),
+                iteration=payload.get("iteration"),
+            )
             _discard_from(snapshot, resume)
         else:
             # 决策台账的快照面：批准时 reason 携带所选 option_id（控制面
@@ -288,12 +330,24 @@ def _on_run_redo(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     snapshot.cancel_requested = False
     snapshot.state = target
     snapshot.force_rerun = True
+    # 反馈包：人工 redo 带用户原话；图条件边自动回退带 auto / via_edge / iteration（s33）
+    _capture_feedback(
+        snapshot,
+        target,
+        reason=payload.get("reason"),
+        from_state=recorded_from or source.value,
+        auto=bool(payload.get("auto")),
+        via_edge=payload.get("via_edge"),
+        iteration=payload.get("iteration"),
+    )
     _discard_from(snapshot, target)
 
 
 def _on_run_completed(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:
     assert_transition(snapshot.state, TaskState.COMPLETED)
     snapshot.state = TaskState.COMPLETED
+    # 跑完清空反馈包：它只服务于回退后的那一轮；修订轮回退时会重新打包
+    snapshot.iteration_feedback = None
 
 
 def _on_run_failed(snapshot: TaskRunSnapshot, event: AgentEvent) -> None:

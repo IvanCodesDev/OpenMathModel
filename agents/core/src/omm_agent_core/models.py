@@ -247,6 +247,11 @@ class TaskRunSnapshot:
     #: Downstream nodes read e.g. the G2 data-gate choice from here instead
     #: of querying the control-plane approval rows (event log is the truth).
     review_decisions: dict[str, str] = field(default_factory=dict)
+    #: 最近一次回退（人工 redo / 修订批准 / 图条件边自动回退）留给重做节点的反馈包：
+    #: ``{target_state, from_state, reason, auto, via_edge, iteration, superseded: {state: outputs}}``——
+    #: ``superseded`` 是回退时被丢弃的那几段产出（上一轮的实验摘要 / 检验发现 / 审稿意见），
+    #: 重做的节点据此针对性改进而不是原样重跑；下一次回退覆盖，跑完清空。
+    iteration_feedback: dict[str, Any] | None = None
     steps: list[StepRun] = field(default_factory=list)
     review: ReviewRequest | None = None
     failure: Failure | None = None
@@ -278,6 +283,7 @@ class TaskRunSnapshot:
             "inputs": self.inputs,
             "outputs": self.outputs,
             "review_decisions": self.review_decisions,
+            "iteration_feedback": self.iteration_feedback,
             "steps": [step.to_dict() for step in self.steps],
             "review": self.review.to_dict() if self.review else None,
             "failure": self.failure.to_dict() if self.failure else None,
@@ -301,6 +307,9 @@ class TaskRunSnapshot:
                 str(key): str(value)
                 for key, value in (raw.get("review_decisions") or {}).items()
             },
+            iteration_feedback=(
+                dict(raw["iteration_feedback"]) if isinstance(raw.get("iteration_feedback"), dict) else None
+            ),
             steps=[StepRun.from_dict(item) for item in raw.get("steps") or []],
             review=ReviewRequest.from_dict(raw["review"]) if raw.get("review") else None,
             failure=Failure.from_dict(raw["failure"]) if raw.get("failure") else None,
