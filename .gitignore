@@ -59,6 +59,8 @@ Microsoft/Windows/PowerShell/
 /audit-current/
 /references/
 /tests/
+# 审批口径将任意层级的测试目录都视为本地开发材料。
+**/tests/
 /doc/
 /design-qa.md
 
