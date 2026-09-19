@@ -1,0 +1,52 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "按上一轮反馈把需求率扰动同时作用在训练与评估集，重跑贪心近似求解并与随机基线对比",
+  "metrics": { "rmse": 0.47, "improvement_pct": 13.1 },
+  "stdout_tail": "OMM_METRICS_JSON: {\"rmse\": 0.47, \"improvement_pct\": 13.1}\n",
+  "experiment_summary": "回退重做后的第 2 轮实验\n核心指标：{\"rmse\": 0.47}\n产物文件：results.csv",
+  "validation": {
+    "verdict": "concerns",
+    "checks": [
+      { "name": "结果合理性", "result": "pass", "note": "指标数量级正常" },
+      { "name": "稳健性", "result": "warn", "note": "重采样稳定性仍未达标" }
+    ],
+    "risks": ["合成数据外推风险"],
+    "validation_summary": "本结果为回退重做后的复检：需求率扰动转为通过，重采样稳定性仍未通过",
+    "robustness": {
+      "executed": true,
+      "status": "passed",
+      "summary_text": "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：重采样稳定性（bootstrap：value 0.18，阈值 0.15）。",
+      "checks": [
+        { "id": "sensitivity", "name": "需求率扰动", "passed": true, "value": 0.17, "threshold": 0.2, "detail": "在阈值内", "assumption_id": "A1" },
+        { "id": "bootstrap", "name": "重采样稳定性", "passed": false, "value": 0.18, "threshold": 0.15, "detail": "超出阈值", "assumption_id": null },
+        { "id": "baseline", "name": "对基线优势幅度", "passed": true, "value": 0.62, "threshold": "≥ 0.1", "detail": "" }
+      ],
+      "checks_total": 3,
+      "checks_failed": 1,
+      "reason": "",
+      "review": null,
+      "round_comparison": {
+        "iteration": 2,
+        "auto": true,
+        "previous_total": 4,
+        "previous_failed": [
+          { "id": "sensitivity", "name": "需求率扰动" },
+          { "id": "bootstrap", "name": "重采样稳定性" },
+          { "id": "holdout", "name": "留出集一致性" }
+        ],
+        "resolved": [
+          { "id": "sensitivity", "name": "需求率扰动" }
+        ],
+        "still_failing": [
+          { "id": "bootstrap", "name": "重采样稳定性", "value": 0.18, "threshold": 0.15 }
+        ],
+        "not_rechecked": [
+          { "id": "holdout", "name": "留出集一致性" }
+        ]
+      }
+    }
+  },
+  "review": null,
+  "figures": [],
+  "updated_at": "2026-09-18T12:00:00.000000Z"
+}

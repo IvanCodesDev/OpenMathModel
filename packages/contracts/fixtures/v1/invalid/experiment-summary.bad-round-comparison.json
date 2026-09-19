@@ -1,0 +1,34 @@
+{
+  "run_id": "run_1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "approach_summary": "构造合成需求数据",
+  "metrics": {},
+  "stdout_tail": "",
+  "experiment_summary": "构造合成需求数据",
+  "validation": {
+    "verdict": "concerns",
+    "checks": [],
+    "risks": [],
+    "validation_summary": "回退重做后的复检",
+    "robustness": {
+      "executed": true,
+      "status": "passed",
+      "summary_text": "沙盒复跑稳健性检查 1 项，通过 0 项。",
+      "checks": [
+        { "id": "bootstrap", "name": "重采样稳定性", "passed": false, "value": 0.18, "threshold": 0.15, "detail": "超出阈值" }
+      ],
+      "checks_total": 1,
+      "checks_failed": 1,
+      "reason": "",
+      "round_comparison": {
+        "iteration": "2",
+        "auto": true,
+        "previous_total": 1,
+        "previous_failed": [{ "id": "bootstrap", "name": "重采样稳定性" }],
+        "resolved": [],
+        "still_failing": [{ "id": "bootstrap", "name": "重采样稳定性", "value": 0.18, "threshold": 0.15 }],
+        "not_rechecked": []
+      }
+    }
+  },
+  "updated_at": "2026-09-18T12:00:00.000000Z"
+}

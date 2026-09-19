@@ -123,6 +123,10 @@ export interface RobustnessReport {
    * 检验脚本的独立审稿结论（同实验代码的生成者-评审者环；僵持时 G3 多一个「重做检验」选项）。复跑未执行、或验证节点未产出该字段（审稿环之前的运行）时为 null。可选字段：旧消费者可忽略。
    */
   review?: null | ReviewReport;
+  /**
+   * 回退重做（人工 redo / 修订 / 图的条件边自动回退）后的复检与上一轮的跨轮对比：上一轮未通过的检查按 id 与本轮求交，分成转为通过 / 仍未通过（带本轮实测与阈值）/ 本轮未复检三桶，只计数与点名、不判好坏。首轮检验、复跑未执行、上一轮全过或没跑成时为 null。可选字段：旧消费者可忽略。
+   */
+  round_comparison?: null | RoundComparison;
 }
 export interface RobustnessCheck {
   /**
@@ -213,6 +217,64 @@ export interface ReviewFinding {
    * 修法建议；无则空串。
    */
   fix_hint: string;
+}
+export interface RoundComparison {
+  /**
+   * 这是回退的第几轮（图的迭代许可 iteration）；无许可字段的旧事件 / 人工重做未计轮次时为 null。
+   */
+  iteration: number | null;
+  /**
+   * 本轮回退是否由图的条件边自动触发（true）而非人工要求（false）。
+   */
+  auto: boolean;
+  /**
+   * 上一轮检查项总数。
+   */
+  previous_total: number;
+  /**
+   * 上一轮未通过的检查（导致回退的那一批）。
+   */
+  previous_failed: RoundCheckRef[];
+  /**
+   * 上一轮未过、本轮同 id 复检转为通过的检查。
+   */
+  resolved: RoundCheckRef[];
+  /**
+   * 上一轮未过、本轮同 id 复检仍未通过的检查，带本轮实测与阈值。
+   */
+  still_failing: RoundCheckResult[];
+  /**
+   * 上一轮未过、本轮脚本里找不到同 id 检查的项（删检查或改名——审稿人按跨轮核查纪律追问）。
+   */
+  not_rechecked: RoundCheckRef[];
+}
+export interface RoundCheckRef {
+  /**
+   * 检查项 id（与 robustness_check.id 同一命名空间）。
+   */
+  id: string;
+  /**
+   * 检查名；上一轮未给名时回落为 id。
+   */
+  name: string;
+}
+export interface RoundCheckResult {
+  /**
+   * 检查项 id。
+   */
+  id: string;
+  /**
+   * 检查名。
+   */
+  name: string;
+  /**
+   * 本轮实测值（来自标记行）；脚本未给数值时为 null。
+   */
+  value: number | null;
+  /**
+   * 本轮判定阈值（数值或文字口径）；未给时为 null。跨轮对比要求阈值照旧，消费者可与上一轮对照。
+   */
+  threshold: number | string | null;
 }
 export interface ExperimentFigure {
   /**

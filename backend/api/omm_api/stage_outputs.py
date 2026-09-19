@@ -783,6 +783,63 @@ def _review_report(raw: Any) -> Optional[dict[str, Any]]:
     }
 
 
+def _positive_int_or_none(value: Any) -> Optional[int]:
+    """正整数（bool 不算）；其它一律 None（轮次「不知道」就写 null，不编 0）。"""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _round_check_refs(raw: Any) -> list[dict[str, Any]]:
+    """跨轮对比里的检查引用列表 → 契约 ``round_check_ref[]``：缺 id 剔除、缺名回落 id。"""
+    refs: list[dict[str, Any]] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        check_id = str(entry.get("id") or "").strip()
+        if not check_id:
+            continue
+        refs.append({"id": check_id, "name": str(entry.get("name") or check_id)})
+    return refs
+
+
+def _round_comparison(raw: Any) -> Optional[dict[str, Any]]:
+    """验证节点 ``robustness["round_comparison"]``（nodes._round_comparison，s35）→ 契约
+    ``round_comparison``（experiment-summary.v1，s40）。
+
+    节点只在「回退目标覆盖检验 ∧ 上一轮 robustness 跑成且有未过项」时产出，三桶按检查 id
+    求交；这里只做形状收敛：七键补齐、引用列表逐条清洗（缺 id 剔除）、``still_failing`` 的
+    实测 / 阈值走与 ``robustness_check`` 相同的数值口径、``iteration`` 非正整数归 null、
+    ``auto`` 强制布尔。首轮检验 / 旧运行没有该键 → null（契约允许）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    still_failing: list[dict[str, Any]] = []
+    for entry in raw.get("still_failing") if isinstance(raw.get("still_failing"), list) else []:
+        if not isinstance(entry, dict):
+            continue
+        check_id = str(entry.get("id") or "").strip()
+        if not check_id:
+            continue
+        still_failing.append(
+            {
+                "id": check_id,
+                "name": str(entry.get("name") or check_id),
+                "value": _number_or_none(entry.get("value")),
+                "threshold": _threshold(entry.get("threshold")),
+            }
+        )
+    return {
+        "iteration": _positive_int_or_none(raw.get("iteration")),
+        "auto": raw.get("auto") is True,
+        "previous_total": _non_negative_int(raw.get("previous_total")),
+        "previous_failed": _round_check_refs(raw.get("previous_failed")),
+        "resolved": _round_check_refs(raw.get("resolved")),
+        "still_failing": still_failing,
+        "not_rechecked": _round_check_refs(raw.get("not_rechecked")),
+    }
+
+
 def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
     """验证节点 ``robustness`` 输出 → 契约 ``robustness_report``（experiment-summary.v1）。
 
@@ -793,7 +850,8 @@ def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
     补齐空值，过程字段剔除（活动流另有展示）。沙盒化之前的运行与模拟节点没有该键
     → null（契约允许）。计数按投影后的 checks 重算，保证 ``checks_total ==
     len(checks)`` 的契约不变量不受个别畸形项被剔除的影响。检验脚本的独立审稿
-    （``review``，§8.4）随报告一起投影为可选键。
+    （``review``，§8.4）与回退重做后的跨轮对比（``round_comparison``，s35 / s40）随
+    报告一起投影为可选键；复跑未执行时两者都是 null（没跑就没有可比的本轮结果）。
     """
     if not isinstance(raw, dict):
         return None
@@ -829,6 +887,7 @@ def _robustness_report(raw: Any) -> Optional[dict[str, Any]]:
         "checks_failed": sum(1 for check in checks if not check["passed"]),
         "reason": str(raw.get("reason") or ""),
         "review": _review_report(raw.get("review")),
+        "round_comparison": _round_comparison(raw.get("round_comparison")) if executed else None,
     }
 
 
