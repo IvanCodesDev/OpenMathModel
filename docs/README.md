@@ -75,6 +75,7 @@
 | [0010 附件图片计数与模型模态感知](./adr/0010-attachment-modality-awareness.md) | Accepted | 附件解析统计图片数并如实展示；纯文本模型配图片附件时发送前提醒；视觉解析与对话附件按批次落地 |
 | [0011 编排选型：状态机与有界循环](./adr/0011-orchestration-state-machine-and-bounded-loops.md) | Accepted | 运行拓扑唯一由显式状态机定义，P4 用节点注册表替换模拟节点；循环分层有界并事件化；不引入通用图编排 |
 | [0021 多语言 Runner 与 `code_run`](./adr/0021-multi-language-runner-and-code-run.md) | Accepted，地基层已落地、接线待做 | 一个 `code_run(language)` 入口按语言分发、`python_run` 为过渡别名；实现语言随 G1 确认钉在任务卡上，执行阶段不换语言；R 先行（`Rscript --vanilla`）；超时杀整棵进程树；非 Python 的静态检查 / 符号核验如实「未执行」 |
+| [0023 Graph v2 成为缺省调度档位](./adr/0023-graph-v2-default-bounded-and-automatic-redo.md) | Accepted，已落地 | `OMM_GRAPH` 缺省 `modeling-v2`：每次回退经迭代边裁定（3 轮上限，E410 / E430）；G3 推荐重做实验时条件边先自动回实验 ≤ 2 轮；闸门随 `iteration_budget` 预告各回退路径余额，用尽项去推荐；自动回退在时间线上不冒充「用户要求」；`linear-v1` 可显式选回 |
 
 ## 当前文档与历史记录的边界
 

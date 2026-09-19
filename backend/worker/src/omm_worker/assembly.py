@@ -142,7 +142,7 @@ def create_real_runtime(
 
     ``knowledge`` 缺省为进程缓存的卡片知识库；显式注入时节点与运行时拿到的是
     同一个对象（提议人预检索与工具检索同库）。``graph_mode`` 缺省读 ``OMM_GRAPH``
-    （§4.9：off / shadow / linear-v1）。
+    （§4.9：off / shadow / linear-v1 / modeling-v2，缺省 modeling-v2）。
     """
     library = knowledge if knowledge is not None else load_knowledge_library()
     return WorkerRuntime(

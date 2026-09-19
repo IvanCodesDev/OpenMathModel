@@ -2,7 +2,9 @@
 
 三步走（§6.1）：linear-v1 = 现有六阶段 + G1 的图化描述 → 与现引擎影子等价（§6.5：
 控制流事件序列等价，不比内容）→ 等价证明后切换默认 → 再启用 v2 特性（lane /
-迭代边 / join）。本模块只落第一步的机件：
+迭代边 / join）。前两步已走完；第三步里迭代边（``iter``，有界回退）、条件边（``cond``，
+自动回退）与闸门上的回退余额（``iteration_budget``）已落在 ``modeling_v2()`` 并成为
+缺省档位（``DEFAULT_GRAPH_MODE``），lane / join / 向前条件分叉仍是后续步。第一步的机件：
 
 - ``GraphSpec``：Python DSL 声明的图 + 装配期校验 + D1.5 形状的 JSON 快照；
 - ``Scheduler`` 端口：引擎「接下来跑哪个状态」的唯一决策点。``LinearScheduler``
@@ -1011,11 +1013,12 @@ class ShadowComparator:
 
 GRAPH_MODE_ENV = "OMM_GRAPH"
 GRAPH_MODES: tuple[str, ...] = ("off", "shadow", "linear-v1", "modeling-v2")
-#: 缺省图驱动（§6.1 第二步「等价证明后切换默认」）：等价证据 = evals 12 剧本 off vs
-#: linear-v1 控制流等价 + core 双调度器逐快照同答 + worker / API 全链；线性调度器留作
-#: 影子，分歧照旧只进日志。``shadow`` / ``off`` 仍可显式选回；``modeling-v2``（Graph v2
-#: 第一步：迭代边放行 / 拒绝回退）是可选档位，等价证据齐了再切缺省。
-DEFAULT_GRAPH_MODE = "linear-v1"
+#: 缺省 Graph v2（§6.1 第三步「再启用 v2 特性」，s39）：迭代边给每次回退设上限（E410 / E430）、
+#: 条件边在 G3 推荐重做实验时先替人自动回实验 ≤ 2 轮、闸门带回退余额（s38）。切换依据 =
+#: evals 12 剧本 modeling-v2 vs off 控制流逐一相等（条件不成立时零差异）+ 条件边剧本 / core /
+#: worker / API 全链各有用例 + 整套 API 用例在 modeling-v2 下全绿；线性调度器仍留作影子，分歧
+#: 只进日志。``linear-v1`` / ``shadow`` / ``off`` 仍可显式选回（无上限、无自动回退的旧口径）。
+DEFAULT_GRAPH_MODE = "modeling-v2"
 
 
 def resolve_graph_mode(raw: str | None) -> tuple[str, str | None]:
