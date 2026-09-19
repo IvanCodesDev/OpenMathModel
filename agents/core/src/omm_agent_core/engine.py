@@ -244,6 +244,11 @@ class TaskRunEngine:
                 if auto_refused is not None:
                     # 自动回退的轮次已用尽：闸门卡片上要看得到「图已替你重做过几轮」
                     review_payload["iteration"] = {"code": auto_refused.code.value, **auto_refused.context}
+                budget = self._iteration_budget(snapshot, target)
+                if budget:
+                    # 有迭代边的图：闸门上每个「回退到某阶段」此刻还剩几轮随卡片下发，
+                    # 用尽的项人在点之前就看得到；v1 图没有迭代边，键不出现、payload 不变
+                    review_payload["iteration_budget"] = budget
                 gate_id = (result.review_meta or {}).get("gate")
                 self._shadow.check_gate(
                     snapshot, target, str(gate_id) if gate_id is not None else None
@@ -443,6 +448,10 @@ class TaskRunEngine:
             payload["note_id"] = note_id
         if license is not None:
             payload.update(license.event_fields())
+            # 修订门列六个起点：每个此刻还剩几轮一并下发，用尽的起点在门里就说清
+            budget = self._iteration_budget(snapshot, WORK_SEQUENCE[-1])
+            if budget:
+                payload["iteration_budget"] = budget
         events: list[AgentEvent] = []
         self._record(snapshot, EventType.REVISION_REQUESTED, payload, events)
         return events
@@ -529,6 +538,13 @@ class TaskRunEngine:
         if callable(check):
             check(snapshot, source, target)
         return None
+
+    def _iteration_budget(self, snapshot: TaskRunSnapshot, source: TaskState) -> dict[str, Any]:
+        """闸门开出前问调度器：从 ``source`` 回退到各阶段此刻各剩几轮（不裁的调度器给空）。"""
+        budget = getattr(self._scheduler, "iteration_budget", None)
+        if not callable(budget):
+            return {}
+        return dict(budget(snapshot, source) or {})
 
     def _run_node(
         self, snapshot: TaskRunSnapshot, state: TaskState, step_id: str, attempt: int

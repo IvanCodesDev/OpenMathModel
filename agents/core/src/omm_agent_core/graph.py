@@ -826,6 +826,50 @@ class GraphScheduler:
         license = self.license_iteration(snapshot, source_state, target_state)
         return license.edge if license is not None else None
 
+    def iteration_budget(
+        self, snapshot: TaskRunSnapshot, source_state: TaskState
+    ) -> dict[str, dict[str, Any]]:
+        """从 ``source_state`` 出发、图上每条迭代边此刻的余额（纯函数、不改快照）。
+
+        闸门开出之前算一次，随 REVIEW_REQUESTED / REVISION_REQUESTED 下发：控制面据此在
+        「从某阶段重做」选项上预先写明「第几轮 / 上限」，轮次用尽的项去掉推荐并说清图
+        不再放行——人在点之前就知道哪条路已经走完，而不是点了才撞 409（人工回退入口撞
+        E430 的闸门口径）。``resolve_review`` 仍按同一裁定把关，这里只是预告。
+
+        键 = 目标阶段（``TaskState.value``），只列图上有迭代边的目标（没有边的不在选项
+        里出现，也不在这里）；放行项带 ``via_edge / iteration / max_iters / remaining``，
+        用尽项带 ``via_edge / code="E430" / max_iters / taken``。没有迭代边的图（v1）→ ``{}``。
+        """
+        budget: dict[str, dict[str, Any]] = {}
+        source = self.spec.node_for_state(source_state)
+        if source is None:
+            return budget
+        for edge in self.spec.iteration_edges:
+            if edge.source != source.id:
+                continue
+            target = self.spec.node(edge.target).state
+            try:
+                license = self.license_iteration(snapshot, source_state, target)
+            except IterationRefused as exc:
+                if exc.code is not ErrorCode.GRAPH_ITERATION_LIMIT:
+                    continue
+                budget[target.value] = {
+                    "via_edge": f"{edge.kind}:{edge.source}->{edge.target}",
+                    "code": exc.code.value,
+                    "max_iters": int(exc.context.get("max_iters") or 0),
+                    "taken": int(exc.context.get("taken") or 0),
+                }
+                continue
+            if license is None:
+                continue
+            budget[target.value] = {
+                "via_edge": license.via_edge,
+                "iteration": license.iteration,
+                "max_iters": license.limit,
+                "remaining": license.remaining,
+            }
+        return budget
+
     def select_target(self, snapshot: TaskRunSnapshot) -> TaskState:
         if snapshot.state is TaskState.CREATED:
             return self.spec.entry().state

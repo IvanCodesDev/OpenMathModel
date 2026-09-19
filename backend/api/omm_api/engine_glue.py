@@ -50,7 +50,7 @@ from omm_agent_core import (
     resolve_graph_mode,
     schedulers_for_mode,
 )
-from omm_agent_core.errors import AgentError
+from omm_agent_core.errors import AgentError, ErrorCode
 from omm_agent_harness import (
     UNLIMITED,
     BudgetGovernor,
@@ -1194,6 +1194,63 @@ def _gate_options(raw: Any) -> list[dict[str, Any]]:
     return options
 
 
+#: 契约 approval-request.options[].description 的上限。
+_OPTION_DESCRIPTION_MAX = 1000
+
+
+def _payload_dict(payload: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """事件 payload 里可选的 dict 块；缺席或形状不对给 None（旧事件没有这些键）。"""
+    value = payload.get(key)
+    return value if isinstance(value, dict) and value else None
+
+
+def _stage_label(state: Any) -> str:
+    return STAGE_LABELS.get(str(state or ""), str(state or ""))
+
+
+def _rounds_suffix(payload: dict[str, Any]) -> str:
+    """回退事件上的迭代许可（Graph v2 的 ``iteration / max_iters``）→「（第 N/M 轮）」；
+    v1 事件没有许可字段，给空串、文案不变。"""
+    iteration, limit = payload.get("iteration"), payload.get("max_iters")
+    if isinstance(iteration, int) and isinstance(limit, int) and limit > 0:
+        return f"（第 {iteration}/{limit} 轮）"
+    return ""
+
+
+def _annotate_redo_options(options: list[dict[str, Any]], budget: Any) -> list[dict[str, Any]]:
+    """按图给的回退余额（引擎 ``iteration_budget``，Graph v2）标注「从某阶段重做」选项。
+
+    人工回退入口撞 E430 的闸门口径（s38）：轮次用尽的项去掉推荐（CTA 不再预选一个点了
+    必 409 的项）并在说明里写明「已重做 N 轮达上限、图不再放行」；还有余额的项写明这是
+    第几轮 / 上限，最后一轮点破。没有预算（linear-v1）或不是 ``redo:`` 选项 → 原样不动，
+    选项 payload 逐字不变。``resolve_review`` 仍按同一裁定把关，这里只是把结论摆到人眼前。
+    """
+    if not isinstance(budget, dict) or not budget:
+        return options
+    for option in options:
+        target = _redo_target(str(option.get("id") or ""))
+        if target is None:
+            continue
+        entry = budget.get(target.value)
+        if not isinstance(entry, dict):
+            continue
+        label = STAGE_LABELS.get(target.value, target.value)
+        limit = int(entry.get("max_iters") or 0)
+        if entry.get("code") == ErrorCode.GRAPH_ITERATION_LIMIT.value:
+            option.pop("recommended", None)
+            taken = int(entry.get("taken") or 0)
+            note = f"「{label}」已重做 {taken} 轮，达图上限 {limit} 轮，图不再放行此项"
+        else:
+            iteration = int(entry.get("iteration") or 0)
+            note = f"重做第 {iteration}/{limit} 轮"
+            if int(entry.get("remaining") or 0) == 0:
+                note += "，这是最后一轮"
+        base = str(option.get("description") or "").strip()
+        text = f"{base}（{note}）" if base else note
+        option["description"] = text[:_OPTION_DESCRIPTION_MAX]
+    return options
+
+
 def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
     """把一条领域事件翻译成 v1 行与 v1 事件（agent_events 自己维护 sequence）。"""
     kind = event.event_type
@@ -1325,6 +1382,9 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         # 文案，载荷逐字节兼容（金轨迹与既有测试不漂移）。
         gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else None
         gate_options = _gate_options(gate.get("options")) if gate else []
+        # Graph v2：引擎随闸门下发的回退余额与「自动回退已用尽」块（s33 / s38）；v1 两键都不出现
+        budget = _payload_dict(payload, "iteration_budget")
+        exhausted = _payload_dict(payload, "iteration")
         if gate and gate_options:
             try:
                 decision_type = ApprovalDecisionType(
@@ -1334,7 +1394,7 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 # 未来闸门带来的新决策类型对旧控制面按 generic 投影，不炸投影
                 decision_type = ApprovalDecisionType.generic.value
             title = str(gate.get("title") or payload.get("reason") or "请确认后继续")[:200]
-            options = gate_options
+            options = _annotate_redo_options(gate_options, budget)
             evidence: dict[str, Any] = {
                 "note": str(payload.get("reason") or title),
                 "requested_by_step": str(payload.get("requested_by_step") or ""),
@@ -1343,6 +1403,10 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 evidence["gate"] = str(gate.get("gate"))
             if isinstance(gate.get("impact"), dict):
                 evidence["impact"] = dict(gate["impact"])
+            if budget:
+                evidence["iteration_budget"] = dict(budget)
+            if exhausted:
+                evidence["iteration"] = dict(exhausted)
             status_reason = "等待人工确认"
         else:
             decision_type = ApprovalDecisionType.confirm_plan.value
@@ -1367,6 +1431,32 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             requested_at=at,
         )
         session.add(approval)
+        if exhausted:
+            # 条件边的自动回退轮次用尽才开的这道门（D2.1「E430→G3」）：时间线上要有一行
+            # 说清「图已替你自动重做过几轮、仍未达标」，不然用户只看到一道普通闸门，
+            # 不知道中间那几趟实验 / 检验是谁要求的。
+            from_label = _stage_label(exhausted.get("from"))
+            to_label = _stage_label(exhausted.get("to"))
+            taken = int(exhausted.get("taken") or 0)
+            limit = int(exhausted.get("max_iters") or 0)
+            append_event(
+                session,
+                run.id,
+                AgentEventType.run_log.value,
+                {
+                    "kind": "auto_redo_exhausted",
+                    "approval_id": approval.id,
+                    "graph": str(exhausted.get("graph") or ""),
+                    "from_state": str(exhausted.get("from") or ""),
+                    "to_state": str(exhausted.get("to") or ""),
+                    "taken": taken,
+                    "max_iters": limit,
+                    "message": (
+                        f"图已按条件边从「{from_label}」自动回退「{to_label}」重做 {taken} 轮"
+                        f"（上限 {limit} 轮），结果仍未达标，交由你在闸门决定"
+                    ),
+                },
+            )
         append_event(
             session,
             run.id,
@@ -1391,6 +1481,7 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         # 与节点自提闸门共用 _gate_options 这一个契约收敛口：形状要变时两类
         # 审批门一起变。它只在 recommended 显式为 True 时写该键，六个非建议项
         # 因而不带这个键（契约里缺省等价于 false）。
+        budget = _payload_dict(payload, "iteration_budget")
         options = _gate_options(
             [
                 {
@@ -1409,18 +1500,23 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 }
             ]
         )
+        # Graph v2：六个起点各剩几轮随修订门下发，用尽的起点去推荐、说明里点破（s38）
+        options = _annotate_redo_options(options, budget)
+        revision_evidence: dict[str, Any] = {
+            "note": note,
+            "requested_by_step": "",
+            "revision_round": round_no,
+            "suggested_stage": target,
+        }
+        if budget:
+            revision_evidence["iteration_budget"] = dict(budget)
         approval = ApprovalRequestRow(
             id=new_id("appr"),
             run_id=run.id,
             decision_type=ApprovalDecisionType.generic.value,
             title=f"第 {round_no} 轮修改：请确认从哪个阶段重做",
             options=options,
-            evidence={
-                "note": note,
-                "requested_by_step": "",
-                "revision_round": round_no,
-                "suggested_stage": target,
-            },
+            evidence=revision_evidence,
             status=ApprovalStatus.PENDING.value,
             requested_at=at,
         )
@@ -1449,17 +1545,19 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         if payload.get("approved"):
             resume = str(payload.get("resume_state") or "")
             label = STAGE_LABELS.get(resume, resume)
+            # Graph v2 的迭代许可（第几轮 / 上限）随事件而来时写进文案；v1 没有许可，文案不变
+            rounds = _rounds_suffix(payload)
             if revision_round > 0:
                 # 回退重做：current_node 此刻还停在 COMPLETED，先摆回目标阶段，
                 # 免得下个 tick 起步前工作台把重开的运行画成已完成。
                 _project_node(session, run, resume, f"第 {revision_round} 轮修改重做")
-                reason = f"第 {revision_round} 轮修改：从「{label}」重做"
+                reason = f"第 {revision_round} 轮修改：从「{label}」重做{rounds}"
             elif payload.get("rerun"):
                 # 节点自提闸门里选了回退项（G3 的「重做实验 / 回退方案阶段」）：
                 # 与修订门同一引擎语义，current_node 同样要先摆回目标阶段，
                 # 文案说清是回退而不是「已确认」。
                 _project_node(session, run, resume, "闸门回退重做")
-                reason = f"已确认回退：从「{label}」重做"
+                reason = f"已确认回退：从「{label}」重做{rounds}"
             else:
                 reason = (
                     "方案已确认"
@@ -1498,6 +1596,19 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         target = str(payload.get("target_state") or "")
         label = STAGE_LABELS.get(target, target)
         now = utcnow()
+        # Graph v2：条件边的自动回退与人工重做走同一条事件，时间线上必须分得开——
+        # 「用户要求」四个字不能安在图替人做的决定上；有迭代许可时把第几轮 / 上限写进去。
+        auto = payload.get("auto") is True
+        rounds = _rounds_suffix(payload)
+        if auto:
+            from_label = _stage_label(payload.get("from_state"))
+            node_note = f"图自动回退重做{rounds}"
+            status_reason = f"「{from_label}」未达标，图按条件边自动从「{label}」重做{rounds}"
+            superseded_kind = "auto_redo"
+        else:
+            node_note = f"从「{label}」重做{rounds}"
+            status_reason = f"用户要求从「{label}」重做{rounds}"
+            superseded_kind = "redo"
         for approval in session.execute(
             select(ApprovalRequestRow).where(
                 ApprovalRequestRow.run_id == run.id,
@@ -1508,7 +1619,9 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             # 选项可记，和取消路径一样留空；为什么作废记在内部的 evidence 里供审计。
             approval.status = ApprovalStatus.CANCELLED.value
             evidence = dict(approval.evidence) if isinstance(approval.evidence, dict) else {}
-            evidence["superseded_by"] = {"kind": "redo", "target_state": target, "at": iso_z(now)}
+            evidence["superseded_by"] = {
+                "kind": superseded_kind, "target_state": target, "at": iso_z(now),
+            }
             approval.evidence = evidence
         for step in session.execute(
             select(StepRunRow).where(
@@ -1523,8 +1636,8 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         run.failure_message = None
         run.paused_from_status = None
         run.ended_at = None
-        _project_node(session, run, target, f"从「{label}」重做")
-        _project_status(session, run, TaskRunStatus.RUNNING.value, f"用户要求从「{label}」重做")
+        _project_node(session, run, target, node_note)
+        _project_status(session, run, TaskRunStatus.RUNNING.value, status_reason)
         return
 
     if kind is EventType.RUN_PAUSED:
