@@ -1671,12 +1671,101 @@ def _profile_data_tables(
 #: 沙盒任务允许的工具面（§7.1 五件套；env_probe 由节点侧预先探测，不给模型）。
 SANDBOX_TOOL_NAMES = ("python_run", "ws_write", "ws_read", "ws_list")
 
+#: 多语言统一执行入口（ADR-0021）：非 Python 实现语言的任务卡把执行工具换成它，
+#: 其余四件不变；Python 任务卡仍走 python_run（过渡别名），提示词与账本逐字不变。
+CODE_RUN_TOOL_NAME = "code_run"
+CODE_RUN_SANDBOX_TOOL_NAMES = (CODE_RUN_TOOL_NAME, "ws_write", "ws_read", "ws_list")
+#: 两个执行工具名：节点侧捕获执行证据（stdout / 指标 / 产物）时同等对待。
+RUN_TOOL_NAMES = frozenset({PYTHON_TOOL_NAME, CODE_RUN_TOOL_NAME})
+
 WS_WRITE_TOOL = "ws_write"
 
 #: 实验节点收束后把通过验收的最终脚本落到工作区的固定路径。沙箱每次运行的
 #: 即时副本在 steps/<step_id>/main.py（按步骤 id 命名，下游节点不知道那个 id），
 #: 这里只放最终版：验证阶段据此复跑，论文阶段（figure_render，H5）也按此路径取。
 EXPERIMENT_SCRIPT_PATH = "experiment.py"
+
+#: 按实现语言的脚本约定（ADR-0021 §7：节点按任务卡语言选路径 / 后缀 / 媒体类型）。
+#: 表外语言按 ``.<language>`` 后缀兜底——不会有执行器跑它，只求文件名不撞、不装 Python。
+EXPERIMENT_SCRIPT_PATHS: dict[str, str] = {"python": EXPERIMENT_SCRIPT_PATH, "r": "experiment.R"}
+SCRIPT_SUFFIXES: dict[str, str] = {"python": ".py", "r": ".R"}
+SCRIPT_MEDIA_TYPES: dict[str, str] = {"python": "text/x-python", "r": "text/x-r"}
+
+
+def run_language(plan: Mapping[str, Any] | None) -> str:
+    """所选方案卡确认的实现语言（契约小写标识）；缺省 / 认不出 → python。
+
+    语言在方案阶段由归约人在可用列表里选、随 G1 确认钉死（``normalize_plan_languages``），
+    执行阶段只读不改——这里不再做「可用性」判断，执行器路由不到会显式失败（§7.4）。
+    """
+    return normalize_language((plan or {}).get("language")) or "python"
+
+
+def run_language_of(ctx: NodeContext) -> str:
+    """下游节点（检验 / 论文补图）读本次运行的实现语言。
+
+    实验节点记下的优先，其次所选方案卡；都没有 → python。
+    """
+    experiment = ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {}
+    recorded = ""
+    if isinstance(experiment, Mapping):
+        recorded = normalize_language(experiment.get("language"))
+    if recorded:
+        return recorded
+    planning = ctx.prior_outputs.get(TaskState.MODEL_PLANNING.value) or {}
+    try:
+        return run_language(chosen_plan(planning, ctx.review_decisions))
+    except (KeyError, TypeError, AttributeError):
+        return "python"
+
+
+def sandbox_tool_names(language: str) -> tuple[str, ...]:
+    """任务卡的工具面：Python 逐字沿用 python_run 五件套；其它语言执行工具换成 code_run。"""
+    return SANDBOX_TOOL_NAMES if language == "python" else CODE_RUN_SANDBOX_TOOL_NAMES
+
+
+def sandbox_run_tool(language: str) -> str:
+    return PYTHON_TOOL_NAME if language == "python" else CODE_RUN_TOOL_NAME
+
+
+def sandbox_task_language_kwargs(language: str) -> dict[str, Any]:
+    """``SandboxTask`` 的语言字段：Python 用缺省（任务卡逐字不变），其它语言钉语言 + code_run。"""
+    if language == "python":
+        return {}
+    return {"language": language, "run_tool": CODE_RUN_TOOL_NAME}
+
+
+def experiment_script_path(language: str) -> str:
+    return EXPERIMENT_SCRIPT_PATHS.get(language) or f"experiment.{language}"
+
+
+def script_filename(stem: str, language: str) -> str:
+    """发布为 code 产物的脚本文件名：``stem`` + 该语言的后缀（cleaning.py / experiment.R …）。"""
+    return stem + (SCRIPT_SUFFIXES.get(language) or f".{language}")
+
+
+def sandbox_template_id(base_id: str, language: str) -> str:
+    """沙盒模板按语言选 variant：Python 用基础卡，其它语言用 ``<base>.<lang>``。"""
+    return base_id if language == "python" else f"{base_id}.{language}"
+
+
+def language_env_fingerprint(probe: Mapping[str, Any], language: str) -> dict[str, Any]:
+    """env_probe 输出 → 该语言的 SandboxRunReport 三键指纹（ADR-0021 §5）。
+
+    顶层三键是 Python 的（H2 以来不变）；其它语言取 ``languages[lang]`` 块。探测里没有
+    这块（旧 env_probe / 未启用）时形状照给、值如实为空——不拿 Python 的版本号冒充。
+    """
+    if language == "python":
+        return dict(probe)
+    languages_raw = probe.get("languages")
+    languages: Mapping[str, Any] = languages_raw if isinstance(languages_raw, Mapping) else {}
+    block_raw = languages.get(language)
+    block: Mapping[str, Any] = block_raw if isinstance(block_raw, Mapping) else {}
+    return {
+        "runtime": str(block.get("runtime") or language),
+        "version": str(block.get("version") or ""),
+        "deps_hash": str(block.get("deps_hash") or ""),
+    }
 
 #: 显式种子（§7.1 任务卡字段）：合成数据/抽样必须使用的固定种子。
 SANDBOX_SEEDS = {"random_seed": 42}
@@ -1749,7 +1838,7 @@ def _sandbox_tool_executor(
             result = services.tools.invoke(
                 ctx.run_id, ctx.step_id, call.name, dict(call.arguments)
             )
-            if call.name == PYTHON_TOOL_NAME:
+            if call.name in RUN_TOOL_NAMES:
                 capture.observe(result)
             results.append(result)
         return results
@@ -1786,8 +1875,10 @@ def _publish_code_callback(
     services: NodeServices,
     capture: _SandboxCapture,
     filename: str,
+    language: str = "python",
 ):
     """publish_code 回调：脚本进内容寻址存储，产物引用并入节点产出。"""
+    media_type = SCRIPT_MEDIA_TYPES.get(language, "text/plain")
 
     def publish(code: str) -> str:
         capture.code = code
@@ -1798,7 +1889,7 @@ def _publish_code_callback(
             "code",
             filename,
             code.encode("utf-8"),
-            "text/x-python",
+            media_type,
             ctx.step_id,
         )
         capture.artifacts.append(ref)
@@ -1818,21 +1909,24 @@ def _report_shape_problems(report: dict[str, Any]) -> list[str]:
     return [f"missing required key: {key}" for key in required if key not in report]
 
 
-def _stage_final_script(ctx: NodeContext, services: NodeServices, code: str) -> str:
-    """把通过验收的最终脚本写到工作区固定路径，返回路径；写不进去如实给空串。
+def _stage_final_script(
+    ctx: NodeContext, services: NodeServices, code: str, language: str = "python"
+) -> str:
+    """把通过验收的最终脚本写到工作区固定路径（按语言），返回路径；写不进去如实给空串。
 
     只影响下游复跑（验证阶段找不到脚本会如实降级为「仅判读」），不影响本
     步骤的成败——脚本本身已作为 code 产物发布，可复现性不靠这一份副本。
     """
     if not code or services.tools is None:
         return ""
+    path = experiment_script_path(language)
     result = services.tools.invoke(
         ctx.run_id,
         ctx.step_id,
         WS_WRITE_TOOL,
-        {"path": EXPERIMENT_SCRIPT_PATH, "text": code},
+        {"path": path, "text": code},
     )
-    return EXPERIMENT_SCRIPT_PATH if result.ok else ""
+    return path if result.ok else ""
 
 
 # ── 数据准备：LLM 方案 → 清洗沙盒执行 → G2 影响面闸门 ─────────────────────────
@@ -2345,15 +2439,19 @@ class _ReviewSpec:
     context_slice: Callable[[_SandboxCapture, Mapping[str, Any], int], dict[str, Any]]
     #: 静态检查口径（None = 不查）：阻断项不等审稿人、直接回沙盒修复；提示项进审稿材料。
     static_profile: StaticCheckProfile | None = None
+    #: 消费方脚本的实现语言（ADR-0021）：复跑核对按它选执行工具，
+    #: 静态检查按它决定查还是如实「未执行」。
+    language: str = "python"
 
 
 def _rerun_check(
-    ctx: NodeContext, services: NodeServices, capture: _SandboxCapture
+    ctx: NodeContext, services: NodeServices, capture: _SandboxCapture, language: str = "python"
 ) -> dict[str, Any]:
     """确定性复跑核对：同一份最终脚本再跑一次，指标逐键比对首跑。
 
     节点自己跑、自己比——「复跑核对」不交给模型想象。预算切片不够一次运行
     或脚本正文缺失时如实 ``executed=false``，审稿照常进行（材料里写明未复跑）。
+    Python 走 python_run（账本 / 金轨迹逐字不变），其它语言走 code_run 并钉语言。
     """
     governor = (services.extras or {}).get("budget_governor")
     budgets: RunBudget = (
@@ -2363,9 +2461,14 @@ def _rerun_check(
         return {"executed": False, "reason": "剩余预算不足以复跑核对"}
     if not capture.code.strip():
         return {"executed": False, "reason": "沙盒未回传最终脚本正文，无法复跑"}
-    result = services.tools.invoke(
-        ctx.run_id, ctx.step_id, PYTHON_TOOL_NAME, {"code": capture.code}
-    )
+    if language == "python":
+        result = services.tools.invoke(
+            ctx.run_id, ctx.step_id, PYTHON_TOOL_NAME, {"code": capture.code}
+        )
+    else:
+        result = services.tools.invoke(
+            ctx.run_id, ctx.step_id, CODE_RUN_TOOL_NAME, {"code": capture.code, "language": language}
+        )
     if not result.ok:
         output = result.output or {}
         stderr = str(output.get("stderr") or "").strip()
@@ -2421,7 +2524,9 @@ def _spawn_reviewer(
     variables.setdefault(
         "static_checks",
         static_material(
-            run_static_checks(capture.code, spec.static_profile) if spec.static_profile else None,
+            run_static_checks(capture.code, spec.static_profile, language=spec.language)
+            if spec.static_profile
+            else None,
             spec.static_profile,
         ),
     )
@@ -2516,7 +2621,9 @@ def _run_review_loop(
         # 修复后再查；提示项随材料给审稿人。修复额度与审稿轮次共用（REVIEW_MAX_ROUNDS / R2）。
         static_findings: list[dict[str, Any]] | None = None
         if spec.static_profile is not None:
-            static_findings = run_static_checks(capture.code, spec.static_profile)
+            static_findings = run_static_checks(
+                capture.code, spec.static_profile, language=spec.language
+            )
             review["static_findings"] = static_findings
         static_feedback = major_static_feedback(static_findings or [])
         if static_feedback is not None:
@@ -2563,7 +2670,7 @@ def _run_review_loop(
                 break
             report, capture, final_answer = repair_report, repair_capture, repair_final
             continue
-        rerun = _rerun_check(ctx, services, capture)
+        rerun = _rerun_check(ctx, services, capture, language=spec.language)
         verdict, calls, error = _spawn_reviewer(
             ctx, services, supervisor, registry, spec, capture, final_answer, rerun, rounds
         )
@@ -2976,12 +3083,23 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "LLM 端口不支持会话式调用（缺 chat_text）：实验执行体需要多轮"
                 "写码/跑码会话，装配缺陷请检查运行时接线"
             )
-        template = self._registry.get(self.prompt_id)
-
         try:
             variables = self.build_variables(ctx)
         except KeyError as exc:
             return NodeResult.failed(f"missing required input: {exc}")
+        planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
+        plan = chosen_plan(planning, ctx.review_decisions)
+        # 实现语言随方案确认钉死（ADR-0021）：模板按语言选 variant、执行工具按语言路由；
+        # 缺 variant 显式失败——不会换用其它语言跑（§7.4）。
+        language = run_language(plan)
+        template_id = sandbox_template_id(self.prompt_id, language)
+        try:
+            template = self._registry.get(template_id)
+        except KeyError:
+            return NodeResult.failed(
+                f"方案确认的实现语言 {language} 没有沙盒模板 {template_id}：不会换用其它语言运行，"
+                "请补齐模板或在方案阶段改选可用语言"
+            )
         data_files = [
             path
             for path in _workspace_files(ctx, services)
@@ -2998,16 +3116,16 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "prompt input invalid: " + "; ".join(input_problems)
             )
 
-        planning = _require_outputs(ctx, TaskState.MODEL_PLANNING)
-        plan = chosen_plan(planning, ctx.review_decisions)
         system_prompt = template.render(variables)
         llm_calls = {"count": 0}
         chat = text_protocol_chat(
             services.llm,
-            label=self.prompt_id,
+            label=template_id,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        env_fingerprint = _env_fingerprint(ctx, services)
+        env_fingerprint = language_env_fingerprint(_env_fingerprint(ctx, services), language)
+        tool_names = sandbox_tool_names(language)
+        run_tool = sandbox_run_tool(language)
         waves: list[_SandboxCapture] = []
 
         def sandbox_wave(brief_suffix: str | None, max_runs: int) -> _SandboxWaveResult:
@@ -3015,7 +3133,7 @@ class ExperimentExecutionNode(LlmSkillNode):
             capture = _SandboxCapture()
             waves.append(capture)
             final_answer: dict[str, Any] = {}
-            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            brief = tool_protocol_note(tool_names)
             if brief_suffix:
                 brief += "\n\n" + brief_suffix
             task = SandboxTask(
@@ -3029,7 +3147,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 assertions=(
                     SandboxAssertion(
                         id="run_ok",
-                        description="实验脚本经 python_run 成功运行（退出码 0）",
+                        description=f"实验脚本经 {run_tool} 成功运行（退出码 0）",
                         check=_experiment_run_ok_check,
                     ),
                     SandboxAssertion(
@@ -3051,16 +3169,20 @@ class ExperimentExecutionNode(LlmSkillNode):
                     ),
                 ),
                 optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
+                **sandbox_task_language_kwargs(language),
             )
             report = run_sandbox_task(
                 task,
                 chat=chat,
-                execute_tools=_sandbox_tool_executor(ctx, services, capture),
+                execute_tools=_sandbox_tool_executor(ctx, services, capture, tool_names),
                 workspace_files=lambda: _workspace_files(ctx, services),
                 read_text=_workspace_reader(ctx, services),
                 env_fingerprint=env_fingerprint,
-                publish_code=_publish_code_callback(ctx, services, capture, "experiment.py"),
+                publish_code=_publish_code_callback(
+                    ctx, services, capture, script_filename("experiment", language), language
+                ),
                 on_final_answer=final_answer.update,
+                normalize_language=normalize_language,
             )
             return report, capture, final_answer
 
@@ -3102,7 +3224,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 services,
                 supervisor,
                 self._registry,
-                self._review_spec(ctx, plan, planning),
+                self._review_spec(ctx, plan, planning, language=language),
                 first=(report, capture, final_answer),
                 sandbox_wave=sandbox_wave,
                 max_runs=self.max_sandbox_runs,
@@ -3118,7 +3240,10 @@ class ExperimentExecutionNode(LlmSkillNode):
             node_metrics["review_rounds"] = int(review["rounds"])
         # 符号一致性的代码侧核验（§9.1「同一符号贯穿」）：最终脚本的变量名与方案符号表确定性
         # 对账，结果进产出与警告（审稿材料里每轮也带同一份对照）；对不上不阻断，交审稿人与人裁。
-        symbol_check = check_symbols(plan_symbols(planning, plan.get("id")), capture.code)
+        # 非 Python 脚本没有 ast 解析器：如实 skipped，警告里写明未核验（ADR-0021 §6）。
+        symbol_check = check_symbols(
+            plan_symbols(planning, plan.get("id")), capture.code, language=language
+        )
         symbol_warning = symbol_check_warning(symbol_check)
         if symbol_warning:
             node_metrics["quality_warnings"] = [symbol_warning]
@@ -3136,9 +3261,9 @@ class ExperimentExecutionNode(LlmSkillNode):
             summary_bits.append("产物文件：" + "、".join(names))
         if review.get("executed"):
             summary_bits.append(verdict_summary_text(review))
-        # 最终脚本落工作区固定路径：验证阶段据此复跑（steps/<id>/main.py 的
-        # 即时副本下游拿不到 id）。
-        script_path = _stage_final_script(ctx, services, capture.code)
+        # 最终脚本落工作区固定路径（按语言：experiment.py / experiment.R）：验证阶段据此复跑
+        # （steps/<id>/main.py 的即时副本下游拿不到 id）。
+        script_path = _stage_final_script(ctx, services, capture.code, language)
         # 所有波的产物并集：修复波重写同名结果文件时沙盒不再报新建，首波引用要留
         artifacts = _union_artifacts(waves, capture)
 
@@ -3154,6 +3279,8 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "sandbox_report": report,
                 # 工作区里的最终脚本路径（写入失败为空串，下游据此判断能否复跑）
                 "script_path": script_path,
+                # 实现语言（随方案确认钉死；下游检验 / 补图按它选执行器与模板，ADR-0021）
+                "language": language,
                 # 生成者-评审者环的结论（§8.4）：复跑核对 + 独立审稿意见；僵持时
                 # stalemate=true，验证阶段据此挂 G3
                 "review": review,
@@ -3176,16 +3303,22 @@ class ExperimentExecutionNode(LlmSkillNode):
         return REVIEWER_TOOL_NAMES + REVIEWER_KNOWLEDGE_TOOL_NAMES
 
     def _review_spec(
-        self, ctx: NodeContext, plan: Mapping[str, Any], planning: Mapping[str, Any]
+        self,
+        ctx: NodeContext,
+        plan: Mapping[str, Any],
+        planning: Mapping[str, Any],
+        language: str = "python",
     ) -> _ReviewSpec:
         """实验审稿口径：材料 = 方案 / 假设 / 符号 / 脚本正文 / 指标 / 复跑 / 实现摘要 / 上一轮反馈。
 
         独立上下文 = 只拿这些结构化切片，不继承生成者会话；tier readonly——运行
-        部分已由节点做完。
+        部分已由节点做完。``language`` 决定复跑核对走哪个执行工具、静态检查 / 符号核验
+        查还是如实「未执行」（ADR-0021 §6）。
         """
         assumptions = assumption_material(plan_assumptions(planning, plan.get("id")))
         symbol_rows = plan_symbols(planning, plan.get("id"))
         symbols = symbol_material(symbol_rows)
+        script_path = experiment_script_path(language)
         # 上一轮反馈（s37）：回退重做时审稿人拿上一轮实验审稿阻断意见、指标与未过检查对照核查
         previous_round = experiment_reviewer_note(ctx)
 
@@ -3200,9 +3333,9 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "model_assumptions": assumptions,
                 # 符号表后附代码侧对照（每轮按当前脚本重算）：审稿人据此判断脚本是否忠实于方案记号
                 "model_symbols": symbols + "\n\n" + symbol_check_material(
-                    check_symbols(symbol_rows, capture.code)
+                    check_symbols(symbol_rows, capture.code, language=language)
                 ),
-                "experiment_code": _clip_code(capture.code),
+                "experiment_code": _clip_code(capture.code, script_path),
                 "metrics": json.dumps(dict(capture.metrics), ensure_ascii=False),
                 "rerun_report": rerun_material(rerun),
                 "approach_summary": str(final_answer.get("approach_summary") or "无"),
@@ -3234,13 +3367,14 @@ class ExperimentExecutionNode(LlmSkillNode):
             materials=materials,
             context_slice=context_slice,
             static_profile=EXPERIMENT_STATIC_PROFILE,
+            language=language,
         )
 
 
 def _experiment_run_ok_check(evidence) -> tuple[bool, str]:
     last = evidence.last_run
     if last is None:
-        return False, "尚未用 python_run 运行任何代码"
+        return False, "尚未用执行工具（python_run / code_run）运行任何代码"
     if not last.ok:
         output = last.output or {}
         stderr = str(output.get("stderr") or "").strip()
@@ -3696,9 +3830,24 @@ class ValidationNode(LlmSkillNode):
             return skipped("未配置子代理监督者，跳过稳健性复跑")
         if not supports_chat(services.llm):
             return skipped("模型端口不支持会话式调用，跳过稳健性复跑")
+        plan = chosen_plan(
+            _require_outputs(ctx, TaskState.MODEL_PLANNING), ctx.review_decisions
+        )
+        experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
+        # 检验脚本跟实验脚本同一实现语言（ADR-0021：语言随方案确认钉死，执行阶段不换）；
+        # 实验节点写下的真实路径优先，缺席按语言约定路径找。
+        language = run_language(plan)
+        script_path = str(experiment.get("script_path") or "") or experiment_script_path(language)
         files = _workspace_files(ctx, services)
-        if EXPERIMENT_SCRIPT_PATH not in files:
-            return skipped(f"工作区没有实验脚本 {EXPERIMENT_SCRIPT_PATH}，无法复跑")
+        if script_path not in files:
+            return skipped(f"工作区没有实验脚本 {script_path}，无法复跑")
+        template_id = sandbox_template_id(self.sandbox_prompt_id, language)
+        try:
+            template = self._registry.get(template_id)
+        except KeyError:
+            return skipped(
+                f"实现语言 {language} 没有检验沙盒模板 {template_id}，不会换用其它语言复跑"
+            )
 
         governor = (services.extras or {}).get("budget_governor")
         budgets: RunBudget = (
@@ -3708,16 +3857,12 @@ class ValidationNode(LlmSkillNode):
             return skipped("剩余预算不足以派发检验子代理")
 
         try:
-            code = _workspace_reader(ctx, services)(EXPERIMENT_SCRIPT_PATH)
+            code = _workspace_reader(ctx, services)(script_path)
         except FileNotFoundError as exc:
             return skipped(f"读取实验脚本失败：{exc}")
         if not code.strip():
-            return skipped(f"实验脚本 {EXPERIMENT_SCRIPT_PATH} 为空，无法复跑")
+            return skipped(f"实验脚本 {script_path} 为空，无法复跑")
 
-        plan = chosen_plan(
-            _require_outputs(ctx, TaskState.MODEL_PLANNING), ctx.review_decisions
-        )
-        experiment = dict(ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {})
         metrics = dict(experiment.get("metrics") or {})
         risk_points = _risk_points(plan, judgement, experiment.get("review"))
         # 跨轮对比（s35）：回退重做时把上一轮未过的检查点名进任务卡（要求同名 id 复检），
@@ -3735,14 +3880,13 @@ class ValidationNode(LlmSkillNode):
             for path in files
             if path.startswith(DATA_DIR_PREFIX) or path.startswith("cleaned/")
         ]
-        template = self._registry.get(self.sandbox_prompt_id)
         system_prompt = template.render({
             "chosen_plan": json.dumps(plan, ensure_ascii=False),
             "experiment_summary": str(
                 experiment.get("experiment_summary") or experiment.get("stdout_tail") or "无"
             ),
             "metrics": json.dumps(metrics, ensure_ascii=False),
-            "experiment_code": _clip_code(code),
+            "experiment_code": _clip_code(code, script_path),
             "risk_points": risk_points,
             "model_assumptions": assumption_material(focus),
             "data_files": "\n".join(f"- {path}" for path in data_files) or "无",
@@ -3753,10 +3897,12 @@ class ValidationNode(LlmSkillNode):
         llm_calls = {"count": 0}
         chat = text_protocol_chat(
             services.llm,
-            label=self.sandbox_prompt_id,
+            label=template_id,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        fingerprint = _env_fingerprint(ctx, services)
+        fingerprint = language_env_fingerprint(_env_fingerprint(ctx, services), language)
+        tool_names = sandbox_tool_names(language)
+        run_tool = sandbox_run_tool(language)
         waves: list[_SandboxCapture] = []
         last_envelope: dict[str, Any] = {}
 
@@ -3766,7 +3912,7 @@ class ValidationNode(LlmSkillNode):
             """一次经监督者派发的检验沙盒波（首波 / 按审稿意见修复）。"""
             capture = _SandboxCapture()
             final_answer: dict[str, Any] = {}
-            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            brief = tool_protocol_note(tool_names)
             if brief_suffix:
                 brief += "\n\n" + brief_suffix
             task = SandboxTask(
@@ -3777,7 +3923,7 @@ class ValidationNode(LlmSkillNode):
                 assertions=(
                     SandboxAssertion(
                         id="run_ok",
-                        description="检验脚本经 python_run 成功运行（退出码 0）",
+                        description=f"检验脚本经 {run_tool} 成功运行（退出码 0）",
                         check=_experiment_run_ok_check,
                     ),
                     SandboxAssertion(
@@ -3800,8 +3946,9 @@ class ValidationNode(LlmSkillNode):
                 seeds=dict(SANDBOX_SEEDS),
                 max_runs=max_runs,
                 optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
+                **sandbox_task_language_kwargs(language),
             )
-            executor = _sandbox_tool_executor(ctx, services, capture)
+            executor = _sandbox_tool_executor(ctx, services, capture, tool_names)
 
             def runner(_spec: SpawnSpec) -> ResultEnvelope:
                 report = run_sandbox_task(
@@ -3812,9 +3959,14 @@ class ValidationNode(LlmSkillNode):
                     read_text=_workspace_reader(ctx, services),
                     env_fingerprint=fingerprint,
                     publish_code=_publish_code_callback(
-                        ctx, services, capture, "validation_checks.py"
+                        ctx,
+                        services,
+                        capture,
+                        script_filename("validation_checks", language),
+                        language,
                     ),
                     on_final_answer=final_answer.update,
+                    normalize_language=normalize_language,
                 )
                 return ResultEnvelope(
                     status="done",
@@ -3831,8 +3983,9 @@ class ValidationNode(LlmSkillNode):
                         "metrics": metrics,
                         "risk_points": risk_points,
                         "assumptions_to_verify": focus,
+                        "language": language,
                     },
-                    toolset=tuple(SANDBOX_TOOL_NAMES),
+                    toolset=tuple(tool_names),
                     tool_tier="execute",
                     budgets=budgets,
                     output_schema_id="sandbox-run-report.v1",
@@ -3867,7 +4020,9 @@ class ValidationNode(LlmSkillNode):
                 services,
                 supervisor,
                 self._registry,
-                self._review_spec(ctx, plan, code, metrics, focus, focus_ids, risk_points),
+                self._review_spec(
+                    ctx, plan, code, metrics, focus, focus_ids, risk_points, language=language
+                ),
                 first=first,
                 sandbox_wave=sandbox_wave,
                 max_runs=total_runs,
@@ -3918,9 +4073,13 @@ class ValidationNode(LlmSkillNode):
         focus: Sequence[Mapping[str, Any]],
         focus_ids: Sequence[str],
         risk_points: str,
+        language: str = "python",
     ) -> _ReviewSpec:
         """稳健性审稿口径：材料 = 方案 / 须检验假设 / 实验脚本 / 检验脚本 / 检查结果 / 复跑 / 上一轮反馈。"""
-        script_path = f"steps/{ctx.step_id}/main.py"
+        script_path = f"steps/{ctx.step_id}/main{SCRIPT_SUFFIXES.get(language) or '.' + language}"
+        experiment_path = str(
+            (ctx.prior_outputs.get(TaskState.EXPERIMENTING.value) or {}).get("script_path") or ""
+        ) or experiment_script_path(language)
         assumptions = assumption_material(list(focus))
         # 上一轮反馈（s37）：回退重做时审稿人拿上一轮检验审稿阻断意见与未过检查对照核查
         # （同名 id 复检、阈值不得放宽、未过项不得删改名）
@@ -3935,7 +4094,7 @@ class ValidationNode(LlmSkillNode):
             return {
                 "chosen_plan": json.dumps(dict(plan), ensure_ascii=False),
                 "model_assumptions": assumptions,
-                "experiment_code": _clip_code(experiment_code),
+                "experiment_code": _clip_code(experiment_code, experiment_path),
                 "metrics": json.dumps(dict(metrics), ensure_ascii=False),
                 "checks_code": _clip_code(capture.code, script_path),
                 "checks": json.dumps(
@@ -3973,6 +4132,7 @@ class ValidationNode(LlmSkillNode):
             materials=materials,
             context_slice=context_slice,
             static_profile=VALIDATION_STATIC_PROFILE,
+            language=language,
         )
 
     # -- G3 gate ----------------------------------------------------------------
@@ -4117,6 +4277,7 @@ _PAPER_FIGURE_LOGICAL_SOURCES = ("metrics", "frozen_numbers")
 #: 规划的文件名：英文 slug + 位图 / 矢量后缀（沙盒按后缀归类为 figure 产物）。
 _PAPER_FIGURE_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\.(?:png|svg)$")
 _PAPER_FIGURE_DIR = "figures/"
+_PAPER_FIGURES_STEM = "paper_figures"
 _PAPER_FIGURES_SCRIPT = "paper_figures.py"
 
 #: 章节数带宽：低于下限说明骨架退化（回退单次调用），高于上限说明规划失控。
@@ -4959,10 +5120,13 @@ class PaperWritingNode(LlmSkillNode):
             return skipped("未配置子代理监督者")
         if not supports_chat(services.llm):
             return skipped("模型端口不支持会话式调用")
+        # 补图脚本跟实验同一实现语言（ADR-0021）：模板按语言选 variant，缺 variant 如实不渲染
+        language = run_language_of(ctx)
+        figures_template_id = sandbox_template_id(PAPER_FIGURES_PROMPT, language)
         try:
-            template = self._registry.get(PAPER_FIGURES_PROMPT)
+            template = self._registry.get(figures_template_id)
         except KeyError:
-            return skipped(f"缺少提示词模板 {PAPER_FIGURES_PROMPT}")
+            return skipped(f"缺少提示词模板 {figures_template_id}")
         governor = (services.extras or {}).get("budget_governor")
         budgets: RunBudget = (
             governor.subagent_slice() if governor is not None else RunBudget()
@@ -4988,10 +5152,12 @@ class PaperWritingNode(LlmSkillNode):
         llm_calls = {"count": 0}
         chat = text_protocol_chat(
             services.llm,
-            label=PAPER_FIGURES_PROMPT,
+            label=figures_template_id,
             on_call=lambda: llm_calls.__setitem__("count", llm_calls["count"] + 1),
         )
-        fingerprint = _env_fingerprint(ctx, services)
+        fingerprint = language_env_fingerprint(_env_fingerprint(ctx, services), language)
+        tool_names = sandbox_tool_names(language)
+        run_tool = sandbox_run_tool(language)
         total_runs = max(1, min(_PAPER_FIGURE_RUNS, budgets.max_sandbox_runs))
         wave_no = {"count": 0}
         last_envelope: dict[str, Any] = {}
@@ -5006,7 +5172,7 @@ class PaperWritingNode(LlmSkillNode):
             directory = _PAPER_FIGURE_DIR if wave_no["count"] == 1 else f"{_PAPER_FIGURE_DIR}rev{wave_no['count']}/"
             capture = _SandboxCapture()
             final_answer: dict[str, Any] = {}
-            brief = tool_protocol_note(SANDBOX_TOOL_NAMES)
+            brief = tool_protocol_note(tool_names)
             if wave_no["count"] > 1:
                 brief += (
                     f"\n\n本波修复请把全部图保存到 `{directory}` 目录（文件名不变；"
@@ -5022,7 +5188,7 @@ class PaperWritingNode(LlmSkillNode):
                 assertions=(
                     SandboxAssertion(
                         id="run_ok",
-                        description="画图脚本经 python_run 成功运行（退出码 0）",
+                        description=f"画图脚本经 {run_tool} 成功运行（退出码 0）",
                         check=_experiment_run_ok_check,
                     ),
                     SandboxAssertion(
@@ -5038,8 +5204,9 @@ class PaperWritingNode(LlmSkillNode):
                 max_runs=max(1, max_runs),
                 max_waves=_PAPER_FIGURE_WAVES,
                 optional_final_keys=(FIGURE_NOTES_FINAL_KEY,),
+                **sandbox_task_language_kwargs(language),
             )
-            executor = _sandbox_tool_executor(ctx, services, capture)
+            executor = _sandbox_tool_executor(ctx, services, capture, tool_names)
 
             def runner(_spec: SpawnSpec) -> ResultEnvelope:
                 report = run_sandbox_task(
@@ -5049,8 +5216,11 @@ class PaperWritingNode(LlmSkillNode):
                     workspace_files=lambda: _workspace_files(ctx, services),
                     read_text=_workspace_reader(ctx, services),
                     env_fingerprint=fingerprint,
-                    publish_code=_publish_code_callback(ctx, services, capture, _PAPER_FIGURES_SCRIPT),
+                    publish_code=_publish_code_callback(
+                        ctx, services, capture, script_filename(_PAPER_FIGURES_STEM, language), language
+                    ),
                     on_final_answer=final_answer.update,
+                    normalize_language=normalize_language,
                 )
                 return ResultEnvelope(
                     status="done",
@@ -5062,8 +5232,13 @@ class PaperWritingNode(LlmSkillNode):
                 SpawnSpec(
                     kind="sandbox",
                     goal=task.goal,
-                    context_slice={"figures_wanted": plan, "data_files": list(data_files), "wave": wave_no["count"]},
-                    toolset=tuple(SANDBOX_TOOL_NAMES),
+                    context_slice={
+                        "figures_wanted": plan,
+                        "data_files": list(data_files),
+                        "wave": wave_no["count"],
+                        "language": language,
+                    },
+                    toolset=tuple(tool_names),
                     tool_tier="execute",
                     budgets=budgets,
                     output_schema_id="sandbox-run-report.v1",
@@ -5097,7 +5272,7 @@ class PaperWritingNode(LlmSkillNode):
                 services,
                 supervisor,
                 self._registry,
-                self._figure_review_spec(title, plan, data_files),
+                self._figure_review_spec(title, plan, data_files, language=language),
                 first=(report, capture, final_answer),
                 sandbox_wave=sandbox_wave,
                 max_runs=total_runs,
@@ -5182,9 +5357,14 @@ class PaperWritingNode(LlmSkillNode):
         )
 
     def _figure_review_spec(
-        self, title: str, plan: Sequence[Mapping[str, str]], data_files: Sequence[str]
+        self,
+        title: str,
+        plan: Sequence[Mapping[str, str]],
+        data_files: Sequence[str],
+        language: str = "python",
     ) -> _ReviewSpec:
         """补图审稿口径：材料 = 规划表 / 数据白名单 / 画图脚本 / 采集到的图件 / 复跑 / 工程师自述。"""
+        figure_script = script_filename(_PAPER_FIGURES_STEM, language)
         plan_rows = "\n".join(
             f"- {item['file']}｜{item['title']}｜{item['chapter'] or '未指定'}｜{item['source']}｜{item['spec'] or '按图题自拟'}"
             for item in plan
@@ -5208,7 +5388,7 @@ class PaperWritingNode(LlmSkillNode):
                 "title": title,
                 "figures_wanted": plan_rows,
                 "data_files": whitelist,
-                "figure_code": _clip_code(capture.code, _PAPER_FIGURES_SCRIPT),
+                "figure_code": _clip_code(capture.code, figure_script),
                 "rendered_files": "\n".join(rendered) or "无（本波没有采集到图件产物）",
                 "rerun_report": rerun_material(rerun),
                 "figure_summary": summary + (f"\n图件说明：\n{notes}" if notes else ""),
@@ -5240,6 +5420,7 @@ class PaperWritingNode(LlmSkillNode):
             materials=materials,
             context_slice=context_slice,
             static_profile=PAPER_FIGURE_STATIC_PROFILE,
+            language=language,
         )
 
     # -- helpers -------------------------------------------------------------
