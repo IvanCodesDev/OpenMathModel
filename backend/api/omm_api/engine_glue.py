@@ -74,12 +74,15 @@ from omm_agent_skills import (
 from omm_agent_tools import (
     KNOWLEDGE_READ_TOOL,
     KNOWLEDGE_SEARCH_TOOL,
+    LANGUAGE_SPECS,
+    CodeRunSandbox,
     PythonSandbox,
     RecordingInvoker,
     TaskWorkspace,
     ToolRegistry,
     knowledge_tool_specs,
     load_knowledge_library,
+    probe_language,
     probe_sandbox_gpu,
     sandbox_workspace_specs,
     table_profile_spec,
@@ -414,6 +417,27 @@ def _sandbox_packages() -> str:
     return "、".join(available) if available else "无（仅 Python 标准库）"
 
 
+#: 沙箱的两个执行工具名：预算账本（每次运行预付一次）与用量重建对两者同计（ADR-0021 §1：
+#: ``python_run`` 是过渡别名、``code_run`` 是多语言统一入口，同一个执行核）。
+_SANDBOX_RUN_TOOLS = frozenset({PythonSandbox.TOOL_NAME, CodeRunSandbox.TOOL_NAME})
+
+
+@lru_cache(maxsize=1)
+def _implementation_languages() -> tuple[str, ...]:
+    """方案阶段可选的实现语言 = 本执行器**真的能跑**的语言（ADR-0021 §5：随探测解锁）。
+
+    探测走 ``probe_language``（与 code_run 同环境、进程内缓存一次），Python 永远在首位
+    （缺省语言）；R 等只有可执行文件解析得到、版本探得出才进列表——探不到的语言不给
+    归约人选，免得 G1 确认了一个本机跑不了的语言。
+    """
+    available = [
+        language
+        for language, spec in LANGUAGE_SPECS.items()
+        if language != "python" and probe_language(spec).available
+    ]
+    return ("python", *available)
+
+
 @lru_cache(maxsize=1)
 def _sandbox_hardware() -> str:
     """沙箱硬件口径：探测到沙箱可用的 CUDA GPU 就引导实验代码优先上 GPU。
@@ -507,6 +531,11 @@ _PROMPT_NODE_IDS = {
     "paper_writing.default": TaskState.PAPER_WRITING.value,
     "paper_figures.sandbox": TaskState.PAPER_WRITING.value,
     "paper_figures_review.default": TaskState.PAPER_WRITING.value,
+    # R 沙盒 variant（ADR-0021 §7）：与 Python 卡同阶段归账
+    "data_cleaning.sandbox.r": TaskState.DATA_PREPARATION.value,
+    "experiment_code.sandbox.r": TaskState.EXPERIMENTING.value,
+    "validating.sandbox.r": TaskState.VALIDATING.value,
+    "paper_figures.sandbox.r": TaskState.PAPER_WRITING.value,
 }
 
 #: 提示词 → 设置中心「智能路由」的任务类型（ADR-0015 决策 3）。数据准备阶段
@@ -534,6 +563,11 @@ _PROMPT_TASK_KINDS = {
     # 论文阶段补图是沙盒里写码画图：按编程任务路由（审稿人读的也是代码）
     "paper_figures.sandbox": "coding",
     "paper_figures_review.default": "coding",
+    # R 沙盒 variant：写码跑码，按编程任务路由
+    "data_cleaning.sandbox.r": "coding",
+    "experiment_code.sandbox.r": "coding",
+    "validating.sandbox.r": "coding",
+    "paper_figures.sandbox.r": "coding",
 }
 
 
@@ -640,7 +674,7 @@ def _build_budget_governor(session: Session, run: TaskRunRow) -> BudgetGovernor:
             node_id = _PROMPT_NODE_IDS.get(str(data.get("prompt_id") or ""))
             if node_id is not None:
                 node_tokens[node_id] = node_tokens.get(node_id, 0) + tokens
-        elif data.get("tool") == PythonSandbox.TOOL_NAME:
+        elif data.get("tool") in _SANDBOX_RUN_TOOLS:
             sandbox_runs += 1
     governor.seed_usage(
         total_tokens=total_tokens,
@@ -757,7 +791,7 @@ class _BudgetedInvoker:
         self._governor = governor
 
     def invoke(self, run_id: str, step_id: str, tool_name: str, arguments: dict) -> Any:
-        if tool_name == PythonSandbox.TOOL_NAME:
+        if tool_name in _SANDBOX_RUN_TOOLS:
             self._governor.charge_sandbox_run()
         return self._inner.invoke(run_id, step_id, tool_name, arguments)
 
@@ -991,9 +1025,11 @@ def _llm_wiring_impl(
             TaskState.PROBLEM_ANALYSIS: _GoalProblemAnalysisNode(registry),
             TaskState.DATA_PREPARATION: _ParamsDataPreparationNode(registry),
             # 方案阶段的先例材料：进程内缓存的卡片知识库（找不到快照就是空库，
-            # 材料落「无」，不影响推进）
+            # 材料落「无」，不影响推进）；可选实现语言 = 本机真的能跑的（探测解锁，ADR-0021）
             TaskState.MODEL_PLANNING: ModelPlanningNode(
-                registry, knowledge=load_knowledge_library()
+                registry,
+                knowledge=load_knowledge_library(),
+                implementation_languages=_implementation_languages(),
             ),
             # 实验审稿人（§8.4）拿同一个知识库的两个只读工具：知识端口在场即列入
             # 子代理工具清单（工具本体已随知识库注册进 ToolBus）
@@ -1861,15 +1897,25 @@ def _build_tool_invoker(
     settings = runtime_settings()
     workspace = TaskWorkspace(settings.workspaces_dir, run.id)
     _stage_attachment_tables(session, run, workspace)
+    store = ApiArtifactStore(get_blobstore())
     sandbox = PythonSandbox(
         workspace,
         timeout_s=settings.experiment_timeout_seconds,
-        store=ApiArtifactStore(get_blobstore()),
+        store=store,
+    )
+    # 多语言统一入口（ADR-0021）：与 python_run 同一执行核、同一产物存储；本刀启用全部
+    # 有 Runner 的语言（python / r），运行时没装的语言调用时显式失败、探测时如实 unavailable。
+    code_run = CodeRunSandbox(
+        workspace,
+        timeout_s=settings.experiment_timeout_seconds,
+        store=store,
     )
     registry = ToolRegistry()
     registry.register(sandbox.spec())
+    registry.register(code_run.spec())
     registry.register(table_profile_spec(workspace))
-    for spec in sandbox_workspace_specs(workspace):
+    # env_probe 报 code_run 真正启用的语言（含可执行文件解析结果），节点按任务卡语言取指纹
+    for spec in sandbox_workspace_specs(workspace, code_run.probes):
         registry.register(spec)
     # 与方案节点同一份进程缓存的知识库（_llm_wiring_impl 里 ModelPlanningNode 的
     # knowledge）：提议人预检索与会话里的工具检索读同一个库
@@ -1886,6 +1932,7 @@ def _build_tool_invoker(
         registry.with_allowlist(
             {
                 PythonSandbox.TOOL_NAME,
+                CodeRunSandbox.TOOL_NAME,
                 "table_profile",
                 "ws_list",
                 "ws_read",

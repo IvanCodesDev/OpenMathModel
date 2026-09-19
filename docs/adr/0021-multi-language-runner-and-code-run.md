@@ -1,6 +1,6 @@
 # ADR-0021：多语言 Runner——`code_run(language)` 统一入口、语言随方案确认钉死、R 先行
 
-- 状态：Accepted（地基层已落地：`agents/tools` 的 Runner / `code_run` / `env_probe` 多语言探测，harness 执行体的语言路由，skills 的非 Python 诚实降级与 R 沙盒模板；节点 / API / worker 的接线与 `IMPLEMENTATION_LANGUAGES` 解锁待下一刀）
+- 状态：Accepted（已落地。地基层：`agents/tools` 的 Runner / `code_run` / `env_probe` 多语言探测，harness 执行体的语言路由，skills 的非 Python 诚实降级与 R 沙盒模板；接线（2026-09-19）：实验 / 检验 / 论文补图三处沙盒按方案语言选模板 variant 并走 `code_run`、脚本按语言命名落盘、复跑 / 静态检查 / 符号核验传 `language`，API 与 worker 同构注册 `code_run` 并同计账本，`IMPLEMENTATION_LANGUAGES` 随本机探测解锁；方案确认 R 的运行全链真跑 `Rscript` 有端到端测试。清洗沙盒暂固定 Python——数据准备在方案确认之前，没有语言可读，运行级语言偏好另议）
 - 日期：2026-09-09
 - 关联：ADR-0011（编排选型：有界循环与节点注册表）、ADR-0013（终态可返工）、设计文档 §7「执行体：沙盒 Agent 与多语言运行」（§7.2 沙箱分级、§7.3 可复现性、§7.4 多语言 Runner 与 v3.42 语言范围拍板、§7.5 运行记忆化）、§13.3 本地执行器与能力路由
 
@@ -57,4 +57,5 @@ harness `SandboxTask` 新增 `language`（缺省 `python`）与 `run_tool`（缺
 - 方案阶段确认的语言到执行阶段不会被模型或系统悄悄换掉；换语言的每一次尝试都留下一条可审计的退回观察。
 - 沙箱超时对多进程运行时真正生效，孙进程不再拖住管道。
 - 代价与边界：R 冷启动约 1 s / 次；探测首次调用起子进程（进程内缓存）；非 Python 脚本的静态检查与符号核验为空档，靠审稿人与人补位，材料里明写。
-- 接线刀清单（未做即不算完成）：节点任务卡带语言与 `code_run`、模板按语言选 variant、API / worker 注册 `code_run` 并给 `env_probe` 接入 `code_run.probes`、账本并计 `code_run`、`IMPLEMENTATION_LANGUAGES` 随探测解锁、静态检查 / 符号核验传 `language`、评测脚本化工具认 `code_run`。
+- 接线刀清单（2026-09-19 已全部落地）：节点任务卡带语言与 `code_run`、模板按语言选 variant、API / worker 注册 `code_run` 并给 `env_probe` 接入 `code_run.probes`、账本并计 `code_run`、`IMPLEMENTATION_LANGUAGES` 随探测解锁、静态检查 / 符号核验传 `language`；评测的脚本化工具面本就按「非工作区工具即运行」处理 `code_run`，无需改动。
+- 接线后的边界：清洗沙盒仍固定 Python（数据准备先于方案确认）；缺某语言的沙盒模板时实验节点显式失败点名模板 id、检验 / 补图如实跳过，都不换语言；补图的 R 渲染链有模板但未走查；MATLAB / Octave / 北太天元 Runner 按 v3.42 顺位仍待。

@@ -9,8 +9,10 @@ Execution-plane rules implemented here (PROJECT_STRUCTURE / system-overview):
   new work starts, so retries are explicit attempts, not silent overwrites;
 - events/artifacts are persisted before state moves (engine + JSONL sink);
 - the job loop is budgeted — a runaway registry cannot spin forever;
-- tools are minimally granted: the per-run invoker allowlists python_run only
-  and caps the caller tier at "execute" (isomorphic to the API-side glue);
+- tools are minimally granted: the per-run invoker allowlists the two sandbox
+  run tools (``python_run`` and the multi-language ``code_run``), the workspace
+  tools and the knowledge tools, and caps the caller tier at "execute"
+  (isomorphic to the API-side glue);
 - scheduling follows the ``OMM_GRAPH`` profile (§4.9): ``modeling-v2`` (default)
   lets the Graph v2 scheduler drive (bounded redo via iteration edges,
   automatic redo via condition edges, redo budget on gates) with the linear
@@ -52,6 +54,7 @@ from omm_agent_harness import SubagentSupervisor
 from omm_agent_tools import (
     KNOWLEDGE_READ_TOOL,
     KNOWLEDGE_SEARCH_TOOL,
+    CodeRunSandbox,
     PythonSandbox,
     RecordingInvoker,
     TaskWorkspace,
@@ -288,12 +291,20 @@ class WorkerRuntime:
             timeout_s=self.config.python_timeout_s,
             store=services.artifacts,
         )
+        # 多语言统一入口（ADR-0021，与 API 侧同构）：同一执行核、同一产物存储；
+        # env_probe 报它真正启用的语言，节点按任务卡语言取指纹。
+        code_run = CodeRunSandbox(
+            workspace,
+            timeout_s=self.config.python_timeout_s,
+            store=services.artifacts,
+        )
         registry = ToolRegistry()
         registry.register(sandbox.spec())
+        registry.register(code_run.spec())
         # 数据阶段工具（与 API 侧 _build_tool_invoker 保持同构）：table_profile
         # 确定性画像 + 工作区四件套（ws_list 是数据节点画像前置的入口）。
         registry.register(table_profile_spec(workspace))
-        for spec in sandbox_workspace_specs(workspace):
+        for spec in sandbox_workspace_specs(workspace, code_run.probes):
             registry.register(spec)
         # 方案阶段工具（§10.3 切片二，与 API 侧 _build_tool_invoker 同构）：卡片知识库
         # 两个只读工具，三路提议人子代理在会话里自主检索、顺链读卡。
@@ -314,6 +325,7 @@ class WorkerRuntime:
             registry.with_allowlist(
                 {
                     PythonSandbox.TOOL_NAME,
+                    CodeRunSandbox.TOOL_NAME,
                     "table_profile",
                     "ws_list",
                     "ws_read",

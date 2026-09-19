@@ -31,7 +31,7 @@ from omm_agent_skills import (
     ValidationNode,
     load_default_registry,
 )
-from omm_agent_tools import load_knowledge_library
+from omm_agent_tools import LANGUAGE_SPECS, load_knowledge_library, probe_language
 
 from .runtime import WorkerConfig, WorkerRuntime
 
@@ -81,11 +81,26 @@ class GoalProblemAnalysisNode(ProblemAnalysisNode):
         }
 
 
+def available_implementation_languages() -> tuple[str, ...]:
+    """方案阶段可选的实现语言 = 本执行器真的能跑的语言（ADR-0021 §5，与 API 侧同构）。
+
+    Python 永远在首位（缺省语言）；其它语言经 ``probe_language``（与 code_run 同环境、
+    进程内缓存一次）解析到可执行文件并探得版本才进列表。
+    """
+    available = [
+        language
+        for language, spec in LANGUAGE_SPECS.items()
+        if language != "python" and probe_language(spec).available
+    ]
+    return ("python", *available)
+
+
 def build_real_nodes(
     *,
     unattended: bool = False,
     prompts: PromptRegistry | None = None,
     knowledge: KnowledgePort | None = None,
+    implementation_languages: tuple[str, ...] | None = None,
 ) -> dict[TaskState, StepNode]:
     """六阶段真实节点注册表。
 
@@ -95,7 +110,8 @@ def build_real_nodes(
 
     ``knowledge`` 缺省时装配进程内缓存的卡片知识库（``omm_agent_tools.
     load_knowledge_library``：环境变量 / 仓内快照；找不到就是空库，方案阶段的
-    先例材料落「无」，不是装配缺陷）。
+    先例材料落「无」，不是装配缺陷）。``implementation_languages`` 缺省按本机探测
+    解锁（``available_implementation_languages``）；评测 / 测试可显式钉死。
     """
     registry = prompts or load_default_registry()
     missing = REQUIRED_PROMPT_IDS - set(registry.ids())
@@ -105,6 +121,11 @@ def build_real_nodes(
             + ", ".join(sorted(missing))
         )
     library = knowledge if knowledge is not None else load_knowledge_library()
+    languages = (
+        implementation_languages
+        if implementation_languages is not None
+        else available_implementation_languages()
+    )
     return {
         TaskState.PROBLEM_ANALYSIS: GoalProblemAnalysisNode(registry),
         TaskState.DATA_PREPARATION: DataPreparationNode(registry),
@@ -112,6 +133,7 @@ def build_real_nodes(
             registry,
             require_confirmation=not unattended,
             knowledge=library,
+            implementation_languages=languages,
         ),
         # 实验审稿人（§8.4）与方案提议人共用同一知识库的两个只读工具
         TaskState.EXPERIMENTING: ExperimentExecutionNode(registry, knowledge=library),
