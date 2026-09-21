@@ -1,0 +1,332 @@
+/* Owner-supplied reference, 2026-09-18: colors and surface silhouettes only.
+   Keep existing content, assets and interactions. Resource spacing is refined
+   below following the owner's subsequent review.
+   Load before accessibility.css so user contrast preferences retain priority.
+   The html:root prefix below matches the same single element plain html does; it
+   only carries the extra class-level weight these palette rules need to outrank
+   the component defaults in styles.css. */
+:root {
+  --shell-radius: 32px;
+  --shell-top-inset: 20px;
+}
+
+html:root {
+  --ink: #101720;
+  --muted: #778292;
+  --faint: #a5afbd;
+  --line: #e4e8ee;
+  --soft: #f3f5f8;
+  --soft-2: #e5e9ef;
+}
+
+/* Ordinary routes share .main; the five modeling routes share their existing
+   document panel instead. Rounded clipping follows each surface's scrollport. */
+.app-shell > .main {
+  margin-top: var(--shell-top-inset);
+  height: calc(100% - var(--shell-top-inset));
+  border-radius: var(--shell-radius) 0 var(--shell-radius) var(--shell-radius);
+}
+
+.sidebar { border-right: 0; }
+
+.focused-stage-pane {
+  --ax-radius-container: var(--shell-radius);
+}
+
+.modeling-clone-shell .focused-modeling-split {
+  padding-top: var(--shell-top-inset);
+}
+
+.composer { border-radius: 24px; }
+.composer .tool-button { border-radius: 999px; }
+
+html:root :is(body, .app-shell, .sidebar, .modeling-clone-shell) {
+  background: var(--soft);
+}
+
+html:root :is(.main, .main.with-workflow, .confirm-wrap, .running-main, .resource-library, .resource-detail-page) {
+  background: #fff;
+}
+
+html:root .global-search {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+html:root .search-filter {
+  border-color: transparent;
+  border-radius: 14px;
+  background: transparent;
+}
+
+/* Review: only the upper-right corner is square, including the tab overlay. */
+.focused-stage-pane .focused-workspace-panel.active,
+.focused-stage-pane .focused-workspace-tabs {
+  border-top-right-radius: 0;
+}
+
+html .task-toolbar { border-bottom: 0; }
+
+html .task-toolbar-actions button,
+html .task-toolbar-actions button:is(:hover, :active, :focus),
+html .sidebar .search-filter,
+html .sidebar .search-filter:is(:hover, :active, :focus, .is-filtering) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+html:root :is(.nav-item, .recent-link, .composer-model, .tool-button, .composer-shortcuts button) {
+  color: #465263;
+}
+
+html:root :is(.sidebar-collapse, .nav-item i, .recent-link > i, .nav-section-label, .recent-title, .profile-row small, .new-screen .lead) {
+  color: var(--muted);
+}
+
+html:root :is(.new-task-button.active, .nav-item.active, .process-nav .nav-item.active i) {
+  background: var(--soft-2);
+  color: var(--ink);
+}
+
+html:root :is(.nav-item:hover, .new-task-button:hover, .recent-link:hover, .recent-action:hover, .sidebar-search-item:hover, .sidebar-search-item.is-active) {
+  background: #eaf0f5;
+  color: var(--ink);
+}
+
+html:root :is(.recent, .profile-row) { border-color: var(--line); }
+html:root .process-nav .nav-item:not(.active) i { background: var(--soft); }
+
+html:root .recent::-webkit-scrollbar-thumb { background: #e0e5ec; }
+html:root .recent::-webkit-scrollbar-thumb:hover { background: #c7cfda; }
+
+html:root :is(.composer, .chat-composer) {
+  background: #fff;
+  border-color: var(--line);
+  box-shadow: 0 10px 34px rgb(35 52 76 / 5%);
+}
+
+html:root .composer:focus-within {
+  border-color: #bac4d2;
+  box-shadow: 0 0 0 3px rgb(35 52 76 / 3%);
+}
+
+html:root :is(.composer textarea, .chat-composer textarea)::placeholder {
+  color: var(--faint);
+}
+
+html:root .composer-note { color: var(--faint); }
+
+html:root :is(.composer-shortcuts button, .tool-button, .icon-tool) {
+  background: var(--soft);
+}
+
+html:root :is(.composer-shortcuts button:hover, .composer-shortcuts button.active, .tool-button:hover, .composer-model:hover, .composer-model-picker.open .composer-model) {
+  background: var(--soft-2);
+  color: var(--ink);
+}
+
+html:root :is(.primary, .primary-small, .send-button, .focused-stage-cta) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+html:root :is(.primary:hover, .primary-small:hover, .send-button:hover, .focused-stage-cta:hover) {
+  background: #253040;
+  color: #fff;
+}
+
+/* The document components already consume these tokens, including tables,
+   tabs, code panels and the paper editor. Status colors remain semantic. */
+html:root .focused-stage-pane {
+  --ax-text-primary: var(--ink);
+  --ax-text-secondary: #596678;
+  --ax-text-disabled: var(--faint);
+  --ax-muted: var(--soft);
+  --ax-code-bg: #f8f9fb;
+  --ax-border: var(--line);
+  --ax-border-strong: #cdd5df;
+  --ax-accent: var(--ink);
+  --ax-neutral: var(--soft-2);
+  --ax-hover: #edf1f5;
+  --ax-pressed: #e0e6ed;
+  --ax-gray-bg: var(--soft-2);
+  --ax-gray-text: #465263;
+}
+
+html:root .focused-stage-pane .focused-workspace-panel.active {
+  border-color: transparent;
+}
+
+html:root body[data-screen="projects"] {
+  --project-tab: var(--soft);
+  --project-folder: var(--soft-2);
+  --project-front: #f8f9fb;
+  --project-line: var(--line);
+  --project-secondary: var(--muted);
+}
+
+/* Keep the mobile toolbar clearance required by the existing drawer layout. */
+@media (max-width: 820px) {
+  :root {
+    --shell-radius: 24px;
+    --shell-top-inset: 10px;
+  }
+
+  .modeling-clone-shell .focused-modeling-split { padding-top: 56px; }
+
+  .focused-stage-pane {
+    border-radius: var(--shell-radius) 0 var(--shell-radius) var(--shell-radius);
+    background: var(--ax-surface);
+  }
+
+  .focused-stage-pane .focused-workspace:has(.focused-workspace-tabs) > .focused-workspace-panel.active {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+}
+
+/* Settings inherit the same cool palette. Keep geometry, saved preferences,
+   brand marks and status colors intact. */
+html:root .settings-backdrop {
+  background: rgb(24 36 54 / 22%);
+}
+
+html:root .settings-dialog {
+  background: #fff;
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: 0 28px 90px rgb(24 36 54 / 18%);
+}
+
+html:root .settings-sidebar { background: var(--soft); border-color: var(--line); }
+html:root .settings-scroll { background: #f8fafc; }
+html:root .settings-dialog :is(.settings-header, .settings-footer, .settings-section, .usage-stat, .provider-card, .usage-table) {
+  background: #fff;
+  border-color: var(--line);
+}
+
+html:root .settings-dialog :is(.settings-nav button, .settings-field, .settings-range, .settings-row-copy strong) { color: #465263; }
+html:root .settings-dialog :is(.settings-brand span, .settings-account-card div span, .settings-header p, .settings-section-heading p, .settings-row-copy span, .settings-field small, .usage-stat span, .usage-stat small, .provider-card div span, .endpoint-item div span, .settings-footer > div > span) { color: var(--muted); }
+html:root .settings-nav button i { color: var(--muted); }
+html:root .settings-nav button:hover { background: #eaf0f5; color: var(--ink); }
+html:root .settings-nav button.active { background: var(--soft-2); color: var(--ink); }
+html:root .settings-nav button.active i { color: var(--ink); }
+
+html:root .settings-dialog :is(.settings-row, .settings-account-card, .security-item, .device-item, .endpoint-item, .api-advanced, .settings-plan) { border-color: var(--line); }
+html:root .settings-dialog :is(.settings-field input, .settings-field select, .settings-field textarea, .field-with-unit, .secret-field button) {
+  border-color: var(--line);
+  background: #fff;
+  color: var(--ink);
+}
+html:root .settings-dialog :is(.settings-field input, .settings-field textarea):focus {
+  border-color: #aab8cb;
+  box-shadow: 0 0 0 3px rgb(78 108 149 / 10%);
+}
+html:root .settings-dialog .settings-field select:focus {
+  border-color: #aab8cb;
+  box-shadow: none;
+}
+html:root .settings-dialog .settings-field input:disabled { background: var(--soft); color: var(--faint); }
+/* 下拉触发器与弹层的填色、描边、阴影由 styles.css 的液态玻璃 token 统一给出，这里只对齐文字色 */
+html:root .settings-dialog .settings-select-trigger { color: var(--ink); }
+html:root .settings-dialog .settings-select-menu button { color: #465263; }
+html:root .settings-dialog .settings-select-menu button:hover { color: var(--ink); }
+html:root .settings-dialog .settings-select-menu button[aria-selected="true"] { color: var(--ink); }
+
+html:root .settings-switch { background: #cdd5df; }
+html:root .settings-switch:hover { background: #bac5d3; }
+html:root .settings-switch.active { background: var(--ink); }
+html:root .settings-switch.active:hover { background: #253040; }
+html:root .settings-switch span { box-shadow: 0 1px 3px rgb(24 36 54 / 18%); }
+html:root .settings-dialog :is(.usage-table-head, .provider-card.connected, .security-icon) { background: var(--soft); }
+html:root .settings-dialog .settings-footer .settings-reset { color: var(--muted); }
+html:root .settings-dialog .settings-footer .primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+html:root .settings-dialog .settings-footer .primary:hover { background: #253040; border-color: #253040; }
+
+/* Resource libraries: separate the heading, controls and reading area without
+   replacing any rows, filters, assets or existing scroll/navigation behavior. */
+.resource-library {
+  padding: 36px clamp(24px, 2.5vw, 48px) 36px;
+  scrollbar-gutter: stable;
+}
+
+.resource-library .library-heading h1 { margin: 0; line-height: 1.35; }
+.resource-library .library-heading p { margin-top: 10px; line-height: 1.7; }
+.resource-library .resource-tools,
+.paper-library-controls { margin: 26px 0 20px; gap: 14px; flex-wrap: wrap; }
+.resource-library .resource-tools .search-box { width: auto; flex: 1 1 300px; max-width: 560px; }
+.resource-library .filters { gap: 10px; flex-wrap: wrap; overflow: visible; }
+.paper-library-controls .search-box { flex: 1 1 360px; }
+.resource-library > .resource-tabs { gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
+.resource-library .search-box { height: 44px; border-color: var(--line); border-radius: 12px; }
+.resource-table-wrap { border-color: var(--line); border-radius: 14px; }
+.resource-library .resource-table th { height: 48px; padding-inline: 18px; }
+.resource-library .resource-table td { padding: 18px; line-height: 1.7; }
+.resource-library .resource-table td:last-child { padding-inline: 8px; }
+.resource-library :is(.problem-title-copy, .paper-primary-cell) { gap: 7px; }
+.resource-library :is(.problem-title-copy strong, .paper-primary-cell strong) { font-size: 14px; line-height: 1.65; }
+.paper-resource-wrap { margin-top: 24px; }
+.paper-classification-panel { padding: 16px 18px; border-color: var(--line); border-radius: 14px; }
+.paper-classification-row { min-height: 40px; align-items: flex-start; gap: 16px; }
+.paper-classification-label { padding-top: 9px; }
+.paper-classification-row + .paper-classification-row { margin-top: 10px; padding-top: 12px; border-color: var(--line); }
+.paper-resource-tabs { flex-wrap: wrap; gap: 6px; }
+.paper-resource-tabs button, .paper-group-tabs button { height: 34px; }
+.paper-competition-tabs { padding: 4px; gap: 6px; }
+.paper-result-count { align-self: center; }
+
+html:root .resource-library :is(.resource-table th, .paper-classification-panel) { background: #f8fafc; }
+html:root :is(.paper-competition-tabs, .problem-type-badge) { background: var(--soft); }
+html:root .resource-library .resource-tabs button.active { background: var(--soft-2); border-color: transparent; color: var(--ink); }
+html:root .resource-library .resource-table tbody tr:hover { background: #f5f8fb; }
+html:root .resource-library :is(.problem-title-copy > span, .paper-primary-cell > span, .library-heading p) { color: var(--muted); }
+
+.method-content { padding: 36px clamp(24px, 2.6vw, 48px) 56px; scrollbar-gutter: stable; }
+.method-content .method-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px 24px; }
+.method-heading > div:first-child { flex: 1 1 280px; min-width: 0; }
+.method-heading .method-actions { position: static; margin: 0; flex-wrap: wrap; gap: 10px; }
+.method-actions button { padding-inline: 16px; }
+.method-content .method-table { margin-top: 30px; }
+.method-content .method-table th { width: 128px; padding: 24px 18px 24px 0; line-height: 1.9; }
+.method-content .method-table td { padding: 24px 0 24px 22px; line-height: 1.9; overflow-wrap: anywhere; }
+.method-copy-list li + li, .method-workflow li + li { margin-top: 10px; }
+.method-tree .search-box { margin-bottom: 14px; }
+.method-tree .tree-group { margin-block: 12px; }
+.method-tree .tree-child { height: auto; min-height: 38px; line-height: 1.6; }
+html:root .method-tree { background: #f8fafc; }
+html:root .method-tree :is(.tree-child:hover, .tree-group-title:hover) { background: var(--soft-2); color: var(--ink); }
+html:root .method-tree .tree-child.active { background: #eaf0f6; color: var(--ink); }
+
+@media (min-width: 821px) and (max-width: 1440px) {
+  .method-layout:not(.tree-collapsed) { --tree-w: 248px; }
+  .method-tree { padding-inline: 18px; }
+}
+
+@media (max-width: 820px) {
+  .resource-library { padding: 62px 20px 28px; }
+  .resource-library .resource-tools .search-box,
+  .paper-library-controls .search-box { max-width: none; flex-basis: 100%; }
+  .resource-library > .resource-tabs { flex-wrap: nowrap; }
+  .paper-classification-panel { padding: 14px 12px; }
+  .paper-classification-row { gap: 10px; }
+  .paper-classification-row > :is(.paper-resource-tabs, .paper-group-tabs, .paper-competition-tabs) { min-width: 0; flex: 1; }
+  .paper-classification-row { flex-wrap: nowrap; }
+  .paper-classification-row > :is(.paper-resource-tabs, .paper-group-tabs, .paper-competition-tabs) { flex-wrap: nowrap; overflow-x: auto; }
+  .paper-classification-row > :is(.paper-resource-tabs, .paper-group-tabs, .paper-competition-tabs) button { flex: 0 0 auto; }
+  .method-content { padding: 62px 22px 40px; }
+  .method-content .method-table th { width: 104px; padding-right: 12px; }
+  .method-content .method-table td { padding-left: 12px; }
+}
+
+@media (max-width: 520px) {
+  .method-content .method-table,
+  .method-content .method-table tbody,
+  .method-content .method-table tr,
+  .method-content .method-table th,
+  .method-content .method-table td { display: block; width: 100%; }
+  .method-content .method-table th { padding: 22px 0 8px; }
+  .method-content .method-table td { border-top: 0; padding: 0 0 22px; }
+}

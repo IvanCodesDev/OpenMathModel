@@ -12,6 +12,12 @@ import type { DocumentDraft } from "@openmathmodel/contracts";
 
 export type PaperFigure = NonNullable<DocumentDraft["figures"]>[number];
 
+/** 解析只需要「文件名 → 产物 id」：论文终稿、实验 / 数据阶段的图件清单都满足这个形状。 */
+export interface FigureSource {
+  name: string;
+  artifact_id: string | null;
+}
+
 /** 与 stage-outputs 投影 / DeliveryManifest 一致的产物下载路径。 */
 export function artifactDownloadUrl(artifactId: string): string {
   return `/api/v1/artifacts/${encodeURIComponent(artifactId)}/download`;
@@ -26,7 +32,7 @@ function basename(url: string): string {
  * 才解析；清单为空或缺席 → 恒 null（论文页与聊天气泡一样不出图）。
  */
 export function figureImageResolver(
-  figures: readonly PaperFigure[] | null | undefined,
+  figures: readonly FigureSource[] | null | undefined,
 ): (url: string) => string | null {
   const byName = new Map<string, string>();
   for (const figure of figures ?? []) {

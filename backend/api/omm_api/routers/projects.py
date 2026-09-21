@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
+from omm_agent_core import TaskState
 from omm_contracts import (
     AgentEventType,
     Artifact,
@@ -22,7 +23,7 @@ from ..deps import AuthContext, get_auth_context
 from ..errors import ApiError, NotFoundError
 from ..events import append_event
 from ..ids import new_id
-from ..orm import ArtifactRow, ProjectRow, TaskRunRow
+from ..orm import ArtifactRow, ProjectRow, StageOutputRow, TaskRunRow
 from ..privacy import purge_project
 from ..serialize import artifact_to_contract, iso_z, project_to_contract, utcnow
 
@@ -30,6 +31,32 @@ router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
 # 与契约 task-run.status 的终态子集一致：active 桶 = 存在运行且不在此集合。
 TERMINAL_RUN_STATUSES = ("COMPLETED", "FAILED", "CANCELLED")
+
+
+def stage_output_counts_subquery():
+    """「项目 → 现行实验结果 / 论文草稿份数」（契约 stats.experiment_count / paper_count）。
+
+    stage_outputs 只挂在运行上，经 task_runs 归到项目；只数 status=current 的行：
+    重做/重试把旧版置 superseded，卡片上的数字因此是「现在有几份」而不是历次累计，
+    与成果页只列最近一趟产出的口径一致。模拟链路不落行，自然计 0。
+    """
+    experimenting = TaskState.EXPERIMENTING.value
+    paper_writing = TaskState.PAPER_WRITING.value
+    return (
+        select(
+            TaskRunRow.project_id.label("project_id"),
+            func.sum(case((StageOutputRow.node == experimenting, 1), else_=0)).label(
+                "experiments"
+            ),
+            func.sum(case((StageOutputRow.node == paper_writing, 1), else_=0)).label(
+                "papers"
+            ),
+        )
+        .join(TaskRunRow, TaskRunRow.id == StageOutputRow.run_id)
+        .where(StageOutputRow.status == "current")
+        .group_by(TaskRunRow.project_id)
+        .subquery()
+    )
 
 
 def latest_run_subquery():
@@ -104,7 +131,10 @@ def list_projects(
     archived: bool = Query(default=False, description="true 时只返回已归档项目"),
     include: Optional[Literal["stats"]] = Query(
         default=None,
-        description="stats = 每项附带最新运行投影与产物计数（服务端一次聚合，客户端不再 N+1）",
+        description=(
+            "stats = 每项附带最新运行投影、产物计数与现行实验结果 / 论文草稿份数"
+            "（服务端一次聚合，客户端不再 N+1）"
+        ),
     ),
     q: Optional[str] = Query(
         default=None,
@@ -139,15 +169,20 @@ def list_projects(
             .group_by(ArtifactRow.project_id)
             .subquery()
         )
-        query = query.outerjoin(
-            artifact_counts, artifact_counts.c.project_id == ProjectRow.id
-        ).add_columns(
-            latest_run.c.run_id,
-            latest_run.c.run_status,
-            latest_run.c.run_node,
-            latest_run.c.run_goal,
-            latest_run.c.run_updated_at,
-            func.coalesce(artifact_counts.c.n, 0).label("artifact_count"),
+        stage_counts = stage_output_counts_subquery()
+        query = (
+            query.outerjoin(artifact_counts, artifact_counts.c.project_id == ProjectRow.id)
+            .outerjoin(stage_counts, stage_counts.c.project_id == ProjectRow.id)
+            .add_columns(
+                latest_run.c.run_id,
+                latest_run.c.run_status,
+                latest_run.c.run_node,
+                latest_run.c.run_goal,
+                latest_run.c.run_updated_at,
+                func.coalesce(artifact_counts.c.n, 0).label("artifact_count"),
+                func.coalesce(stage_counts.c.experiments, 0).label("experiment_count"),
+                func.coalesce(stage_counts.c.papers, 0).label("paper_count"),
+            )
         )
     query = query.where(*conditions)
     if search:
@@ -189,7 +224,12 @@ def list_projects(
                     "goal": row.run_goal,
                     "updated_at": iso_z(row.run_updated_at),
                 }
-            stats = {"latest_run": latest, "artifact_count": row.artifact_count}
+            stats = {
+                "latest_run": latest,
+                "artifact_count": row.artifact_count,
+                "experiment_count": int(row.experiment_count),
+                "paper_count": int(row.paper_count),
+            }
         items.append(project_to_contract(row[0], stats=stats))
     return ProjectList(items=items, total=total)
 

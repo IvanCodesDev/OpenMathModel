@@ -245,8 +245,14 @@ function agentSummaryForScreen(screen: ScreenId, view: ModelingWorkspaceView): s
  * 计划面板只显示「正在思考并规划…」的思考态；首阶段落定（成功/失败）或
  * 后续阶段已启动时，说明计划已经产生，面板才揭示计划列表。
  * 运行离开 QUEUED/RUNNING（暂停、待审批、终态）时需要展示状态，同样揭示。
+ *
+ * 规划期单向：首阶段一旦落定过（事件流里见过失败 / 成功 / 审批门），「重试题意
+ * 解析」把运行放回 RUNNING + 全 PENDING 也不再算规划中。否则每次重试首气泡都会
+ * 被重新「解封」——新一次尝试的过程行写回页面顶端、摘要清空、执行计划面板退回
+ * 思考态，用户在底部点了按钮却要翻到顶上看进度（2026-09-17 报障）。
  */
-function isPlanningPhase(view: ModelingWorkspaceView): boolean {
+function isPlanningPhase(root: HTMLElement, view: ModelingWorkspaceView): boolean {
+  if (streamState(root).firstStageSettled) return false;
   if (view.run_status === "QUEUED") return true;
   if (view.run_status !== "RUNNING") return false;
   return view.pages.every(page => (
@@ -408,6 +414,13 @@ interface AgentStreamState {
   replayAtMs: number | null;
   /** 已受理的修订轮次（ADR-0013）：0 = 首轮；之后进入的阶段都属于第 N 轮修改的重做。 */
   revisionRound: number;
+  /** 首阶段是否已经落定过（成功 / 失败 / 进审批门）。规划期只有一次：之后哪怕运行
+   *  回到「RUNNING 且六个阶段全 PENDING」（重试题意解析），也不再算规划中——快照
+   *  本身分不出「首次规划」与「第 N 次重试」，这一位由事件流（实时与首连回放）维护。 */
+  firstStageSettled: boolean;
+  /** 用户刚从主操作按钮发出动作：本次尝试的行到达时视口跟着走到底，直到用户自己
+   *  动滚动条或本次尝试落定（见 armFollowTail）。 */
+  followTail: boolean;
 }
 
 const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
@@ -422,6 +435,8 @@ function streamState(root: HTMLElement): AgentStreamState {
       replaying: false,
       replayAtMs: null,
       revisionRound: 0,
+      firstStageSettled: false,
+      followTail: false,
     };
     streamByRoot.set(root, state);
   }
@@ -434,38 +449,35 @@ function revisionSuffix(state: AgentStreamState): string {
   return state.revisionRound > 0 ? `（第 ${state.revisionRound} 轮修改）` : "";
 }
 
-/** 首条 Agent 消息是否已「封口」：开场分析结束且计划相位到达 revealed
- *  （root.dataset.planPhase 由 renderAgent 维护）。封口后新的运行事件不再
- *  挤回首气泡，而是按时间顺序流向对话末尾（见 resolveStreamHost）。 */
+/** 计划是否已揭示：renderAgent 维护的 planPhase 到达 revealed，或事件流已经见过首阶段
+ *  落定。后者是为了不依赖快照刷新的时机——SSE 帧先入活动流、快照 80ms 后才刷新，
+ *  失败叙述到达时 planPhase 还停在上一状态；重试首阶段时快照又会把它放回 planning。 */
+function planRevealed(root: HTMLElement): boolean {
+  return root.dataset.planPhase === "revealed" || streamState(root).firstStageSettled;
+}
+
+/** 首条 Agent 消息是否已「封口」：开场分析结束且计划已揭示。封口后新的运行事件
+ *  不再挤回首气泡，而是按时间顺序流向对话末尾（见 resolveStreamHost）。 */
 function firstAssistantMessage(root: HTMLElement, scroll: HTMLElement): { block: HTMLElement | null; sealed: boolean } {
   const block = scroll.querySelector<HTMLElement>(".assistant-block:not(.follow-up-reply)");
   if (!block) return { block: null, sealed: false };
   const pending = block.dataset.openingState === "pending";
-  return { block, sealed: !pending && root.dataset.planPhase === "revealed" };
+  return { block, sealed: !pending && planRevealed(root) };
 }
 
-/** 「收起执行步骤」折叠头：点击由页面层 toggle-activity 接管，折叠紧随其后的活动流。 */
-function activityHeader(): HTMLButtonElement {
-  const header = document.createElement("button");
-  header.type = "button";
-  header.className = "activity-summary";
-  header.dataset.action = "toggle-activity";
-  header.setAttribute("aria-expanded", "true");
-  header.innerHTML = `<i class="ph ph-eye-slash" aria-hidden="true"></i> ${t("收起执行步骤")} <i class="ph ph-caret-up" aria-hidden="true"></i>`;
-  return header;
-}
-
-/** 对话回复块里的运行步骤区：回复正文（与复制按钮）之后挂折叠头 + 活动流，只建一次。
+/** 对话回复块里的运行步骤区：回复正文（与复制按钮）之后直接挂活动流，只建一次。
  *  对话即控制面（ADR-0018）之后，「继续」「用方案 B」这类话是由对话轮自己把运行推
  *  起来的：回复与随之而来的执行步骤是同一轮的两半，属于同一条 Agent 消息——不能在
  *  还在生成的回复下面再立一个带署名的新块，否则页面上两个「Agent」同时活着
- *  （2026-09-07 用户截图：上面「正在生成回复」、下面「收起执行步骤」各转各的）。 */
+ *  （2026-09-07 用户截图：上面「正在生成回复」、下面「收起执行步骤」各转各的）。
+ *  步骤区上方不再摆「收起执行步骤」折叠头（2026-09-17 用户要求整体撤下）：步骤行
+ *  本来就少、每行自带展开详情，多一层折叠只是噪音。 */
 function replyRunTraceHost(replyBlock: HTMLElement): HTMLElement {
   const existing = replyBlock.querySelector<HTMLElement>(":scope > .agent-stream.run-trace");
   if (existing) return existing;
   const host = document.createElement("div");
   host.className = "agent-stream run-trace";
-  replyBlock.append(activityHeader(), host);
+  replyBlock.append(host);
   return host;
 }
 
@@ -473,11 +485,16 @@ function replyRunTraceHost(replyBlock: HTMLElement): HTMLElement {
  *  - 尾部已是轨迹块 → 继续续写；
  *  - 尾部是对话回复块（生成中或已完成）→ 写进该回复块内部的运行步骤区
  *    （replyRunTraceHost），不另起署名块；
+ *  - 尾部就是首条 Agent 消息（还没有任何对话）→ 返回 null，调用方续写在首气泡摘要
+ *    下方的活动流里。此前这里会另起一个紧挨着首气泡的「Agent」轨迹块：两个相邻署名
+ *    中间什么都没有，而刷新后的历史回放又把同一批行放回首气泡（早于全部追问的事件
+ *    落首气泡），实时与重进两种形态对不上（2026-09-17 拍板合并）；
  *  - 尾部是用户消息等其它元素 → 另起一个与首条 Agent 消息同构的轨迹块
- *    （署名 + 折叠头 + 活动流）。
- *  三条规则合起来保证执行过程与对话在页面上严格按发生顺序交替，且 Agent 不会
+ *    （署名 + 活动流）。
+ *  这些规则合起来保证执行过程与对话在页面上严格按发生顺序交替，且 Agent 不会
  *  连着出现两个署名。署名从所在对话面板里现成的 Agent 署名克隆（总览页是首气泡的，
- *  阶段页左栏是面板顶部的）。 */
+ *  阶段页左栏是面板顶部的）。活动流同样标 .run-trace：它是「这个块承载过运行事件」
+ *  的唯一标记，主操作按钮只跟这样的块（见 followConversationTail）。 */
 function tailTraceHost(scroll: HTMLElement): HTMLElement | null {
   const tail = scroll.lastElementChild;
   if (tail instanceof HTMLElement) {
@@ -485,6 +502,7 @@ function tailTraceHost(scroll: HTMLElement): HTMLElement | null {
       return tail.querySelector<HTMLElement>(".agent-stream");
     }
     if (tail.classList.contains("follow-up-reply")) return replyRunTraceHost(tail);
+    if (tail.classList.contains("assistant-block")) return null;
   }
   const block = document.createElement("div");
   block.className = "assistant-block follow-up-reply agent-activity-block";
@@ -492,8 +510,8 @@ function tailTraceHost(scroll: HTMLElement): HTMLElement | null {
     ?? scroll.querySelector<HTMLElement>(".assistant-id");
   if (identity) block.append(identity.cloneNode(true));
   const host = document.createElement("div");
-  host.className = "agent-stream";
-  block.append(activityHeader(), host);
+  host.className = "agent-stream run-trace";
+  block.append(host);
   scroll.append(block);
   return host;
 }
@@ -551,10 +569,22 @@ function primaryActionSlot(root: HTMLElement): PrimaryActionSlot | null {
   return slot;
 }
 
-/** 主操作按钮随对话尾部走（2026-09-07 用户明确要求：像执行进度一样跟到最新对话的最下面，
- *  不是另做一颗镜像放进面板）。对话里最后一条 Agent 消息（回复块或轨迹块）存在时，把审批
- *  选项列表与按钮一起搬到它的末尾——用户停在底部就能看到「前往实验与验证」「重试当前阶段」，
- *  不必往上翻回首气泡；没有对话（或对话被清空）时按钮回到原位。搬的是按钮本体：文案、
+/** 对话里承载过运行事件的 Agent 块：回复块内部的运行步骤区（replyRunTraceHost）与
+ *  对话尾部的执行轨迹块（tailTraceHost）都带 `.agent-stream.run-trace`。普通一问一答的
+ *  回复块（只有正文，或只有回复自身的 .reply-trace 过程区）不算——它们与运行状态无关。 */
+function runTraceBlocks(scroll: HTMLElement): HTMLElement[] {
+  return [...scroll.querySelectorAll<HTMLElement>(":scope > .assistant-block.follow-up-reply")]
+    .filter(block => block.querySelector(":scope > .agent-stream.run-trace") !== null);
+}
+
+/** 主操作按钮跟着运行事件走，而不是跟着对话尾部走。
+ *
+ *  2026-09-07 的版本把按钮搬到对话里最后一条 Agent 消息的末尾：用户随后报障——按钮总在
+ *  最底下，问一句「为什么失败」之类与运行无关的话，回复下面也顶着一颗「重试当前阶段」
+ *  （2026-09-17）。现在只跟**承载过运行事件的块**：对话里最后一个 `.run-trace` 所在的
+ *  Agent 块（阶段失败 / 等待确认的叙述就写在那里）存在时，把审批选项列表与按钮一起搬到
+ *  它的末尾，「重试当前阶段」紧挨着「「X」阶段失败。」出现；之后的普通对话不再带走它。
+ *  没有这样的块（运行事件都在首气泡 / 摘要下方）时按钮留在原位。搬的是按钮本体：文案、
  *  禁用态、点击处理与幂等 token 全部沿用，两个地方不会分叉。演示夹具的 CTA 不动。 */
 function followConversationTail(root: HTMLElement): void {
   const scroll = conversationScroll(root);
@@ -567,7 +597,7 @@ function followConversationTail(root: HTMLElement): void {
     ? previous
     : null;
   const movable = options ? [options, cta] : [cta];
-  const blocks = scroll.querySelectorAll<HTMLElement>(":scope > .assistant-block.follow-up-reply");
+  const blocks = runTraceBlocks(scroll);
   const tail = blocks[blocks.length - 1];
   if (!tail) {
     if (home.previousElementSibling !== cta) home.before(...movable);
@@ -586,7 +616,7 @@ function liveEventsFlowToTail(root: HTMLElement, scroll: HTMLElement): boolean {
     return block !== null && sealed;
   }
   const tail = scroll.lastElementChild;
-  return root.dataset.planPhase === "revealed"
+  return planRevealed(root)
     && tail instanceof HTMLElement
     && (tail.classList.contains("user-message") || tail.classList.contains("follow-up-reply"));
 }
@@ -594,7 +624,8 @@ function liveEventsFlowToTail(root: HTMLElement, scroll: HTMLElement): boolean {
 /** 解析本条过程行的落点：
  *  - 首条消息未封口（或阶段页还没有对话）：锚定在摘要之后——开场分析结束前
  *    保持隐藏，揭示时与计划一起放行（先思考 → 再计划 → 后过程）；
- *  - 实时事件：写入对话末尾的执行轨迹块，与后续对话按时间交替；
+ *  - 实时事件：写入对话末尾的执行轨迹块，与后续对话按时间交替；没有对话时
+ *    （tailTraceHost 返回 null）同样续写在首气泡摘要下方的活动流里；
  *  - 首连回放的历史事件：按发生时间落到对应对话轮的回复块之后（historyTraceHost），
  *    早于全部追问的仍落回首气泡——重进任务时页面与当初实时看到的一模一样。 */
 function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElement | null {
@@ -604,7 +635,8 @@ function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElem
       const host = historyTraceHost(scroll, state.replayAtMs);
       if (host) return host;
     } else if (liveEventsFlowToTail(root, scroll)) {
-      return tailTraceHost(scroll);
+      const host = tailTraceHost(scroll);
+      if (host) return host;
     }
   }
   if (state.host?.isConnected) return state.host;
@@ -621,14 +653,48 @@ function resolveStreamHost(root: HTMLElement, state: AgentStreamState): HTMLElem
   return host;
 }
 
+/** 追加过程行之后视口要不要跟到底：用户本来就停在底部附近（120px 内）时跟随；
+ *  刚从主操作按钮发出动作（followTail）时无条件跟随——按钮可能停在页面中段
+ *  （失败块之后又聊过几句），新一次尝试的行落在更下面的对话末尾，不跟过去用户
+ *  就只看到按钮消失、什么都没发生。 */
+function shouldStickToTail(root: HTMLElement, scroll: HTMLElement | null): boolean {
+  if (!scroll) return false;
+  if (streamState(root).followTail) return true;
+  return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
+}
+
+const FOLLOW_USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown"] as const;
+
+/** 主操作按钮的动作被服务端受理后：视口跟着本次尝试走。先把对话末尾滚进视野
+ *  （按钮可能在页面中段），之后每条新行到达都吸底，直到用户自己动滚动条或本次
+ *  尝试落定（disarmFollowTail）。 */
+function armFollowTail(root: HTMLElement): void {
+  const state = streamState(root);
+  const scroll = conversationScroll(root);
+  if (!scroll) return;
+  state.followTail = true;
+  const release = (): void => {
+    state.followTail = false;
+    FOLLOW_USER_SCROLL_EVENTS.forEach(type => scroll.removeEventListener(type, release));
+  };
+  FOLLOW_USER_SCROLL_EVENTS.forEach(type => scroll.addEventListener(type, release, { passive: true }));
+  const reduce = document.documentElement.dataset.reduceMotion === "on"
+    || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+  scroll.scrollTo({ top: scroll.scrollHeight, behavior: reduce ? "auto" : "smooth" });
+}
+
+/** 本次尝试落定（失败 / 进审批门 / 完成）：最后一条行与重新出现的按钮已经在视野里，
+ *  之后的行（下一次尝试）不再自动带走用户的视口。 */
+function disarmFollowTail(root: HTMLElement): void {
+  streamState(root).followTail = false;
+}
+
 function streamAppend(root: HTMLElement, node: HTMLElement): void {
   const state = streamState(root);
   const host = resolveStreamHost(root, state);
   if (!host) return;
   const scroll = root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
-  const stick = scroll
-    ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120
-    : false;
+  const stick = shouldStickToTail(root, scroll);
   // 首连回放的历史行不重播入场动画：重进任务时执行轨迹应当「本来就在」，
   // 而不是一条条动画重演；只有实时新事件才浮现入场。
   if (!state.replaying) node.classList.add("stream-in");
@@ -643,6 +709,50 @@ function streamNarration(root: HTMLElement, text: string): void {
   paragraph.className = "stream-narration";
   paragraph.textContent = text;
   streamAppend(root, paragraph);
+}
+
+/** 从失败 / 暂停 / 审批门回到 RUNNING 的迁移：重试、恢复、确认——都说明首阶段早已落定过。 */
+const RESUMED_FROM_STATUSES = new Set(["FAILED", "PAUSED", "WAITING_APPROVAL", "COMPLETED"]);
+
+/** 哪些事件说明首阶段已经落定过（规划期结束，且不可逆）：任何步骤的成功 / 失败、
+ *  任何审批门、运行离开 QUEUED/RUNNING，以及从失败 / 暂停 / 审批回到 RUNNING。
+ *  实时与首连回放走同一判据，刷新重进时也能从历史里得出同样的结论。 */
+function markFirstStageSettled(type: string, payload: Record<string, unknown>): boolean {
+  if (type === "step.succeeded" || type === "step.failed" || type === "approval.requested") return true;
+  if (type !== "run.status_changed") return false;
+  const to = String(payload.to ?? "");
+  if (to !== "QUEUED" && to !== "RUNNING") return true;
+  return to === "RUNNING" && RESUMED_FROM_STATUSES.has(String(payload.from ?? ""));
+}
+
+/** 只对确定命中的瞬态失败给一句「怎么办」；其余类别的归类是保守兜底（没命中规则一律
+ *  CODE_DEFECT），拿它下结论会误导排查方向，原因文案本身已经说了该做什么。 */
+const FAILURE_CLASS_HINTS: Record<string, string> = {
+  TRANSIENT: "多为模型接口或网络的瞬态问题，直接重试通常能过。",
+};
+
+/** 阶段失败：叙述行 + 直接可见的原因段落（不折叠——这是此刻最要紧的一句话），
+ *  主操作按钮随即跟到它下面（followConversationTail），「原因 + 动作」在同一处。
+ *  原因来自事件 payload（run.status_changed 的 message / failure_class，服务端在
+ *  RUN_FAILED 时随迁移一并下发），所以刷新重进时按历史原样重建。 */
+function streamFailure(root: HTMLElement, reason: string, payload: Record<string, unknown>): void {
+  streamNarration(root, `${reason}。`);
+  const message = typeof payload.message === "string" ? payload.message.trim() : "";
+  if (!message) return;
+  const note = document.createElement("div");
+  note.className = "analysis-copy stream-note stream-failure";
+  const body = document.createElement("p");
+  body.className = "stream-failure-message";
+  body.textContent = message;
+  note.append(body);
+  const hint = FAILURE_CLASS_HINTS[String(payload.failure_class ?? "")];
+  if (hint) {
+    const tip = document.createElement("p");
+    tip.className = "stream-failure-hint";
+    tip.textContent = t(hint);
+    note.append(tip);
+  }
+  streamAppend(root, note);
 }
 
 interface StreamRowOptions {
@@ -711,9 +821,7 @@ function appendGrouped(root: HTMLElement, item: HTMLElement, group: StreamRowGro
     return;
   }
   const scroll = root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
-  const stick = scroll
-    ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120
-    : false;
+  const stick = shouldStickToTail(root, scroll);
   body.append(item);
   const badge = body.parentElement?.querySelector<HTMLElement>(".stream-group-count");
   if (badge) badge.textContent = `×${body.children.length}`;
@@ -948,6 +1056,9 @@ function ingestStreamEvent(
   const eventMs = parseIso(event.created_at ?? null);
   state.replaying = replay;
   state.replayAtMs = replay ? eventMs : null;
+  // 首阶段落定的判据在解析落点之前更新：失败叙述本身就该落在时间线末尾，而不是
+  // 等 80ms 后的快照刷新把 planPhase 翻过来（那之前到达的帧全按旧状态落回首气泡）。
+  if (markFirstStageSettled(event.type ?? "", payload)) state.firstStageSettled = true;
 
   switch (event.type) {
     case "run.node_changed": {
@@ -960,11 +1071,19 @@ function ingestStreamEvent(
     }
     case "run.status_changed": {
       const reason = String(payload.reason ?? "").trim();
-      if (reason && reason !== "任务开始") streamNarration(root, `${reason}。`);
-      // 运行到达终态：所有还在走秒的模型调用行一并落定，不留永远转圈的僵尸行
       const to = String(payload.to ?? "");
+      if (to === "FAILED") {
+        // 失败原因跟着失败落在同一处（2026-09-17）：此前尾部只有一句「「X」阶段失败。」，
+        // 真正的原因只经快照写进首气泡顶部的摘要，用户得翻回顶上才知道为什么。
+        streamFailure(root, reason || "任务失败", payload);
+      } else if (reason && reason !== "任务开始") {
+        streamNarration(root, `${reason}。`);
+      }
+      // 运行到达终态：所有还在走秒的模型调用行一并落定，不留永远转圈的僵尸行
       if (to === "FAILED" || to === "CANCELLED") settlePendingLlmRows(root, eventMs, true);
       if (to === "COMPLETED") settlePendingLlmRows(root, eventMs, false);
+      // 本次尝试落定：视口停在这里，后续尝试的行不再自动带走用户
+      if (to !== "RUNNING" && to !== "QUEUED") disarmFollowTail(root);
       return;
     }
     case "run.log": {
@@ -1117,9 +1236,18 @@ function ingestStreamEvent(
           ? (payload.headings as unknown[]).map(item => String(item ?? ""))
           : [];
         streamNarration(root, `论文骨架已定：共 ${Number(payload.total) || headings.length} 章。`);
+        // 论文阶段补画的图件（figure_render 第二步）随骨架事件带下来，章节里插到它们时要能出图
+        const rendered = Array.isArray(payload.figures_rendered) ? (payload.figures_rendered as unknown[]) : [];
+        const figures = rendered.flatMap(item => {
+          const entry = (item ?? {}) as Record<string, unknown>;
+          const name = String(entry.name ?? "").trim();
+          const artifactId = String(entry.artifact_id ?? "").trim();
+          return name && artifactId ? [{ name, artifact_id: artifactId }] : [];
+        });
         preparePaperOutline(root, {
           total: Number(payload.total) || headings.length,
           headings,
+          figures,
         });
         return;
       }
@@ -1339,7 +1467,7 @@ function renderApprovalOptions(
 }
 
 function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspaceView): void {
-  const planning = isPlanningPhase(view);
+  const planning = isPlanningPhase(root, view);
 
   // 规划阶段通知页面层开启「开场思考」回复（与聊天消息同构的真实模型调用）。
   // 每次快照刷新都会走到这里，用 dataset 标记保证每个运行只广播一次。
@@ -1418,9 +1546,12 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
 
   // 页面可能同时存在演示 CTA（真实运行时被 CSS 隐藏）与真实模式 CTA（data-live-only），
   // 统一写入同一后端动作，点击处理按就近的 [data-agent-cta] 生效。
-  // 规划阶段整体隐藏：此时没有可执行动作，「等待任务开始」占位不再显示。
+  // 只在真的有事要用户做时才出现：规划阶段没有可执行动作；kind 为 none（运行中
+  // 「Agent 正在执行」、排队「等待任务开始」、已取消「任务已结束」）也不再摆一颗禁用的
+  // 占位按钮（2026-09-17 用户要求：不要一直显示，该显示的时候才显示）。
   const action = actionForScreen(screen, view);
-  renderApprovalOptions(root, view, action, planning || Boolean(openingPending));
+  const ctaHidden = planning || Boolean(openingPending) || action.kind === "none";
+  renderApprovalOptions(root, view, action, ctaHidden);
   root.querySelectorAll<HTMLButtonElement>("[data-agent-cta]").forEach(cta => {
     cta.removeAttribute("data-go");
     cta.dataset.agentAction = action.kind;
@@ -1429,11 +1560,10 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
     // 与其让用户点空，不如禁用它、由上方选项列表引导先选一项。
     cta.disabled = action.kind === "none"
       || (action.kind === "approve" && action.option_id === null);
-    cta.hidden = planning || Boolean(openingPending);
+    cta.hidden = ctaHidden;
   });
-  // 主操作随对话尾部走：对话一长首气泡就在几屏之上，「前往实验与验证」这类按钮得往上
-  // 翻才够得着（2026-09-07 报障）。选项列表刚由 renderApprovalOptions 摆在按钮上方，
-  // 一起搬。
+  // 主操作跟着运行事件所在的块走（followConversationTail）：选项列表刚由
+  // renderApprovalOptions 摆在按钮上方，一起搬。
   followConversationTail(root);
 }
 
@@ -1986,6 +2116,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
           // 撤回已被服务端受理：紧随其后回落到 COMPLETED 的快照不再当作新完成提醒
           revisionWithdrawn = action.kind === "approve" && action.option_id === REJECT_OPTION_ID;
           await refresh();
+          if (disposed) return;
+          // 让运行再动起来的动作（重试 / 恢复 / 确认）：视口跟着新一次尝试走——
+          // 用户在按钮处点的，反馈就该出现在视线里，而不是让人去找（2026-09-17 报障）。
+          if (action.kind !== "pause") armFollowTail(root);
           // 阶段推进体验：方案确认（非退回重做）后直接进入“实验与验证”页跟随执行。
           // 这是用户显式确认动作的延续；ADR-0007 禁止的是“加载时自动跳页”，不适用于此。
           if (
@@ -2007,6 +2141,8 @@ export function mountModelingWorkspace(screen: ScreenId): void {
         if (!currentView) return;
         const currentAction = actionForScreen(currentScreen, currentView);
         cta.disabled = currentAction.kind === "none";
+        // 动作生效后运行重新转起来（kind 回到 none）：按钮随之收起，不留「Agent 正在执行」占位
+        cta.hidden = currentAction.kind === "none";
         cta.textContent = currentAction.label;
         if (!actionFailed) renderAgent(root, currentScreen, currentView);
       });
@@ -2076,8 +2212,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
   window.addEventListener("pagehide", cleanup, { once: true });
 
   root.dataset.integrationState = "loading";
-  // 同一壳层可能被复用给另一个运行：历史水合标记按本次挂载重新计
+  // 同一壳层可能被复用给另一个运行：历史水合标记按本次挂载重新计；活动流状态
+  // （已见序号、在途行、首阶段是否落定过）是上一个运行的，不能带进新运行。
   delete root.dataset.streamHydrated;
+  if (root.dataset.runId && root.dataset.runId !== runId) streamByRoot.delete(root);
   root.querySelectorAll<HTMLElement>(
     '[data-go], [data-agent-cta], [data-action="continue-paper"], [data-action="download-all"], '
     + '[data-action="files"], [data-action="more"]',

@@ -1,0 +1,197 @@
+/* The folder silhouettes are CSS paths, not screenshot assets. All rules are
+   scoped to the projects screen so the other thirteen routes keep their baseline. */
+body[data-screen="projects"] {
+  --project-surface: #fff;
+  --project-tab: #f5f5f6;
+  --project-folder: #e4e4e5;
+  --project-front: #f8f8f8;
+  --project-line: #e3e3e6;
+  --project-secondary: #7a7a80;
+  --sidebar: 264px;
+}
+
+body[data-screen="projects"] .main-pad { padding: 34px 24px 28px; }
+body[data-screen="projects"] .page-title { margin-left: 16px; font-size: 30px; line-height: 42px; }
+body[data-screen="projects"] .top-action { top: 36px; right: 34px; }
+
+/* Two nested clipped layers trace the soft step at the top of the folder.
+   The wide lower rim belongs to .project-card, so it scales with the viewport. */
+body[data-screen="projects"] .project-tabs {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  height: 80px;
+  margin: 10px 0 -17px;
+  padding: 26px 30px 12px;
+  gap: 8px;
+  width: min(480px, 100%);
+}
+body[data-screen="projects"] .project-tabs::before,
+body[data-screen="projects"] .project-tabs::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--project-line);
+  clip-path: path("M 0 80 L 0 18 Q 0 0 18 0 L 126 0 Q 137 0 143 9 Q 147 15 156 15 L 432 15 Q 444 15 449 26 L 466 58 Q 469 63 477 63 L 480 63 L 480 80 Z");
+  pointer-events: none;
+}
+body[data-screen="projects"] .project-tabs::after {
+  inset: 1px -1px 0 1px;
+  z-index: -1;
+  background: var(--project-tab);
+}
+body[data-screen="projects"] .project-tabs .tab-button {
+  flex: 0 0 94px;
+  height: 42px;
+  padding: 0 12px;
+  color: #606069;
+  font-size: 14px;
+  border-radius: 10px;
+}
+body[data-screen="projects"] .project-tabs .tab-button.active { background: var(--project-surface); color: var(--ink); }
+body[data-screen="projects"] .project-tabs .tab-button:hover:not(.active) { background: var(--project-folder); }
+body[data-screen="projects"] .project-card {
+  position: relative;
+  min-height: calc(100vh - 205px);
+  padding-top: 16px;
+  border: 1px solid var(--project-line);
+  border-radius: 0 14px 14px 14px;
+  background: linear-gradient(var(--project-tab) 0 15px, var(--project-surface) 15px);
+  box-shadow: none;
+  overflow: visible;
+}
+body[data-screen="projects"] .project-search-row {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 18px 18px;
+  border-bottom: 0;
+}
+body[data-screen="projects"] .project-search-row .search-box { width: min(460px, 100%); min-width: 0; flex: 0 1 460px; background: var(--project-surface); border-color: var(--project-line); }
+body[data-screen="projects"] .project-search-row input { min-width: 0; width: 100%; }
+body[data-screen="projects"] .project-view-tools { margin-left: auto; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+body[data-screen="projects"] .project-view-switch { display: flex; gap: 3px; padding: 4px; height: 40px; border-radius: 9px; background: var(--project-tab); }
+body[data-screen="projects"] .project-view-switch button { display: grid; place-items: center; width: 40px; border: 0; padding: 0; background: transparent; color: var(--ink); border-radius: 6px; }
+body[data-screen="projects"] .project-view-switch button[aria-pressed="true"] { background: var(--project-surface); }
+body[data-screen="projects"] .project-sort { position: relative; height: 40px; display: flex; align-items: center; }
+/* 排序下拉与其余页面的下拉选择框共用 styles.css 里的液态玻璃 token */
+body[data-screen="projects"] .project-sort-trigger { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-width: 136px; height: 40px; padding: 0 14px 0 16px; border: 1px solid var(--glass-stroke); border-radius: 9px; background: var(--glass-trigger-sheen), var(--glass-trigger-fill); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4); box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow); color: var(--ink); font-size: 13px; transition: border-color .15s ease, box-shadow .15s ease, transform .08s ease; }
+body[data-screen="projects"] .project-sort-trigger:hover { border-color: var(--glass-stroke-strong); background: var(--glass-trigger-sheen), var(--glass-trigger-fill-hover); box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover); }
+body[data-screen="projects"] .project-sort-trigger[aria-expanded="true"] { border-color: var(--glass-stroke-strong); background: var(--glass-trigger-sheen), var(--glass-trigger-fill-hover); box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover); }
+body[data-screen="projects"] .project-sort-trigger:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+body[data-screen="projects"] .project-sort-trigger > i { font-size: 15px; transition: transform .15s ease; }
+body[data-screen="projects"] .project-sort-trigger[aria-expanded="true"] > i { transform: rotate(180deg); }
+body[data-screen="projects"] .project-sort-menu { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; min-width: 184px; padding: 6px; border: 1px solid var(--glass-stroke); border-radius: 14px; background: var(--glass-sheen), var(--glass-fill); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); box-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -1px 0 var(--glass-highlight-soft), var(--glass-shadow); transform-origin: top right; animation: var(--glass-menu-enter); }
+body[data-screen="projects"] .project-sort-menu[hidden] { display: none; }
+body[data-screen="projects"] .project-sort-menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--project-secondary); font-size: 13px; text-align: left; }
+body[data-screen="projects"] .project-sort-menu button[aria-selected="true"] { color: var(--ink); background: var(--glass-item-active); }
+body[data-screen="projects"] .project-sort-menu button:hover,
+body[data-screen="projects"] .project-sort-menu button:focus-visible { color: var(--ink); background: var(--glass-item-hover); outline: 1px solid var(--glass-stroke); outline-offset: -1px; }
+body[data-screen="projects"] .project-sort-menu i { font-size: 17px; }
+body[data-screen="projects"] .project-sort-menu .ph-check { margin-left: auto; visibility: hidden; font-size: 15px; }
+body[data-screen="projects"] .project-sort-menu [aria-selected="true"] .ph-check { visibility: visible; }
+body[data-screen="projects"] .project-card-only { display: none; }
+
+/* Retain table cells and event targets in both views; only their layout changes. */
+body[data-screen="projects"] [data-project-view="grid"] .project-table { display: block; padding: 0 18px 20px; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+body[data-screen="projects"] [data-project-view="grid"] .project-table tbody { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 28px; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row) {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 28px;
+  grid-template-rows: 52px 28px 30px;
+  align-content: end;
+  height: 172px;
+  padding: 42px 20px 14px;
+  border-radius: 14px;
+  background: transparent;
+  transition: transform .16s ease;
+}
+body[data-screen="projects"] [data-project-view="grid"] .project-table tr[hidden] { display: none; }
+/* Plain sloping back tab, fully behind the rounded front (no curled lip). */
+body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 112px;
+  height: 62px;
+  z-index: -2;
+  background: var(--project-folder);
+  clip-path: path("M 0 62 L 0 12 Q 0 0 12 0 L 82 0 Q 91 0 96 9 L 106 25 L 112 34 L 112 62 Z");
+  pointer-events: none;
+}
+body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row)::after {
+  content: "";
+  position: absolute;
+  inset: 24px 0 0;
+  z-index: -1;
+  border: 1px solid var(--project-line);
+  border-radius: 14px;
+  background: var(--project-front);
+  transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row):hover::after { background: var(--project-surface); border-color: #c8c8cd; box-shadow: 0 5px 14px #00000006; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row):focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td { display: flex; align-items: center; gap: 6px; width: auto; height: auto; min-width: 0; padding: 0; border: 0; color: var(--project-secondary); text-align: left; font-size: 13px; white-space: nowrap; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table .project-name { display: block; grid-column: 1 / -1; grid-row: 1; }
+body[data-screen="projects"] [data-project-view="grid"] .project-name strong { overflow: hidden; text-overflow: ellipsis; font-size: 16px; line-height: 23px; font-weight: 650; margin: 0 86px 0 0; }
+body[data-screen="projects"] [data-project-view="grid"] .project-name > span { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 21px; color: var(--project-secondary); }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(2) { position: absolute; top: 44px; right: 18px; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(3) { grid-column: 1 / -1; grid-row: 2; gap: 5px; font-size: 12px; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(3) i { margin-right: 2px; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(n+4) { grid-row: 3; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(n+4) .project-cell-value { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+body[data-screen="projects"] [data-project-view="grid"] .project-table .project-stat-unavailable .project-cell-value { display: none; }
+body[data-screen="projects"] [data-project-view="grid"] .project-table .project-stat-unavailable { opacity: .65; }
+body[data-screen="projects"] [data-project-view="list"] .project-stat-unavailable .project-cell-value { font-size: 12px; font-weight: 400; color: var(--project-secondary); }
+body[data-screen="projects"] [data-project-view="grid"] .project-table td:last-child { width: auto; justify-content: end; }
+body[data-screen="projects"] [data-project-view="grid"] .project-card-only { display: inline; }
+body[data-screen="projects"] [data-project-view="grid"] i.project-card-only { font-size: 16px; color: #626268; }
+body[data-screen="projects"] [data-project-view="grid"] .row-menu-button { color: var(--ink); }
+body[data-screen="projects"] .stage-pill { font-size: 12px; height: 25px; padding: 0 9px; }
+body[data-screen="projects"] .stage-pill::before { background: currentColor; opacity: .6; }
+body[data-screen="projects"] .stage-pill[data-stage="已失败"] { background: #fbe8e7; color: #c74340; }
+body[data-screen="projects"] .stage-pill[data-stage="已完成"] { background: #e0f1e9; color: #288065; }
+body[data-screen="projects"] .stage-pill[data-stage="建模方案"] { background: #e0f1f8; color: #3581a3; }
+body[data-screen="projects"] [data-project-view="grid"] .projects-empty-row { display: block; grid-column: 1 / -1; }
+body[data-screen="projects"] [data-project-view="grid"] .projects-empty-row td { display: block; padding: 90px 16px; white-space: normal; }
+body[data-screen="projects"] .project-footer { padding: 0 2px; color: var(--project-secondary); }
+body[data-screen="projects"] .project-page-size { padding: 0 10px; margin-left: 6px; white-space: nowrap; font-size: 12px; }
+body[data-screen="projects"] [data-project-view="list"] { overflow-x: auto; }
+body[data-screen="projects"] [data-project-view="list"] .project-table { min-width: 760px; }
+html[lang="en"] body[data-screen="projects"] [data-project-view="grid"] .project-name strong { margin-right: 158px; }
+html[lang="en"] body[data-screen="projects"] .project-sort-trigger { min-width: 166px; }
+html[lang="en"] body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row) { grid-template-columns: max-content minmax(0, 1fr) max-content 24px; column-gap: 8px; }
+
+@media (max-width: 1399px) and (min-width: 761px) {
+  body[data-screen="projects"] [data-project-view="grid"] .project-table tbody { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  html[lang="en"] body[data-screen="projects"] [data-project-view="grid"] .project-table tbody { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  body[data-screen="projects"] .main-pad { padding: 62px 14px 24px; }
+  body[data-screen="projects"] .page-title { margin-left: 8px; font-size: 26px; }
+  body[data-screen="projects"] .top-action { top: 13px; right: 16px; }
+  body[data-screen="projects"] .project-tabs { padding-right: 10px; padding-left: 10px; gap: 0; }
+  body[data-screen="projects"] .project-tabs .tab-button { flex: 1 1 0; min-width: 0; padding: 0 7px; font-size: 13px; }
+  body[data-screen="projects"] .project-search-row { height: auto; flex-wrap: wrap; padding: 16px 14px; gap: 12px; }
+  body[data-screen="projects"] .project-search-row .search-box { flex: 1 1 100%; width: 100%; }
+  body[data-screen="projects"] .project-view-tools { width: 100%; justify-content: space-between; }
+  body[data-screen="projects"] [data-project-view="grid"] .project-table { padding: 0 14px 20px; }
+  body[data-screen="projects"] [data-project-view="grid"] .project-table tbody { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  body[data-screen="projects"] .project-footer { flex-wrap: wrap; gap: 12px; }
+  body[data-screen="projects"] .pagination { flex-wrap: wrap; gap: 6px; }
+  body[data-screen="projects"] .page-size-select { margin-left: 0; width: 104px; }
+  html[lang="en"] body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(n+4) { gap: 4px; font-size: 11px; }
+  html[lang="en"] body[data-screen="projects"] [data-project-view="grid"] .project-table td:nth-child(n+4) i.project-card-only { font-size: 14px; }
+}
+@media (max-width: 580px) {
+  body[data-screen="projects"] [data-project-view="grid"] .project-table tbody { grid-template-columns: minmax(0, 1fr); }
+  body[data-screen="projects"] [data-project-view="grid"] .project-table tr:not(.projects-empty-row) { padding-right: 16px; padding-left: 16px; }
+}

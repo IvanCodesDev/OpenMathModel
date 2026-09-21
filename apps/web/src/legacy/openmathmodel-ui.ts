@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { ScreenId } from "../types/screens";
+import { bindPaperFilterWheels } from "../integration/paper-filter-wheels";
 import type { KnowledgeLibrary } from "../types/knowledge-library";
 import { methodCategories, methodLibrary } from "../data/method-library";
 import {
@@ -36,6 +37,14 @@ import {
   restorePendingTaskReferences,
 } from "../integration/composer-references";
 import { loadConversationLog } from "../tasks/conversation-log";
+import { strToU8, zipSync } from "fflate";
+import {
+  dataUrl as imageDataUrl,
+  exportFileName,
+  latexFigure,
+  mhtmlDocument,
+  mhtmlImageLocation,
+} from "../integration/paper-export-images";
 import {
   endpointHost,
   presetMatchesHost,
@@ -82,6 +91,7 @@ import {
   syncPrivacyGatesOnce,
 } from "../preferences/privacy-preferences";
 import { mountModelingWorkspace } from "../integration/modeling-workspace-controller";
+import { syncPaperOutlineFromEditor } from "../integration/stage-content";
 import { demoMode } from "../integration/demo-mode";
 import { guardRunBoundRoute } from "../integration/auth-guard";
 import { mountSidebarSearch } from "../integration/sidebar-search";
@@ -522,8 +532,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     </section>`;
     const demoSteps = `${steps.map(([text, time]) => `<div class="focused-step"><span class="focused-step-dot done">${icon("check-circle")}</span><span>${text}</span><time>${time}</time>${icon("caret-down", "chev")}</div>`).join("")}
           <div class="focused-step current"><span class="focused-step-dot ${active === "complete" ? "done" : ""}">${active === "complete" ? icon("check-circle") : ""}</span><span>${stage.current}</span><span class="focused-loading">${active === "complete" ? "完成" : "·····"}</span>${icon("caret-up", "chev")}</div>`;
-    const demoTimeline = `<button type="button" class="activity-summary" data-action="toggle-activity" aria-expanded="true" aria-controls="focused-activity-list-${active}">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
-        <div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
+    const demoTimeline = `<div class="focused-activity-list" id="focused-activity-list-${active}" data-agent-steps>
           ${demoSteps}
         </div>`;
     return `<section class="chat-pane focused-agent-chat">
@@ -587,7 +596,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     // 首气泡整块默认 hidden——没有真实运行时不摆一个只剩「Agent」头像的空壳；
     // 控制器渲染真实运行（renderStatus）或需要报错（renderError）时再放出。
     const demoAssistantBlock = `
-              <button class="activity-summary" data-action="toggle-activity">${icon("eye-slash")} 收起执行步骤 <span class="steps-count" data-steps-count hidden></span>${icon("caret-up")}</button>
               <div class="activity-list" data-agent-steps>
                 ${steps.map(step => progressStep(true, step[0], step[1], step[2], true)).join("")}
               </div>
@@ -1247,17 +1255,18 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           </div>
           <button class="paper-filter-reset" type="button" data-paper-filter-reset>${icon("arrow-counter-clockwise")} 重置</button>
         </div>
-        <div class="paper-classification-panel" aria-label="论文分类筛选">
-          <div class="paper-classification-row"><span class="paper-classification-label">比赛</span><div class="paper-competition-tabs" role="group" aria-label="按比赛筛选">
+        <div class="paper-wheel-panel" aria-label="论文分类筛选">
+          <section class="paper-wheel" data-paper-wheel="competition"><div class="paper-wheel-header"><button type="button" class="paper-wheel-arrow" data-wheel-step="-1" aria-label="上一个比赛">${icon("caret-left")}</button><h2>${icon("trophy")}比赛</h2><button type="button" class="paper-wheel-arrow" data-wheel-step="1" aria-label="下一个比赛">${icon("caret-right")}</button></div><div class="paper-wheel-viewport" data-wheel-viewport role="group" aria-label="按比赛筛选"></div><div data-wheel-options hidden>
             <button class="active" type="button" data-paper-competition-filter="">全部比赛</button>${competitions.map(key=>`<button type="button" data-paper-competition-filter="${escapeHtml(key)}">${escapeHtml(paperCompetitionLabel(key))}</button>`).join("")}
-          </div></div>
-          <div class="paper-classification-row"><span class="paper-classification-label">奖项</span><div class="resource-tabs paper-resource-tabs" role="tablist" aria-label="按奖项分类">
-            ${paperAwardTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper"${i===0?"":` data-paper-scope="${scopeAttr(awardScopes, x)}"`}>${escapeHtml(x)}</button>`).join("")}
-          </div></div>
-          <div class="paper-classification-row"><span class="paper-classification-label">题组</span><div class="paper-group-tabs" role="group" aria-label="按题组筛选">
+          </div></section>
+          <section class="paper-wheel" data-paper-wheel="award"><div class="paper-wheel-header"><button type="button" class="paper-wheel-arrow" data-wheel-step="-1" aria-label="上一个奖项">${icon("caret-left")}</button><h2>${icon("medal")}奖项</h2><button type="button" class="paper-wheel-arrow" data-wheel-step="1" aria-label="下一个奖项">${icon("caret-right")}</button></div><div class="paper-wheel-viewport" data-wheel-viewport role="group" aria-label="按奖项筛选"></div><div data-wheel-options hidden>
+            ${paperAwardTabs().map((x,i)=>`<button class="${i===0?"active":""}" data-resource-tab="${escapeHtml(x)}" data-resource-kind="paper"${i===0?"":` data-paper-scope="${scopeAttr(awardScopes, x)}"`}>${escapeHtml(i===0?"全部奖项":x)}</button>`).join("")}
+          </div></section>
+          <section class="paper-wheel" data-paper-wheel="group"><div class="paper-wheel-header"><button type="button" class="paper-wheel-arrow" data-wheel-step="-1" aria-label="上一个题组">${icon("caret-left")}</button><h2>${icon("clipboard-text")}题组</h2><button type="button" class="paper-wheel-arrow" data-wheel-step="1" aria-label="下一个题组">${icon("caret-right")}</button></div><div class="paper-wheel-viewport" data-wheel-viewport role="group" aria-label="按题组筛选"></div><div data-wheel-options hidden>
             <button class="active" type="button" data-paper-group-filter="">全部题组</button>${groups.map(group=>`<button type="button" data-paper-group-filter="${escapeHtml(group)}" data-paper-scope="${scopeAttr(groupScopes, group)}">${escapeHtml(paperGroupLabel("", group))}</button>`).join("")}${groupScopes.has("—")?`<button type="button" data-paper-group-filter="—" data-paper-scope="${scopeAttr(groupScopes, "—")}">未标注题组</button>`:""}
-          </div><span class="paper-result-count" data-paper-result-copy>${entries.length} 篇</span></div>
+          </div></section>
         </div>
+        <div class="paper-selected-bar"><span>已选条件：</span><div class="paper-selected-filters" data-paper-selected-filters></div><span class="paper-result-count" data-paper-result-copy role="status" aria-live="polite">共 <strong>${entries.length}</strong> 篇论文</span></div>
         <div class="resource-table-wrap paper-resource-wrap">
           <table class="resource-table paper-resource-table">
             <thead><tr><th>研究主题与论文编号</th><th>比赛与题组</th><th>奖项</th><th>正文</th><th>收藏</th></tr></thead>
@@ -3050,10 +3059,9 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
   function renderCostChart(Chart) {
     const costCanvas = $("#costChart");
     if (!costCanvas) return;
-    const dark = document.documentElement.dataset.theme === "dark";
-    const chartInk = dark ? "#ecece8" : "#171717";
-    Chart.defaults.color = dark ? "#b8b7b1" : "#5f5f5f";
-    Chart.defaults.borderColor = dark ? "#3b3b38" : "rgba(0,0,0,.1)";
+    const chartInk = "#171717";
+    Chart.defaults.color = "#5f5f5f";
+    Chart.defaults.borderColor = "rgba(0,0,0,.1)";
     Chart.defaults.font.family = 'Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif';
     Chart.defaults.animation = false;
     new Chart(costCanvas, {
@@ -3062,7 +3070,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         labels: ["基线结果", "当前结果"],
         datasets: [{
           data: [2033414, 1842596],
-          backgroundColor: [dark ? "#6d6d69" : "#c7c7c7", dark ? "#ecece8" : "#171717"],
+          backgroundColor: ["#c7c7c7", chartInk],
           borderRadius: 1,
           barThickness: 132,
           maxBarThickness: 132
@@ -3348,7 +3356,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     // 难度路由/运行控制回执）→ 思考块 → 正文。过程行由 streamAssistantReply
     // 按实际发生顺序写入；生成本身不写行，普通一问一答的过程区是空的（:empty 自动隐藏）。
     // 「收起执行步骤」折叠头已按用户要求撤下——修剪后过程行只剩少数几条，直接显示
-    // 比多一层折叠更干净（首条 Agent 消息的六阶段长时间线仍保留折叠头，那里有真实收纳需求）。
+    // 比多一层折叠更干净（2026-09-17 起控制器写入的运行步骤区与演示时间线也不再带折叠头）。
     scroll.insertAdjacentHTML("beforeend", `
       <div class="user-message"><div class="user-bubble">${escapeHtml(text)}${chips}</div></div>
       <div class="assistant-block follow-up-reply" id="${replyId}">
@@ -4246,17 +4254,95 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     </ul><p class="editor-check-note">以上为本机结构检查；语义与表达质量请在左侧对话中让 Agent 审阅。</p>`);
   }
 
-  function exportPaper(choice) {
+  /**
+   * 导出前抓取正文里每张图的字节：编辑器里的插图是同源产物下载链接（Cookie 鉴权），原样
+   * 写进文件到了用户电脑上就是死链。返回正文副本（流式光标等编辑态节点已摘掉）与图件清单，
+   * 副本里每个 <img> 记下自己对应清单里的序号；抓不到的图保留原链接、不阻断导出。
+   */
+  async function collectPaperImages(page) {
+    // 副本放在 <template> 的惰性文档里：后面改写 img src 成部件地址 / data URL 时浏览器不会去真加载
+    const template = document.createElement("template");
+    template.innerHTML = `<div>${page.innerHTML}</div>`;
+    const clone = template.content.firstElementChild;
+    clone.querySelectorAll(".editor-stream-caret").forEach(node => node.remove());
+    const sources = [...page.querySelectorAll("img")];
+    const targets = [...clone.querySelectorAll("img")];
+    const images = [];
+    const used = new Set();
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index];
+      const source = sources[index];
+      const src = target.getAttribute("src") || "";
+      if (!src) continue;
+      try {
+        const response = await fetch(src, { credentials: "same-origin" });
+        if (!response.ok) throw new Error(String(response.status));
+        const blob = await response.blob();
+        const mediaType = blob.type || "image/png";
+        const name = exportFileName(target.dataset.figureName || target.alt || "", images.length + 1, mediaType, used);
+        images.push({
+          name,
+          mediaType,
+          bytes: new Uint8Array(await blob.arrayBuffer()),
+          // 页面上的实际渲染尺寸：Word 需要显式 width/height 才不会把大图撑出页面
+          width: source?.naturalWidth || 0,
+          height: source?.naturalHeight || 0,
+        });
+        target.dataset.exportIndex = String(images.length - 1);
+      } catch {
+        // 抓不到（网络 / 权限）就保留原链接
+      }
+    }
+    return { clone, images };
+  }
+
+  /** 打印窗口里的图全部解码完再调 print，否则预览里图还是空白。 */
+  function waitForImages(doc, timeoutMs = 4000) {
+    const pending = [...doc.images].filter(img => !img.complete).map(img => new Promise(resolve => {
+      img.addEventListener("load", resolve, { once: true });
+      img.addEventListener("error", resolve, { once: true });
+    }));
+    return Promise.race([Promise.all(pending), new Promise(resolve => setTimeout(resolve, timeoutMs))]);
+  }
+
+  const paperExportInFlight = new Set();
+
+  async function exportPaper(choice) {
     const page = paperPage();
     if (!page) { toast("当前页面没有可导出的论文正文"); return; }
+    if (paperExportInFlight.has(choice)) return;
+    paperExportInFlight.add(choice);
+    try {
+      await exportPaperAs(page, choice);
+    } catch (error) {
+      console.error("论文导出失败", error);
+      toast("导出失败，请稍后重试");
+    } finally {
+      paperExportInFlight.delete(choice);
+    }
+  }
+
+  async function exportPaperAs(page, choice) {
     const title = $("h1", page)?.textContent.trim() || "论文草稿";
+    const { clone, images } = await collectPaperImages(page);
     // 开源字体 + KaTeX 的 CDN 样式一并带上：HTML/打印导出里选用的思源宋体与
     // 已排版的公式照常渲染（Word 忽略外链样式，正文仍完整）。
     const fontLinks = [
       ...PAPER_WEBFONT_LINKS,
       "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css",
     ].map(href => `<link rel="stylesheet" href="${href}">`).join("");
-    const documentHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${fontLinks}<style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,"Noto Serif SC",serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3,h4{font-family:"Heiti SC",SimHei,"Microsoft YaHei","Noto Sans SC",sans-serif;line-height:1.5}h2{margin:28px 0 14px}h3{margin:22px 0 12px}p{text-indent:2em;text-align:justify;margin:0 0 16px}.paper-abstract-heading{text-align:center;letter-spacing:.5em;text-indent:.5em}.paper-keywords{text-indent:0}ul,ol{margin:0 0 16px;padding-left:2em}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px;text-indent:0}img{max-width:100%}.editor-formula,.md-math-block{text-align:center;margin:18px 0;overflow-x:auto}pre{padding:10px 12px;border:1px solid #ddd;border-radius:6px;background:#fafafa;overflow-x:auto;font-size:13px}.md-inline-code{padding:1px 5px;border-radius:4px;background:#f0f0ee;font-size:.85em}.source-chip{border:1px solid #ddd;border-radius:6px;padding:4px 10px;background:#fff;font-size:12px}</style></head><body>${page.innerHTML}</body></html>`;
+    const styles = 'body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,"Noto Serif SC",serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3,h4{font-family:"Heiti SC",SimHei,"Microsoft YaHei","Noto Sans SC",sans-serif;line-height:1.5}h2{margin:28px 0 14px}h3{margin:22px 0 12px}p{text-indent:2em;text-align:justify;margin:0 0 16px}.paper-abstract-heading{text-align:center;letter-spacing:.5em;text-indent:.5em}.paper-keywords{text-indent:0}ul,ol{margin:0 0 16px;padding-left:2em}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px;text-indent:0}img{max-width:100%}figure{margin:18px 0 22px;text-align:center}figure img{display:block;margin:0 auto 8px}figcaption{font-size:13px;color:#555;text-align:center}.editor-formula,.md-math-block{text-align:center;margin:18px 0;overflow-x:auto}pre{padding:10px 12px;border:1px solid #ddd;border-radius:6px;background:#fafafa;overflow-x:auto;font-size:13px}.md-inline-code{padding:1px 5px;border-radius:4px;background:#f0f0ee;font-size:.85em}.source-chip{border:1px solid #ddd;border-radius:6px;padding:4px 10px;background:#fff;font-size:12px}';
+    const documentHtml = body => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${fontLinks}<style>${styles}</style></head><body>${body}</body></html>`;
+    // 图件按格式各自落地（见 integration/paper-export-images）：Word 只认 MHTML 部件，
+    // HTML / 打印内联 data: URL，LaTeX 随 zip 附 figures/ 目录
+    const rewriteImages = toSrc => {
+      clone.querySelectorAll("img[data-export-index]").forEach(img => {
+        const image = images[Number(img.dataset.exportIndex)];
+        if (!image) return;
+        img.setAttribute("src", toSrc(image));
+        delete img.dataset.exportIndex;
+      });
+    };
     const download = (blob, filename) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
@@ -4265,20 +4351,43 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       URL.revokeObjectURL(link.href);
     };
     if (choice === "导出 Word (.doc)") {
-      download(new Blob(["\ufeff", documentHtml], { type: "application/msword" }), `${title}.doc`);
-      toast("已导出 Word 文档");
+      clone.querySelectorAll("img[data-export-index]").forEach(img => {
+        const image = images[Number(img.dataset.exportIndex)];
+        if (!image || !image.width || !image.height) return;
+        // Word 按 width/height 属性排版，缺了会按原始像素撑破页面（A4 正文宽约 600px）
+        const width = Math.min(image.width, 600);
+        img.setAttribute("width", String(width));
+        img.setAttribute("height", String(Math.round(image.height * width / image.width)));
+      });
+      rewriteImages(mhtmlImageLocation);
+      const mhtml = mhtmlDocument(documentHtml(clone.innerHTML), images);
+      download(new Blob([mhtml], { type: "application/msword" }), `${title}.doc`);
+      toast(images.length ? `已导出 Word 文档（含 ${images.length} 张图）` : "已导出 Word 文档");
     } else if (choice === "导出 LaTeX (.tex)") {
-      download(new Blob([paperToLatex(page, title)], { type: "application/x-tex;charset=utf-8" }), `${title}.tex`);
-      toast("已导出 LaTeX 源文件，可用 xelatex 直接编译");
+      const tex = paperToLatex(clone, title, images);
+      if (!images.length) {
+        download(new Blob([tex], { type: "application/x-tex;charset=utf-8" }), `${title}.tex`);
+        toast("已导出 LaTeX 源文件，可用 xelatex 直接编译");
+      } else {
+        const files = { [`${title}.tex`]: strToU8(tex) };
+        images.forEach(image => { files[`figures/${image.name}`] = image.bytes; });
+        // 图片本身已压缩，存储级即可；.tex 用默认压缩
+        const zipped = zipSync(files, { level: 6 });
+        download(new Blob([zipped], { type: "application/zip" }), `${title}.zip`);
+        toast(`已导出 LaTeX 源文件与 ${images.length} 张图（zip），解压后用 xelatex 编译`);
+      }
     } else if (choice === "导出 HTML") {
-      download(new Blob([documentHtml], { type: "text/html;charset=utf-8" }), `${title}.html`);
-      toast("已导出 HTML 文件");
+      rewriteImages(imageDataUrl);
+      download(new Blob([documentHtml(clone.innerHTML)], { type: "text/html;charset=utf-8" }), `${title}.html`);
+      toast(images.length ? `已导出 HTML 文件（含 ${images.length} 张图）` : "已导出 HTML 文件");
     } else {
       const preview = window.open("", "_blank");
       if (!preview) { toast("浏览器拦截了打印窗口，请允许弹出窗口后重试"); return; }
-      preview.document.write(documentHtml);
+      rewriteImages(imageDataUrl);
+      preview.document.write(documentHtml(clone.innerHTML));
       preview.document.close();
       preview.focus();
+      await waitForImages(preview.document);
       setTimeout(() => preview.print(), 260);
     }
   }
@@ -4313,10 +4422,23 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     }
   }
 
-  /** 整篇正文 → 可编译的 .tex：标题、章节、公式、表格、来源注记逐块序列化。 */
-  function paperToLatex(page, title) {
+  /**
+   * 整篇正文 → 可编译的 .tex：标题、章节、公式、表格、插图、来源注记逐块序列化。
+   * `images` 是 collectPaperImages 抓到的图件（随 zip 放在 figures/），插图按它写
+   * \includegraphics；没抓到字节的图只留注释占位。
+   */
+  function paperToLatex(page, title, images = []) {
     const body = [];
+    const figureBlock = (img, caption) => {
+      const image = images[Number(img?.dataset.exportIndex)];
+      if (image) return latexFigure(image.name, caption);
+      return `% 插图：${latexEscape(caption || img?.getAttribute("alt") || "未命名")}（图片文件未能随导出带走，另存到 figures/ 后替换路径并取消注释）\n% \\includegraphics[width=0.8\\textwidth]{figures/figure}`;
+    };
     [...page.children].forEach(node => {
+      if (node.matches("figure")) {
+        body.push(figureBlock(node.querySelector("img"), node.querySelector("figcaption")?.textContent.trim() || ""));
+        return;
+      }
       if (node.matches("h1")) return;
       if (node.matches("h2")) { body.push(`\\section*{${latexInline(node)}}`); return; }
       if (node.matches("h3")) { body.push(`\\subsection*{${latexInline(node)}}`); return; }
@@ -4344,7 +4466,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         return;
       }
       if (node.matches("img")) {
-        body.push(`% 插图：${latexEscape(node.getAttribute("alt") || "未命名")}（图片另存到 .tex 同目录后替换路径并取消注释）\n% \\includegraphics[width=0.8\\textwidth]{figure}`);
+        body.push(figureBlock(node, node.getAttribute("alt") || ""));
         return;
       }
       const text = latexInline(node).trim();
@@ -4356,6 +4478,8 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       "\\documentclass[12pt]{article}",
       "\\usepackage[UTF8]{ctex}",
       "\\usepackage{amsmath, amssymb, graphicx, booktabs}",
+      // 图题正文已带「图 N」编号，用 \\caption* 免得再编一遍
+      "\\usepackage{caption}",
       "\\usepackage[margin=2.5cm]{geometry}",
       "% 赛事论文排版习惯：正文 1.5 倍行距；链接可点击但不带彩色边框",
       "\\usepackage{setspace}",
@@ -4696,24 +4820,6 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           : "<p>本次任务还没有附件。</p>");
       }
       if (action === "more" || action === "row-menu") popupMenu(target, ["重命名", "复制", "归档"]);
-      if (action === "toggle-activity") {
-        const activityHost = target.closest(".focused-agent-chat, .assistant-block");
-        // 折叠对象优先取折叠头紧随其后的那个列表：对话回复块里同时有回复自身的过程区
-        // （.reply-trace）与控制器续写的运行步骤区（.run-trace），按块内首个 .agent-stream
-        // 找会折错。对话尾部的执行轨迹块没有步骤时间线，折叠对象是块内的活动流。
-        const next = target.nextElementSibling;
-        const adjacent = next?.matches(".focused-activity-list, .activity-list, .agent-stream") ? next : null;
-        const list = adjacent || activityHost?.querySelector(".focused-activity-list, .activity-list, .agent-stream") || $(".focused-activity-list") || $(".activity-list");
-        list?.classList.toggle("collapsed");
-        const collapsed = list?.classList.contains("collapsed") ?? false;
-        target.setAttribute("aria-expanded", String(!collapsed));
-        // 重建文案时保留步骤计数徽标（n/6 由控制器持续更新），不再写死数字
-        const badge = target.querySelector("[data-steps-count]");
-        const badgeHtml = badge ? badge.outerHTML : '<span class="steps-count" data-steps-count hidden></span>';
-        target.innerHTML = collapsed
-          ? `${icon("eye")} 查看执行步骤 ${badgeHtml}${icon("caret-down")}`
-          : `${icon("eye-slash")} 收起执行步骤 ${badgeHtml}${icon("caret-up")}`;
-      }
       if (action === "new-project") modal("新建项目", '<label>项目名称</label><input placeholder="输入项目名称"><label>项目说明</label><textarea placeholder="简单描述建模目标"></textarea>', () => toast("项目已创建"));
       if (action === "upload-data") $(".file-input")?.click() || toast("可直接拖入 CSV、XLSX 文件");
       if (action === "clean-data") { target.textContent = "清洗中…"; setTimeout(() => { target.textContent = "清洗完成"; toast("已处理缺失值与异常记录"); }, 850); }
@@ -4925,6 +5031,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
       const paperCompetitionFilters = kind === "paper" ? $$('[data-paper-competition-filter]') : [];
       const paperGroupFilters = kind === "paper" ? $$('[data-paper-group-filter]') : [];
       const paperReset = kind === "paper" ? $("[data-paper-filter-reset]") : null;
+      const syncPaperWheels = kind === "paper" ? bindPaperFilterWheels($(".papers-main")) : () => {};
       const problemFilterSelects = kind === "problem" ? $$("[data-problem-filter]") : [];
       let currentPage = 1;
       // 页码窗口以当前页为中心，最多 5 个；两端各留首页/末页和省略号，
@@ -4990,7 +5097,20 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         const copy = $("[data-resource-page-copy]");
         if (copy) copy.textContent = `共 ${matches.length} ${kind === "problem" ? "题" : "篇"} · 第 ${currentPage}/${pageCount} 页`;
         const resultCopy = kind === "paper" ? $("[data-paper-result-copy]") : null;
-        if (resultCopy) resultCopy.textContent = `${matches.length} 篇`;
+        if (resultCopy) resultCopy.innerHTML = `共 <strong>${matches.length}</strong> 篇论文`;
+        if (kind === "paper") {
+          const chips = [
+            ["competition", selectedCompetition ? paperCompetitionLabel(selectedCompetition) : ""],
+            ["award", selected !== "全部" ? selected : ""],
+            ["group", selectedGroup ? paperGroupLabel(selectedCompetition, selectedGroup) : ""],
+            ["year", selectedYear ? `${selectedYear} 年` : ""],
+            ["search", query ? $(searchSelector).value.trim() : ""],
+          ].filter(([, value]) => value);
+          $("[data-paper-selected-filters]").innerHTML = chips.length
+            ? chips.map(([key, value]) => `<button type="button" class="paper-filter-chip" data-paper-clear="${key}" aria-label="清除筛选：${escapeHtml(value)}"><span>${escapeHtml(value)}</span>${icon("x")}</button>`).join("")
+            : '<span class="paper-filter-empty">未设置筛选条件</span>';
+          syncPaperWheels();
+        }
         const emptyRow = kind === "paper" ? $("[data-paper-empty]") : $("[data-problem-empty]");
         if (emptyRow) emptyRow.hidden = matches.length > 0;
         renderPagination(pageCount);
@@ -5058,6 +5178,26 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         syncPaperScopes();
         currentPage = 1;
         applyResourceFilters();
+      });
+      if (kind === "paper") $("[data-paper-selected-filters]")?.addEventListener("click", event => {
+        const button = event.target.closest("[data-paper-clear]");
+        if (!button) return;
+        const field = button.dataset.paperClear;
+        if (field === "competition") paperCompetitionFilters[0]?.click();
+        else if (field === "award") tabs[0]?.click();
+        else if (field === "group") paperGroupFilters[0]?.click();
+        else if (field === "year") {
+          selectPaperYear(paperYearOptions[0]);
+          currentPage = 1;
+          applyResourceFilters();
+        }
+        else if (field === "search") {
+          $(searchSelector).value = "";
+          currentPage = 1;
+          applyResourceFilters();
+        }
+        // The removed chip held focus; return it to the first surviving condition.
+        ($("[data-paper-clear]") || $(searchSelector))?.focus({ preventScroll: true });
       });
       const openResourceDetail = row => {
         const route = kind === "problem" ? routes.problemDetail : routes.paperDetail;
@@ -5279,7 +5419,12 @@ async function initPaperPdfReader(): Promise<void> {
       pageCopy.textContent = `${pdf.numPages} 页${sizeSuffix}`;
     }
 
-    const displayWidth = Math.min(980, Math.max(320, reader.clientWidth - 44));
+    // 页面撑满阅读框：按容器内容宽度渲染，不设上限，两侧不留灰边。
+    const readerStyle = getComputedStyle(reader);
+    const displayWidth = Math.max(
+      320,
+      reader.clientWidth - parseFloat(readerStyle.paddingLeft) - parseFloat(readerStyle.paddingRight),
+    );
     const firstPage = await pdf.getPage(1);
     const naturalViewport = firstPage.getViewport({ scale: 1 });
     const estimatedHeight = Math.round(displayWidth * naturalViewport.height / naturalViewport.width);
@@ -5296,9 +5441,24 @@ async function initPaperPdfReader(): Promise<void> {
     });
     reader.replaceChildren(...pageHosts);
     reader.setAttribute("aria-busy", "false");
+    // 整篇要持续几十秒逐页把占位换成位图；保持 polite 会让读屏器把每一页的替换都念一遍。
+    // 加载态此前已经播报过，这里关掉。
+    reader.setAttribute("aria-live", "off");
 
+    // 全篇常驻渲染时不能保留 canvas：一页位图缓存约 5–10MB，百余页论文会吃掉上 GB 内存。
+    // canvas 只作绘制中转，绘完立即编码成压缩位图交给 <img>，浏览器可按需丢弃/重解码
+    // 离屏图片，整篇常驻只占几十 MB。WebP 编码不可用（Safari）时退到 JPEG。
+    const bitmapType = await new Promise<string>(resolve => {
+      const probe = document.createElement("canvas");
+      probe.width = 1;
+      probe.height = 1;
+      probe.toBlob(blob => resolve(blob?.type === "image/webp" ? "image/webp" : "image/jpeg"), "image/webp");
+    });
+
+    const pending = new Set(pageHosts.map((_, index) => index + 1));
     const renderPage = async (pageNumber: number) => {
       const host = pageHosts[pageNumber - 1];
+      pending.delete(pageNumber);
       if (!host || host.dataset.state !== "pending") return;
       host.dataset.state = "loading";
       try {
@@ -5309,8 +5469,6 @@ async function initPaperPdfReader(): Promise<void> {
         const canvas = document.createElement("canvas");
         canvas.width = Math.floor(viewport.width * outputScale);
         canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
         const canvasContext = canvas.getContext("2d", { alpha: false });
         if (!canvasContext) throw new Error("Canvas 2D context unavailable");
         await page.render({
@@ -5318,8 +5476,27 @@ async function initPaperPdfReader(): Promise<void> {
           viewport,
           transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
         }).promise;
+        // 这一页不会再重绘，释放 pdf.js 为它缓存的操作列表等中间数据。
+        page.cleanup();
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, bitmapType, 0.92));
+        let surface: HTMLElement = canvas;
+        if (blob) {
+          const image = document.createElement("img");
+          image.src = URL.createObjectURL(blob);
+          image.width = Math.floor(viewport.width);
+          image.height = Math.floor(viewport.height);
+          image.alt = "";
+          image.decoding = "async";
+          image.draggable = false;
+          surface = image;
+          canvas.width = 0;
+          canvas.height = 0;
+        } else {
+          canvas.style.width = `${Math.floor(viewport.width)}px`;
+          canvas.style.height = `${Math.floor(viewport.height)}px`;
+        }
         host.style.minHeight = "0";
-        host.replaceChildren(canvas);
+        host.replaceChildren(surface);
         host.dataset.state = "rendered";
         host.setAttribute("aria-busy", "false");
       } catch (error) {
@@ -5330,16 +5507,55 @@ async function initPaperPdfReader(): Promise<void> {
       }
     };
 
-    const observer = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if (!entry.isIntersecting) return;
-        const pageNumber = Number((entry.target as HTMLElement).dataset.paperPage);
-        observer.unobserve(entry.target);
-        void renderPage(pageNumber);
-      });
-    }, { rootMargin: "1200px 0px" });
-    pageHosts.forEach(host => observer.observe(host));
-    await renderPage(1);
+    // 阅读区在 .resource-detail-page（overflow:auto）里滚动，而不是 window。IntersectionObserver
+    // 以视口为 root 时，rootMargin 对中间的滚动容器不起作用，预渲染余量形同虚设，用户滚到
+    // 哪里都先看到一片「正在渲染」。这里改为按与可视区的距离排队：正在看的页最先渲，随后
+    // 由近及远把整篇补齐；滚动会唤醒队列就近插队，补齐远页只占用主线程空闲时间。
+    const scroller = (() => {
+      for (let node = reader.parentElement; node; node = node.parentElement) {
+        const { overflowY } = getComputedStyle(node);
+        if (overflowY === "auto" || overflowY === "scroll") return node;
+      }
+      return null;
+    })();
+    const nextPending = () => {
+      const bounds = scroller ? scroller.getBoundingClientRect() : { top: 0, height: window.innerHeight };
+      const center = bounds.top + bounds.height / 2;
+      let pageNumber = 0;
+      let distance = Infinity;
+      for (const candidate of pending) {
+        const rect = pageHosts[candidate - 1].getBoundingClientRect();
+        const gap = rect.bottom < center ? center - rect.bottom : Math.max(0, rect.top - center);
+        if (gap < distance) {
+          distance = gap;
+          pageNumber = candidate;
+        }
+      }
+      // 两屏以内视为即将看到，不等空闲直接渲。
+      return { pageNumber, urgent: distance < bounds.height * 2 };
+    };
+    let wake: (() => void) | null = null;
+    const restUntilIdle = () => new Promise<void>(resolve => {
+      const finish = () => {
+        if (wake === finish) wake = null;
+        resolve();
+      };
+      wake = finish;
+      if (typeof requestIdleCallback === "function") requestIdleCallback(finish, { timeout: 600 });
+      else setTimeout(finish, 150);
+    });
+    (scroller ?? window).addEventListener("scroll", () => wake?.(), { passive: true });
+    const yieldToBrowser = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+    while (pending.size && reader.isConnected) {
+      const candidate = nextPending();
+      if (!candidate.urgent) {
+        await restUntilIdle();
+        if (!reader.isConnected) break;
+      }
+      await renderPage(candidate.urgent ? candidate.pageNumber : nextPending().pageNumber);
+      await yieldToBrowser();
+    }
   } catch (error) {
     reader.setAttribute("aria-busy", "false");
     reader.innerHTML = `<div class="paper-pdf-error">${icon("warning-circle")}<strong>论文正文加载失败</strong><span>请使用下方完整 PDF 入口查看原文。</span></div>`;
@@ -5403,6 +5619,10 @@ export function activateScreen(screen: ScreenId): void {
   resetComposerReferences();
   // 放在工作台挂载之后：恢复对话草稿要等 composer 渲染完成。
   mountTaskAutosave(screen);
+  // 两条本机草稿恢复路径（bindPaperEditor 的全局键、task-autosave 的按项目键）都已跑完：
+  // 论文大纲按编辑器里实际的章标题重建，不让恢复出来的正文配一个「将在论文生成后显示」
+  // 的空目录。演示夹具的大纲是固定样张，不动。
+  if (!demoMode()) syncPaperOutlineFromEditor();
   // 模型选择器换成真实接口池（Auto + 已保存接口），未配置时保持演示选项。
   void hydrateModelPickers();
 }

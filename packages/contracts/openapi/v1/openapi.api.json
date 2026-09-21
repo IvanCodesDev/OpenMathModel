@@ -4218,6 +4218,19 @@
             "title": "Artifact Count",
             "type": "integer"
           },
+          "experiment_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "现行实验结果份数：项目全部运行中 EXPERIMENTING 节点的现行阶段输出（stage_outputs.status=current）条数。重做/重试只保留最新版，模拟链路不产出实质内容故不计。可选字段：旧生产者不返回时消费方按「暂无统计」处理。",
+            "title": "Experiment Count"
+          },
           "latest_run": {
             "anyOf": [
               {
@@ -4228,6 +4241,19 @@
               }
             ],
             "description": "该项目最新一次运行的轻量投影（按创建时间取最近）；从未发起运行时为 null。"
+          },
+          "paper_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "现行论文草稿份数：项目全部运行中 PAPER_WRITING 节点的现行阶段输出条数，口径同 experiment_count。可选字段。",
+            "title": "Paper Count"
           }
         },
         "required": [
@@ -7991,7 +8017,7 @@
             }
           },
           {
-            "description": "stats = 每项附带最新运行投影与产物计数（服务端一次聚合，客户端不再 N+1）",
+            "description": "stats = 每项附带最新运行投影、产物计数与现行实验结果 / 论文草稿份数（服务端一次聚合，客户端不再 N+1）",
             "in": "query",
             "name": "include",
             "required": false,
@@ -8005,7 +8031,7 @@
                   "type": "null"
                 }
               ],
-              "description": "stats = 每项附带最新运行投影与产物计数（服务端一次聚合，客户端不再 N+1）",
+              "description": "stats = 每项附带最新运行投影、产物计数与现行实验结果 / 论文草稿份数（服务端一次聚合，客户端不再 N+1）",
               "title": "Include"
             }
           },

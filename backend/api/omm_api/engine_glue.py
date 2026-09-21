@@ -35,14 +35,12 @@ from omm_agent_core import (
 )
 from omm_agent_core import (
     GRAPH_MODE_ENV,
-    INTERRUPTED_STEP_ERROR,
     ArtifactRef,
     EventType,
     NodeContext,
     NodeResult,
     NodeServices,
     SchedulingDivergence,
-    StepStatus,
     TaskRunEngine,
     TaskRunSnapshot,
     TaskState,
@@ -115,6 +113,7 @@ from .orm import (
     StepRunRow,
     TaskRunRow,
 )
+from .reload_guard import RECOMMENDED_COMMAND, RECOMMENDED_FLAGS, current_reload_watch_hazard
 from .serialize import iso_z, utcnow
 from .stage_outputs import REQUIRED_OUTPUT_KEYS, STAGE_OUTPUT_SCHEMA_IDS
 from .usage import budget_exhausted, is_free_endpoint, record_usage
@@ -576,11 +575,12 @@ def _env_limit(name: str) -> int | float:
 
     2026-09-08 IvanCodesDev 拍板去掉默认额度。原先 §4.7 的四个数字（150 万
     tokens / 300 次调用 / 40 次沙箱 / 每节点 30 万 tokens）是失控保护，但它保护
-    的那类失控——进程被反复重启导致阶段无上限重跑——现在由
-    ``MAX_CONSECUTIVE_INTERRUPTS`` 在源头掐断（连续 3 次「executor lost」即停），
-    而额度一旦烧光是**整个 run 不可逆地卡死**：账本按 run 累计，连人工「重试」
-    都会在预检处被拦（2026-09-07 真实案例：实验阶段撞 E320 后彻底无法继续）。
-    保护弱、副作用重，所以默认关掉，需要时再按变量显式开。
+    的那类失控——进程被反复重启导致阶段无上限重跑——根子是热重载监视到了沙盒
+    目录（启动参数问题），2026-09-19 起由 ``reload_guard`` 在启动时与每次修复落定
+    时诊断进服务端日志，而不再拿次数上限或额度当刹车；额度一旦烧光是**整个 run
+    不可逆地卡死**：账本按 run 累计，连人工「重试」都会在预检处被拦（2026-09-07
+    真实案例：实验阶段撞 E320 后彻底无法继续）。保护弱、副作用重，所以默认关掉，
+    需要时再按变量显式开。
 
     ``0`` / 负数 / 非数字 / 未设置一律视为无上限；这里的 ``0`` 不同于治理器里的
     ``0``（那是「一次都不给」的真实额度），手敲环境变量的人写 0 想表达的是关闭。
@@ -1076,8 +1076,16 @@ def _dt(value: str) -> datetime:
 
 
 def _project_status(
-    session: Session, run: TaskRunRow, to_status: str, reason: str
+    session: Session,
+    run: TaskRunRow,
+    to_status: str,
+    reason: str,
+    extra: dict[str, Any] | None = None,
 ) -> None:
+    """状态迁移事件。``extra`` 随 payload 一并下发（v1 契约 payload 为自由对象，消费方
+    容忍未知字段）：失败迁移用它带上人话原因与失败类别——执行轨迹按事件重建，原因只
+    放在快照的 failure_message 里的话，时间线上就只剩一句「阶段失败」，用户得翻回
+    页面顶部的摘要才知道为什么（2026-09-17 报障）。"""
     from_status = run.status
     run.status = to_status
     run.updated_at = utcnow()
@@ -1085,7 +1093,7 @@ def _project_status(
         session,
         run.id,
         AgentEventType.run_status_changed.value,
-        {"from": from_status, "to": to_status, "reason": reason},
+        {"from": from_status, "to": to_status, "reason": reason, **(extra or {})},
     )
 
 
@@ -1732,6 +1740,7 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             run,
             TaskRunStatus.FAILED.value,
             f"「{stage}」阶段失败" if stage else "任务失败",
+            {"message": error, "failure_class": run.failure_class},
         )
         return
 
@@ -1999,73 +2008,44 @@ def advance_run(session: Session, run: TaskRunRow) -> None:
     # 修复语义把它们落定为 STEP_FAILED（"executor lost"），事件日志与 step_runs
     # 才是闭合的；随后的 advance 以 attempt+1 重跑该阶段。进程内互斥由唯一的
     # 推进线程保证（本函数是 checkpoint 模式的唯一入口）。
+    # 重跑没有次数上限（2026-09-19 拍板）：中断是环境造成的、不是任务本身的错，
+    # 不该替用户把运行判死；环境问题（热重载监视到沙盒目录）在启动时与每次修复
+    # 落定时都写进服务端日志，由开发者处置。
     healed = engine.heal_interrupted(snapshot)
     if healed:
         _note_executor_restart(session, run, snapshot, healed)
-        streak = _interrupt_streak(snapshot)
-        if streak >= MAX_CONSECUTIVE_INTERRUPTS:
-            # crash loop：再自动重跑只是再花一遍模型调用然后再被打断。停在这里、把原因和
-            # 出路写进失败信息（含 executor lost 标记 → TRANSIENT，UI 照常给「重试」）。
-            label = STAGE_LABELS.get(snapshot.state.value, snapshot.state.value)
-            engine.fail_run(
-                snapshot,
-                error=(
-                    f"「{label}」阶段连续 {streak} 次在执行中途被后端进程重启打断"
-                    f"（{INTERRUPTED_STEP_ERROR}），已停止自动重跑以免空耗模型额度。"
-                    "请先排查后端为何反复重启——开发环境最常见的原因是以 uvicorn --reload 启动却没加 "
-                    "--reload-dir，沙盒每写一个 .py 就触发一次重载（改用 npm run dev:api，见 README）；"
-                    "排除后点「重试当前阶段」继续。"
-                ),
-            )
-            return
     engine.advance(snapshot)
-
-
-#: 同一阶段连续多少次「执行中途被进程重启打断」后停止自动重跑。每次重跑都要重新花一遍
-#: 模型调用；进程反复被杀（uvicorn --reload 监视到沙盒写的 .py）时无上限重跑会把该节点的
-#: token 额度烧光——2026-09-07 真实案例：实验阶段 23 次连环打断、39 万 tokens，直到 E320
-#: 预算硬停，此后连人工重试都被预算门拦下。
-MAX_CONSECUTIVE_INTERRUPTS = 3
-
-
-def _interrupt_streak(snapshot: TaskRunSnapshot) -> int:
-    """当前阶段末尾连续被判「executor lost」的步骤数（从最新一步往前数，遇到别的结果即停）。"""
-    streak = 0
-    for step in reversed(snapshot.steps):
-        if step.state is not snapshot.state:
-            break
-        if step.status is not StepStatus.FAILED or step.error != INTERRUPTED_STEP_ERROR:
-            break
-        streak += 1
-    return streak
 
 
 def _note_executor_restart(
     session: Session, run: TaskRunRow, snapshot: TaskRunSnapshot, healed: list[CoreEvent]
 ) -> None:
-    """悬挂步骤被修复落定时，把「进程重启打断了执行」说给用户和开发者听。
+    """悬挂步骤被修复落定时，分别对用户和开发者说明「上一次执行被中断了」。
 
-    页面上这一幕只表现为思考行标着「本次调用中断」、随后又开一次尝试，用户
-    很容易把它归因于自己刚做的操作（切页、切对话）。真实案例（2026-09-07）：
-    以 ``uvicorn --reload`` 起 API 却没加 ``--reload-dir``，沙盒每写一个
-    ``steps/*/main.py`` 都触发重载——实验阶段每次尝试都在第一次 python_run 之后
-    十几秒被打断、永远跑不完。这里落一条叙述事件让活动流如实说明原因，并在服务
-    端日志给出 README 里的修正命令；事件发送失败绝不影响推进。
+    页面上这一幕只表现为思考行标着「本次调用中断」、随后又开一次尝试，用户很容易
+    把它归因于自己刚做的操作（切页、切对话）。给用户的叙述事件只说事实——上一次
+    执行意外中断、已自动重新开始——不带进程 / 热重载 / 启动参数这些开发细节；
+    原因分析（最常见：``uvicorn --reload`` 没加 ``--reload-dir``，沙盒每写一个
+    ``steps/*/main.py`` 都触发重载，2026-09-07 / 09-18 两次真实事故）只进服务端
+    日志，能确诊时直接给出诊断与修正命令。事件写入失败绝不影响推进。
     """
     step_ids = [str(event.payload.get("step_id") or "") for event in healed]
     steps = [step for step in map(snapshot.find_step, step_ids) if step is not None]
     labels = sorted({STAGE_LABELS.get(step.state.value, step.state.value) for step in steps})
     stage = "、".join(labels) or "当前"
     next_attempt = max((step.attempt for step in steps), default=1) + 1
+    diagnosis = current_reload_watch_hazard(runtime_settings().workspaces_dir) or (
+        "The previous process died or was restarted mid-step. If the API runs under "
+        f"`uvicorn --reload`, start it with `{RECOMMENDED_COMMAND}` ({RECOMMENDED_FLAGS}) so that "
+        "only source directories are watched; any edit under a watched directory restarts the server."
+    )
     logger.warning(
-        "run %s: %d step(s) in「%s」were interrupted by a process restart; retrying as attempt %d. "
-        "If the API runs under `uvicorn --reload`, add `--reload-dir backend/api/omm_api --reload-dir agents` "
-        "(see README) — otherwise every sandbox-written .py under %s restarts the server.",
+        "run %s: %d step(s) in「%s」were left RUNNING by a lost executor; re-running as attempt %d. %s",
         run.id,
         len(healed),
         stage,
         next_attempt,
-        runtime_settings().workspaces_dir,
+        diagnosis,
     )
     try:
         append_event(
@@ -2075,8 +2055,7 @@ def _note_executor_restart(
             {
                 "kind": "executor_restarted",
                 "message": (
-                    f"后端进程在「{stage}」执行中途重启，进行中的模型调用被打断；"
-                    f"已自动作为第 {next_attempt} 次尝试重跑该阶段"
+                    f"「{stage}」的上一次执行在中途意外中断，已自动重新开始第 {next_attempt} 次尝试"
                 ),
                 "steps": step_ids,
             },

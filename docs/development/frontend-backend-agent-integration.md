@@ -690,7 +690,7 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 - 设置中心「外观与显示」移除「界面主题」分区，侧栏副标题同步改为「正文字号与可读性」；正文字号、减少动效、增强对比度三项保留不变。
 - 移除 `applyTheme/normalizeTheme/savedTheme` 与主题的保存/回填/即时预览/恢复默认逻辑；`openmathmodelSettings` 里历史残留的 `theme` 键读取时静默跳过。`theme-dark.css` 已删除。
-- 保留而未清理的部分：styles.css 与 attachments.css 中既有的 `html[data-theme="dark"]` 规则成为不可达死代码（受保护基线，未做大规模删除）；`renderCharts` 的按主题取色分支保留（`data-theme` 永不再置位，恒走浅色）。如后续重启深色主题，从这两处加上 git 历史里的 theme-dark.css 可恢复。
+- 保留而未清理的部分：styles.css 与 attachments.css 中既有的 `html[data-theme="dark"]` 规则成为不可达死代码（受保护基线，未做大规模删除）；`renderCharts` 的按主题取色分支保留（`data-theme` 永不再置位，恒走浅色）。如后续重启深色主题，从这两处加上 git 历史里的 theme-dark.css 可恢复。（已于 2026-09-18 全部删除，见下文同名条目。）
 - `initInterfaceLocale` 之外不再有主题相关启动逻辑；增强对比度的暗色变体选择器（accessibility.css）同样不可达，保留。
 
 当日执行并通过：`node --test`（en-US 词典 5 项、显示偏好 5 项、任务记录 3 项）、`npm run check --workspace @openmathmodel/web`、`npm run build --workspace @openmathmodel/web`。
@@ -1063,6 +1063,89 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 - 不动：受保护入口、页面模板与路由、DOM 槽位（方案行仍是 radio / strong / 三个 span / i 的既有结构，CSS 按序摆位）。
 
 当日执行并通过：`agents/skills` `pytest tests/test_nodes.py` 161 passed；`npm run check`；`npm run build`（index 755.67 kB）；`node --test "src/**/*.test.mjs"` 150/150；Playwright 实机：方案页 1280 / 1366 / 1440 / 1536 / 1920 五档探针「scrollWidth > clientWidth」元素 0 个；论文页纸面 `scrollWidth == clientWidth`；打字机脚本——终稿在论文面板隐藏时到达 4.5s 后正文 0 字、`data-streaming=true`，切到论文页 0.8s 后 356 字 / 3.3s 后 1563 字，切走 2.5s 内字数不增长，切回继续，键入一字后整段放行、`data-streaming` 撤销、大纲 8 项全部打勾。截图存 `audit-current/stage-polish-2026-09-07/`（`*-before*` / `*-after*` / `typewriter-*.png`）。浏览器验收待用户：方案页方案卡两行（标题 + 核心方法 + 步骤数 / 主要风险）不再拥挤；论文页右侧正文不再被右边裁掉；停留在别的阶段等论文写完再切到论文页，正文应从头逐字打出，中途切走再切回从原处继续，开始编辑立即全文放出；左侧大纲是一列纯文字目录（无勾、无左标、不加粗），当前章节浅底、未写完的章节淡灰。
+
+### 2026-09-17 报障修复：主操作按钮总在对话最底下、无事可做时也显示；「收起执行步骤」折叠头整体撤下
+
+用户带图报障两条：（1）`.running-live-cta`（「重试当前阶段」这颗黑色主操作）**总出现在内容最底层、一直显示**——问一句「重新开始吧」「为什么失败」这类与运行无关的话，回复下面也顶着它；要求「只有该显示的时候才显示，和它没关系的内容下面不该出现」。（2）`.activity-summary`（「收起执行步骤」折叠头）删掉。
+
+根因：2026-09-07 的 `followConversationTail` 把按钮搬到对话里**最后一条 Agent 消息**的末尾，判据只看「是不是 `.follow-up-reply`」——普通问答的回复块也算，于是每发一条消息按钮就跟到新回复下面；`renderAgent` 又只在规划期隐藏按钮，运行中 `kind:"none"` 时照样摆一颗禁用的「Agent 正在执行」占位。折叠头则是 2026-09-07 修「两个 Agent 气泡」时随 `replyRunTraceHost` / `tailTraceHost` 重新挂回来的（对话层自己的过程区早在 09-05 就按用户要求撤了）。
+
+- **前端** `integration/modeling-workspace-controller.ts`：新增 `runTraceBlocks(scroll)`——对话里**承载过运行事件**的 Agent 块（直接子节点带 `.agent-stream.run-trace`），`tailTraceHost` 新建的轨迹块活动流也标上 `run-trace`，成为「这个块与运行有关」的唯一标记。`followConversationTail` 改为只跟这些块里最后一个：「「X」阶段失败。」写在哪个块，「重试当前阶段」就紧挨着出现在那个块的末尾，之后的普通对话不再带走它；没有这样的块时按钮留在原位（首气泡末尾 / 阶段页左栏摘要之后）。`renderAgent`：`kind === "none"`（运行中「Agent 正在执行」、排队「等待任务开始」、已取消「任务已结束」）时按钮与选项列表一起 `hidden`，不再摆禁用占位；点击回调的 `finally` 同步这一条（动作生效、运行重新转起来时按钮随之收起）。删除 `activityHeader()`，`replyRunTraceHost` / `tailTraceHost` 不再挂折叠头。
+- **前端** `legacy/openmathmodel-ui.ts`：`?demo=1` 的两处演示模板（总览页首气泡、阶段页左栏时间线）去掉 `.activity-summary` 按钮；`toggle-activity` 点击分支（含 `.steps-count` 徽标重建）整段删除；注释同步。`i18n/en-US.ts` 删「查看执行步骤 / 收起执行步骤」两条死词条。
+- **样式** `styles.css` / `workflow-refresh.css`：删除全部 `.activity-summary` 规则（基础 / 暗色 / `.modeling-chat-pane` / `.focused-agent-scroll` 三档响应式 / `[hidden]` / hover·active）、`.steps-count` 与 `omm-count-pop`、只由折叠头写入的 `.agent-stream.collapsed` 与 api 布局的 `.activity-list.collapsed`；revision 38 注释改述。`.follow-up-reply > .agent-stream + .running-live-cta` 等间距规则不动。
+- 不动：按钮的动作语义、审批选项列表的渲染与滚入视野、执行轨迹的落点规则（`resolveStreamHost` / `historyTraceHost`）、受保护入口与 DOM 槽位。
+
+当日执行并通过：`npm run check`；`npm run build`（index 795.23 kB）；`node --test "src/**/*.test.mjs"` 173/173；真实 Chromium（CDP）里按控制器同一套 DOM 结构跑按钮落位场景 9/9（无对话留原位 / 普通回复不吸走 / 落了运行事件的回复块接走 / 之后的普通回复不再带走 / 新轨迹块接走 / 选项列表同行 / 对话清空退回占位 / 页面无 `.activity-summary`）。应用内浏览器验收待用户（本环境没有已登录的运行）：失败任务里问「为什么失败」→ 回复下方**没有**按钮，「重试当前阶段」仍留在「「X」阶段失败。」那条叙述所在的 Agent 块末尾；运行正常执行时页面上没有「Agent 正在执行」的灰色按钮；阶段失败 / 等待确认时按钮（与选项列表）出现在失败 / 等待叙述的下方；全站不再有「收起执行步骤」折叠头，步骤行直接展示、每行仍可点开详情。
+
+### 2026-09-17 报障修复：每次点「重试当前阶段」都得翻到顶上才看得清
+
+用户反馈：每次点重试都要往上滚才能看清发生了什么。读码定位不是滚动条没跟上，而是**反馈落点错了**——在底部点按钮，重试的进度与失败原因却被写回页面顶端。四个根因：
+
+1. `isPlanningPhase(view)` 只看快照（RUNNING + 六阶段全 PENDING/RUNNING），分不出「首次规划」与「第 N 次重试题意解析」：重试把 `planPhase` 翻回 `planning`，首气泡被「解封」，`resolveStreamHost` 把「重试失败阶段。」「深度思考 · 题意解析」写回首气泡摘要下方的活动流；同时 `renderCopy` 清空摘要、执行计划面板退回「正在思考」。
+2. SSE 帧先入活动流、快照 80ms 后才刷新（`onWorkspaceEvent` → `ingestStreamEvent` → `scheduleRefresh`），落点用的是上一状态的 `planPhase`：`step.failed` 与 `run.status_changed(FAILED)` 相隔不到 80ms 就一起落顶，隔开了就一顶一尾，同一次运行里两次失败叙述位置不一。
+3. 失败原因只存在于顶部：`RUN_FAILED` 只把 `error` 写进 `run.failure_message`，事件 payload（`step.failed` 的 `{node, attempt, failure_class}`、状态迁移的 `{from, to, reason}`）都不带文案；时间线上只有一句「「X」阶段失败。」，原因只经快照进首气泡摘要。
+4. 点击之后没有视口跟随；`streamAppend` 的吸底只在距底 120px 内生效。
+
+拍板（决策卡）：A+B+C 全做；E 合并进首气泡。
+
+- **后端** `engine_glue.py`：`_project_status` 增可选 `extra`，随 payload 一并下发（v1 契约 payload 为自由对象、消费方容忍未知字段）；`RUN_FAILED` 的 FAILED 迁移带 `message`（= `failure_message`）与 `failure_class`。`test_task_runs_and_actions.py::test_injected_failure_then_retry_completes` 补断言：`events/history` 里的 FAILED 迁移事件 `reason == "「实验运行」阶段失败"`、`message` 与快照 `failure.message` 一致、`failure_class == CODE_DEFECT`。
+- **前端 A（规划期单向）** `modeling-workspace-controller.ts`：`AgentStreamState` 新增 `firstStageSettled`，由事件流维护（`markFirstStageSettled`：任何 `step.succeeded / step.failed / approval.requested`、运行离开 QUEUED/RUNNING、从 FAILED/PAUSED/WAITING_APPROVAL/COMPLETED 回到 RUNNING），实时与首连回放同一判据，且在解析落点**之前**更新——失败叙述本身就按封口后的规则落位，不再受 80ms 刷新时序影响。`isPlanningPhase(root, view)` 见到该位直接返回 false；新增 `planRevealed(root)`（`planPhase === "revealed" || firstStageSettled`）供 `firstAssistantMessage` 与阶段页左栏的 `liveEventsFlowToTail` 共用。挂载时若壳层被复用给另一个运行（`root.dataset.runId` 不同）丢弃上一个运行的活动流状态。
+- **前端 B（原因随失败落位）**：`run.status_changed{to: FAILED}` 改为 `streamFailure`——叙述行「「X」阶段失败。」+ 直接可见（不折叠）的原因段落 `.stream-note.stream-failure`（`message` 原文、`white-space: pre-wrap`），`failure_class === TRANSIENT` 时补一句「多为模型接口或网络的瞬态问题，直接重试通常能过。」（其余类别是保守兜底归类，不下结论）。按钮随即由 `followConversationTail` 压在它下面——原因与动作同处。历史回放从事件重建，刷新后原样。
+- **前端 C（视口跟随本次动作）**：新增 `armFollowTail / disarmFollowTail / shouldStickToTail`。按钮的重试 / 恢复 / 确认被服务端受理后（`act` 成功 → `refresh` 之后）：先把对话末尾滚进视野（按钮可能停在页面中段——失败块之后又聊过几句），之后每条新行都吸底、不看 120px 阈值；用户 wheel / touchstart / pointerdown 即放手；本次尝试落定（状态离开 RUNNING/QUEUED）也放手。`appendGrouped` 同步改用 `shouldStickToTail`。暂停不跟随。
+- **前端 E（合并相邻块）**：`tailTraceHost` 在尾部就是首条 Agent 消息（还没有任何对话）时返回 null，`resolveStreamHost` 回落到首气泡摘要下方的活动流——不再另起紧挨首气泡的「Agent」轨迹块（2026-08-21 起的既有形态退役：两个相邻署名中间什么都没有，且与刷新后回放把这批行放回首气泡的形态对不上）。有对话时规则不变：尾部回复块内部的 `.run-trace` / 尾部用户消息后的轨迹块。
+- **样式** `workflow-refresh.css`：`.stream-failure` 左侧 2px 淡红竖线 + 浅底，暗色主题配色；`en-US.ts` 补瞬态提示词条。
+- 不动：按钮的动作语义、审批选项列表、历史回放的按轮落位（`historyTraceHost`）、受保护入口与 DOM 槽位。
+
+当日执行并通过：`pytest backend/api/tests` 462 passed / 2 skipped；`npm run check`；`npm run build`（index 802.93 kB）；`node --test "src/**/*.test.mjs"` 173/173；真实 Chromium（CDP）按控制器同一套函数跑落点 / 原因 / 跟随 / 回放场景 20/20（规划期行落首气泡、刷新前到达的首次失败仍封口并留在首气泡且不另起相邻块、重试快照不再翻回 planning、重试行按时间顺序接在失败之后、有对话时失败与按钮一起落到尾部回复块、瞬态失败带提示 / 非瞬态不带、arm 后从顶部滚到底且新行持续吸底、wheel 放手、落定放手、无对话回放全部落首气泡且从历史推出首阶段已落定、重进中途重试的快照不再是 planning）。**后端需重启**才会在新失败上带原因；已有的历史失败事件没有 `message`，时间线上仍只显示一句叙述。应用内浏览器验收待用户：失败任务里点「重试当前阶段」→ 视线不离开点击处：按钮下方出现「重试失败阶段。」→ 深度思考走秒 → 「「X」阶段失败。」+ 原因段落 + 按钮重新出现；顶部摘要与执行计划面板在重试期间不再清空 / 退回思考态；没聊过天的运行不再出现两个相邻的 Agent 署名。
+
+### 2026-09-17 报障修复：论文生成完成后，左侧「论文大纲」仍是「将在论文生成后显示」
+
+用户带图报障：论文页正文一万六千字、底部状态「已恢复本机草稿」，左侧大纲栏却还是模板空态一行字。
+
+根因：大纲只在 `renderEditorPanel` 把 Agent 定稿灌进编辑器的那一条路上顺手建（`buildDraftBlocks` → `rebuildPaperOutline`），编辑器内容另有来源时没人管它。截图正是其中最常见的一种——**本机草稿恢复**：`bindPaperEditor`（全局键 `openmathmodelPaperDraft.v1`）与 `task-autosave.restorePaper`（按项目键、`user_edited`）把上次的现场写回编辑器，随后 `renderEditorPanel` 因 `hasUserPaperDraft()` 按「用户主权」早退——正文在（多半就是上次渲染出来的定稿，点过一次撤销 / 加粗就算「用户编辑过」）、目录却停在骨架。用户自己增删改标题、论文阶段未产出而用户先写了，同样没有大纲。
+
+- **前端** `integration/stage-content.ts`：新增 `syncPaperOutlineFromEditor(root = document)`——以编辑器里实际存在的非空 `h2` 为准重建大纲，口径与 `buildDraftBlocks` 一致（`h1` 论文标题不进目录；「摘要」与各章是 `h2`；小节按 `paper_section` 提示词约定是 `###` → `h3`，不进目录）。没有 `id` 的标题补 `section-N` 锚点（已被占用时退到 `section-N-2`…，绝不改动已有锚点，与定稿渲染的 `#section-N` / `#section-abstract` 一致）；条目全部标 done（内容都在）；`spyOutline`（从 `bindOutlineNavigation` 的滚动跟随里抽出）按当前滚动位置高亮。`rebuildPaperOutline` 记 `data-outline-signature`，标题集合没变时不重建（保住 active 态）。**让路规则** `outlineOwnedByStream`：分章直播未写完（`livePaperState.rendered.size < total`，大纲由它预挂全章、逐章打勾）或打字机还在逐字上屏（`pending > 0`）时不动大纲。正文里一个 `h2` 都没有：模板空态原样保留；只有残留旧链接时换成「正文中还没有章节标题。」。`bindOutlineSync`：编辑器 `input` 300ms 防抖后同步——改章标题、加一章、删一章大纲都跟着变，每台编辑器只挂一次。三处接入：`renderEditorPanel` 的用户草稿早退分支改为先同步大纲再返回；正常渲染路径挂 `bindOutlineSync`；`renderStageContent` 在 `document_draft` 为 null 时也同步（论文阶段未产出、用户先写了）。
+- **前端** `legacy/openmathmodel-ui.ts`：`render()` 末尾（`mountTaskAutosave` 之后——两条草稿恢复路径都已跑完）非演示态调一次 `syncPaperOutlineFromEditor()`；演示夹具的大纲是固定样张，不动。`en-US.ts` 补一条词条。
+- 不动：`buildDraftBlocks` / `preparePaperOutline` / `appendPaperSection` 的建纲逻辑与直播打勾；`.outline` 的 DOM 结构（`.outline-heading` + `a > .outline-status + 文本`）与样式；受保护入口。
+
+当日执行并通过：`npm run check`；`npm run build`（index 823.11 kB）；`node --test "src/**/*.test.mjs"` 178/178；真实 Chromium（CDP）按同一套函数跑 16/16：只有占位段时模板空态不动；恢复的草稿（h1 + 摘要 h2 + 三章 h2 + 小节 h3）→ 大纲四项、h3 不入、空态移除、全部 done、首项 active；同一批标题不重建；滚动后 active 跟随；用户新加无 id 的 h2 → 防抖后入纲并补锚点；中间插章保持文档顺序、序号被占时退到带后缀的锚点；改标题文字大纲同步；直播进行中 / 打字机未打完 → 让路；删光 h2 → 旧链接换成一句说明、加回来大纲回来；点击大纲滚到对应标题并高亮。应用内浏览器验收待用户：打开截图里那个任务的论文页，左侧应列出摘要与各章目录，点击可跳转、滚动正文时高亮跟随；在正文里新加一个「标题 2」段落约 0.3 秒后出现在大纲里。
+
+### 2026-09-18 删除深色主题的全部残留代码
+
+2026-08-12 下线主题切换时，`html[data-theme="dark"]` 规则作为不可达死代码整批保留（见上文同日条目）。业主明确不再需要深色主题，本轮把这些规则连同相关注释和死组件一并删除，界面只剩浅色一套。
+
+- **CSS 规则**：用 PostCSS 按选择器逐条删除 355 条规则——styles.css 179 条、workflow-refresh.css 132 条、reference-theme.css 20 条、attachments.css 16 条、projects.css 7 条、accessibility.css 1 条（`html[data-contrast="high"][data-theme="dark"]`）。三处「浅色选择器 + 深色重复项」的选择器列表（`.recent`、`.reference-picker-list`、`.composer-attachments-head:hover`）只摘掉深色那一半，浅色规则原样保留。`html[data-theme="dark"] { … color-scheme: dark }` 变量块随之消失；`:root` 的 `color-scheme: light` 保留。
+- **reference-theme.css 的浅色守卫**：63 条 `html:not([data-theme="dark"]) …` 改写为 `html:root …`。两者匹配同一个元素，特异度同为 (0,1,1)，这批调色板规则相对 styles.css 组件默认值的层叠关系分毫未变——直接降成 `html` 会掉一个类级权重，部分规则会被 styles.css 的双类选择器反超。文件头注释记了这条约束。
+- **死组件**：styles.css 的 `.theme-options / .theme-option / .theme-preview`（含 `.theme-preview.dark`）整块删除——主题选择器 2026-08-12 已从设置中心移除，DOM 里不再有这些节点；reference-theme.css 中对应的三条覆盖与两处 `:is()` 列表项同步清理。
+- **TypeScript**：`renderCostChart` 的 `dataset.theme === "dark"` 分支按浅色取值压平。`i18n/locale.ts` 里「语言与主题共用」的注释、`task-routes.test.mjs` 里拿 `theme: "dark"` 当无关键的夹具（改用 `interfaceLocale`）一并清掉。
+- 源码与 `dist` 产物中 `data-theme` 命中均已归零；本条取代上文 2026-08-12 条目里「保留而未清理」的结论。
+
+当日执行并通过：`npm run build --workspace @openmathmodel/web`（index 824.14 kB）；`node --test` 178/178；六张样式表 PostCSS 重新解析全部通过。真实 Chromium（CDP）逐路由验收：首页、我的项目、赛题库、优秀论文、方法库、设置中心渲染与改前一致，论文年份筛选 / 设置下拉 / 项目排序三个液态玻璃弹层正常开合；页面计算样式核对 `--ink #101720`、`--soft #f3f5f8`、`--line #e4e8ee`、body `#f3f5f8`、`.main #fff`、`.nav-item #465263`、`color-scheme: light`，与改前取值相同。
+
+### 2026-09-19 报障修复：实验阶段「连续 3 次被后端进程重启打断」即判死，且把 uvicorn 参数说明摊在页面上
+
+用户带图报障：实验阶段连续三次「深度思考 · 实验执行（本次调用中断）」后运行落 FAILED，失败框里是整段给开发者看的话（`interrupted: executor lost before completion`、`uvicorn --reload` / `--reload-dir` / `npm run dev:api` / README）。三条拍板：**这段不能显示到前端让用户看到**；**不要设置限额**；以及一个疑问——「为什么总说后端进程重启打断，我明明没重启」。
+
+排查：查库 `run_8bc8eacd…` / `run_f0e1ff8c…`（09-18）步骤表，实验阶段各趟都在 `python_run` 之后 2–12 秒被判 `interrupted`；`Win32_Process` 里当前 API 进程的命令行是 `python -m uvicorn omm_api.asgi:app --reload --timeout-graceful-shutdown 5 --port 8000`——**没有 `--reload-dir`**（也没有 `--app-dir`，靠可编辑安装从 VS Code 终端直接起，cwd 是仓库根或 `backend/api`，两者都盖住 `backend/api/data/`）；已装 uvicorn 0.52.4 的 `Config` 在没给 `--reload-dir` 时监视 `Path.cwd()` 下全部 `*.py`，沙盒每次写出 `backend/api/data/workspaces/<run>/steps/<step>/main.py` 都触发一次热重载。所以「重启」不是用户做的，是 `--reload` 自动做的；用户看不到这层，文案却把责任说成「后端进程重启」，自然对不上。
+
+- **后端** `engine_glue.advance_run`：删除 `MAX_CONSECUTIVE_INTERRUPTS` / `_interrupt_streak` 与 `fail_run` 分支——被中断的阶段无上限自动重跑（attempt+1），运行不再因中断次数落 FAILED；`INTERRUPTED_STEP_ERROR` / `StepStatus` 两个只为它服务的导入随之移除（`TaskRunEngine.fail_run` 保留为引擎能力）。`_note_executor_restart`：给用户的 `run.log{kind:"executor_restarted"}` 改为「「X」的上一次执行在中途意外中断，已自动重新开始第 N 次尝试」——不带进程 / 热重载 / 启动参数任何开发细节（前端渲染路径不变）；服务端 `omm.engine` warning 改为「left RUNNING by a lost executor」并附诊断：能确诊时直指监视目录与沙盒目录，否则给出通用的 `npm run dev:api` 提示。
+- **后端** 新增 `reload_guard.py`：纯函数 `reload_watch_dirs(argv, cwd)`（与 uvicorn `Config` 同口径：`--reload-dir` / `--reload-dir=` / 环境变量 `UVICORN_RELOAD_DIRS`，缺省 cwd）与 `reload_watch_hazard(argv, cwd, workspaces_dir)`（沙盒工作区落在监视目录内即命中；目录形式的 `--reload-exclude` 盖住工作区算排除，glob 形式不算——uvicorn 过滤器只拿它匹配文件名末段）；`warn_if_reload_watches_sandbox` 在 `create_app` 的 lifespan 里、推进线程启动前调用，命中就以 ERROR 打一块 `!!!` 包住的日志（uvicorn reload 子进程继承父进程的 `sys.argv` 与 cwd，所以能在子进程里看出来）。API 不拒绝启动——生产没有 `--reload`，这层只对开发者说话。
+- **测试** `test_executor_restart_note.py`：叙述断言改为新文案并加「不含开发词」守卫；原「三次打断后停下」用例替换为「连续 5 次打断运行始终 RUNNING、无 failure，环境修好后第 6 趟直接成功、叙述 5 条」。新增 `test_reload_guard.py` 8 项（非 reload 不报；裸 `--reload` 命中并给出目录与命令；`--reload-dir` 限定源码不报；显式 `--reload-dir backend/api` 仍命中；目录排除清除 / glob 排除不清除；环境变量等价；相对 `workspaces_dir` 按 cwd 解析；启动函数按真实 argv / cwd 打 ERROR 或不打）。
+- **文档**：`backend/api/README.md`（启动命令下补一段「漏 `--reload-dir` 时会看到什么」，预算说明里的 `MAX_CONSECUTIVE_INTERRUPTS` 改为指向 reload_guard）、根 `README.md`（同段措辞）、`.env.example` 注释；`engine_glue._env_limit` 的 docstring 同步。
+- 不动：`INTERRUPTED_STEP_ERROR` 常量与 TRANSIENT 归类（前端「重试当前阶段」路径不变）；工作区目录位置（`backend/api/data/workspaces`）——它是跨阶段共享的执行暂存，不为躲开监视范围搬家；`tools/dev-api.mjs` / `npm run dev`（本就带正确参数）。
+
+当日执行并通过：`pytest backend/api/tests` 479 passed / 2 skipped（含新增 11 项）。实机复现：用同款参数（`--reload`、无 `--reload-dir`）从仓库根起一个只装了护栏的探针应用，uvicorn 日志 `Will watch for changes in these directories: ['E:\\…\\OpenMathModel']`，子进程 argv / cwd 与父进程一致，护栏按预期打出 ERROR 块。随后停掉那条没有 `--reload-dir` 的进程（`Win32_Process` 确认其 reloader 的 cwd 是 `backend/api`，监视范围盖住 `data/workspaces`），以 `npm run dev:api` 重启，`/api/health` ok、监视目录只剩 `agents` 与 `backend/api/omm_api`。浏览器验收待用户：在失败的任务上点「重试当前阶段」，实验阶段的 `python_run` 之后不再出现「本次调用中断」；即便出现，活动流只会补一句「上一次执行在中途意外中断，已自动重新开始第 N 次尝试」，运行不再因此落 FAILED。
+
+### 2026-09-19 报障修复：「我的项目」卡片上「实验」「论文」两列永远是灰色「暂无统计」
+
+用户带图报障：项目卡片的「文件」有数字，「实验」「论文」却对所有项目（包括已完成的）一律灰掉，什么都不显示。原因是切片②只在契约 `Project.stats` 里定义了 `latest_run` 与 `artifact_count`，`projects-page.ts` 的 `rowHtml` 把后两列硬编码成 `—`，展示层再把 `—` 译成灰色「暂无统计」——数据源从未接上，而不是数据为空。
+
+- **契约** `project.schema.json`：`project_stats` 新增可选字段 `experiment_count` / `paper_count`（非负整数）。口径 = 该项目全部运行中 `EXPERIMENTING` / `PAPER_WRITING` 节点 **现行**（`stage_outputs.status=current`）阶段输出条数：重做 / 重试只保留最新版、模拟链路不落行故计 0，与成果页只列最近一趟产物的口径一致。做成可选而非 required 是因为 `check_compat.py` 把新增 required 判为破坏性变更；旧生产者不返回时前端仍显示「暂无统计」。夹具 `project.1/3.json` 补字段，新增反例 `project.bad-experiment-count.json`；TS / Pydantic 重新生成，手工维护的 `src/index.ts` 同步；OpenAPI 基线重导。
+- **后端** `routers/projects.py`：`stage_output_counts_subquery()` 经 `task_runs` 把 `stage_outputs` 归到项目、按节点 `sum(case)` 一次算出两列，`include=stats` 时与既有产物计数子查询一并 `outerjoin`，仍是单条查询、无 N+1。
+- **前端** `projects-page.ts`：`ProjectItem` 增加 `experimentCount` / `paperCount`，三列计数统一走 `count()`，`—` 只在旧服务端缺字段时出现。`projects-presentation.ts` 与样式不动。
+- **测试** `test_projects.py`：新增「两次运行、首轮实验被重做、另有 VALIDATING / DATA_PREPARATION 行」用例断言 `experiment_count=2 / paper_count=1`、superseded 与其他阶段不计、`q` 过滤后计数不变；既有空统计断言改为含两个新字段。
+
+当日执行并通过：`validate.py`（16 schema / 75 fixture）、`check_compat.py` OK、`generate_python.py --check`、`npm run check --workspace @openmathmodel/contracts`、`export_openapi.py --check`、`pytest backend/api/tests` 479 passed / 2 skipped、`npm run check`（web）。只读探针核对本地库：3 个已完成项目均为实验 1 / 论文 1，2 个失败项目为实验 1 / 论文 0。真实 Chromium 验收：注册一次性 smoke 账号，白盒造「首轮实验 superseded + v2 current、论文 v1 current、MODEL_PLANNING current」与一个从未运行的对照项目，网格卡片显示「文件 0 · 实验 1 · 论文 1」与「0 · 0 · 0」，列表视图三列同值且无 `project-stat-unavailable` 灰化；验收后账号与两个项目已删除。
 
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 

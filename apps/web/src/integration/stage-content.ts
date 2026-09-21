@@ -26,6 +26,7 @@ import { deliveryPackageUrl, describeDelivery } from "./delivery-record";
 import type { DeliveryView } from "./delivery-record";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
 import type { ReviewSection } from "./experiment-notes";
+import { openFigureLightbox } from "./figure-lightbox";
 import { modelingWorkspaceApi } from "./modeling-workspace-api";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
 import {
@@ -36,6 +37,7 @@ import {
   summarizeFindingKinds,
 } from "./paper-audit";
 import { figureImageResolver, summarizeFigures } from "./paper-figures";
+import type { FigureSource } from "./paper-figures";
 import { describePaperPackage, describeResultFigures } from "./result-figures";
 import type { FigureCard } from "./result-figures";
 import { delimiterLabel, describeRawData, isPreviewableName, previewTable } from "./table-preview";
@@ -1258,41 +1260,81 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
 // 两个分页都只填 resultDocument 骨架的 .complete-project-name 与 .result-summary（.deliverables 文件表仍
 // 由工作台控制器按产物 kind 填）。
 
-/** 图件卡：缩略图（有产物 id）或占位、「图 N · 图题」、来源阶段、可选的「已插入 / 未插入」与下载。 */
+/**
+ * 图件卡：缩略图（有产物 id）或占位 + 三段固定结构的说明——
+ * 头行「图 N · 来源阶段 · 已插入 / 未插入」、图题、脚行「文件名 · 下载」。
+ * 卡片只负责「一眼认出是哪张图」：模型给的图题长短不可控（一张三百字、另一张一个字没写），
+ * 180px 的卡里怎么排都排不下，所以图题固定三行截断、不在卡内展开，完整图题悬停可见；
+ * 点击后的放大查看（figure-lightbox）只放大图本身。脚行钉在卡底，同一行的卡等高；画图工程师没给图题时
+ * 退回文件名，脚行不再重复一遍。缩略图是一枚按钮（键盘可达，Enter 同样打开放大查看）。
+ */
 function figureCardElement(card: FigureCard): HTMLElement {
   const figure = el("figure", `result-figure${card.imageUrl ? "" : " is-missing"}`);
-  const media = el("div", "result-figure-media");
+  let media: HTMLElement;
   if (card.imageUrl) {
+    const button = el("button", "result-figure-media");
+    button.type = "button";
+    button.title = t("放大查看");
+    button.setAttribute("aria-label", `${t("放大查看")} ${t("图")} ${card.number}`);
     const img = document.createElement("img");
     img.loading = "lazy";
     img.decoding = "async";
     img.src = card.imageUrl;
     img.alt = `${card.label} ${card.caption}`;
-    media.append(img);
+    button.append(img, icon("magnifying-glass-plus"));
+    media = button;
   } else {
+    media = el("div", "result-figure-media");
     media.append(icon("image"), el("span", "", t("产物未登记")));
   }
   const caption = el("figcaption");
-  const title = el("strong", "", `${t("图")} ${card.number} · ${card.caption}`);
-  const meta = el("span", "result-figure-meta");
-  meta.append(el("span", "result-figure-stage", t(card.stage)), el("span", "result-figure-name", card.name));
+
+  const head = el("div", "result-figure-head");
+  head.append(
+    el("span", "result-figure-number", `${t("图")} ${card.number}`),
+    el("span", "result-figure-stage", t(card.stage)),
+  );
   if (card.inserted !== null) {
-    meta.append(el("span", `result-figure-inserted is-${card.inserted ? "yes" : "no"}`, t(card.inserted ? "已插入正文" : "未插入正文")));
+    head.append(el("span", `result-figure-inserted is-${card.inserted ? "yes" : "no"}`, t(card.inserted ? "已插入正文" : "未插入正文")));
+  }
+
+  const untitled = card.caption === card.name;
+  const title = el("strong", `result-figure-caption${untitled ? " is-filename" : ""}`, card.caption);
+  // 悬停看全文；截没截到都给，短图题的悬停只是重复一遍，不误导
+  title.title = card.caption;
+
+  const foot = el("div", "result-figure-foot");
+  if (!untitled) {
+    const name = el("span", "result-figure-name", card.name);
+    name.title = card.name;
+    foot.append(name);
   }
   if (card.imageUrl) {
     const link = el("a", "result-figure-download", t("下载"));
     link.href = card.imageUrl;
     link.dataset.artifactDownload = card.imageUrl;
-    meta.append(link);
+    foot.append(link);
   }
-  caption.append(title, meta);
+
+  caption.append(head, title, foot);
   figure.append(media, caption);
   return figure;
 }
 
+/** 图件条：按编号排开的卡；点击任一张（下载链接除外）打开放大查看，条内其余可预览的图可左右翻。 */
 function figureStrip(cards: readonly FigureCard[]): HTMLElement {
   const strip = el("div", "result-figure-strip");
   cards.forEach(card => strip.append(figureCardElement(card)));
+  strip.addEventListener("click", event => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || target.closest("a")) return;
+    const figure = target.closest<HTMLElement>(".result-figure");
+    if (!figure || figure.parentElement !== strip) return;
+    const index = [...strip.children].indexOf(figure);
+    if (!cards[index]?.imageUrl) return;
+    event.preventDefault();
+    openFigureLightbox(cards, index, figure.querySelector<HTMLElement>("button.result-figure-media"));
+  });
   return strip;
 }
 
@@ -1440,7 +1482,8 @@ function renderApprovalEvidence(root: HTMLElement, outputs: StageOutputsPayload)
       body.append(el("span", "", `${evidence.figures.total} ${t("张")}（${t("已插入")} ${evidence.figures.inserted} ${t("张")}）`));
       if (evidence.figures.cards.length) {
         const strip = el("div", "approval-evidence-figures");
-        for (const card of evidence.figures.cards) {
+        const cards = evidence.figures.cards;
+        cards.forEach((card, index) => {
           const figure = el("figure", `approval-evidence-figure${card.inserted ? " is-inserted" : ""}`);
           const img = document.createElement("img");
           img.loading = "lazy";
@@ -1449,8 +1492,22 @@ function renderApprovalEvidence(root: HTMLElement, outputs: StageOutputsPayload)
           img.alt = `${card.label} ${card.caption}`;
           const caption = el("figcaption", "", `${t("图")} ${card.number} · ${card.caption}${card.inserted ? "" : `（${t("未插入正文")}）`}`);
           figure.append(img, caption);
+          if (card.imageUrl) {
+            // 与成果页图件卡同一入口：点缩略图放大看，同卡片里的其他附图可左右翻
+            figure.classList.add("is-viewable");
+            figure.tabIndex = 0;
+            figure.setAttribute("role", "button");
+            figure.setAttribute("aria-label", `${t("放大查看")} ${t("图")} ${card.number}`);
+            const open = (): void => openFigureLightbox(cards, index, figure);
+            figure.addEventListener("click", open);
+            figure.addEventListener("keydown", event => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              open();
+            });
+          }
           strip.append(figure);
-        }
+        });
         body.append(strip);
         if (evidence.figures.more > 0) body.append(el("span", "approval-evidence-more", `${t("另有")} ${evidence.figures.more} ${t("张，见成果页「论文文件」")}`));
       } else if (evidence.figures.total > 0) {
@@ -1518,8 +1575,56 @@ interface OutlineEntry {
   label: string;
 }
 
+// ── 图件清单（正文插图 `![图 N 标题](文件名)` → 产物下载链接）────────────────
+//
+// 分章直播的 paper_section 事件只带章节正文，不带图件清单；而清单其实早就到了——
+// 数据 / 实验 / 检验阶段的图件随各自的阶段产出投影到页面，论文阶段补画的图随
+// paper_outline 事件下来。这里按工作台根节点记住见过的全部图件，直播章节与终稿
+// 用同一张表解析插图，用户看直播时图就在正文里，而不是等终稿到了才整篇替换。
+
+const knownFigures = new WeakMap<HTMLElement, Map<string, string>>();
+
+function rememberFigures(root: HTMLElement, figures: readonly FigureSource[] | null | undefined): void {
+  if (!figures?.length) return;
+  let table = knownFigures.get(root);
+  if (!table) {
+    table = new Map();
+    knownFigures.set(root, table);
+  }
+  for (const figure of figures) {
+    if (figure.name && figure.artifact_id) table.set(figure.name, figure.artifact_id);
+  }
+}
+
+function knownFigureSources(root: HTMLElement): FigureSource[] {
+  const table = knownFigures.get(root);
+  return table ? [...table].map(([name, artifact_id]) => ({ name, artifact_id })) : [];
+}
+
+/**
+ * 真实图件的加载态：请求中给一个有高度的占位盒（否则未到的图只是 2px 边框，看着就是
+ * 「没有图」），加载失败明说而不是留白。listener 挂在元素上，块随后被打字机搬进编辑器也带着。
+ */
+function watchFigureImages(scope: HTMLElement): void {
+  scope.querySelectorAll<HTMLImageElement>("figure.md-figure > img").forEach(image => {
+    const figure = image.parentElement!;
+    figure.dataset.brokenLabel = t("图件加载失败，请刷新页面或到成果页重新下载");
+    const settle = (): void => figure.classList.remove("is-loading");
+    if (image.complete && image.naturalWidth > 0) return;
+    figure.classList.add("is-loading");
+    image.addEventListener("load", settle, { once: true });
+    image.addEventListener("error", () => {
+      settle();
+      figure.classList.add("is-broken");
+    }, { once: true });
+  });
+}
+
 /** 正文块 + 大纲条目（摘要与各章节；与优秀论文一致，摘要进大纲）。 */
-function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries: OutlineEntry[] } {
+function buildDraftBlocks(
+  draft: DocumentDraft,
+  extraFigures: readonly FigureSource[] = [],
+): { blocks: DraftBlock[]; entries: OutlineEntry[] } {
   const blocks: DraftBlock[] = [];
   const entries: OutlineEntry[] = [];
   blocks.push({ element: el("h1", "", draft.title), outlineIndex: null, head: true });
@@ -1541,8 +1646,9 @@ function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries
     blocks.push({ element: keywords, outlineIndex: null, head: true });
   }
   // 真实图件：正文 `![图 N 标题](文件名)` 只在文件名命中 DocumentDraft.figures（本次运行
-  // 采集到的图件、有产物 id）时解析成同源产物下载链接出图；其余图片语法保持纯文本
-  const resolveImage = figureImageResolver(draft.figures);
+  // 采集到的图件、有产物 id）时解析成同源产物下载链接出图；其余图片语法保持纯文本。
+  // 终稿清单缺条目（老运行 / 节点没拿到产物 id）时退到页面已知的阶段图件表。
+  const resolveImage = figureImageResolver([...(draft.figures ?? []), ...extraFigures]);
   draft.sections.forEach((section, index) => {
     const outlineIndex = entries.length;
     entries.push({ href: `#section-${index}`, label: section.heading });
@@ -1552,6 +1658,7 @@ function buildDraftBlocks(draft: DocumentDraft): { blocks: DraftBlock[]; entries
     const body = el("div");
     body.innerHTML = renderMarkdown(section.content, { resolveImage });
     wrapWideTables(body);
+    watchFigureImages(body);
     [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
   });
   return { blocks, entries };
@@ -1567,7 +1674,14 @@ function wrapWideTables(scope: HTMLElement): void {
   });
 }
 
-function rebuildPaperOutline(root: HTMLElement, entries: OutlineEntry[]): HTMLAnchorElement[] {
+/** 大纲条目的指纹：同一批标题不重建链接（重建会丢掉 active / done 态）。 */
+function outlineSignature(entries: OutlineEntry[]): string {
+  return entries
+    .map(entry => `${entry.href}\u0000${entry.label.replace(/\s+/g, " ").trim()}`)
+    .join("\u0001");
+}
+
+function rebuildPaperOutline(root: ParentNode, entries: OutlineEntry[]): HTMLAnchorElement[] {
   const outline = root.querySelector<HTMLElement>(".paper-editor-workspace .outline");
   if (!outline) return [];
   const heading = outline.querySelector(".outline-heading");
@@ -1578,6 +1692,7 @@ function rebuildPaperOutline(root: HTMLElement, entries: OutlineEntry[]): HTMLAn
     return link;
   });
   outline.replaceChildren(...(heading ? [heading] : []), ...links);
+  outline.dataset.outlineSignature = outlineSignature(entries);
   return links;
 }
 
@@ -1613,20 +1728,103 @@ function bindOutlineNavigation(editor: HTMLElement, links: HTMLAnchorElement[]):
     pending = true;
     window.requestAnimationFrame(() => {
       pending = false;
-      const outline = editor.closest(".editor-layout")?.querySelector<HTMLElement>(".outline");
-      const items = outline ? [...outline.querySelectorAll<HTMLAnchorElement>("a")] : [];
-      const anchors = items
-        .map(link => ({ link, node: editor.querySelector<HTMLElement>(link.getAttribute("href") ?? "") }))
-        .filter((item): item is { link: HTMLAnchorElement; node: HTMLElement } => Boolean(item.node));
-      if (!anchors.length) return;
-      const threshold = editor.getBoundingClientRect().top + 96;
-      let current = anchors[0];
-      anchors.forEach(item => {
-        if (item.node.getBoundingClientRect().top <= threshold) current = item;
-      });
-      setOutlineActive(items, current.link);
+      spyOutline(editor);
     });
   }, { passive: true });
+}
+
+/** 按编辑器当前滚动位置高亮大纲条目：最后一个顶部已越过「编辑器顶部下 96px」的章。 */
+function spyOutline(editor: HTMLElement): void {
+  const outline = editor.closest(".editor-layout")?.querySelector<HTMLElement>(".outline");
+  const items = outline ? [...outline.querySelectorAll<HTMLAnchorElement>("a")] : [];
+  const anchors = items
+    .map(link => ({ link, node: editor.querySelector<HTMLElement>(link.getAttribute("href") ?? "") }))
+    .filter((item): item is { link: HTMLAnchorElement; node: HTMLElement } => Boolean(item.node));
+  if (!anchors.length) return;
+  const threshold = editor.getBoundingClientRect().top + 96;
+  let current = anchors[0];
+  anchors.forEach(item => {
+    if (item.node.getBoundingClientRect().top <= threshold) current = item;
+  });
+  setOutlineActive(items, current.link);
+}
+
+// ── 大纲跟正文走（编辑器内容不是 renderEditorPanel 灌进去的那些场合） ─────────
+//
+// renderEditorPanel 只在把 Agent 定稿灌进编辑器时顺手建大纲。编辑器内容另有来源时
+// ——本机草稿恢复（用户编辑过的现场按「用户主权」挡住定稿渲染，而那份草稿多半就是
+// 上次渲染出来的定稿：点过一次撤销 / 加粗就算「用户编辑过」）、用户自己增删改标题、
+// 论文阶段还没产出而用户先写了——大纲一直停在模板的「论文大纲将在论文生成后显示」，
+// 正文明明一万六千字（2026-09-17 报障）。大纲是正文的目录：正文在，目录就该在。
+
+/** 分章直播还没写完（大纲由它预挂全部章节、逐章打勾）或打字机还在逐字上屏（章标题
+ *  尚未全部落进编辑器）时，从编辑器现状反推大纲只会把待写章节抹掉——让路。 */
+function outlineOwnedByStream(editor: HTMLElement): boolean {
+  const live = livePaperState.get(editor);
+  if (live && live.rendered.size < live.total) return true;
+  return (activePaperStreams.get(editor)?.pending ?? 0) > 0;
+}
+
+const outlineSyncBound = new WeakSet<HTMLElement>();
+const outlineSyncTimers = new WeakMap<HTMLElement, number>();
+const OUTLINE_SYNC_DEBOUNCE_MS = 300;
+
+/** 用户编辑正文时（input，300ms 防抖）按编辑器现状重建大纲：改了章标题、加了一章、
+ *  删了一章都跟着变。每台编辑器只挂一次。 */
+function bindOutlineSync(root: ParentNode, editor: HTMLElement): void {
+  if (outlineSyncBound.has(editor)) return;
+  outlineSyncBound.add(editor);
+  editor.addEventListener("input", () => {
+    const timer = outlineSyncTimers.get(editor);
+    if (timer) window.clearTimeout(timer);
+    outlineSyncTimers.set(editor, window.setTimeout(() => {
+      outlineSyncTimers.delete(editor);
+      if (editor.isConnected) syncPaperOutlineFromEditor(root);
+    }, OUTLINE_SYNC_DEBOUNCE_MS));
+  });
+}
+
+/**
+ * 大纲以编辑器里实际存在的章标题（h2）为准重建：与 buildDraftBlocks 的口径一致——
+ * 论文标题是 h1 不进目录，「摘要」与各章是 h2，小节是 h3（paper_section 提示词约定）。
+ * 没有 id 的标题补 section-N 锚点（点击跳转要用），已有锚点原样保留，与定稿渲染一致。
+ * 标题集合没变时不重建（保住 active 态）；正文里一个章标题都没有时，模板空态不动、
+ * 残留的旧链接换成一句说明。
+ */
+export function syncPaperOutlineFromEditor(root: ParentNode = document): void {
+  const editor = root.querySelector<HTMLElement>('.editor-page[contenteditable="true"]');
+  if (!editor) return;
+  bindOutlineSync(root, editor);
+  if (outlineOwnedByStream(editor)) return;
+  const outline = root.querySelector<HTMLElement>(".paper-editor-workspace .outline");
+  if (!outline) return;
+  const headings = [...editor.querySelectorAll<HTMLHeadingElement>("h2")]
+    .filter(heading => (heading.textContent ?? "").trim().length > 0);
+  if (!headings.length) {
+    if (!outline.querySelector("a")) return;
+    rebuildPaperOutline(root, []);
+    const note = el("p", "stage-empty-state outline-empty", t("正文中还没有章节标题。"));
+    note.dataset.stageEmpty = "";
+    outline.append(note);
+    return;
+  }
+  const used = new Set([...editor.querySelectorAll<HTMLElement>("[id]")].map(node => node.id));
+  headings.forEach((heading, index) => {
+    if (heading.id) return;
+    let id = `section-${index}`;
+    for (let suffix = 2; used.has(id); suffix += 1) id = `section-${index}-${suffix}`;
+    heading.id = id;
+    used.add(id);
+  });
+  const entries: OutlineEntry[] = headings.map(heading => ({
+    href: `#${heading.id}`,
+    label: (heading.textContent ?? "").trim(),
+  }));
+  if (outline.querySelector("a") && outline.dataset.outlineSignature === outlineSignature(entries)) return;
+  const links = rebuildPaperOutline(root, entries);
+  bindOutlineNavigation(editor, links);
+  links.forEach(link => markOutlineDone(link));
+  spyOutline(editor);
 }
 
 function refreshPaperWordCount(editor: HTMLElement): void {
@@ -1774,7 +1972,11 @@ class PaperTypewriter {
       if (!item.block.element.isConnected) {
         if (animate) item.block.element.classList.add("stream-in");
         editor.append(item.block.element);
-        item.block.element.insertAdjacentElement("afterend", this.caret);
+        // 光标落到新块第一段文字的起点（块内、行内）；块里没有文字（图 / 分隔线）
+        // 才退到块后，下一块接上时随即挪走
+        const first = item.units[0];
+        if (first) this.followCaret(first);
+        else item.block.element.insertAdjacentElement("afterend", this.caret);
         if (item.block.outlineIndex !== null) {
           const links = this.outlineLinks();
           setOutlineActive(links, links[item.block.outlineIndex]);
@@ -1790,11 +1992,24 @@ class PaperTypewriter {
       const remaining = unit.full.length - unit.node.data.length;
       const step = job.instant ? remaining : Math.min(budget, remaining);
       unit.node.data = unit.full.slice(0, unit.node.data.length + step);
+      this.followCaret(unit);
       budget -= step;
       this.pendingChars -= step;
       this.revealedChars += step;
       if (unit.node.data.length >= unit.full.length) this.unitIndex += 1;
     }
+  }
+
+  /** 光标紧跟正在写入的文本节点之后（同一行内），随最后一个字移动。
+   *  旧实现把它挂在块元素（p / h2）之后，行内盒落在块级元素之间必然被挤成单独一行，
+   *  看起来永远在正在输出的文字下面。已在位时不重插：搬动 DOM 会重启闪烁动画。 */
+  private followCaret(unit: TypingUnit): void {
+    // 结构容器之间的空白文本（表格行 / 列表项之间）承载不了行内盒，跳过不动
+    if (!unit.full.trim()) return;
+    const node = unit.node;
+    const parent = node.parentNode;
+    if (!parent || this.caret.previousSibling === node) return;
+    parent.insertBefore(this.caret, node.nextSibling);
   }
 
   private schedule(): void {
@@ -1888,8 +2103,10 @@ function liveEditor(root: HTMLElement): HTMLElement | null {
 /** 论文骨架已定（paper_outline 事件）：清空演示正文，大纲预挂全部章节为待写。 */
 export function preparePaperOutline(
   root: HTMLElement,
-  payload: { total: number; headings: string[] },
+  payload: { total: number; headings: string[]; figures?: readonly FigureSource[] },
 ): void {
+  // 论文阶段补画的图随骨架事件下来：先记住，章节里插到它们时才解析得出图
+  rememberFigures(root, payload.figures);
   const editor = liveEditor(root);
   if (!editor || livePaperState.has(editor)) return;
   livePaperState.set(editor, { total: payload.total, rendered: new Set() });
@@ -1943,8 +2160,12 @@ export function appendPaperSection(
   heading.id = `section-${outlineIndex}`;
   const blocks: DraftBlock[] = [{ element: heading, outlineIndex }];
   const body = el("div");
-  body.innerHTML = renderMarkdown(payload.content);
+  // 直播章节同样出图：按页面已知的图件表（数据 / 实验 / 检验阶段的产出 + 论文阶段补图）解析
+  body.innerHTML = renderMarkdown(payload.content, {
+    resolveImage: figureImageResolver(knownFigureSources(root)),
+  });
   wrapWideTables(body);
+  watchFigureImages(body);
   [...body.children].forEach(child => blocks.push({ element: child as HTMLElement, outlineIndex }));
 
   const settle = (): void => {
@@ -1970,12 +2191,19 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
   if (!editor) return;
   // 用户主权：用户编辑过的本机草稿绝不覆盖；同一版本正文只填充一次。
   if (editor.dataset.stageDraftVersion === String(draft.version)) return;
-  if (hasUserPaperDraft()) return;
+  if (hasUserPaperDraft()) {
+    // 正文不动，但大纲要按编辑器里实际的章标题给：恢复的草稿就是用户看到的论文，
+    // 目录不能停在模板空态（2026-09-17 报障：正文一万六千字、大纲「将在论文生成后显示」）
+    syncPaperOutlineFromEditor(root);
+    return;
+  }
   editor.dataset.stageDraftVersion = String(draft.version);
 
-  const { blocks, entries } = buildDraftBlocks(draft);
+  const { blocks, entries } = buildDraftBlocks(draft, knownFigureSources(root));
   const links = rebuildPaperOutline(root, entries);
   bindOutlineNavigation(editor, links);
+  // 之后用户改标题 / 加章节，大纲跟着编辑器走
+  bindOutlineSync(root, editor);
 
   const settle = (): void => {
     typesetMath(editor);
@@ -2019,43 +2247,41 @@ function renderEditorPanel(root: HTMLElement, draft: DocumentDraft): void {
   settle();
 }
 
-// ── 论文页「终稿审计」条（DocumentDraft.frozen_numbers / audit_findings → 编辑器上方） ──
+// ── 论文页「终稿审计」弹框（DocumentDraft.frozen_numbers / audit_findings → 工具栏按钮 + 独立弹框） ──
 //
 // G4 定稿交付闸门的证据面：卡片 title 只点得出前两处发现，完整清单与发现在契约字段里。
 // 审计链三条（数值 / 图表 / 引用）的发现同列一张表，每条按 kind 给原因、违规 token 成 chip。
-// 条挂在 article.paper-editor 的工具栏与纸面之间——不进 contenteditable 纸面（不会被本机
-// 草稿保存 / 导出带走），也不受「用户草稿优先」早退影响（审计说的是智能体这一版）。
-// 原生 <details>：一行结论默认收起，展开看发现与清单，不引入新交互模型。
+// 审计说的是智能体那一版正文，不是用户的本机草稿：既不进 contenteditable 纸面（不会被草稿保存 / 导出
+// 带走），也不再压在纸面上方占位——论文页只留工具栏一枚「终稿审计」按钮（有发现时带计数），
+// 点开是一张独立弹框（复用 .modal-backdrop / .modal 的视觉语言），关闭键 / Esc / 点遮罩关闭，焦点回按钮。
+// 弹框开着时若 SSE 推来新一版审计，就地换内容、不打断阅读；离开论文页时自动收起。
 
-const PAPER_AUDIT_CLASS = "paper-audit";
+const PAPER_AUDIT_TOGGLE_ATTR = "data-paper-audit-toggle";
+const PAPER_AUDIT_DIALOG_CLASS = "paper-audit-dialog";
 
 function paperAuditChip(text: string): HTMLElement {
   return el("code", "paper-audit-chip", text);
 }
 
-function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
-  const article = root.querySelector<HTMLElement>(".paper-editor-workspace article.paper-editor");
-  if (!article) return;
-  const existing = article.querySelector<HTMLElement>(`:scope > .${PAPER_AUDIT_CLASS}`);
+interface PaperAuditView {
+  stamp: string;
+  tone: "warn" | "clean" | "muted";
+  iconName: string;
+  findingCount: number;
+  /** 一句结论：冻结数字条数 + 三链判定（+ 图件 / 文献计数，契约有该字段才有）。 */
+  verdict: string;
+  /** 发现列表 + 冻结清单 / 真实图件 / 参考文献库三张表 + 口径：真要上屏时才搭。 */
+  body: () => HTMLElement;
+}
+
+/** 契约没有审计字段（旧运行 / 模拟节点）→ null：不拿空弹框示人。 */
+function describePaperAuditView(draft: DocumentDraft): PaperAuditView | null {
   const section = describePaperAudit(draft);
-  if (section.kind === "absent") {
-    // 旧运行 / 模拟节点没有审计字段：不拿空条示人；换到这类运行时把上一份的条摘掉
-    existing?.remove();
-    return;
-  }
-  const stamp = paperAuditStamp(draft);
-  if (existing?.dataset.paperAuditStamp === stamp) return;
+  if (section.kind === "absent") return null;
 
   const tone = section.kind === "findings" ? "warn" : section.kind === "clean" ? "clean" : "muted";
-  const details = el("details", `${PAPER_AUDIT_CLASS} is-${tone}`);
-  details.dataset.paperAuditStamp = stamp;
-  // 有发现默认展开：这正是用户在 G4 要看的东西；干净时收起，不挤纸面
-  details.open = section.kind === "findings";
-
-  const summary = el("summary", "paper-audit-summary");
-  const iconName = tone === "warn" ? "warning-circle" : tone === "clean" ? "check-circle" : "list-numbers";
   const rows = section.rows;
-  const verdict = section.kind === "findings"
+  const judgement = section.kind === "findings"
     ? summarizeFindingKinds(section.findings).map(entry => `${entry.count} ${t(entry.label)}`).join("、")
     : section.kind === "clean"
       ? t("数值、图表与引用审计全部通过")
@@ -2070,128 +2296,236 @@ function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
   const referenceNote = references
     ? `，${t("N 条已验证文献，正文引用 M 条").replace("N", String(references.total)).replace("M", String(references.cited))}`
     : "";
-  summary.append(
-    icon(iconName),
-    el("strong", "", `${t("终稿审计")}：`),
-    el("span", "paper-audit-verdict", `${rows.length} ${t("项冻结数字")}，${verdict}${figureNote}${referenceNote}`),
-    el("span", "paper-audit-hint", t("展开查看清单与发现")),
-  );
-  details.append(summary);
 
-  const body = el("div", "paper-audit-body");
-  if (section.kind === "findings") {
-    const list = el("ul", "paper-audit-findings");
-    for (const finding of section.findings) {
-      const item = el("li");
-      const text = el("div");
-      text.append(el("strong", "", `${finding.scope}：`));
-      // 违规 token 原样成 chip（数值 / 「图 N」「表 N」/ 引用标记），用户可直接去正文里搜
-      finding.numbers.forEach(token => text.append(paperAuditChip(token)));
-      const reason = FINDING_KIND_REASONS[finding.kind];
-      // 契约 enum 之外的 kind：按节点给的说明原样示人
-      text.append(el("span", "paper-audit-reason", reason ? t(reason) : finding.detail || finding.kind));
-      item.append(icon("warning-circle"), text);
-      list.append(item);
-    }
-    body.append(el("h4", "", t("审计发现")), list);
-  }
-
-  body.append(el("h4", "", t("数字冻结清单")));
-  if (rows.length === 0) {
-    body.append(el("p", "paper-audit-empty", t("上游阶段没有可冻结的数字，正文数值只能引用材料中已有的数值")));
-  } else {
-    const table = el("table", "paper-audit-table");
-    const thead = el("thead");
-    const head = el("tr");
-    for (const label of ["编号", "数值", "含义", "出处"]) head.append(el("th", "", t(label)));
-    thead.append(head);
-    const tbody = el("tbody");
-    for (const row of rows) {
-      const tr = el("tr");
-      const value = el("td", "paper-audit-value");
-      value.append(paperAuditChip(row.value));
-      tr.append(
-        el("td", "paper-audit-id", row.id),
-        value,
-        el("td", "", row.label),
-        el("td", "paper-audit-source", `${t(row.stage)} · ${row.path}`),
-      );
-      tbody.append(tr);
-    }
-    table.append(thead, tbody);
-    body.append(table);
-  }
-
-  if (figures) {
-    // 真实图件清单：编号是正文「图 N」的唯一合法编号；未插入的图如实列出（人裁「有图没用」）
-    body.append(el("h4", "", t("真实图件")));
-    const table = el("table", "paper-audit-table paper-audit-figures");
-    const thead = el("thead");
-    const head = el("tr");
-    for (const label of ["编号", "文件名", "出处", "说明", "状态"]) head.append(el("th", "", t(label)));
-    thead.append(head);
-    const tbody = el("tbody");
-    for (const figure of draft.figures ?? []) {
-      const tr = el("tr");
-      const name = el("td", "paper-audit-value");
-      name.append(paperAuditChip(figure.name));
-      tr.append(
-        el("td", "paper-audit-id", `${t("图")} ${figure.number}`),
-        name,
-        el("td", "paper-audit-source", t(FROZEN_STAGE_LABELS[figure.source_stage] ?? figure.source_stage)),
-        el("td", "", figure.caption || "—"),
-        el("td", figure.inserted ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
-          t(figure.inserted ? "已插入" : "未插入")),
-      );
-      tbody.append(tr);
-    }
-    table.append(thead, tbody);
-    body.append(table);
-  }
-
-  if (references) {
-    // 已验证引用库：编号是正文 [n] 与参考文献条目的唯一合法编号；未引用的条目如实列出
-    body.append(el("h4", "", t("参考文献库")));
-    const table = el("table", "paper-audit-table paper-audit-references");
-    const thead = el("thead");
-    const head = el("tr");
-    for (const label of ["编号", "条目", "来源", "状态"]) head.append(el("th", "", t(label)));
-    thead.append(head);
-    const tbody = el("tbody");
-    for (const row of referenceRows(draft.references ?? [])) {
-      const tr = el("tr");
-      const entry = el("td", "paper-audit-reference-entry");
-      // 出处链接只放行 http(s)（referenceRows 已过滤）；条目正文原文放悬停，标题上屏
-      if (row.url) {
-        const link = el("a", "", row.title) as HTMLAnchorElement;
-        link.href = row.url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        entry.append(link);
-      } else {
-        entry.append(document.createTextNode(row.title));
+  const body = (): HTMLElement => {
+    const host = el("div", "paper-audit-body");
+    if (section.kind === "findings") {
+      const list = el("ul", "paper-audit-findings");
+      for (const finding of section.findings) {
+        const item = el("li");
+        const text = el("div");
+        text.append(el("strong", "", `${finding.scope}：`));
+        // 违规 token 原样成 chip（数值 / 「图 N」「表 N」/ 引用标记），用户可直接去正文里搜
+        finding.numbers.forEach(token => text.append(paperAuditChip(token)));
+        const reason = FINDING_KIND_REASONS[finding.kind];
+        // 契约 enum 之外的 kind：按节点给的说明原样示人
+        text.append(el("span", "paper-audit-reason", reason ? t(reason) : finding.detail || finding.kind));
+        item.append(icon("warning-circle"), text);
+        list.append(item);
       }
-      entry.title = row.text;
-      tr.append(
-        el("td", "paper-audit-id", row.label),
-        entry,
-        el("td", "paper-audit-source", t(row.source)),
-        el("td", row.cited ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
-          t(row.cited ? "已引用" : "未引用")),
-      );
-      tbody.append(tr);
+      host.append(el("h4", "", t("审计发现")), list);
     }
-    table.append(thead, tbody);
-    body.append(table);
+
+    host.append(el("h4", "", t("数字冻结清单")));
+    if (rows.length === 0) {
+      host.append(el("p", "paper-audit-empty", t("上游阶段没有可冻结的数字，正文数值只能引用材料中已有的数值")));
+    } else {
+      const table = el("table", "paper-audit-table");
+      const thead = el("thead");
+      const head = el("tr");
+      for (const label of ["编号", "数值", "含义", "出处"]) head.append(el("th", "", t(label)));
+      thead.append(head);
+      const tbody = el("tbody");
+      for (const row of rows) {
+        const tr = el("tr");
+        const value = el("td", "paper-audit-value");
+        value.append(paperAuditChip(row.value));
+        tr.append(
+          el("td", "paper-audit-id", row.id),
+          value,
+          el("td", "", row.label),
+          el("td", "paper-audit-source", `${t(row.stage)} · ${row.path}`),
+        );
+        tbody.append(tr);
+      }
+      table.append(thead, tbody);
+      host.append(table);
+    }
+
+    if (figures) {
+      // 真实图件清单：编号是正文「图 N」的唯一合法编号；未插入的图如实列出（人裁「有图没用」）
+      host.append(el("h4", "", t("真实图件")));
+      const table = el("table", "paper-audit-table paper-audit-figures");
+      const thead = el("thead");
+      const head = el("tr");
+      for (const label of ["编号", "文件名", "出处", "说明", "状态"]) head.append(el("th", "", t(label)));
+      thead.append(head);
+      const tbody = el("tbody");
+      for (const figure of draft.figures ?? []) {
+        const tr = el("tr");
+        const name = el("td", "paper-audit-value");
+        name.append(paperAuditChip(figure.name));
+        // 图题长短由模型决定（同一张表里常是一条三百字、其余一个字没有）：截三行、悬停看全文，行高才齐。
+        // 截断挂在单元格内层的块上——line-clamp 直接加在 td 上会把行切在半行处。
+        const caption = el("td");
+        const captionText = el("div", "paper-audit-figure-caption", figure.caption || "—");
+        if (figure.caption) captionText.title = figure.caption;
+        caption.append(captionText);
+        tr.append(
+          el("td", "paper-audit-id", `${t("图")} ${figure.number}`),
+          name,
+          el("td", "paper-audit-source", t(FROZEN_STAGE_LABELS[figure.source_stage] ?? figure.source_stage)),
+          caption,
+          el("td", figure.inserted ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
+            t(figure.inserted ? "已插入" : "未插入")),
+        );
+        tbody.append(tr);
+      }
+      table.append(thead, tbody);
+      host.append(table);
+    }
+
+    if (references) {
+      // 已验证引用库：编号是正文 [n] 与参考文献条目的唯一合法编号；未引用的条目如实列出
+      host.append(el("h4", "", t("参考文献库")));
+      const table = el("table", "paper-audit-table paper-audit-references");
+      const thead = el("thead");
+      const head = el("tr");
+      for (const label of ["编号", "条目", "来源", "状态"]) head.append(el("th", "", t(label)));
+      thead.append(head);
+      const tbody = el("tbody");
+      for (const row of referenceRows(draft.references ?? [])) {
+        const tr = el("tr");
+        const entry = el("td", "paper-audit-reference-entry");
+        // 出处链接只放行 http(s)（referenceRows 已过滤）；条目正文原文放悬停，标题上屏
+        if (row.url) {
+          const link = el("a", "", row.title) as HTMLAnchorElement;
+          link.href = row.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          entry.append(link);
+        } else {
+          entry.append(document.createTextNode(row.title));
+        }
+        entry.title = row.text;
+        tr.append(
+          el("td", "paper-audit-id", row.label),
+          entry,
+          el("td", "paper-audit-source", t(row.source)),
+          el("td", row.cited ? "paper-audit-figure-inserted" : "paper-audit-figure-unused",
+            t(row.cited ? "已引用" : "未引用")),
+        );
+        tbody.append(tr);
+      }
+      table.append(thead, tbody);
+      host.append(table);
+    }
+
+    host.append(el("p", "paper-audit-note", t("口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行），一位数不计；引用的图须是本次运行产出的图件、引用的表须有带编号的表题；引用标记与参考文献须来自已验证的引用库。")));
+    return host;
+  };
+
+  return {
+    stamp: paperAuditStamp(draft),
+    tone,
+    iconName: tone === "warn" ? "warning-circle" : tone === "clean" ? "check-circle" : "list-numbers",
+    findingCount: section.kind === "findings" ? section.findings.length : 0,
+    verdict: `${rows.length} ${t("项冻结数字")}，${judgement}${figureNote}${referenceNote}`,
+    body,
+  };
+}
+
+/** 当前那枚工具栏按钮：每版审计都会换一枚新的，所以按选择器现取，不在闭包里攥着旧节点。 */
+function paperAuditToggleNode(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[${PAPER_AUDIT_TOGGLE_ATTR}]`);
+}
+
+function openPaperAuditDialog(view: PaperAuditView): void {
+  closePaperAuditDialog();
+  const backdrop = el("div", `modal-backdrop ${PAPER_AUDIT_DIALOG_CLASS} is-${view.tone}`);
+  backdrop.dataset.paperAuditStamp = view.stamp;
+  backdrop.tabIndex = -1;
+
+  const modal = el("section", "modal");
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-label", t("终稿审计"));
+
+  const close = el("button", "paper-audit-close");
+  close.type = "button";
+  close.title = t("关闭");
+  close.setAttribute("aria-label", t("关闭"));
+  close.append(icon("x"));
+  const head = el("header", "paper-audit-head");
+  head.append(icon(view.iconName), el("h2", "", t("终稿审计")), close);
+
+  modal.append(head, el("p", "paper-audit-verdict", view.verdict), view.body());
+  backdrop.append(modal);
+
+  const dispose = (): void => {
+    document.removeEventListener("omm:stage-shown", dispose);
+    backdrop.remove();
+    const toggle = paperAuditToggleNode();
+    toggle?.setAttribute("aria-expanded", "false");
+    toggle?.classList.remove("is-active");
+    toggle?.focus();
+  };
+  close.addEventListener("click", dispose);
+  backdrop.addEventListener("click", event => {
+    if (event.target === backdrop) dispose();
+  });
+  backdrop.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    // legacy 外壳的全局 Esc 会直接摘掉任意 .modal-backdrop：自己先处理完（含焦点回归）再拦下
+    event.stopPropagation();
+    dispose();
+  });
+  // 软切换到别的阶段页时不留一张盖住新页面的弹框
+  document.addEventListener("omm:stage-shown", dispose);
+
+  document.body.append(backdrop);
+  backdrop.focus({ preventScroll: true });
+  const toggle = paperAuditToggleNode();
+  toggle?.setAttribute("aria-expanded", "true");
+  toggle?.classList.add("is-active");
+}
+
+function closePaperAuditDialog(): void {
+  document.querySelector<HTMLElement>(`.${PAPER_AUDIT_DIALOG_CLASS}`)?.remove();
+}
+
+/** 弹框正开着时收到新一版审计：就地换结论与正文，不关它、也不动用户的滚动之外的状态。 */
+function syncOpenPaperAuditDialog(view: PaperAuditView): void {
+  const backdrop = document.querySelector<HTMLElement>(`.${PAPER_AUDIT_DIALOG_CLASS}`);
+  if (!backdrop || backdrop.dataset.paperAuditStamp === view.stamp) return;
+  backdrop.dataset.paperAuditStamp = view.stamp;
+  backdrop.className = `modal-backdrop ${PAPER_AUDIT_DIALOG_CLASS} is-${view.tone}`;
+  backdrop.querySelector(".paper-audit-head > i")?.replaceWith(icon(view.iconName));
+  const verdict = backdrop.querySelector<HTMLElement>(".paper-audit-verdict");
+  if (verdict) verdict.textContent = view.verdict;
+  backdrop.querySelector(".paper-audit-body")?.replaceWith(view.body());
+}
+
+function renderPaperAudit(root: HTMLElement, draft: DocumentDraft): void {
+  const toolbar = root.querySelector<HTMLElement>(".paper-editor-workspace article.paper-editor > .editor-toolbar");
+  if (!toolbar) return;
+  const existingToggle = toolbar.querySelector<HTMLElement>(`[${PAPER_AUDIT_TOGGLE_ATTR}]`);
+  const view = describePaperAuditView(draft);
+  if (!view) {
+    // 旧运行 / 模拟节点没有审计字段：把上一份的入口与弹框一并摘掉
+    existingToggle?.remove();
+    closePaperAuditDialog();
+    return;
   }
+  if (existingToggle?.dataset.paperAuditStamp === view.stamp) return;
 
-  body.append(el("p", "paper-audit-note", t("口径：正文数值须来自冻结清单或输入材料（题面常数靠材料放行），一位数不计；引用的图须是本次运行产出的图件、引用的表须有带编号的表题；引用标记与参考文献须来自已验证的引用库。")));
-  details.append(body);
+  const toggle = el("button", `paper-audit-toggle is-${view.tone}`);
+  toggle.type = "button";
+  toggle.dataset.paperAuditStamp = view.stamp;
+  toggle.setAttribute(PAPER_AUDIT_TOGGLE_ATTR, "");
+  toggle.setAttribute("aria-haspopup", "dialog");
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.title = t("查看终稿审计");
+  toggle.append(icon(view.iconName), el("span", "", t("终稿审计")));
+  if (view.findingCount > 0) toggle.append(el("span", "paper-audit-count", String(view.findingCount)));
+  toggle.addEventListener("click", () => openPaperAuditDialog(view));
 
-  const toolbar = article.querySelector<HTMLElement>(":scope > .editor-toolbar");
-  if (existing) existing.replaceWith(details);
-  else if (toolbar) toolbar.after(details);
-  else article.prepend(details);
+  // 入口插在「检查」之前；工具栏没有行动区（非标准骨架）时退到工具栏末尾，不让审计无处可看
+  const actions = toolbar.querySelector<HTMLElement>(".paper-editor-inline-actions");
+  if (existingToggle) existingToggle.replaceWith(toggle);
+  else if (actions) actions.prepend(toggle);
+  else toolbar.append(toggle);
+  syncOpenPaperAuditDialog(view);
 }
 
 // ── 最终成果页（DeliveryManifest → final-summary 面板） ─────────────────────
@@ -2350,6 +2684,10 @@ function renderDeliveryRecordPanel(root: HTMLElement, manifest: DeliveryManifest
 
 /** 把五类正文填进对应面板；契约为 null 的阶段保留空态骨架（不再回落演示内容）。 */
 export function renderStageContent(root: HTMLElement, outputs: StageOutputsPayload): void {
+  // 各阶段的真实图件先记账：论文分章直播时章节正文里的插图就能按它解析出图
+  rememberFigures(root, outputs.dataset_profile?.cleaning?.figures);
+  rememberFigures(root, outputs.experiment_summary?.figures);
+  rememberFigures(root, outputs.document_draft?.figures);
   if (outputs.dataset_profile) renderDataPanel(root, outputs.dataset_profile);
   if (outputs.plan_proposal) renderModelPanel(root, outputs.plan_proposal);
   if (outputs.experiment_summary) {
@@ -2360,6 +2698,9 @@ export function renderStageContent(root: HTMLElement, outputs: StageOutputsPaylo
     renderPaperAudit(root, outputs.document_draft);
     renderEditorPanel(root, outputs.document_draft);
     renderPaperPackagePanel(root, outputs.document_draft);
+  } else {
+    // 论文阶段还没产出：编辑器里若有恢复的本机草稿（用户先写了），大纲同样按正文现状给
+    syncPaperOutlineFromEditor(root);
   }
   if (outputs.delivery_manifest) {
     renderCompletePanel(root, outputs.delivery_manifest);

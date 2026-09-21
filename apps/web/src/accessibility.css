@@ -74,23 +74,46 @@ html[data-reduce-motion="on"] .settings-backdrop {
   backdrop-filter: none;
 }
 
+/* ── 液态玻璃下拉的可读性回退 ────────────────────────────────
+   下拉选择框（触发器与弹层）默认半透明 + backdrop 模糊。三种情况改回近乎不透明：
+   系统「减少透明度」、应用内「减少动态效果」（与上面关掉背景虚化同一口径）、
+   以及「增强文字对比度」——半透明底上文字对比度不可控，实底才能保证 4.5:1。 */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-fill: linear-gradient(165deg, rgba(255, 255, 255, .98) 0%, rgba(247, 249, 252, .97) 100%);
+    --glass-sheen: none;
+    --glass-trigger-fill: linear-gradient(180deg, #fff 0%, rgba(250, 251, 253, .98) 100%);
+    --glass-trigger-sheen: none;
+  }
+}
+
+html[data-reduce-motion="on"],
+html[data-contrast="high"] {
+  --glass-fill: linear-gradient(165deg, rgba(255, 255, 255, .98) 0%, rgba(247, 249, 252, .97) 100%);
+  --glass-sheen: none;
+  --glass-trigger-fill: linear-gradient(180deg, #fff 0%, rgba(250, 251, 253, .98) 100%);
+  --glass-trigger-sheen: none;
+}
+
+html[data-contrast="high"] {
+  --glass-stroke: var(--line);
+  --glass-stroke-strong: var(--muted);
+}
+
+html[data-reduce-motion="on"] :is(.settings-select-menu, .settings-select-trigger, .problem-filter-select .filter-button, .agent-model-menu, .menu, .recent-menu, .project-sort-trigger, .project-sort-menu) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 /* ── 增强文字对比度 ──────────────────────────────────────────
    现有浅色调色板里 --faint (#a1a19d) 与白底的对比度约 2.6:1、
    --muted (#777773) 约 4.5:1，都达不到 WCAG AA 对正文的 4.5:1 要求。
-   打开该开关后把这几个变量整体加深；因为暗色主题本身就是靠重定义
-   同一组变量实现的，这里对两种主题各给一套值。                      */
+   打开该开关后把这几个变量整体加深。                                */
 html[data-contrast="high"] {
   --ink: #000000;
   --muted: #4a4a46;
   --faint: #5f5f5a;
   --line: #b9b9b4;
-}
-
-html[data-contrast="high"][data-theme="dark"] {
-  --ink: #ffffff;
-  --muted: #d6d5d0;
-  --faint: #b4b3ae;
-  --line: #6b6b67;
 }
 
 /* 少数正文颜色直接写死在规则里，绕过了变量，这里一并对齐 */

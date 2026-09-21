@@ -59,4 +59,12 @@ export interface ProjectStats {
    * 项目产物总条数（运行产出与手动上传都计入）。
    */
   artifact_count: number;
+  /**
+   * 现行实验结果份数：项目全部运行中 EXPERIMENTING 节点的现行阶段输出（stage_outputs.status=current）条数。重做/重试只保留最新版，模拟链路不产出实质内容故不计。可选字段：旧生产者不返回时消费方按「暂无统计」处理。
+   */
+  experiment_count?: number;
+  /**
+   * 现行论文草稿份数：项目全部运行中 PAPER_WRITING 节点的现行阶段输出条数，口径同 experiment_count。可选字段。
+   */
+  paper_count?: number;
 }

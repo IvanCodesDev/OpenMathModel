@@ -146,6 +146,10 @@ export interface ProjectStats {
   latest_run: ProjectLatestRun | null;
   /** 项目产物总条数（运行产出与手动上传都计入）。 */
   artifact_count: number;
+  /** 现行实验结果份数：各运行 EXPERIMENTING 节点的 current 阶段输出条数；旧服务端不返回。 */
+  experiment_count?: number;
+  /** 现行论文草稿份数：各运行 PAPER_WRITING 节点的 current 阶段输出条数；旧服务端不返回。 */
+  paper_count?: number;
 }
 
 export interface Project {

@@ -33,6 +33,11 @@ npm run dev:api
 .venv\Scripts\python -m uvicorn omm_api.asgi:app --app-dir backend/api --reload --reload-dir backend/api/omm_api --reload-dir agents --timeout-graceful-shutdown 5 --port 8000
 ```
 
+漏了 `--reload-dir` 时 API 不会拒绝启动，但会在启动日志里打一块 `!!!` 包住的 ERROR
+（`omm.reload_guard`：「热重载配置会让实验阶段无法完成」，写明监视目录、沙盒目录与修正命令），
+之后每次被打断的阶段修复落定时 `omm.engine` 也会重复这条诊断。页面上用户只会看到
+「上一次执行在中途意外中断，已自动重新开始第 N 次尝试」——不带任何开发细节，且重跑不设次数上限。
+
 - 文档：http://127.0.0.1:8000/docs
 - 健康检查：http://127.0.0.1:8000/api/health
 
@@ -83,8 +88,10 @@ cd backend/api
 | `OMM_NODE_MAX_TOKENS` | 无上限 | 单个阶段节点的 token 硬停（E320），同上 |
 
 > 四项资源预算 2026-09-08 起默认关闭。它们原本要防的失控是「后端进程反复重启 →
-> 阶段无上限重跑」，那条已由 `MAX_CONSECUTIVE_INTERRUPTS`（连续 3 次 executor lost
-> 即停）在源头掐断；而额度一旦烧光是整个运行不可逆卡死——账本按 run 累计，人工
+> 阶段无上限重跑」，那条的根子是热重载监视到了沙盒目录（启动参数问题）：2026-09-19
+> 起 API 启动时与每次中断修复落定时都会在服务端日志里诊断（`omm.reload_guard` /
+> `omm.engine`，见上方启动命令说明），被中断的阶段无上限自动重跑、不再判死运行；
+> 而额度一旦烧光是整个运行不可逆卡死——账本按 run 累计，人工
 > 「重试」也会在调用前的预检处被拦。要恢复硬闸就填正整数，改完需重启 API 进程；
 > 每发起一轮修订，run/node 两级的有限额度各追加一份（ADR-0013 §3.1），不设限的
 > 维度不受影响。用量记录不受开关影响，「设置中心 → 用量监控」的月度费用预算与

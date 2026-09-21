@@ -47,8 +47,7 @@
 
 /* 折叠头是 <button>，会吃到全局 button:hover 的浅灰底；这里明确按住透明，
    悬停只靠回形针↔箭头的图标切换表达，不出现灰色背景盒子。 */
-.composer-attachments-head:hover,
-html[data-theme="dark"] .composer-attachments-head:hover {
+.composer-attachments-head:hover {
   background: transparent;
   border-color: transparent;
 }
@@ -350,82 +349,6 @@ html[data-theme="dark"] .composer-attachments-head:hover {
   max-width: 80%;
   font-size: 12px;
   color: #7c7c77;
-}
-
-html[data-theme="dark"] .composer-attachment {
-  border-color: #3b3b38;
-  background: #262625;
-}
-
-html[data-theme="dark"] .composer-attachment-icon {
-  color: #b8b7b1;
-}
-
-html[data-theme="dark"] .composer-attachment-name {
-  color: #f1f1ee;
-}
-
-html[data-theme="dark"] .composer-attachment-meta,
-html[data-theme="dark"] .composer-attachment-status,
-html[data-theme="dark"] .composer-dropzone small {
-  color: #98978f;
-}
-
-html[data-theme="dark"] .composer-attachment-notice {
-  color: #d3ab52;
-}
-
-html[data-theme="dark"] .composer-attachment-modality {
-  color: #d3ab52;
-}
-
-html[data-theme="dark"] .composer-attachments-head {
-  color: #f1f1ee;
-}
-
-html[data-theme="dark"] .composer-attachments-head-icon,
-html[data-theme="dark"] .composer-attachments-count {
-  color: #98978f;
-}
-
-html[data-theme="dark"] .user-attachment-chip {
-  border-color: #3b3b38;
-  background: #262625;
-  color: #b6b6b0;
-}
-
-html[data-theme="dark"] .user-attachment-chip i {
-  color: #98978f;
-}
-
-html[data-theme="dark"] .composer-attachment-remove:hover {
-  background: #353532;
-  color: #f1f1ee;
-}
-
-html[data-theme="dark"] .composer-attachment[data-state="failed"] {
-  border-color: #5a3b35;
-  background: #2a201e;
-}
-
-html[data-theme="dark"] .composer-attachment[data-state="failed"] .composer-attachment-icon,
-html[data-theme="dark"] .composer-attachment[data-state="failed"] .composer-attachment-notice,
-html[data-theme="dark"] .composer-attachment-status[data-kind="error"] {
-  color: #e08a78;
-}
-
-html[data-theme="dark"] .composer-dropzone {
-  background: rgba(24, 24, 23, .94);
-}
-
-html[data-theme="dark"] .composer-dropzone i,
-html[data-theme="dark"] .composer-dropzone strong {
-  color: #f1f1ee;
-}
-
-html[data-theme="dark"] .composer.is-dropping {
-  border-color: #6f6f68;
-  box-shadow: 0 0 0 3px rgba(241, 241, 238, .07);
 }
 
 @media (prefers-reduced-motion: reduce) {

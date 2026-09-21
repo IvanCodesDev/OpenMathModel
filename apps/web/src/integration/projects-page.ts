@@ -5,9 +5,9 @@
  * 治理入口——搜索、状态筛选、分页、新建、重命名、归档与删除。
  *
  * 数据 = GET /v1/projects?include=stats：服务端一次聚合出每个项目的最新
- * 运行投影（阶段、更新时间、行跳转取自它）与产物计数；Tabs（archived/state
- * 参数）、搜索（q 参数）与分页（limit/offset/total）全部在服务端完成。
- * 实验 / 论文计数列仍显示「—」，等各页正文契约（Phase 1）落地后回填。
+ * 运行投影（阶段、更新时间、行跳转取自它）、产物计数与现行实验结果 / 论文
+ * 草稿份数；Tabs（archived/state 参数）、搜索（q 参数）与分页（limit/offset/
+ * total）全部在服务端完成。旧服务端不返回实验 / 论文计数时由展示层标为「暂无统计」。
  *
  * 未登录或请求失败时保留模板演示表格与其原有交互，不打扰当前页面。
  */
@@ -19,6 +19,7 @@ import { forgetLastTask } from "../tasks/last-task-record";
 import { modelingWorkspaceApi } from "./modeling-workspace-api";
 import { hydrateRecentTasks } from "./recent-tasks";
 import { buildRunningUrl } from "./task-start-state";
+import { decorateProjectRows, initializeProjectPresentation, projectPageSize } from "./projects-presentation";
 
 type ProjectStats = NonNullable<Project["stats"]>;
 type LatestRun = NonNullable<ProjectStats["latest_run"]>;
@@ -29,11 +30,14 @@ interface ProjectItem {
   run: LatestRun | null;
   /** 产物计数；服务端未返回 stats 时为 null（计数列显示「—」）。 */
   artifactCount: number | null;
+  /** 现行实验结果份数；契约里是可选字段，旧服务端不返回时为 null。 */
+  experimentCount: number | null;
+  /** 现行论文草稿份数；同上。 */
+  paperCount: number | null;
 }
 
 type ProjectsTab = "all" | "active" | "done" | "archived";
 
-const PAGE_SIZES = [10, 20, 50];
 /** 页码窗口之外用省略号收敛，避免页多时按钮铺满一行。 */
 const MAX_PLAIN_PAGES = 7;
 
@@ -59,7 +63,7 @@ const NODE_STAGE_LABELS: Record<string, string> = {
 let currentTab: ProjectsTab = "all";
 let searchQuery = "";
 let currentPage = 1;
-let pageSize = 20;
+let pageSize = 12;
 let items: ProjectItem[] = [];
 let totalCount = 0;
 let fetchSeq = 0;
@@ -126,6 +130,8 @@ async function fetchPage(): Promise<{ items: ProjectItem[]; total: number } | nu
         project,
         run: project.stats?.latest_run ?? null,
         artifactCount: project.stats?.artifact_count ?? null,
+        experimentCount: project.stats?.experiment_count ?? null,
+        paperCount: project.stats?.paper_count ?? null,
       })),
       total: page.total,
     };
@@ -150,10 +156,13 @@ async function refetch(): Promise<void> {
   }
   if (fetched === null) {
     showToast(t("项目列表加载失败，请稍后再试"));
+    const loading = document.querySelector<HTMLElement>("[data-projects-loading]");
+    if (loading) loading.textContent = t("项目列表加载失败，请稍后再试");
     return;
   }
   items = fetched.items;
   totalCount = fetched.total;
+  ensureTakeover();
   render();
 }
 
@@ -171,14 +180,14 @@ function rowHtml(item: ProjectItem): string {
   const subtitleSource = item.run?.goal ?? item.project.description ?? "";
   const subtitle = subtitleSource ? escapeHtml(truncate(subtitleSource, 60)) : t("尚未发起运行");
   const runAttribute = item.run ? ` data-run-id="${escapeHtml(item.run.id)}"` : "";
-  // 文件列 = 服务端聚合的产物计数；实验/论文列等 Phase 1 正文契约后回填。
-  const files = item.artifactCount === null ? "—" : String(item.artifactCount);
+  // 三列计数都来自服务端聚合；「—」由展示层译成「暂无统计」（仅旧服务端缺字段时出现）。
+  const count = (value: number | null): string => (value === null ? "—" : String(value));
   // data-stage 保持中文原值：它是 CSS 配色选择器，不参与界面语言切换。
   return `<tr data-project-row data-project-id="${escapeHtml(item.project.id)}"${runAttribute} tabindex="0">
     <td class="project-name"><strong>${escapeHtml(item.project.name)}</strong><span>${subtitle}</span></td>
     <td><span class="stage-pill" data-stage="${escapeHtml(stage)}">${t(stage)}</span></td>
     <td>${updated}</td>
-    <td>${files}</td><td>—</td><td>—</td>
+    <td>${count(item.artifactCount)}</td><td>${count(item.experimentCount)}</td><td>${count(item.paperCount)}</td>
     <td><button type="button" class="row-menu-button" data-project-menu aria-label="${t("项目选项")}" title="${t("项目选项")}">${icon("dots-three")}</button></td>
   </tr>`;
 }
@@ -213,16 +222,11 @@ function footerHtml(total: number, pageCount: number): string {
   const numbers = pageWindow(pageCount).map(slot => slot === "gap"
     ? '<span class="page-gap">…</span>'
     : `<button type="button" class="page-button ${slot === currentPage ? "active" : ""}" data-projects-page="${slot}" aria-current="${slot === currentPage ? "page" : "false"}">${slot}</button>`).join("");
-  const options = PAGE_SIZES.map(size =>
-    `<button type="button" role="option" data-select-option="${size}" aria-selected="${size === pageSize}"><span>${size} ${t("条/页")}</span>${icon("check")}</button>`).join("");
   return `<span>${t("共")} ${total} ${t("项")}</span><div class="pagination">
     <button type="button" class="page-button" data-projects-page="prev" ${currentPage <= 1 ? "disabled" : ""} aria-label="${t("上一页")}">‹</button>
     ${numbers}
     <button type="button" class="page-button" data-projects-page="next" ${currentPage >= pageCount ? "disabled" : ""} aria-label="${t("下一页")}">›</button>
-    <div class="settings-custom-select page-size-select" data-page-size-select data-select-menu>
-      <button type="button" class="settings-select-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-label="${t("每页条数")}"><span data-select-label>${pageSize} ${t("条/页")}</span>${icon("caret-down")}</button>
-      <div class="settings-select-menu" role="listbox" aria-label="${t("每页条数")}">${options}</div>
-    </div>
+    <span class="project-page-size">${pageSize} ${t("条/页")}</span>
   </div>`;
 }
 
@@ -233,6 +237,7 @@ function render(): void {
   const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
   currentPage = Math.min(Math.max(1, currentPage), pageCount);
   tbody.innerHTML = items.length > 0 ? items.map(rowHtml).join("") : emptyRowHtml();
+  decorateProjectRows();
   footer.innerHTML = footerHtml(totalCount, pageCount);
 }
 
@@ -565,7 +570,7 @@ function ensureTakeover(): void {
     if (item) openItem(item);
   });
 
-  // 分页与每页条数：页脚整体由 render() 重建，监听挂容器做委托。
+  // 每页数量由视图固定（网格 12 / 列表 10），页脚只保留翻页。
   const footer = document.querySelector<HTMLElement>(".project-footer");
   footer?.addEventListener("click", event => {
     const target = event.target as Element;
@@ -578,26 +583,6 @@ function ensureTakeover(): void {
       void refetch();
       return;
     }
-    const wrapper = target.closest<HTMLElement>("[data-page-size-select]");
-    if (!wrapper) return;
-    const option = target.closest<HTMLElement>("[data-select-option]");
-    if (option) {
-      const next = Number(option.dataset.selectOption);
-      if (PAGE_SIZES.includes(next) && next !== pageSize) {
-        pageSize = next;
-        currentPage = 1;
-        void refetch();
-      } else {
-        wrapper.classList.remove("open");
-        wrapper.querySelector("[data-select-trigger]")?.setAttribute("aria-expanded", "false");
-      }
-      return;
-    }
-    if (target.closest("[data-select-trigger]")) {
-      const willOpen = !wrapper.classList.contains("open");
-      wrapper.classList.toggle("open", willOpen);
-      wrapper.querySelector("[data-select-trigger]")?.setAttribute("aria-expanded", String(willOpen));
-    }
   });
 }
 
@@ -606,6 +591,21 @@ function ensureTakeover(): void {
 /** 进入「我的项目」页后调用：把模板表格换成真实项目清单；拿不到数据时保留模板（默认即空表）。 */
 export async function hydrateProjectsPage(): Promise<void> {
   if (!document.querySelector(".project-table")) return;
+  initializeProjectPresentation(() => {
+    pageSize = projectPageSize();
+    currentPage = 1;
+    // Empty/demo views have at most seven rows; real pages re-fetch using the new limit.
+    const table = document.querySelector<HTMLElement>(".project-table");
+    if (table?.dataset.projectsBound) {
+      const tbody = table.querySelector("tbody");
+      if (tbody) tbody.innerHTML = `<tr class="projects-empty-row"><td colspan="7" data-projects-loading>${t("加载中…")}</td></tr>`;
+      void refetch();
+    } else {
+      // Also supersedes an in-flight initial request, so it cannot restore the old limit.
+      void hydrateProjectsPage();
+    }
+  });
+  pageSize = projectPageSize();
   const seq = ++fetchSeq;
   const fetched = await fetchPage();
   // 快速切换或失败时不打扰当前页面（未登录/网络失败 = 保留模板表格）

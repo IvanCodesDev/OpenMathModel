@@ -40,7 +40,7 @@ test("下拉值 ↔ 接口 id：auto / 空 / 历史静态模型名都算自动",
 
 test("整张设置表 → task_routes：四键齐全，缺项为 null", () => {
   assert.deepEqual(
-    taskRoutesFromForm({ codingModel: "endpoint-ep_c", visionModel: "auto", theme: "dark" }),
+    taskRoutesFromForm({ codingModel: "endpoint-ep_c", visionModel: "auto", interfaceLocale: "zh-CN" }),
     { coding: "ep_c", research: null, writing: null, vision: null },
   );
   assert.deepEqual(taskRoutesFromForm({}), { coding: null, research: null, writing: null, vision: null });

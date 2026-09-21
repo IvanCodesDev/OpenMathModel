@@ -11,6 +11,8 @@
   LLM 与 python_run 工具打桩，覆盖审批门、实验修复轮、审批拒绝重试与失败恢复。
 - ``shadow``：Graph v1（linear-v1）影子等价（设计文档 §6.5）——全链场景在现引擎
   与图调度下各跑一趟，控制流事件序列逐一比对。
+- ``metrics``：E6 看板（设计文档 §14.1 E6 / §14.2）——从事件日志聚合运行级 / 批次级的
+  质量、失败错误码与成本指标，纯函数，不接生产。
 """
 
 from .full_chain import (
@@ -41,6 +43,15 @@ from .full_chain import (
     robustness_success,
     sandbox_failure,
     sandbox_success,
+)
+from .metrics import (
+    REPORT_VERSION,
+    SANDBOX_TOOLS,
+    aggregate_batch,
+    aggregate_run,
+    compare_reports,
+    render_batch_markdown,
+    render_markdown,
 )
 from .scenario import (
     CANNED_ANALYSIS,
@@ -95,6 +106,8 @@ __all__ = [
     "FULL_CHAIN_ROBUSTNESS_CHECKS",
     "GOLDEN_EVENT_TYPES",
     "PROBLEM_STATEMENT",
+    "REPORT_VERSION",
+    "SANDBOX_TOOLS",
     "SHADOW_SCENARIOS",
     "VALIDATION_CODE_MARKER",
     "FakeToolInvoker",
@@ -102,6 +115,8 @@ __all__ = [
     "ScriptedRun",
     "ShadowReport",
     "ShadowScenario",
+    "aggregate_batch",
+    "aggregate_run",
     "build_full_chain_llm",
     "build_full_chain_session",
     "build_llm",
@@ -109,8 +124,11 @@ __all__ = [
     "canned_paper_section",
     "canned_proposer",
     "canned_sandbox_agent",
+    "compare_reports",
     "compare_scenario",
     "control_flow_trace",
+    "render_batch_markdown",
+    "render_markdown",
     "robustness_success",
     "run_scenario",
     "sandbox_failure",

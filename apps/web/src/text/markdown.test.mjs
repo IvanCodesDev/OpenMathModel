@@ -147,10 +147,13 @@ test("images stay plain text unless a resolver vouches for them", () => {
     },
   });
   assert.deepEqual(seen, [["fit.png", "图 1 拟合曲线"]]);
+  // 不带 loading="lazy"：懒加载在滚到之前只留一个空盒，论文页几张图直接加载；
+  // data-figure-name 记正文写的文件名，导出（Word / LaTeX 包）按它命名图件
   assert.ok(html.includes(
-    '<figure class="md-figure"><img src="/api/v1/artifacts/art_1/download" alt="图 1 拟合曲线" loading="lazy">'
+    '<figure class="md-figure"><img src="/api/v1/artifacts/art_1/download" alt="图 1 拟合曲线" decoding="async" data-figure-name="fit.png">'
     + "<figcaption>图 1 拟合曲线</figcaption></figure>",
   ));
+  assert.ok(!html.includes('loading="lazy"'));
   assert.ok(!html.includes("<p><figure"), "图是块级：不裹进段落");
   assert.ok(html.includes("<p>拟合效果见图 1。</p>") && html.includes("<p>随后分析。</p>"));
 });

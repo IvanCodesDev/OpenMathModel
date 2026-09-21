@@ -61,11 +61,6 @@
   font-weight: 600;
 }
 
-.modeling-chat-pane .activity-summary {
-  margin-bottom: 16px;
-  font-size: 15px;
-}
-
 .modeling-chat-pane .progress-step {
   min-height: 52px;
   font-size: 15px;
@@ -930,10 +925,6 @@
   line-height: 1.7;
 }
 
-html[data-theme="dark"] .workflow-editor .editor-page .md-inline-code { background: #2e2e2c; }
-html[data-theme="dark"] .workflow-editor .editor-page .md-code pre { border-color: #3a3a37; background: #262624; }
-html[data-theme="dark"] .workflow-editor .editor-page blockquote { border-left-color: #3f3f3c; color: #a5a5a0; }
-
 .workflow-editor mark {
   padding: 3px 5px;
   border-radius: 3px;
@@ -1300,9 +1291,6 @@ html[data-theme="dark"] .workflow-editor .editor-page blockquote { border-left-c
 .focused-agent-scroll { min-height: 0; padding: 5px 28px 13px; flex: 1 1 auto; overflow: auto; scrollbar-width: thin; }
 .focused-agent-scroll { scrollbar-width: none; }
 .focused-agent-scroll::-webkit-scrollbar { display: none; }
-.focused-agent-scroll .activity-summary { width: auto; margin: 0 0 11px; padding: 5px 0; border: 0; color: #555551; background: transparent; font-size: 16px; font-weight: 500; }
-.focused-agent-scroll .activity-summary > i:first-child { margin-right: 8px; font-size: 20px; }
-.focused-agent-scroll .activity-summary > i:last-child { margin-left: 6px; font-size: 14px; }
 .focused-activity-list { position: relative; margin-bottom: 18px; }
 .focused-activity-list.collapsed { display: none; }
 .focused-activity-list::before { content: ""; position: absolute; top: 23px; bottom: 23px; left: 12px; width: 1px; background: #e1e6e2; }
@@ -1541,8 +1529,6 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 .focused-agent-head .assistant-id { gap: 9px; font-size: 20px; }
 .focused-agent-head .assistant-logo { width: 24px; height: 24px; }
 .focused-agent-scroll { padding: 3px 20px 10px; }
-.focused-agent-scroll .activity-summary { margin-bottom: 7px; font-size: 14px; }
-.focused-agent-scroll .activity-summary > i:first-child { font-size: 18px; }
 .focused-step { min-height: 44px; grid-template-columns: 22px minmax(0,1fr) auto 17px; gap: 8px; font-size: 14px; }
 .focused-step-dot { width: 20px; height: 20px; border-width: 1.5px; font-size: 11px; }
 .focused-activity-list::before { top: 20px; bottom: 20px; left: 10px; }
@@ -1712,23 +1698,6 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
 
 .focused-agent-scroll {
   padding: 4px 24px 14px;
-}
-
-.focused-agent-scroll .activity-summary {
-  margin-bottom: 6px;
-  padding: 4px 0;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.focused-agent-scroll .activity-summary > i:first-child {
-  margin-right: 7px;
-  font-size: 16px;
-}
-
-.focused-agent-scroll .activity-summary > i:last-child {
-  margin-left: 5px;
-  font-size: 12px;
 }
 
 .focused-activity-list { margin-bottom: 14px; }
@@ -3112,11 +3081,10 @@ body.is-resizing-modeling .focused-modeling-resizer::before {
   font-size: 13px;
 }
 
-html[data-theme="dark"] .final-delivery-document .delivery-package-link { color: #8ec5ea; }
-html[data-theme="dark"] .final-delivery-document .delivery-package-note { color: #a8a8a3; }
-
 /* 结果页「结果图表」/ 成果页「论文文件」的真实图件条与文献清单（H5 切片 s25）：
-   缩略图卡按 180px 网格铺开，图题 + 来源 + 已插入标记 + 下载；无产物 id 的图只给占位。
+   缩略图卡按 180px 网格铺开；说明区固定三段——头行「图 N · 来源 · 已插入」、图题、脚行「文件名 · 下载」。
+   卡片只负责认图：图题固定三行截断（不在卡内展开，长图题去放大查看里读），脚行钉在卡底、同行卡片等高，
+   长文件名单行省略、悬停看全名；缩略图是按钮，点开 figure-lightbox 放大；无产物 id 的图只给占位。
    文献按编号列，出处是外链（新开页），来源 / 验证状态 / \cite key 作小字。 */
 .result-detail-document .result-figure-strip,
 .clean-data-template .result-figure-strip {
@@ -3128,24 +3096,78 @@ html[data-theme="dark"] .final-delivery-document .delivery-package-note { color:
 
 .result-detail-document .result-figure,
 .clean-data-template .result-figure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   margin: 0;
   border: 1px solid #e6e6e2;
   border-radius: 10px;
   overflow: hidden;
   background: #fff;
+  transition: border-color .15s ease;
 }
+
+.result-detail-document .result-figure:not(.is-missing):hover,
+.clean-data-template .result-figure:not(.is-missing):hover { border-color: #c9c9c4; }
 
 .result-detail-document .result-figure-media,
 .clean-data-template .result-figure-media {
+  position: relative;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  width: 100%;
   height: 120px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   background: #f5f5f2;
   color: #8a8a85;
   font-size: 12px;
 }
+
+/* 缩略图按钮：去掉全局按钮的按下位移，指针给放大镜；右下角的放大镜图标悬停 / 聚焦时浮现 */
+.result-detail-document button.result-figure-media,
+.clean-data-template button.result-figure-media { cursor: zoom-in; transition: none; }
+.result-detail-document button.result-figure-media:active,
+.clean-data-template button.result-figure-media:active { transform: none; }
+.result-detail-document button.result-figure-media:focus-visible,
+.clean-data-template button.result-figure-media:focus-visible { outline: 2px solid #1f5f8b; outline-offset: -2px; }
+
+.result-detail-document .result-figure-media > i,
+.clean-data-template .result-figure-media > i {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(29, 29, 27, .78);
+  color: #fff;
+  font-size: 15px !important;
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+/* 占位卡（无产物 id）里的图标是正文的一部分，不套放大镜的浮层样式 */
+.result-detail-document .result-figure.is-missing .result-figure-media > i,
+.clean-data-template .result-figure.is-missing .result-figure-media > i {
+  position: static;
+  width: auto;
+  height: auto;
+  background: transparent;
+  color: inherit;
+  opacity: 1;
+}
+.result-detail-document .result-figure:hover button.result-figure-media > i,
+.clean-data-template .result-figure:hover button.result-figure-media > i,
+.result-detail-document button.result-figure-media:focus-visible > i,
+.clean-data-template button.result-figure-media:focus-visible > i { opacity: 1; }
 
 .result-detail-document .result-figure-media img,
 .clean-data-template .result-figure-media img {
@@ -3159,24 +3181,89 @@ html[data-theme="dark"] .final-delivery-document .delivery-package-note { color:
 .result-detail-document .result-figure figcaption,
 .clean-data-template .result-figure figcaption {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  min-width: 0;
   padding: 8px 10px 10px;
   font-size: 13px;
   line-height: 1.45;
 }
 
-.result-detail-document .result-figure-meta,
-.clean-data-template .result-figure-meta {
+/* 头行：编号加重，来源与已插入状态作小字；状态靠右 */
+.result-detail-document .result-figure-head,
+.clean-data-template .result-figure-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 10px;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: #6a6a65;
+}
+
+.result-detail-document .result-figure-number,
+.clean-data-template .result-figure-number {
+  font-weight: 650;
+  font-size: 13px;
+  color: #1d1d1b;
+  white-space: nowrap;
+}
+
+.result-detail-document .result-figure-stage,
+.clean-data-template .result-figure-stage { white-space: nowrap; }
+
+.result-detail-document .result-figure-inserted,
+.clean-data-template .result-figure-inserted { margin-left: auto; white-space: nowrap; }
+
+/* 图题：固定三行截断、可任意断行；全文在放大查看里读，卡内不展开（卡片高度因此可控） */
+.result-detail-document .result-figure-caption,
+.clean-data-template .result-figure-caption {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  color: #1d1d1b;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+/* 没有图题、退回文件名：等宽单行省略，不假装成一句图题 */
+.result-detail-document .result-figure-caption.is-filename,
+.clean-data-template .result-figure-caption.is-filename {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.result-detail-document .result-figure.is-missing .result-figure-caption,
+.clean-data-template .result-figure.is-missing .result-figure-caption { cursor: default; }
+
+/* 脚行钉在卡底：文件名吃掉剩余宽度并省略，下载靠右 */
+.result-detail-document .result-figure-foot,
+.clean-data-template .result-figure-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  margin-top: auto;
   font-size: 12px;
   color: #6a6a65;
 }
 
 .result-detail-document .result-figure-name,
 .clean-data-template .result-figure-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
 }
 
@@ -3185,7 +3272,14 @@ html[data-theme="dark"] .final-delivery-document .delivery-package-note { color:
 .result-detail-document .result-figure-inserted.is-no,
 .clean-data-template .result-figure-inserted.is-no { color: #a8711c; }
 .result-detail-document .result-figure-download,
-.clean-data-template .result-figure-download { color: #1f5f8b; text-decoration: underline; text-underline-offset: 3px; }
+.clean-data-template .result-figure-download {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #1f5f8b;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
 .result-detail-document .result-figure.is-missing .result-figure-media,
 .clean-data-template .result-figure.is-missing .result-figure-media { border-bottom: 1px dashed #d8d8d3; }
 
@@ -3210,33 +3304,60 @@ html[data-theme="dark"] .final-delivery-document .delivery-package-note { color:
 .result-detail-document .paper-reference-meta { flex-basis: 100%; font-size: 12px; color: #6a6a65; }
 .result-detail-document .paper-reference-list li.is-uncited .paper-reference-title { font-weight: 500; color: #6a6a65; }
 
-html[data-theme="dark"] .result-detail-document .result-figure,
-html[data-theme="dark"] .clean-data-template .result-figure { border-color: #3a3a37; background: #1f1f1d; }
-html[data-theme="dark"] .result-detail-document .result-figure-media,
-html[data-theme="dark"] .clean-data-template .result-figure-media { background: #2a2a28; color: #a8a8a3; }
-html[data-theme="dark"] .result-detail-document .result-figure-media img,
-html[data-theme="dark"] .clean-data-template .result-figure-media img { background: #f5f5f2; }
-html[data-theme="dark"] .result-detail-document .result-figure-meta,
-html[data-theme="dark"] .clean-data-template .result-figure-meta,
-html[data-theme="dark"] .result-detail-document .paper-reference-label,
-html[data-theme="dark"] .result-detail-document .paper-reference-meta,
-html[data-theme="dark"] .result-detail-document .paper-reference-list li.is-uncited .paper-reference-title { color: #a8a8a3; }
-html[data-theme="dark"] .result-detail-document .result-figure-inserted.is-yes,
-html[data-theme="dark"] .clean-data-template .result-figure-inserted.is-yes { color: #7fc39a; }
-html[data-theme="dark"] .result-detail-document .result-figure-inserted.is-no,
-html[data-theme="dark"] .clean-data-template .result-figure-inserted.is-no { color: #e0b15c; }
-html[data-theme="dark"] .result-detail-document .result-figure-download,
-html[data-theme="dark"] .clean-data-template .result-figure-download,
-html[data-theme="dark"] .result-detail-document a.paper-reference-title { color: #8ec5ea; }
+/* ── 图件放大查看（figure-lightbox.ts）：只放大图本身——半透明深底上一张按视口适配的图，没有面板、标题与按钮。
+   滚轮 / 双指 / 双击缩放、拖动平移，Esc 或点图外关闭；图有圆角与投影，从底上浮起。
+   z-index 压在普通弹框（120）之上、提示条（260）之下。 ── */
+.figure-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  overflow: hidden;
+  background: rgba(20, 20, 18, .82);
+  cursor: zoom-out;
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: figure-lightbox-in .16s ease-out;
+}
 
-html[data-theme="dark"] .final-delivery-document .delivery-status.is-ok,
-html[data-theme="dark"] .final-delivery-document .delivery-checks li.is-passed > i { color: #7fc39a; }
-html[data-theme="dark"] .final-delivery-document .delivery-status.is-warn { color: #e0b15c; }
-html[data-theme="dark"] .final-delivery-document .delivery-checks li.is-failed > i { color: #e29a6a; }
-html[data-theme="dark"] .final-delivery-document .delivery-status.is-muted,
-html[data-theme="dark"] .final-delivery-document .delivery-comment,
-html[data-theme="dark"] .final-delivery-document .delivery-check-detail,
-html[data-theme="dark"] .final-delivery-document .delivery-file-hash { color: #a8a8a3; }
+@keyframes figure-lightbox-in { from { opacity: 0; } }
+
+html[data-reduce-motion="on"] .figure-lightbox { animation: none; }
+
+.figure-lightbox.is-pannable { cursor: grab; }
+.figure-lightbox.is-dragging { cursor: grabbing; }
+
+/* 图以自然像素尺寸铺在左上角，transform 只做 translate + scale */
+.figure-lightbox-image {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: none;
+  transform-origin: 0 0;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+  cursor: default;
+  will-change: transform;
+}
+
+.figure-lightbox-image[hidden] { display: none; }
+
+/* 只在图加载失败时出现的一行说明 */
+.figure-lightbox-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #d5d5d0;
+  font-family: Inter, "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.figure-lightbox-status[hidden] { display: none; }
 
 .paper-editing-section {
   margin-top: 16px;
@@ -3519,160 +3640,214 @@ html[data-theme="dark"] .final-delivery-document .delivery-file-hash { color: #a
   padding: 38px clamp(44px, 6vw, 82px) 90px;
 }
 
-/* ── 论文页「数字审计」条（H5 数字冻结清单 + 终稿审计，G4 定稿闸门的证据面）：
-   工具栏与纸面之间的一行结论（<details>），展开后是发现列表 + 冻结清单表。
+/* ── 论文页「终稿审计」（H5 数字冻结清单 + 终稿审计，G4 定稿闸门的证据面）：
+   纸面上不再压任何东西——论文页只在工具栏留一枚「终稿审计」按钮（有发现时带琥珀计数徽标），
+   点开是一张独立弹框，复用 .modal-backdrop / .modal 的视觉语言，只是更宽、内部滚动。
    单色为主：有发现用琥珀警示、对账通过用绿色勾，与稳健性小节同一套色阶。 ── */
-.paper-only-editor .paper-audit {
-  flex: 0 0 auto;
-  border-bottom: 1px solid #e3e3df;
-  background: #fafaf8;
+.paper-only-editor .paper-editor-inline-actions .paper-audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paper-only-editor .paper-audit-toggle > i { font-size: 15px !important; }
+.paper-only-editor .paper-audit-toggle.is-warn > i { color: #a76a00; }
+.paper-only-editor .paper-audit-toggle.is-clean > i { color: #1d8a4e; }
+.paper-only-editor .paper-audit-toggle.is-muted > i { color: #8a8a85; }
+.paper-only-editor .paper-editor-inline-actions .paper-audit-toggle.is-active {
+  background: #f0f0ed;
+  border-color: #cfcfca;
+}
+
+.paper-only-editor .paper-audit-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #f6e7c8;
+  color: #7a4d00;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 弹框：头行「图标 + 终稿审计 + 关闭」，其下一句结论，再下是滚动的清单区 */
+.paper-audit-dialog .modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, 94vw);
+  max-height: min(760px, 88vh);
+  padding: 0;
+  overflow: hidden;
   color: #3a3a37;
   font-family: Inter, "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
 }
 
-.paper-only-editor .paper-audit-summary {
-  min-height: 38px;
-  padding: 7px 18px;
+.paper-audit-dialog .paper-audit-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 18px 16px 12px 24px;
+}
+
+.paper-audit-dialog .paper-audit-head > i { flex: 0 0 auto; font-size: 20px !important; }
+.paper-audit-dialog.is-warn .paper-audit-head > i { color: #a76a00; }
+.paper-audit-dialog.is-clean .paper-audit-head > i { color: #1d8a4e; }
+.paper-audit-dialog.is-muted .paper-audit-head > i { color: #8a8a85; }
+
+.paper-audit-dialog .paper-audit-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: #1d1d1b;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.paper-audit-dialog .paper-audit-close {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #6a6a65;
   cursor: pointer;
-  list-style: none;
-  user-select: none;
 }
 
-.paper-only-editor .paper-audit-summary::-webkit-details-marker { display: none; }
+.paper-audit-dialog .paper-audit-close:hover { background: #ececea; color: #1d1d1b; }
+.paper-audit-dialog .paper-audit-close > i { font-size: 16px !important; }
 
-.paper-only-editor .paper-audit-summary > i {
-  font-size: 16px !important;
+.paper-audit-dialog .paper-audit-verdict {
   flex: 0 0 auto;
+  margin: 0;
+  padding: 0 24px 14px;
+  border-bottom: 1px solid #ececea;
+  color: #6a6a65;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
-.paper-only-editor .paper-audit.is-warn .paper-audit-summary > i { color: #a76a00; }
-.paper-only-editor .paper-audit.is-clean .paper-audit-summary > i { color: #1d8a4e; }
-.paper-only-editor .paper-audit.is-muted .paper-audit-summary > i { color: #8a8a85; }
+.paper-audit-dialog.is-warn .paper-audit-verdict { color: #7a4d00; }
 
-.paper-only-editor .paper-audit-summary strong { font-weight: 600; color: #1d1d1b; }
-
-.paper-only-editor .paper-audit-verdict { min-width: 0; flex: 1 1 auto; }
-
-.paper-only-editor .paper-audit.is-warn .paper-audit-verdict { color: #7a4d00; }
-
-.paper-only-editor .paper-audit-hint {
-  flex: 0 0 auto;
-  color: #8a8a85;
-  font-size: 12px;
-}
-
-.paper-only-editor .paper-audit[open] .paper-audit-hint { display: none; }
-
-.paper-only-editor .paper-audit-body {
-  max-height: 42vh;
-  padding: 2px 18px 14px;
+.paper-audit-dialog .paper-audit-body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
-  border-top: 1px dashed #e3e3df;
+  padding: 2px 24px 22px;
+  font-size: 13.5px;
+  line-height: 1.6;
 }
 
-.paper-only-editor .paper-audit-body h4 {
-  margin: 12px 0 6px;
+.paper-audit-dialog .paper-audit-body h4 {
+  margin: 22px 0 8px;
   color: #8a8a85;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: .04em;
 }
 
-.paper-only-editor .paper-audit-findings {
+.paper-audit-dialog .paper-audit-body h4:first-child { margin-top: 16px; }
+
+.paper-audit-dialog .paper-audit-findings {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.paper-only-editor .paper-audit-findings li {
-  padding: 5px 0;
+.paper-audit-dialog .paper-audit-findings li {
+  padding: 6px 0;
   display: flex;
   align-items: flex-start;
   gap: 8px;
 }
 
-.paper-only-editor .paper-audit-findings li > i {
+.paper-audit-dialog .paper-audit-findings li > i {
   margin-top: 2px;
   color: #a76a00;
   font-size: 15px !important;
 }
 
-.paper-only-editor .paper-audit-findings strong { font-weight: 600; color: #1d1d1b; }
+.paper-audit-dialog .paper-audit-findings strong { font-weight: 600; color: #1d1d1b; }
+.paper-audit-dialog .paper-audit-reason { margin-left: 6px; color: #6a6a65; }
 
-.paper-only-editor .paper-audit-reason { margin-left: 6px; color: #6a6a65; }
-
-.paper-only-editor .paper-audit-chip {
+.paper-audit-dialog .paper-audit-chip {
   margin: 0 3px;
   padding: 1px 7px;
   border: 1px solid #e3e3df;
   border-radius: 6px;
-  background: #fff;
+  background: #fafaf8;
   color: #1d1d1b;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
   font-size: 12px;
 }
 
-.paper-only-editor .paper-audit-table {
+.paper-audit-dialog .paper-audit-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
-.paper-only-editor .paper-audit-table th,
-.paper-only-editor .paper-audit-table td {
-  padding: 5px 10px 5px 0;
+.paper-audit-dialog .paper-audit-table th,
+.paper-audit-dialog .paper-audit-table td {
+  padding: 7px 12px 7px 0;
   vertical-align: top;
   text-align: left;
   border-bottom: 1px solid #ececea;
 }
 
-.paper-only-editor .paper-audit-table th {
+.paper-audit-dialog .paper-audit-table th {
   color: #8a8a85;
   font-weight: 600;
   white-space: nowrap;
 }
 
 /* 编号 / 出处是机器路径（metrics.rmse、robustness.checks[1].value）：不在 token 中间折行，
-   宁可让表在 body 里横向滚动，也不把 value 拆成 valu / e。 */
-.paper-only-editor .paper-audit-id,
-.paper-only-editor .paper-audit-source {
+   宁可让表在弹框里横向滚动，也不把 value 拆成 valu / e。 */
+.paper-audit-dialog .paper-audit-id,
+.paper-audit-dialog .paper-audit-source {
   font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
   font-size: 12px;
   color: #6a6a65;
   white-space: nowrap;
 }
 
-.paper-only-editor .paper-audit-value { white-space: nowrap; }
+.paper-audit-dialog .paper-audit-value { white-space: nowrap; }
 
-/* 真实图件表：已插入 / 未插入两态只用颜色区分，文字本身已说明状态 */
-.paper-only-editor .paper-audit-figure-inserted { color: #2f7d4f; white-space: nowrap; }
-.paper-only-editor .paper-audit-figure-unused { color: #8a8a85; white-space: nowrap; }
+/* 图件表的图题：截三行、悬停看全文，一条三百字的图题不会把整行撑到六行高 */
+.paper-audit-dialog .paper-audit-figures th:nth-child(4) { width: 42%; }
+.paper-audit-dialog .paper-audit-figure-caption {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 
-.paper-only-editor .paper-audit-empty,
-.paper-only-editor .paper-audit-note {
-  margin: 8px 0 0;
+/* 真实图件 / 参考文献表：已插入 / 未插入两态只用颜色区分，文字本身已说明状态 */
+.paper-audit-dialog .paper-audit-figure-inserted { color: #2f7d4f; white-space: nowrap; }
+.paper-audit-dialog .paper-audit-figure-unused { color: #8a8a85; white-space: nowrap; }
+.paper-audit-dialog .paper-audit-reference-entry a { color: #1f5f8b; text-decoration: underline; text-underline-offset: 3px; }
+
+.paper-audit-dialog .paper-audit-empty,
+.paper-audit-dialog .paper-audit-note {
+  margin: 10px 0 0;
   color: #8a8a85;
   font-size: 12px;
 }
 
-html[data-theme="dark"] .paper-only-editor .paper-audit {
-  border-bottom-color: #3a3a37;
-  background: #262624;
-  color: #d5d5d0;
+@media (max-width: 720px) {
+  .paper-audit-dialog .modal { max-height: 92vh; }
+  .paper-audit-dialog .paper-audit-head { padding: 14px 10px 10px 16px; }
+  .paper-audit-dialog .paper-audit-verdict { padding: 0 16px 12px; }
+  .paper-audit-dialog .paper-audit-body { padding: 2px 16px 18px; overflow-x: auto; }
 }
-html[data-theme="dark"] .paper-only-editor .paper-audit-summary strong,
-html[data-theme="dark"] .paper-only-editor .paper-audit-findings strong,
-html[data-theme="dark"] .paper-only-editor .paper-audit-chip { color: #f0f0ec; }
-html[data-theme="dark"] .paper-only-editor .paper-audit-body { border-top-color: #3a3a37; }
-html[data-theme="dark"] .paper-only-editor .paper-audit-chip { border-color: #3f3f3c; background: #2e2e2c; }
-html[data-theme="dark"] .paper-only-editor .paper-audit-table th,
-html[data-theme="dark"] .paper-only-editor .paper-audit-table td { border-bottom-color: #3a3a37; }
-html[data-theme="dark"] .paper-only-editor .paper-audit.is-warn .paper-audit-verdict { color: #e0b15c; }
 
 @container (max-width: 700px) {
   .paper-only-editor .editor-layout {
@@ -3854,8 +4029,6 @@ html[data-theme="dark"] .paper-only-editor .paper-audit.is-warn .paper-audit-ver
 /* 完成态：黑色圆形 + 白色对钩（填充字形的钩是镂空的，衬底即为白） */
 .focused-step[data-stage-status="SUCCEEDED"] .focused-step-dot i,
 .progress-step[data-stage-status="SUCCEEDED"] .step-dot i { color: #151515; }
-html[data-theme="dark"] .focused-step[data-stage-status="SUCCEEDED"] .focused-step-dot i,
-html[data-theme="dark"] .progress-step[data-stage-status="SUCCEEDED"] .step-dot i { color: #e8e8e4; }
 .focused-step,
 .focused-step time,
 .focused-step-dot,
@@ -3976,20 +4149,11 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
 
 /* hidden 属性必须真的隐藏：这些元素带作者级 display（flex/inline-flex），
    优先级高于 UA 的 [hidden]，不加 !important 会出现“已隐藏却仍显示”。 */
-.activity-summary[hidden],
 .activity-list[hidden],
 .focused-activity-list[hidden],
 .agent-stream[hidden],
 [data-agent-summary][hidden],
 [data-agent-cta][hidden] { display: none !important; }
-
-/* 折叠开关：悬停不出现全局按钮的底色药丸；api 布局下折叠依然生效
-   （api 模式的 display:flex 特异性更高，必须显式补 collapsed 规则） */
-.activity-summary:hover { background: transparent; border-color: transparent; }
-.activity-summary:active { transform: none; }
-[data-modeling-shell][data-workspace-source="api"] .activity-list.collapsed { display: none; }
-/* 对话尾部执行轨迹块与回复内过程区共用活动流容器，同样支持折叠 */
-.agent-stream.collapsed { display: none; }
 
 /* 实时 CTA：悬停/按压零样式变化（覆盖全局 button:hover 的浅灰底） */
 .running-live-cta:hover { background: #11110f; color: #fff; border-color: transparent; }
@@ -4114,8 +4278,6 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
   background-clip: text;
   animation: thinking-shine 1.6s cubic-bezier(0.25, 0.1, 0.25, 1) 2;
 }
-html[data-theme="dark"] .stream-narration { color: #d0d0ca; }
-html[data-theme="dark"] .stream-row { color: #b9b9b2; }
 /* 终态运行的「按这条要求继续修改」入口（ADR-0013 第 12 项）：过程行下挂一个真按钮。
    点它只是受理修订、真正重跑与花费仍要在审批门里再确认一次，所以用低调的次级按钮，
    不给主行动色——避免看起来像「点了就开跑」。 */
@@ -4140,8 +4302,6 @@ html[data-theme="dark"] .stream-row { color: #b9b9b2; }
 }
 .stream-cta button:hover:not(:disabled) { border-color: #bcbcb6; background: #f4f4f1; }
 .stream-cta button:disabled { color: #9a9a95; cursor: default; }
-html[data-theme="dark"] .stream-detail { border-color: #3a3a37; background: #262624; }
-html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; scrollbar-color: #4a4a46 transparent; }
 /* 审批门的多选项列表（ADR-0013 第 14 项）：修订门六个「从 X 重做」+ 一个撤回。
    做成一组可点卡片而不是原生 radio——每项都要摆得下标题、建议徽标和一句影响面
    说明（「重跑 X 及其之后的全部阶段」），原生控件既塞不下也压不住行高。 */
@@ -4184,12 +4344,6 @@ html[data-theme="dark"] .stream-detail pre { color: #a8a8a1; scrollbar-color: #4
   background: #efefec;
   font-size: 12px;
 }
-html[data-theme="dark"] .approval-options-legend { color: #a8a8a1; }
-html[data-theme="dark"] .approval-options button { border-color: #3a3a37; color: #d8d8d2; background: #232321; }
-html[data-theme="dark"] .approval-options button small { color: #98988f; }
-html[data-theme="dark"] .approval-options button:hover { border-color: #4d4d46; background: #2b2b28; }
-html[data-theme="dark"] .approval-options button.is-selected { border-color: #e6e6e0; box-shadow: inset 0 0 0 1px #e6e6e0; }
-html[data-theme="dark"] .approval-option-badge { color: #d3d3cc; background: #3a3a37; }
 /* G4 定稿闸门卡片的内嵌证据（s30）：选项列表上方一块「定稿前的事实核对」——审计计数与前几处发现、
    已插入附图缩略图、文献引用计数、一致性检查未过项。全是契约事实，紧凑排版、不抢选项的视觉重心 */
 .approval-evidence {
@@ -4218,21 +4372,11 @@ html[data-theme="dark"] .approval-option-badge { color: #d3d3cc; background: #3a
 .approval-evidence-figure img { display: block; width: 100%; height: 64px; object-fit: contain; border: 1px solid #e4e4e1; border-radius: 6px; background: #fff; }
 .approval-evidence-figure figcaption { margin-top: 3px; font-size: 11px; color: #6d6d67; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .approval-evidence-figure.is-inserted figcaption { color: #3a3a36; }
-html[data-theme="dark"] .approval-evidence { border-color: #45453f; background: #232321; color: #c9c9c3; }
-html[data-theme="dark"] .approval-evidence-title,
-html[data-theme="dark"] .approval-evidence-scope,
-html[data-theme="dark"] .approval-evidence-figure.is-inserted figcaption { color: #e0e0da; }
-html[data-theme="dark"] .approval-evidence-label,
-html[data-theme="dark"] .approval-evidence-reason,
-html[data-theme="dark"] .approval-evidence-more,
-html[data-theme="dark"] .approval-evidence-figure figcaption { color: #a8a8a1; }
-html[data-theme="dark"] .approval-evidence-ok { color: #7fc39a; }
-html[data-theme="dark"] .approval-evidence-warn { color: #e0b15c; }
-html[data-theme="dark"] .approval-evidence-token { background: #3a3a37; }
-html[data-theme="dark"] .approval-evidence-figure img { border-color: #3a3a37; background: #f5f5f2; }
-html[data-theme="dark"] .stream-cta { color: #a8a8a1; }
-html[data-theme="dark"] .stream-cta button { border-color: #45453f; color: #d8d8d2; background: #2e2e2c; }
-html[data-theme="dark"] .stream-cta button:hover:not(:disabled) { border-color: #56564f; background: #383835; }
+/* 有大图可看的附图：放大镜指针，悬停 / 聚焦时描边加深（与成果页图件卡同一入口） */
+.approval-evidence-figure.is-viewable { cursor: zoom-in; border-radius: 6px; }
+.approval-evidence-figure.is-viewable:hover img,
+.approval-evidence-figure.is-viewable:focus-visible img { border-color: #9a9a94; }
+.approval-evidence-figure.is-viewable:focus-visible { outline: 2px solid #1f5f8b; outline-offset: 2px; }
 html[data-reduce-motion="on"] .stream-in,
 html[data-reduce-motion="on"] .stream-item.is-waiting .stream-row > i { animation: none; }
 html[data-reduce-motion="on"] .stream-title.title-shine-once {
@@ -4241,35 +4385,8 @@ html[data-reduce-motion="on"] .stream-title.title-shine-once {
   -webkit-text-fill-color: currentColor;
   background: none;
 }
-
-html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .activity-list::before { background: #3a3a37; }
-html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step { color: #d0d0ca; }
-html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .progress-step .step-dot { background: #1e1e1c; }
-html[data-theme="dark"] [data-modeling-shell][data-workspace-source="api"] .step-details { border-color: #3a3a37; background: #262624; color: #a8a8a1; }
-html[data-theme="dark"] .step-attempt { background: #2e2e2c; color: #a3a39c; }
 html[data-reduce-motion="on"] [data-modeling-shell][data-workspace-source="api"] .progress-step[data-stage-status="RUNNING"] .step-dot i,
 html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focused-step-dot i { animation: none; }
-
-/* 步骤计数徽标（执行步骤 n/6），数值变化时轻微弹入。 */
-.steps-count {
-  min-width: 34px;
-  margin-left: 6px;
-  padding: 1px 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 99px;
-  color: #55554f;
-  background: #efefec;
-  font-size: 11.5px;
-  font-weight: 620;
-  font-variant-numeric: tabular-nums;
-}
-@keyframes omm-count-pop {
-  from { transform: translateY(4px); opacity: .2; }
-  to { transform: translateY(0); opacity: 1; }
-}
-.steps-count.count-pop { animation: omm-count-pop .32s ease; }
 
 /* Streaming caret：Agent 摘要在排队/运行状态时尾部闪烁光标。 */
 @keyframes omm-caret {
@@ -4301,7 +4418,6 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
     background-clip: initial;
     color: #55554f;
   }
-  .steps-count.count-pop { animation: none; }
   .focused-agent-copy p[data-agent-text]::after,
   .modeling-agent-copy p[data-agent-text]::after { content: none; animation: none; }
 }
@@ -4319,8 +4435,7 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
 }
 
 /* revision 28 — 2026-08-13 项目列表页视觉打磨：排版向资源库表格（revision 17）看齐，
-   阶段列改成带进度点的药丸，行内操作与分页补上状态样式，
-   并补齐这张表在暗色主题下缺失的配色。 */
+   阶段列改成带进度点的药丸，行内操作与分页补上状态样式。 */
 
 /* 搜索行原本 16px 内边距、表格单元格 20px，卡片里两条左边界差 4px。 */
 .project-search-row { padding-right: 20px; padding-left: 20px; }
@@ -4416,25 +4531,6 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
 .page-button:disabled:hover { border-color: var(--line); background: #fff; }
 .page-size-select { margin-left: 10px; }
 .page-size-select .settings-select-trigger { height: 34px; }
-
-/* 暗色主题：这张表之前只有卡片底色，正文、hover 和主名称都还是浅色系的值。 */
-html[data-theme="dark"] .project-table th { color: #93938d; }
-html[data-theme="dark"] .project-table td { color: #b7b7b1; }
-html[data-theme="dark"] .project-name { color: #f1f1ee !important; }
-html[data-theme="dark"] .project-name strong { color: #f1f1ee; }
-html[data-theme="dark"] .project-name span { color: #9a9a94; }
-html[data-theme="dark"] .project-table tbody tr:hover { background: #232322; }
-html[data-theme="dark"] .project-table tbody tr:hover .project-name strong { color: #fff; }
-html[data-theme="dark"] .stage-pill { background: #2b2b29; color: #c6c6c0; }
-html[data-theme="dark"] .row-menu-button { background: transparent; color: #85857f; }
-html[data-theme="dark"] .row-menu-button:hover { background: #2f2f2c; color: #f1f1ee; }
-html[data-theme="dark"] .project-tabs .tab-button { background: transparent; color: #9a9a94; }
-html[data-theme="dark"] .project-tabs .tab-button:hover { background: #232322; color: #f1f1ee; }
-html[data-theme="dark"] .project-tabs .tab-button.active { background: #2f2f2c; color: #f1f1ee; }
-html[data-theme="dark"] .page-button.active { border-color: #f1f1ee; background: #f1f1ee; color: #1a1a19; }
-html[data-theme="dark"] .page-button.active:hover { border-color: #fff; background: #fff; }
-html[data-theme="dark"] .page-button:disabled { color: #5a5a56; }
-html[data-theme="dark"] .page-button:disabled:hover { border-color: #3d3d3a; background: #20201f; }
 
 /* ─────────────────────────────────────────────────────────────
    revision 29 — 2026-08-13 响应式第一批（首页 / 任务执行 / 建模工作台三页 / 我的项目）
@@ -4601,12 +4697,6 @@ html[data-theme="dark"] .page-button:disabled:hover { border-color: #3d3d3a; bac
   .project-table td:nth-child(3) { display: none; }
   .project-search-row { padding: 10px 12px; }
   .project-search-row .search-box { width: 100%; }
-}
-
-html[data-theme="dark"] .sidebar-drawer-toggle {
-  border-color: #3d3d3a;
-  background: #20201f;
-  color: #f1f1ee;
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -4954,10 +5044,6 @@ html[data-theme="dark"] .sidebar-drawer-toggle {
   }
 }
 
-html[data-theme="dark"] .modeling-pane-switch { background: #2b2b29; }
-html[data-theme="dark"] .modeling-pane-switch button { background: transparent; color: #9a9a94; }
-html[data-theme="dark"] .modeling-pane-switch button.active { background: #3a3a37; color: #f1f1ee; }
-
 /* ─────────────────────────────────────────────────────────────
    revision 34 — 2026-08-20 右侧正文区对齐 astryx ai-chat 模板（业主指定）。
 
@@ -4965,7 +5051,6 @@ html[data-theme="dark"] .modeling-pane-switch button.active { background: #3a3a3
    @astryxdesign/theme-neutral 令牌（值取自 theme.css，非目测）。
    范围：仅 .focused-stage-pane（建模工作台右栏五个阶段面板）；
    左栏 Agent 区、顶栏、分隔条一律不动。布局与 DOM 槽位不变，只换皮肤。
-   令牌化：浅色为默认值，html[data-theme="dark"] 只翻转变量。
    业主复验调优：文章列从固定 720px 改为随容器伸缩（720→980），
    避免宽面板下分页面显空；表格与列表正文提一档字号。
    ───────────────────────────────────────────────────────────── */
@@ -5002,29 +5087,6 @@ html[data-theme="dark"] .modeling-pane-switch button.active { background: #3a3a3
   /* 面板两侧留白随容器缓增 */
   --ax-pad-inline: clamp(24px, 4cqw, 44px);
   font-family: var(--ax-font-body);
-}
-
-html[data-theme="dark"] .focused-stage-pane {
-  --ax-text-primary: #fafafa;
-  --ax-text-secondary: #a3a3a3;
-  --ax-text-disabled: #525252;
-  --ax-surface: #262626;
-  --ax-muted: #1b1b1b;
-  --ax-code-bg: #1b1b1b;
-  --ax-border: rgba(255, 255, 255, .10);
-  --ax-border-strong: #525252;
-  --ax-accent: #ebebeb;
-  --ax-on-accent: #171717;
-  --ax-neutral: rgba(255, 255, 255, .10);
-  --ax-hover: rgba(255, 255, 255, .05);
-  --ax-pressed: rgba(255, 255, 255, .10);
-  --ax-success: #9fe59b;
-  --ax-success-bg: rgba(132, 201, 128, .24);
-  --ax-success-text: #9fe59b;
-  --ax-warning: #e5b45b;
-  --ax-danger: #f19489;
-  --ax-gray-bg: rgba(255, 255, 255, .10);
-  --ax-gray-text: #e5e5e5;
 }
 
 /* ── 文档卡片（Card variant="transparent" 的贴合译法：白面 + 发丝线 + container 圆角） ── */
@@ -5364,7 +5426,7 @@ html[data-theme="dark"] .focused-stage-pane {
 
 .focused-stage-pane .focused-table-footer nav button:disabled { color: var(--ax-text-disabled); }
 
-/* ── 开关：accent 实底（暗色自动翻转），描边灰关态 ── */
+/* ── 开关：accent 实底开态，描边灰关态 ── */
 .focused-stage-pane .focused-toggle {
   position: relative;
   width: 36px;
@@ -5391,7 +5453,6 @@ html[data-theme="dark"] .focused-stage-pane {
 
 .focused-stage-pane .focused-toggle.is-on { background: var(--ax-accent); }
 .focused-stage-pane .focused-toggle.is-on span { transform: translateX(16px); }
-html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { background: #171717; }
 
 /* ── 方案列表 = SelectableCard：发丝框、选中 accent 双线、code-bg 悬停面 ── */
 .focused-stage-pane .focused-plan-row {
@@ -5787,6 +5848,11 @@ html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { backgro
   border-color: transparent;
 }
 
+/* 「终稿审计」按钮的按下态（面板已打开）：无描边皮肤下用 pressed 令牌加深一档 */
+.focused-stage-pane .paper-only-editor .paper-editor-inline-actions .paper-audit-toggle.is-active {
+  background: var(--ax-pressed);
+}
+
 /* 来源引用 chip 在工作台里同样保持白底描边（不用灰底），hover 只提亮描边与文字 */
 .focused-stage-pane .paper-only-editor .source-chip {
   border: 1px solid var(--ax-border);
@@ -5802,12 +5868,15 @@ html[data-theme="dark"] .focused-stage-pane .focused-toggle.is-on span { backgro
   background: #fff;
 }
 
-/* ── 论文正文流式呈现：随写入进度移动的闪烁光标（编辑器内容为流式落点） ── */
+/* ── 论文正文流式呈现：随写入进度移动的闪烁光标（编辑器内容为流式落点） ──
+   光标由打字机插在正在写入的文本节点之后（块内、行内），跟着最后一个字走；
+   左右外边距合计为 0，光标不占行内进度，行末满行时不会把自己挤到下一行。 */
 .editor-page .editor-stream-caret {
   display: inline-block;
   width: 2px;
   height: 1.15em;
   margin-left: 1px;
+  margin-right: -3px;
   vertical-align: -0.18em;
   border-radius: 1px;
   background: #171717;
@@ -5877,10 +5946,6 @@ html[data-reduce-motion="on"] .editor-page .editor-stream-caret {
   color: inherit;
 }
 
-html[data-theme="dark"] .paper-only-editor .editor-page ::selection {
-  background: rgba(255, 255, 255, .28);
-}
-
 /* 2. 工具栏激活态（B/I/U 随光标反映真实格式状态） */
 .focused-stage-pane .paper-only-editor .editor-format-tools button.active {
   color: var(--ax-text-primary);
@@ -5932,10 +5997,6 @@ html[data-theme="dark"] .paper-only-editor .editor-page ::selection {
 
 .editor-page .editor-formula[data-tex]:hover {
   background: rgba(0, 0, 0, .04);
-}
-
-html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
-  background: rgba(255, 255, 255, .08);
 }
 
 /* 4. 插入的表格与图片在纸面里的形态 */
@@ -5992,6 +6053,32 @@ html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
   text-indent: 0;
 }
 
+/* 图件请求中：给一个有高度的占位盒，别让未到的图只剩 2px 边框（看着就是「没有图」） */
+.editor-page .md-figure.is-loading img {
+  min-height: 180px;
+  width: min(100%, 560px);
+  background:
+    repeating-linear-gradient(-45deg, #f7f7f5 0 10px, #f1f1ee 10px 20px);
+  border-style: dashed;
+}
+
+/* 加载失败：藏掉破图标，原位明说原因（文案由 stage-content 写在 data-broken-label） */
+.editor-page .md-figure.is-broken img { display: none; }
+
+.editor-page .md-figure.is-broken::before {
+  content: attr(data-broken-label);
+  display: block;
+  margin: 0 auto 8px;
+  padding: 28px 16px;
+  width: min(100%, 560px);
+  box-sizing: border-box;
+  border: 1px dashed #d4d4d0;
+  border-radius: 6px;
+  color: #8a8a85;
+  font-size: 13px;
+  background: #fafaf8;
+}
+
 /* 5. 检查结果清单（模态框内，脱离右栏令牌作用域，用字面色） */
 .editor-check-list {
   margin: 14px 0 0;
@@ -6035,17 +6122,6 @@ html[data-theme="dark"] .editor-page .editor-formula[data-tex]:hover {
   color: #525252;
   font-size: 12px;
 }
-
-html[data-theme="dark"] .editor-check-list li span,
-html[data-theme="dark"] .editor-check-note { color: #a3a3a3; }
-html[data-theme="dark"] .editor-check-list li.ok i { color: #9fe59b; }
-html[data-theme="dark"] .editor-check-list li.warn i { color: #fdcf4f; }
-html[data-theme="dark"] .editor-page .editor-table th,
-html[data-theme="dark"] .editor-page .md-table th { background: #1b1b1b; }
-html[data-theme="dark"] .editor-page .editor-table th,
-html[data-theme="dark"] .editor-page .editor-table td,
-html[data-theme="dark"] .editor-page .md-table th,
-html[data-theme="dark"] .editor-page .md-table td { border-color: #525252; }
 
 /* ─────────────────────────────────────────────────────────────
    revision 34 — 2026-08-21 H5 二轮：清点 revision 29–33 之后新增/漏网的拥挤点。
@@ -6259,19 +6335,6 @@ html[data-theme="dark"] .editor-page .md-table td { border-color: #525252; }
   background: conic-gradient(currentColor var(--todo-pie, 0%), transparent 0);
 }
 
-html[data-theme="dark"] .task-todos { color: #f5f5f5; background: #262624; box-shadow: 0 0 0 1px #3a3a37, 0 10px 34px rgba(0, 0, 0, .35); }
-html[data-theme="dark"] .todo-head { color: #f5f5f5; }
-html[data-theme="dark"] .todo-head-icon { color: #737373; }
-html[data-theme="dark"] .todo-head-check { color: #f5f5f5; }
-html[data-theme="dark"] .todo-count { color: #737373; }
-html[data-theme="dark"] .todo-head-pie { color: #f5f5f5; }
-html[data-theme="dark"] .todo-head-pie-ring { color: #737373; }
-html[data-theme="dark"] .todo-item { color: #737373; }
-html[data-theme="dark"] .todo-icon { color: #737373; }
-html[data-theme="dark"] .todo-icon-active.on { color: #f5f5f5; }
-html[data-theme="dark"] .todo-label { color: #737373; }
-html[data-theme="dark"] .todo-label::before { background: linear-gradient(90deg, #f5f5f5 0%, #f5f5f5 30%, rgba(245, 245, 245, .45) 45%, rgba(245, 245, 245, .45) 55%, #f5f5f5 70%, #f5f5f5 100%); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; }
-
 /* ── 首页轻量对话（对话优先接待的聊天态）───────────────────────────────
    气泡、Agent 头（水母 Logo）、思考块、Markdown 正文全部复用执行页的
    全局类（user-bubble / assistant-block / reply-thinking / analysis-copy），
@@ -6335,7 +6398,6 @@ html[data-theme="dark"] .todo-label::before { background: linear-gradient(90deg,
   border-radius: 999px;
   background: #fff;
 }
-html[data-theme="dark"] .new-screen[data-home-chat="on"] > .composer-note { background: #181817; }
 /* 手机档：抽屉按钮悬浮在左上角（fixed），线程铺满后首屏内容要从它下面让开 */
 @media (max-width: 820px) {
   .new-screen[data-home-chat="on"] .home-chat-thread { padding-top: 72px; }
@@ -6344,7 +6406,6 @@ html[data-theme="dark"] .new-screen[data-home-chat="on"] > .composer-note { back
 .home-chat-thread .assistant-block { margin: 0 0 30px; }
 .home-chat-thread .assistant-id { display: flex; align-items: center; }
 .home-chat-error { color: #bd4840; font-size: 13px; }
-html[data-theme="dark"] .home-chat-error { color: #e2726a; }
 
 /* 被打断的回复（整页导航掐断 / 接口报错 / 暂停）恢复时的说明行：紧跟半截正文，
    有正文时用一道虚线隔开，让人一眼看出下面这句不是模型说的 */
@@ -6359,12 +6420,27 @@ html[data-theme="dark"] .home-chat-error { color: #e2726a; }
 .agent-stream .stream-note { margin: 10px 0 12px; line-height: 1.7; }
 .agent-stream .stream-note p { margin: 0 0 8px; }
 
+/* 阶段失败的原因段落（2026-09-17）：紧跟「「X」阶段失败。」叙述行，直接可见不折叠，
+   主操作「重试当前阶段」随即压在它下面——原因与动作在同一处，不必翻回顶部的摘要。
+   左侧一道淡红竖线标记失败语义，底色只比纸面深一档，不做整块红底。 */
+.agent-stream .stream-failure {
+  margin: 0 0 12px;
+  padding: 9px 14px;
+  border-left: 2px solid #d9a5a0;
+  border-radius: 0 8px 8px 0;
+  background: #faf5f4;
+  color: #3c3c37;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.agent-stream .stream-failure p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-stream .stream-failure .stream-failure-hint { margin-top: 6px; color: #8a8a85; font-size: 12.5px; }
+
 /* 数据准备页真实正文：准备步骤与清洗策略列表（替换演示预览表的内容区） */
 .stage-step-list { margin: 12px 0 0; padding-left: 22px; line-height: 1.9; }
 .stage-step-list li + li { margin-top: 6px; }
 .stage-strategy-list { margin: 12px 0 0; padding-left: 22px; line-height: 1.9; color: #555551; }
 .stage-strategy-list li + li { margin-top: 6px; }
-html[data-theme="dark"] .stage-strategy-list { color: #b3b3ae; }
 
 /* 建模方案页：G1 决策台账落地后，用户确认采用的那一行把角色标改成「（已采用）」
    （仍是标题里那一枚 <small>，方案行的六个网格子项与行高都不动），用主色点亮 */
@@ -6372,7 +6448,6 @@ html[data-theme="dark"] .stage-strategy-list { color: #b3b3ae; }
   color: var(--ax-accent, #11110f);
   font-weight: 600;
 }
-html[data-theme="dark"] .focused-plan-row strong small.stage-plan-adopted { color: var(--ax-accent, #e8e8e4); }
 
 /* ── 流程页真实产出的富文本（stage-content 的 richBlock/richInline）：
    模型正文里的 markdown（加粗/代码/列表/表格/公式）在面板里也要有排版，
@@ -6433,18 +6508,6 @@ html[data-theme="dark"] .focused-plan-row strong small.stage-plan-adopted { colo
 .stage-rich-inline.stage-rich-multi { display: block; min-width: 0; }
 .stage-rich-inline.stage-rich-multi p { margin: 0 0 8px; }
 .stage-rich-inline.stage-rich-multi > :last-child { margin-bottom: 0; }
-
-html[data-theme="dark"] .stage-rich-text .md-inline-code,
-html[data-theme="dark"] .stage-rich-inline .md-inline-code { background: #2e2e2c; }
-html[data-theme="dark"] .stage-rich-text .md-code pre,
-html[data-theme="dark"] .stage-rich-inline .md-code pre { border-color: #3a3a37; background: #262624; }
-html[data-theme="dark"] .stage-rich-text blockquote { border-left-color: #3f3f3c; color: #a5a5a0; }
-html[data-theme="dark"] .stage-rich-text table.md-table th,
-html[data-theme="dark"] .stage-rich-text table.md-table td,
-html[data-theme="dark"] .stage-rich-inline table.md-table th,
-html[data-theme="dark"] .stage-rich-inline table.md-table td { border-color: #3a3a37; }
-html[data-theme="dark"] .stage-rich-text table.md-table th,
-html[data-theme="dark"] .stage-rich-inline table.md-table th { background: #262624; }
 
 /* 数据清单等真实表格：长字段名/风险描述允许任意断行，不许把表格挤出容器 */
 .focused-workspace .focused-table td { overflow-wrap: anywhere; }
@@ -6508,7 +6571,6 @@ html[data-theme="dark"] .stage-rich-inline table.md-table th { background: #2626
   cursor: default;
 }
 .stage-field-chip.is-more { color: #8c8c86; border-style: dashed; }
-html[data-theme="dark"] .stage-field-chip { border-color: #3a3a37; background: #262624; color: #b9b9b2; }
 
 /* 质量风险列逐条排布，条目间留缝 */
 .stage-risk-cell .stage-risk-item + .stage-risk-item { margin-top: 6px; }
@@ -6532,7 +6594,6 @@ html[data-theme="dark"] .stage-field-chip { border-color: #3a3a37; background: #
 .focused-stage-pane .stage-note-list li > i { color: var(--ax-success); }
 .focused-stage-pane .stage-note-list li.is-warn > i { color: var(--ax-warning); }
 .focused-stage-pane .stage-note-list li.is-fail > i { color: var(--ax-danger); }
-html[data-theme="dark"] .stage-note-list li { color: #b3b3ae; }
 
 /* 字段说明页的真实字段表：名称列不折行，说明列吃掉剩余宽度 */
 .focused-workspace .stage-field-table th { white-space: nowrap; }
@@ -6575,20 +6636,6 @@ html[data-theme="dark"] .stage-note-list li { color: #b3b3ae; }
 .focused-workspace .table-preview th,
 .focused-workspace .table-preview td { white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .focused-workspace .table-preview td { font-size: 13px; }
-html[data-theme="dark"] .raw-data-template .raw-data-facts,
-html[data-theme="dark"] .raw-data-template .raw-data-hash,
-html[data-theme="dark"] .table-preview-meta,
-html[data-theme="dark"] .table-preview-status { color: #a8a8a3; }
-html[data-theme="dark"] .raw-data-template .raw-data-download { color: #8ec5ea; }
-html[data-theme="dark"] .raw-data-template .raw-data-staged.is-yes { color: #7fc39a; }
-html[data-theme="dark"] .raw-data-template .raw-data-staged.is-no { color: #e0b15c; }
-html[data-theme="dark"] .table-preview-status.is-error { color: #e29a6a; }
-html[data-theme="dark"] .focused-template-status.is-failed { color: #e29a6a; background: #3a2622; }
-html[data-theme="dark"] .clean-data-download { color: #8ec5ea; }
-html[data-theme="dark"] .clean-data-template .focused-template-metrics small,
-html[data-theme="dark"] .focused-workspace .clean-data-outputs .clean-data-hash,
-html[data-theme="dark"] .clean-data-empty-outputs { color: #a8a8a3; }
-html[data-theme="dark"] .stage-note-list li.is-info > i { color: #8fb3e6; }
 
 /* 方案页真实假设表 / 符号表：假设与定义列折行显示全文（演示表的定宽截断在这里
    会把「15 分钟内区域需求…」这类正文吃掉），编号 / 符号列不折行 */
@@ -6720,17 +6767,6 @@ html[data-reduce-motion="on"] .todo-collapsible { transition: none; }
   color: #91918b;
 }
 
-html[data-theme="dark"] .task-launch-overlay { background: rgba(23, 23, 21, .88); }
-html[data-theme="dark"] .task-launch-visual,
-html[data-theme="dark"] .task-launch-title { color: #f5f5f5; }
-html[data-theme="dark"] .task-launch-overlay[data-state="done"] .launch-visual-tick { stroke: #171715; }
-html[data-theme="dark"] .task-launch-step { color: #737373; }
-html[data-theme="dark"] .task-launch-step[data-step-state="active"] { color: #f5f5f5; }
-html[data-theme="dark"] .task-launch-step[data-step-state="done"] { color: #a8a8a2; }
-html[data-theme="dark"] .task-launch-step[data-step-state="active"] .launch-icon-active,
-html[data-theme="dark"] .task-launch-step[data-step-state="done"] .launch-icon-done { color: #f5f5f5; }
-html[data-theme="dark"] .task-launch-note { color: #8c8c86; }
-
 html[data-reduce-motion="on"] .task-launch-overlay,
 html[data-reduce-motion="on"] .task-launch-panel,
 html[data-reduce-motion="on"] .launch-visual-ring,
@@ -6776,8 +6812,6 @@ html[data-reduce-motion="on"] .task-launch-overlay[data-state="done"] .launch-vi
   font-size: 15px;
   line-height: 1.9;
 }
-html[data-theme="dark"] .stage-empty-state { color: #85857e; }
-html[data-theme="dark"] .editor-page .editor-placeholder { color: #6f6f69; }
 
 /* revision 36 — 2026-09-05 运行态路由的登录闸门（ADR-0014 决策 8）：校验登录状态
    与跳转登录页这段时间里正文区不可见，避免「状态同步需要处理 · 请先登录」这类
@@ -6792,13 +6826,11 @@ body[data-auth-gate] .main { visibility: hidden; }
   font-size: 12px;
   line-height: 1.5;
 }
-html[data-theme="dark"] .settings-field-note { color: #85857e; }
 
 /* revision 38 — 2026-09-07 对话触发的运行动作（ADR-0018）之后，执行步骤续写在同一条
-   回复块内部（正文 / 复制按钮之后接「收起执行步骤」折叠头 + 活动流），不再另起一个
-   带署名的 Agent 块。折叠头贴着正文时补一点上间距；步骤区沿用 .agent-stream 的节奏。 */
-.follow-up-reply > .reply-actions + .activity-summary,
-.follow-up-reply > .analysis-copy + .activity-summary { margin-top: 4px; }
+   回复块内部（正文 / 复制按钮之后直接接活动流），不再另起一个带署名的 Agent 块。
+   步骤区沿用 .agent-stream 的节奏（原先摆在步骤区上方的「收起执行步骤」折叠头
+   .activity-summary 已于 2026-09-17 按用户要求整体撤下，相关规则一并删除）。 */
 
 /* ─────────────────────────────────────────────────────────────
    revision 39 — 2026-09-07 建模流程页复验：文字穿盒 / 拥挤；论文页纸面与大纲。

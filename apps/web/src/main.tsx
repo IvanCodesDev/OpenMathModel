@@ -16,7 +16,10 @@ import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
 import "./styles.css";
 import "./workflow-refresh.css";
+import "./projects.css";
 import "./attachments/attachments.css";
+import "./reference-theme.css";
+import "./papers.css";
 // 放在最后：可读性覆盖需要在同等特异性下压过上面两张基线样式表
 import "./accessibility.css";
 

@@ -313,9 +313,9 @@ const TASK_RUNNING: Record<string, string> = {
   "已比较 XGBoost、Prophet 和 LSTM 的适配度。":
     "Compared the fit of XGBoost, Prophet and LSTM.",
   "规划完成": "Planning complete",
+  "多为模型接口或网络的瞬态问题，直接重试通常能过。":
+    "Usually a transient model-API or network issue; retrying normally succeeds.",
   "查看 3 个附件": "View 3 attachments",
-  "查看执行步骤": "View execution steps",
-  "收起执行步骤": "Hide steps",
   "我已经完成题目和附件的初步读取。这个任务可以稳定地拆成三个相互衔接的子问题：":
     "I have read the brief and attachments. The task splits cleanly into three connected subproblems:",
   "需求预测": "Demand forecasting",
@@ -438,6 +438,14 @@ const PROJECTS: Record<string, string> = {
   "搜索项目名称……": "Search project names…",
   "当前阶段": "Stage",
   "最近更新　⌃": "Last updated  ⌃",
+  "项目视图": "Project view",
+  "网格视图": "Grid view",
+  "列表视图": "List view",
+  "对当前页项目排序": "Sort projects on this page",
+  "最近更新": "Last updated",
+  "最早更新": "Oldest updated",
+  "更新于": "Updated",
+  "暂无统计": "Not available",
   "共 7 项": "7 items",
   "新建项目": "New project",
   "项目名称": "Project name",
@@ -1058,6 +1066,7 @@ const EXPERIMENT_STAGE: Record<string, string> = {
 const PAPER_AND_DELIVERY: Record<string, string> = {
   "论文编辑": "Paper editor",
   "论文大纲": "Outline",
+  "正文中还没有章节标题。": "The paper has no section headings yet.",
   "正文": "Body",
   "引用": "Citations",
   "撤销": "Undo",
@@ -1211,7 +1220,7 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "处其他发现": "other findings",
   "数值、图表与引用审计全部通过": "numbers, figures/tables and citations all passed",
   "未做终稿审计": "final draft not audited",
-  "展开查看清单与发现": "Expand for the list and findings",
+  "查看终稿审计": "Show the final-draft audit",
   "审计发现": "Findings",
   "数字冻结清单": "Frozen number list",
   "不在冻结清单与材料中": "not in the frozen list or source materials",
@@ -1228,6 +1237,7 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "实验运行": "Experiment run",
   // 真实图件（DocumentDraft.figures，figure_render 第一步）：条里的计数（N / M 占位由代码替换）与清单表；文件名 / 说明原样不译
   "N 张真实图件，已插入 M 张": "N real figures, M inserted",
+  "图件加载失败，请刷新页面或到成果页重新下载": "Figure failed to load — refresh the page or download it again from the results page",
   "真实图件": "Real figures",
   "文件名": "File",
   "图": "Figure",
@@ -1288,6 +1298,9 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "处，见论文页「终稿审计」": "more — see “Final-draft audit” on the paper page",
   "张，见成果页「论文文件」": "more figure(s) — see “Paper files” on the results page",
   "图件没有登记产物，无法预览": "Figures have no registered artifacts and cannot be previewed",
+  // 图件放大查看（figure-lightbox）
+  "放大查看": "View full size",
+  "图片加载失败": "The image failed to load",
   // （「含义」「数据准备」「建模方案」「结果验证」「说明」「状态」「来源」「交付状态」「文件」「个文件」已在其他词典里）
 };
 

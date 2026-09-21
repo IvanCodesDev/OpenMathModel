@@ -19,6 +19,7 @@ from .errors import register_error_handlers
 from .middleware import OriginCheckMiddleware, RequestIdMiddleware
 from .paper_export import PaperExportProcessor, PaperExportThread
 from .privacy import RetentionThread
+from .reload_guard import warn_if_reload_watches_sandbox
 from .routers import (
     account,
     artifacts,
@@ -52,6 +53,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         app.state.chat_turns.recover_interrupted()
         runner: Optional[RunnerThread] = None
         if resolved.runner_enabled:
+            # 推进线程在本进程内执行沙盒；热重载若监视到沙盒工作区，每次写脚本都会
+            # 把本进程杀掉、阶段永远跑不完——启动时就把诊断写进服务端日志。
+            warn_if_reload_watches_sandbox(resolved.workspaces_dir)
             runner = RunnerThread(db, resolved)
             runner.start()
         app.state.runner = runner

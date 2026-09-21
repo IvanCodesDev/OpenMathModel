@@ -245,9 +245,14 @@ function codeBlockHtml(lang: string, code: string): string {
 /** 独占一行的 Markdown 图片：`![alt](url)`，url 不含空白与右括号，可带 "title"。 */
 const IMAGE_LINE = /^[^\S\n]*!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"\n]*")?\)[^\S\n]*$/gm;
 
-function figureHtml(src: string, alt: string): string {
+/**
+ * 图件成块：不用 loading="lazy"——论文页只有几张图，懒加载在滚到之前只留一个 2px 的空盒，
+ * 用户看到的就是「没有图、连占位都没有」；data-figure-name 记下正文写的文件名，导出
+ * （Word / LaTeX 包）按它给图件命名。
+ */
+function figureHtml(src: string, alt: string, name: string): string {
   const caption = alt.trim();
-  return `<figure class="md-figure"><img src="${escapeHtml(src)}" alt="${escapeHtml(caption)}" loading="lazy">`
+  return `<figure class="md-figure"><img src="${escapeHtml(src)}" alt="${escapeHtml(caption)}" decoding="async" data-figure-name="${escapeHtml(name)}">`
     + (caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "")
     + "</figure>";
 }
@@ -295,7 +300,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
   if (resolveImage) {
     text = text.replace(IMAGE_LINE, (match, alt: string, url: string) => {
       const src = resolveImage(url, alt);
-      return src ? put(stash, figureHtml(src, alt), true) : match;
+      return src ? put(stash, figureHtml(src, alt, url), true) : match;
     });
   }
 
