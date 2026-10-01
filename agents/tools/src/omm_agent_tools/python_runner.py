@@ -127,7 +127,7 @@ def probe_sandbox_gpu(
     """Report the CUDA GPU usable from sandbox code, or None for CPU-only.
 
     Probes with the exact conditions ``python_run`` uses — same interpreter,
-    ``-I`` isolation, scrubbed environment — because that is the only honest
+    ``-I -X utf8`` isolation, scrubbed environment — because that is the only honest
     answer to "will generated GPU code actually run here?" (e.g. torch
     installed only in user site-packages imports fine in the parent process
     but not under ``-I``). Every failure mode — no torch, CPU-only build,
@@ -136,7 +136,7 @@ def probe_sandbox_gpu(
     """
     try:
         proc = subprocess.run(
-            [python_executable or sys.executable, "-I", "-c", _GPU_PROBE_SCRIPT],
+            [python_executable or sys.executable, "-I", "-X", "utf8", "-c", _GPU_PROBE_SCRIPT],
             env=_sandbox_env(),
             capture_output=True,
             text=True,

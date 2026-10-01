@@ -198,14 +198,17 @@ _PYTHON_PROBE_SCRIPT = (
     "print('OMM_PROBE_JSON: ' + json.dumps(info))\n"
 )
 
+#: ``-I`` 隐含 ``-E``：沙盒解释器本身不读任何 ``PYTHON*`` 环境变量，UTF-8 模式只能由命令行
+#: ``-X utf8`` 给（缺了它 Windows 上 stdout 与不写 encoding 的 open() 都按 GBK）。
+#: ``env_overrides`` 的两个变量仍要留：脚本自己再起的、不带 ``-I`` 的 Python 子进程靠它们走 UTF-8。
 PYTHON_SPEC = LanguageSpec(
     language="python",
     label="python",
     script_name="main.py",
-    argv=("{executable}", "-I", "{script}"),
+    argv=("{executable}", "-I", "-X", "utf8", "{script}"),
     executables=(sys.executable,),
     version_argv=("--version",),
-    probe_argv=("{executable}", "-I", "-c", _PYTHON_PROBE_SCRIPT),
+    probe_argv=("{executable}", "-I", "-X", "utf8", "-c", _PYTHON_PROBE_SCRIPT),
     package_candidates=_PYTHON_PACKAGE_CANDIDATES,
     env_overrides=(("PYTHONIOENCODING", "utf-8"), ("PYTHONUTF8", "1")),
 )
