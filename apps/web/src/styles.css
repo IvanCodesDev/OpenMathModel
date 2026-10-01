@@ -929,7 +929,7 @@ i[class^="ph"], i[class*=" ph"] { font-size: 19px; line-height: 1; }
   background: var(--glass-sheen), var(--glass-fill);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  box-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -1px 0 var(--glass-highlight-soft), var(--glass-shadow);
+  box-shadow: none;
   transform-origin: top center;
   animation: var(--glass-menu-enter);
 }
@@ -1792,10 +1792,7 @@ html[data-reduce-motion="on"] .thinking-shimmer {
   color: #5d5d58;
 }
 .analysis-copy hr { margin: 12px 0; border: 0; border-top: 1px solid #e3e3df; }
-/* 代码：与页面同一族暖灰，不另起色相——此前试过石板蓝，冷色压在暖灰页面上显得外来。
-   区分度交给形（标题带 + 两级底色 + 等宽字）与克制的 token 配色，而不是底色换色相。
-   底色取现成的表面色阶：正文 = 表头/用户气泡那一档，标题带 = 导航选中态那一档。
-   调子集中在 .md-code 的几个变量里，要换只改那里。 */
+/* 行内代码保留原配色；代码块的两级底色集中在 .md-code 变量中。 */
 .analysis-copy .md-inline-code {
   padding: 1px 6px;
   border-radius: 5px;
@@ -1808,8 +1805,8 @@ html[data-reduce-motion="on"] .thinking-shimmer {
    （.md-code[data-lang][data-label] > pre > code），标题带用 ::before 画、标签取 data-label
    （每一块都有：没标语言的按 Text），复制按钮由 text/code-blocks 插进容器右上角。 */
 .analysis-copy .md-code {
-  --code-bg: #f6f6f3;
-  --code-head: #ebebe7;
+  --code-bg: #f4f7fb;
+  --code-head: #eaf0f6;
   --code-label: #6f6f6b;
   --code-ink: #20201e;
   --code-hover: rgba(32, 32, 30, .08);
@@ -1918,11 +1915,12 @@ html[data-reduce-motion="on"] .thinking-shimmer {
 .analysis-copy .md-table th,
 .analysis-copy .md-table td {
   padding: 6px 10px;
-  border: 1px solid #e3e3df;
+  border: 1px solid #dce4ed;
   text-align: left;
   vertical-align: top;
 }
-.analysis-copy .md-table th { background: #f6f6f3; font-weight: 600; }
+.analysis-copy .md-table th { background: #eaf0f6; font-weight: 600; }
+.analysis-copy .md-table td { background: transparent; }
 .analysis-copy .md-math-block {
   margin: 0 0 10px;
   overflow-x: auto;
@@ -2447,14 +2445,14 @@ html[data-reduce-motion="on"] .thinking-shimmer {
   /* 这里的弹层是容器的后代：容器一旦带 backdrop-filter 就成了弹层的 backdrop root，
      弹层只能模糊到容器自身而透不到页面，所以触发器外壳只做半透明填色，不加模糊。 */
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow);
+  box-shadow: none;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 
 .paper-year-filter:hover {
   border-color: var(--glass-stroke-strong);
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill-hover);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover);
+  box-shadow: none;
 }
 
 .paper-year-filter > span {
@@ -2466,12 +2464,14 @@ html[data-reduce-motion="on"] .thinking-shimmer {
 .paper-year-filter.open {
   z-index: 50;
   border-color: var(--glass-stroke-strong);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover);
+  box-shadow: none;
 }
 
 .paper-year-filter:has(.paper-year-trigger:focus-visible) {
   border-color: var(--glass-stroke-strong);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 0 0 3px var(--glass-focus), var(--glass-trigger-shadow);
+  box-shadow: none;
+  outline: 2px solid var(--glass-focus);
+  outline-offset: 2px;
 }
 
 .paper-year-trigger {
@@ -2591,25 +2591,26 @@ html[data-reduce-motion="on"] .thinking-shimmer {
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow);
+  box-shadow: none;
   transition: border-color .15s ease, box-shadow .15s ease, transform .08s ease;
 }
 
 .problem-filter-select .filter-button:hover {
   border-color: var(--glass-stroke-strong);
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill-hover);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover);
+  box-shadow: none;
 }
 
 .problem-filter-select.open .filter-button {
   border-color: var(--glass-stroke-strong);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover);
+  box-shadow: none;
 }
 
 .problem-filter-select .filter-button:focus-visible {
   border-color: var(--glass-stroke-strong);
-  outline: 0;
-  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 0 0 3px var(--glass-focus), var(--glass-trigger-shadow-hover);
+  outline: 2px solid var(--glass-focus);
+  outline-offset: 2px;
+  box-shadow: none;
 }
 
 .problem-filter-select .filter-button > span {
@@ -4276,7 +4277,7 @@ html[data-reduce-motion="on"] .thinking-shimmer {
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow);
+  box-shadow: none;
   color: #30302d;
   font-size: 13px;
   text-align: left;
@@ -4286,13 +4287,14 @@ html[data-reduce-motion="on"] .thinking-shimmer {
 .settings-select-trigger:hover {
   border-color: var(--glass-stroke-strong);
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill-hover);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover);
+  box-shadow: none;
 }
 
 .settings-select-trigger:focus-visible {
   border-color: var(--glass-stroke-strong);
-  outline: 0;
-  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 0 0 3px var(--glass-focus), var(--glass-trigger-shadow);
+  outline: 2px solid var(--glass-focus);
+  outline-offset: 2px;
+  box-shadow: none;
 }
 
 .settings-select-trigger > span {
@@ -4312,7 +4314,7 @@ html[data-reduce-motion="on"] .thinking-shimmer {
 .settings-custom-select.open .settings-select-trigger {
   border-color: var(--glass-stroke-strong);
   background: var(--glass-trigger-sheen), var(--glass-trigger-fill-hover);
-  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-trigger-shadow-hover);
+  box-shadow: none;
 }
 
 .settings-custom-select.open .settings-select-trigger i {
@@ -4336,7 +4338,7 @@ html[data-reduce-motion="on"] .thinking-shimmer {
   background: var(--glass-sheen), var(--glass-fill);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  box-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -1px 0 var(--glass-highlight-soft), var(--glass-shadow);
+  box-shadow: none;
   transform-origin: top center;
 }
 
@@ -6015,7 +6017,7 @@ body.is-resizing-modeling * {
   background: var(--glass-sheen), var(--glass-fill);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  box-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -1px 0 var(--glass-highlight-soft), var(--glass-shadow);
+  box-shadow: none;
 }
 
 .composer-model-picker.open .agent-model-menu {
