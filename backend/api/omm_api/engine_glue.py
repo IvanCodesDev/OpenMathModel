@@ -761,6 +761,45 @@ _API_ERROR_GUIDANCE_DEFAULT = (
     "请在设置中心检查该接口的配置与可用性，必要时更换或追加备用接口后重试。"
 )
 
+#: ApiError → D2.1 码，按目录定义归：链内回退与整次重试之后仍失败的网络 / 超时类（连不上、超时、
+#: 限流、网关临时故障、上游 5xx、坏响应）归 E110，余额 / 配额 / 计费归 E140。上游 4xx 的确定性
+#: 拒绝（鉴权、权限、模型或路径不存在、请求被拒）、重定向（Base URL 要改）与配置类（未配置接口、
+#: 缺模型 ID、协议不支持…）都不是网络故障，目录里没有对应码，不给码——harness ModelGateway
+#: 参考实现把非 200 一律记 E110，控制面在 4xx 上比它严。
+_API_ERROR_NETWORK_CODES = frozenset(
+    {
+        "LLM_UNREACHABLE",
+        "LLM_TIMEOUT",
+        "LLM_RATE_LIMITED",
+        "LLM_UPSTREAM_UNAVAILABLE",
+        "LLM_BAD_RESPONSE",
+    }
+)
+_API_QUOTA_MARKERS = (
+    "insufficient_quota",
+    "quota_exceeded",
+    "billing",
+    "insufficient balance",
+    "credit insufficient",
+)
+#: LLM_UPSTREAM_ERROR 只由 llm._upstream_error 产出，上游状态码只在它的文案「返回 HTTP nnn」里。
+_UPSTREAM_STATUS = re.compile(r"返回 HTTP (\d{3})")
+
+
+def _api_error_code(error: ApiError) -> str | None:
+    if error.code == "LLM_NO_BALANCE":
+        return ErrorCode.LLM_PROVIDER_QUOTA.value
+    upstream = error.code == "LLM_UPSTREAM_ERROR"
+    if not upstream and error.code not in _API_ERROR_NETWORK_CODES:
+        return None
+    if any(marker in error.message.lower() for marker in _API_QUOTA_MARKERS):
+        return ErrorCode.LLM_PROVIDER_QUOTA.value
+    if upstream:
+        status = _UPSTREAM_STATUS.search(error.message)
+        if status is None or int(status.group(1)) < 500:
+            return None
+    return ErrorCode.LLM_NETWORK.value
+
 
 class _BudgetGuardedNode:
     """把节点内抛出的已知基础设施错误转成干净的步骤失败信息（D2.1：UI 只显示
@@ -780,10 +819,13 @@ class _BudgetGuardedNode:
         try:
             return self._inner.run(ctx, services)
         except AgentError as error:
-            return NodeResult.failed(_budget_stop_message(error))
+            return NodeResult.failed(_budget_stop_message(error), error_code=error.code.value)
         except ApiError as error:
             guidance = _API_ERROR_GUIDANCE.get(error.code, _API_ERROR_GUIDANCE_DEFAULT)
-            return NodeResult.failed(f"模型接口调用失败：{error.message}。{guidance}")
+            return NodeResult.failed(
+                f"模型接口调用失败：{error.message}。{guidance}",
+                error_code=_api_error_code(error),
+            )
 
 
 class _BudgetedInvoker:

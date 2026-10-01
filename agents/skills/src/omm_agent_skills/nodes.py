@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from omm_agent_core import KnowledgePort, NodeContext, NodeResult, NodeServices, TaskState
-from omm_agent_core.errors import AgentError
+from omm_agent_core.errors import AgentError, ErrorCode
 from omm_agent_core.models import ToolResult
 from omm_agent_harness import (
     LoopBudget,
@@ -286,7 +286,8 @@ class LlmSkillNode:
         parsed, attempts, error = self._complete_validated(template, variables, services)
         if parsed is None:
             return NodeResult.failed(
-                f"model output failed validation after {attempts} attempts: {error}"
+                f"model output failed validation after {attempts} attempts: {error}",
+                error_code=ErrorCode.LLM_SCHEMA_VIOLATION.value,
             )
         return self.to_result(parsed, attempts)
 
@@ -1735,6 +1736,18 @@ def sandbox_task_language_kwargs(language: str) -> dict[str, Any]:
     return {"language": language, "run_tool": CODE_RUN_TOOL_NAME}
 
 
+def sandbox_failure_code(last_loop: Mapping[str, Any]) -> str | None:
+    """沙盒验收没过时的失败码（§5.3 / §5.4）。
+
+    最后一波内环没正常收束 → 用内环自己的码（E120 / E330 / E331 / E332；取消没有码）；
+    内环正常收束而断言仍不过 = R2 执行修复用尽 → E330。
+    """
+    if last_loop.get("ok") is False:
+        code = last_loop.get("error_code")
+        return str(code) if code else None
+    return ErrorCode.BUDGET_LOOP.value
+
+
 def experiment_script_path(language: str) -> str:
     return EXPERIMENT_SCRIPT_PATHS.get(language) or f"experiment.{language}"
 
@@ -3127,6 +3140,7 @@ class ExperimentExecutionNode(LlmSkillNode):
         tool_names = sandbox_tool_names(language)
         run_tool = sandbox_run_tool(language)
         waves: list[_SandboxCapture] = []
+        last_loop: dict[str, Any] = {}
 
         def sandbox_wave(brief_suffix: str | None, max_runs: int) -> _SandboxWaveResult:
             """一次独立装配的沙盒任务（首轮 / 按审稿意见修复）：每次自己的证据捕获。"""
@@ -3183,6 +3197,9 @@ class ExperimentExecutionNode(LlmSkillNode):
                 ),
                 on_final_answer=final_answer.update,
                 normalize_language=normalize_language,
+                on_loop_exit=lambda outcome: last_loop.update(
+                    ok=outcome.ok, error_code=outcome.error_code
+                ),
             )
             return report, capture, final_answer
 
@@ -3208,6 +3225,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                     "code_rounds": usage["runs"],
                     "waves": usage["waves"],
                 },
+                error_code=sandbox_failure_code(last_loop),
             )
 
         # ── 生成者-评审者（§8.4）：复跑核对 → 独立审稿 → 驳回退 R2 → 僵持进 G3 ──
@@ -4850,7 +4868,8 @@ class PaperWritingNode(LlmSkillNode):
             attempts_total += attempts
             if section is None:
                 return NodeResult.failed(
-                    f"第 {index}/{total} 章「{heading}」生成失败：{error}"
+                    f"第 {index}/{total} 章「{heading}」生成失败：{error}",
+                    error_code=ErrorCode.LLM_SCHEMA_VIOLATION.value,
                 )
             content = str(section.get("content") or "").strip()
             # 字数带宽越界 → 一次有界重写（全文共 _MAX_LENGTH_REVISIONS 次额度）：
@@ -5557,7 +5576,8 @@ class PaperWritingNode(LlmSkillNode):
         if parsed is None:
             return NodeResult.failed(
                 f"论文骨架规划失败（{fallback_reason}），回退整篇生成同样失败："
-                f"model output failed validation after {attempts} attempts: {error}"
+                f"model output failed validation after {attempts} attempts: {error}",
+                error_code=ErrorCode.LLM_SCHEMA_VIOLATION.value,
             )
         metrics_payload: dict[str, Any] = {
             "llm_attempts": attempts_before + attempts,

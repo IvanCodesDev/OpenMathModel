@@ -373,6 +373,7 @@ def run_sandbox_task(
     cancelled: Callable[[], bool] | None = None,
     on_final_answer: Callable[[dict[str, Any]], None] | None = None,
     normalize_language: Callable[[Any], str] | None = None,
+    on_loop_exit: Callable[[LoopOutcome], None] | None = None,
 ) -> dict[str, Any]:
     """驱动一张任务卡到 sandbox-run-report.v1 形状的报告 dict。
 
@@ -383,6 +384,9 @@ def run_sandbox_task(
     ``on_final_answer`` 在收束前回传最后一个通过结构校验的终答对象（含
     extra_final_keys 声明的叙事键）——报告本身保持 sandbox-run-report.v1
     形状，叙事产出经此旁路交给父节点。
+
+    ``on_loop_exit`` 每波内环收束后回传其 LoopOutcome：报告契约里没有退出原因，
+    父节点据最后一波判定失败码（内环自己的 E120 / E330 / E331 / E332，或 R2 用尽）。
 
     ``normalize_language`` 是语言别名归一（python3 → python、Rscript → r …），由
     调用方注入以与方案卡 / 执行器同一张表；缺省只做小写去空白。
@@ -427,6 +431,8 @@ def run_sandbox_task(
         )
         total_usage["tokens"] += outcome.usage.total_tokens
         total_usage["duration_ms"] += outcome.usage.duration_ms
+        if on_loop_exit is not None:
+            on_loop_exit(outcome)
         if outcome.ok and outcome.value is not None:
             final_answer = outcome.value
 

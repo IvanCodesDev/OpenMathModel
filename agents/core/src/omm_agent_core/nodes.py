@@ -67,6 +67,9 @@ class NodeResult:
     #: under "gate" — absent when None, so legacy flows keep their payload
     #: shape byte-identical (golden traces unaffected).
     review_meta: dict[str, Any] | None = None
+    #: D2.1 code of a FAILED result; the engine copies it into
+    #: ``STEP_FAILED.payload.error_code`` only when set (same byte-identical rule).
+    error_code: str | None = None
 
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -86,8 +89,15 @@ class NodeResult:
         )
 
     @staticmethod
-    def failed(error: str, metrics: dict[str, Any] | None = None) -> "NodeResult":
-        return NodeResult(status=NodeResult.FAILED, error=error, metrics=metrics or {})
+    def failed(
+        error: str,
+        metrics: dict[str, Any] | None = None,
+        *,
+        error_code: str | None = None,
+    ) -> "NodeResult":
+        return NodeResult(
+            status=NodeResult.FAILED, error=error, metrics=metrics or {}, error_code=error_code
+        )
 
     @staticmethod
     def needs_review(

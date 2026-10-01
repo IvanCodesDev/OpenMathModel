@@ -24,6 +24,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any
 
+from .errors import AgentError
 from .graph import (
     DivergenceHook,
     IterationRefused,
@@ -263,12 +264,13 @@ class TaskRunEngine:
             return AdvanceOutcome(AdvanceOutcome.ADVANCED, snapshot, events)
 
         # failure path
-        self._record(
-            snapshot,
-            EventType.STEP_FAILED,
-            {"step_id": step_id, "error": result.error or "step failed"},
-            events,
-        )
+        failed_payload: dict[str, Any] = {
+            "step_id": step_id,
+            "error": result.error or "step failed",
+        }
+        if result.error_code:
+            failed_payload["error_code"] = result.error_code
+        self._record(snapshot, EventType.STEP_FAILED, failed_payload, events)
         self._record(
             snapshot,
             EventType.RUN_FAILED,
@@ -555,6 +557,9 @@ class TaskRunEngine:
         ctx = NodeContext.for_step(snapshot, state, step_id, attempt)
         try:
             return node.run(ctx, self._services)
+        except AgentError as error:
+            # 目录内的失败（D2.1）：人话 + 码进 STEP_FAILED，不是一段 traceback
+            return NodeResult.failed(str(error), error_code=error.code.value)
         except Exception:  # noqa: BLE001 - a node crash must fail the step, not the loop
             return NodeResult.failed(
                 "node raised:\n" + traceback.format_exc(limit=8)
