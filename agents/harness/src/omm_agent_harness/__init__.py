@@ -3,7 +3,8 @@
 H0 批次交付三个组件：ModelGateway（执行面唯一 LLM 出口）、BudgetGovernor
 （四级预算硬停）、TraceHub（运行跟踪与报告）。H1 批次新增两个组件：
 run_inner_loop（L-I 内环引擎，§5.2/§5.3）与 ContextAssembler（分节装配，
-§4.2）。Subagent 组件随 H2 进入本包。依赖方向：harness → core, tools；
+§4.2）。Subagent 组件随 H2 进入本包；E6 看板聚合器（metrics，§14.2）随控制面
+接线从 evals 迁入。依赖方向：harness → core, tools；
 禁止 import omm_api、禁止 import skills（parser/validator 由调用方注入）。
 """
 
@@ -38,6 +39,13 @@ from .gateway import (
     request_fingerprint,
 )
 from .loops import LoopOutcome, LoopTask, run_inner_loop
+from .metrics import (
+    aggregate_batch,
+    aggregate_run,
+    compare_reports,
+    render_batch_markdown,
+    render_markdown,
+)
 from .sandbox_agent import (
     SandboxAssertion,
     SandboxEvidence,
@@ -87,8 +95,13 @@ __all__ = [
     "TraceHub",
     "TransportFailure",
     "Usage",
+    "aggregate_batch",
+    "aggregate_run",
+    "compare_reports",
     "httpx_sender",
     "is_unlimited",
+    "render_batch_markdown",
+    "render_markdown",
     "request_fingerprint",
     "run_inner_loop",
     "run_sandbox_task",

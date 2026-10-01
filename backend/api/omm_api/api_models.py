@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -121,6 +121,27 @@ class StageOutputs(BaseModel):
     experiment_summary: Optional[ExperimentSummary] = None
     document_draft: Optional[DocumentDraft] = None
     delivery_manifest: Optional[DeliveryManifest] = None
+
+
+class RunMetricsReport(BaseModel):
+    """E6 看板运行级报告：GET /v1/task-runs/{run_id}/metrics（harness ``aggregate_run`` 的输出）。
+
+    顶层 12 键固定；各节内部随聚合器演进（加键不升 version，删键 / 改语义才升），看板页面落地前
+    不把节内形状冻进公开契约，这里按开放对象透传。
+    """
+
+    version: int
+    run: dict[str, Any]
+    stages: dict[str, Any]
+    gates: dict[str, Any]
+    iterations: dict[str, Any]
+    failures: dict[str, Any]
+    tools: dict[str, Any]
+    reviews: dict[str, Any]
+    robustness: dict[str, Any]
+    audit: dict[str, Any]
+    llm: dict[str, Any]
+    process: dict[str, Any]
 
 
 class TaskIntakeAttachment(BaseModel):

@@ -30,6 +30,7 @@ from .routers import (
     intake,
     paper_exports,
     projects,
+    run_metrics,
     stage_outputs,
     task_runs,
     usage,
@@ -147,6 +148,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.include_router(task_runs.router, prefix="/api")
     app.include_router(workspace.router, prefix="/api")
     app.include_router(stage_outputs.router, prefix="/api")
+    app.include_router(run_metrics.router, prefix="/api")
     app.include_router(delivery.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")

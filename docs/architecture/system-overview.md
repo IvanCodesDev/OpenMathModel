@@ -176,6 +176,7 @@ POST     /api/v1/task-runs/{run_id}/notes
 POST     /api/v1/task-runs/{run_id}/revisions
 GET      /api/v1/task-runs/{run_id}/workspace
 GET      /api/v1/task-runs/{run_id}/stage-outputs
+GET      /api/v1/task-runs/{run_id}/metrics（E6 运行指标，按事件日志现算，暂无页面消费）
 GET      /api/v1/task-runs/{run_id}/events/history
 GET      /api/v1/task-runs/{run_id}/events
 

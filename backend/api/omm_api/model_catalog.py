@@ -486,8 +486,8 @@ class ModelCatalog:
             "providers": providers,
         }
 
-    def pricing_cny(self, model: str) -> Optional[tuple[float, float]]:
-        """模型 ID 精确命中目录单价 → (输入, 输出) 元 / 百万 token；未收录返回 None。"""
+    def pricing_usd(self, model: str) -> Optional[tuple[float, float]]:
+        """模型 ID 精确命中目录单价 → (输入, 输出) 美元 / 百万 token；未收录返回 None。"""
         key = (model or "").strip().lower()
         if not key:
             return None
@@ -495,7 +495,11 @@ class ModelCatalog:
             snapshot = self._snapshot
         if snapshot is None:
             return None
-        priced = snapshot.prices.get(key)
+        return snapshot.prices.get(key)
+
+    def pricing_cny(self, model: str) -> Optional[tuple[float, float]]:
+        """模型 ID 精确命中目录单价 → (输入, 输出) 元 / 百万 token；未收录返回 None。"""
+        priced = self.pricing_usd(model)
         if priced is None:
             return None
         rate = float(self._settings.usd_cny_rate)

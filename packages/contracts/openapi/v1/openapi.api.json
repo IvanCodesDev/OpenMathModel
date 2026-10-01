@@ -4823,6 +4823,86 @@
         "title": "RunId",
         "type": "string"
       },
+      "RunMetricsReport": {
+        "description": "E6 看板运行级报告：GET /v1/task-runs/{run_id}/metrics（harness ``aggregate_run`` 的输出）。\n\n顶层 12 键固定；各节内部随聚合器演进（加键不升 version，删键 / 改语义才升），看板页面落地前\n不把节内形状冻进公开契约，这里按开放对象透传。",
+        "properties": {
+          "audit": {
+            "additionalProperties": true,
+            "title": "Audit",
+            "type": "object"
+          },
+          "failures": {
+            "additionalProperties": true,
+            "title": "Failures",
+            "type": "object"
+          },
+          "gates": {
+            "additionalProperties": true,
+            "title": "Gates",
+            "type": "object"
+          },
+          "iterations": {
+            "additionalProperties": true,
+            "title": "Iterations",
+            "type": "object"
+          },
+          "llm": {
+            "additionalProperties": true,
+            "title": "Llm",
+            "type": "object"
+          },
+          "process": {
+            "additionalProperties": true,
+            "title": "Process",
+            "type": "object"
+          },
+          "reviews": {
+            "additionalProperties": true,
+            "title": "Reviews",
+            "type": "object"
+          },
+          "robustness": {
+            "additionalProperties": true,
+            "title": "Robustness",
+            "type": "object"
+          },
+          "run": {
+            "additionalProperties": true,
+            "title": "Run",
+            "type": "object"
+          },
+          "stages": {
+            "additionalProperties": true,
+            "title": "Stages",
+            "type": "object"
+          },
+          "tools": {
+            "additionalProperties": true,
+            "title": "Tools",
+            "type": "object"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "run",
+          "stages",
+          "gates",
+          "iterations",
+          "failures",
+          "tools",
+          "reviews",
+          "robustness",
+          "audit",
+          "llm",
+          "process"
+        ],
+        "title": "RunMetricsReport",
+        "type": "object"
+      },
       "RunNote": {
         "properties": {
           "created_at": {
@@ -8874,6 +8954,48 @@
         "summary": "List Run Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/api/v1/task-runs/{run_id}/metrics": {
+      "get": {
+        "operationId": "get_run_metrics_api_v1_task_runs__run_id__metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunMetricsReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run Metrics",
+        "tags": [
+          "run-metrics"
         ]
       }
     },
