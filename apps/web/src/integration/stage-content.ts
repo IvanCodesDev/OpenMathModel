@@ -25,7 +25,7 @@ import { describeCleanData } from "./clean-data";
 import { deliveryPackageUrl, describeDelivery } from "./delivery-record";
 import type { DeliveryView } from "./delivery-record";
 import { describeCleaning, describeReview, describeRobustness, formatMetricValue } from "./experiment-notes";
-import type { ReviewSection } from "./experiment-notes";
+import type { ReviewSection, RoundComparisonView } from "./experiment-notes";
 import { openFigureLightbox } from "./figure-lightbox";
 import { modelingWorkspaceApi } from "./modeling-workspace-api";
 import type { StageOutputsPayload } from "./modeling-workspace-api";
@@ -1143,6 +1143,35 @@ const VERDICT_COPY: Record<string, { icon: string; label: string; tone: string }
   fail: { icon: "x-circle", label: "结果未通过", tone: "fail" },
 };
 
+/**
+ * 「较上一轮」条目（robustness.round_comparison）：回退重做后的复检与上一轮未过检查的对照。
+ * 契约口径只计数与点名、不判好坏，所以用中性的 info 态，不借通过 / 未通过的颜色。
+ */
+function roundComparisonItem(view: RoundComparisonView): HTMLElement {
+  const facts = [t(view.auto ? "图按条件边自动回退后复检" : "回退重做后复检")];
+  if (view.iteration !== null) facts.push(`${t("回退轮次")} ${view.iteration}`);
+  facts.push(`${t("上一轮未通过")} ${view.failedOfTotal}`);
+  const buckets: string[] = [];
+  if (view.resolved.length) {
+    buckets.push(`${t("转为通过")} ${view.resolved.length}：${view.resolved.join("、")}`);
+  }
+  if (view.stillFailing.length) {
+    const names = view.stillFailing.map(row => {
+      const numbers = [
+        row.value !== null ? `${t("实测")} ${row.value}` : "",
+        row.threshold !== null ? `${t("阈值")} ${row.threshold}` : "",
+      ].filter(Boolean);
+      return numbers.length ? `${row.name}（${numbers.join("，")}）` : row.name;
+    });
+    buckets.push(`${t("仍未通过")} ${view.stillFailing.length}：${names.join("、")}`);
+  }
+  if (view.notRechecked.length) {
+    buckets.push(`${t("本轮未复检")} ${view.notRechecked.length}（${t("本轮脚本里没有同 id 的检查")}）：${view.notRechecked.join("、")}`);
+  }
+  const detail = buckets.length ? `${facts.join("｜")} — ${buckets.join("；")}` : facts.join("｜");
+  return noteItem("info", "clock-counter-clockwise", t("较上一轮"), detail);
+}
+
 function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): void {
   const panel = root.querySelector<HTMLElement>('[data-workspace-panel="experiment-report"]');
   if (!panel || !shouldRender(panel, "experiments", summary.updated_at)) return;
@@ -1202,10 +1231,13 @@ function renderExperimentsPanel(root: HTMLElement, summary: ExperimentSummary): 
         summary.append(richInline(rerun.summary));
         heading.push(summary);
       }
+      // 回退重做后的复检：摘要只说本轮，「上一轮没过的那几项这轮怎样了」紧随其后、先于逐项
+      if (rerun.comparison) list.append(roundComparisonItem(rerun.comparison));
       for (const row of rerun.rows) {
         const facts = [t(row.tone === "pass" ? "通过" : "未通过")];
         if (row.value !== null) facts.push(`${t("实测")} ${row.value}`);
         if (row.threshold !== null) facts.push(`${t("阈值")} ${row.threshold}`);
+        if (row.round) facts.push(t(row.round === "resolved" ? "较上一轮转为通过" : "较上一轮仍未通过"));
         const detail = row.detail ? `${facts.join("｜")} — ${row.detail}` : facts.join("｜");
         list.append(noteItem(
           row.tone,

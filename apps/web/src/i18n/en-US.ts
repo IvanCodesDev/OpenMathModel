@@ -900,6 +900,18 @@ const EXPERIMENT_STAGE: Record<string, string> = {
   "未通过": "Failed",
   "实测": "Observed",
   "阈值": "Threshold",
+  // 跨轮对比条目（stage-content：robustness.round_comparison，H4 切片 40 前端半边）
+  "较上一轮": "Compared with the previous round",
+  "图按条件边自动回退后复检": "Re-checked after the graph's automatic redo",
+  "回退重做后复检": "Re-checked after a redo",
+  "回退轮次": "Redo round",
+  "上一轮未通过": "Failed last round",
+  "转为通过": "Now passing",
+  "仍未通过": "Still failing",
+  "本轮未复检": "Not re-checked this round",
+  "本轮脚本里没有同 id 的检查": "no check with the same id in this round's script",
+  "较上一轮转为通过": "Newly passing vs. the previous round",
+  "较上一轮仍未通过": "Still failing vs. the previous round",
   // 独立审稿条目（stage-content：experiment-summary.review / robustness.review，H4 切片 12）
   "实验代码独立审稿": "Independent review of experiment code",
   "实验代码独立审稿未执行": "Independent review of experiment code not executed",

@@ -2,7 +2,8 @@
  * 实验与验证页、数据准备页的纯数据整形（不碰 DOM，node --test 直接断言）：
  * - 指标值格式化；
  * - experiment-summary 契约 validation.robustness（沙盒复跑的稳健性检查，G3 结果
- *   采用闸门的判定依据）→「稳健性与风险结论」小节的条目；
+ *   采用闸门的判定依据）→「稳健性与风险结论」小节的条目；回退重做后的复检另带
+ *   round_comparison（与上一轮未过检查的跨轮对比）→ 同一小节的「较上一轮」条目与逐项标记；
  * - 契约 review / validation.robustness.review（实验代码 / 检验脚本的独立审稿结论，
  *   §8.4 生成者-评审者环）→ 同一小节的审稿条目；
  * - dataset-profile 契约 cleaning（清洗脚本的执行结论 + 独立审稿，§8.4 第三个沙盒
@@ -17,6 +18,7 @@ import type { DatasetProfile, ExperimentSummary } from "@openmathmodel/contracts
 export type ValidationReport = NonNullable<ExperimentSummary["validation"]>;
 export type RobustnessReport = NonNullable<ValidationReport["robustness"]>;
 export type RobustnessCheck = RobustnessReport["checks"][number];
+export type RoundComparison = NonNullable<RobustnessReport["round_comparison"]>;
 export type ReviewReport = NonNullable<ExperimentSummary["review"]>;
 export type ReviewFinding = ReviewReport["findings"][number];
 export type CleaningReport = NonNullable<DatasetProfile["cleaning"]>;
@@ -29,6 +31,9 @@ export function formatMetricValue(value: unknown): string {
     maximumFractionDigits: Math.abs(num) >= 100 ? 2 : 4,
   });
 }
+
+/** 上一轮未过、本轮同 id 复检的检查：转为通过 / 仍未通过。 */
+export type RoundMark = "resolved" | "still_failing";
 
 export interface RobustnessCheckRow {
   tone: "pass" | "fail";
@@ -43,6 +48,32 @@ export interface RobustnessCheckRow {
   /** 阈值：数值已格式化，文字口径（如「≤ 0.05」）原样；没给时为 null。 */
   threshold: string | null;
   detail: string;
+  /** 回退重做后的复检里这条检查上一轮也没过；首轮检验、上一轮就过了的检查不带该键。 */
+  round?: RoundMark;
+}
+
+/** 跨轮对比里仍未通过的一项，本轮实测 / 阈值与逐项检查同一套格式化。 */
+export interface RoundStillFailingRow {
+  name: string;
+  value: string | null;
+  threshold: string | null;
+}
+
+/**
+ * 回退重做后的复检与上一轮的对照：上一轮未过的检查按 id 与本轮求交，分成转为通过 /
+ * 仍未通过 / 本轮未复检三桶。契约口径是只计数与点名、不判好坏——「未复检」是删了检查
+ * 还是改了 id，结果页不猜。
+ */
+export interface RoundComparisonView {
+  /** 图的条件边自动回退（true）还是人工要求重做（false）。 */
+  auto: boolean;
+  /** 回退的第几轮；旧事件 / 人工重做未计轮次时为 null。 */
+  iteration: number | null;
+  /** 上一轮未过数 / 检查总数，如「4/5」；总数不知道（0）时只有未过数。 */
+  failedOfTotal: string;
+  resolved: string[];
+  stillFailing: RoundStillFailingRow[];
+  notRechecked: string[];
 }
 
 export type RobustnessSection =
@@ -52,24 +83,61 @@ export type RobustnessSection =
   | { kind: "skipped"; reason: string }
   /** 复跑派出去了但沙盒会话没跑成（status ≠ passed）：checks 为空，G3 不触发。 */
   | { kind: "unfinished"; status: string; summary: string }
-  /** 复跑跑成：逐项判定 + 供论文引用的一句话结论（数字只来自标记行）。 */
-  | { kind: "executed"; summary: string; total: number; failed: number; rows: RobustnessCheckRow[] };
+  /** 复跑跑成：逐项判定 + 供论文引用的一句话结论（数字只来自标记行）+ 回退重做后的跨轮对比（首轮为 null）。 */
+  | {
+      kind: "executed";
+      summary: string;
+      total: number;
+      failed: number;
+      rows: RobustnessCheckRow[];
+      comparison: RoundComparisonView | null;
+    };
 
-function checkRow(check: RobustnessCheck): RobustnessCheckRow {
-  const threshold = check.threshold;
+function formatThreshold(threshold: RobustnessCheck["threshold"]): string | null {
+  if (threshold === null || threshold === "") return null;
+  return typeof threshold === "number" ? formatMetricValue(threshold) : threshold;
+}
+
+function checkRow(check: RobustnessCheck, marks: ReadonlyMap<string, RoundMark>): RobustnessCheckRow {
   const name = check.name || check.id;
   const assumption = typeof check.assumption_id === "string" ? check.assumption_id.trim() : "";
+  // 标记必须与本轮判定一致：畸形数据里「转为通过」的项本轮却没过时不标，免得一行里自相矛盾
+  const mark = marks.get(check.id);
+  const round = mark === (check.passed ? "resolved" : "still_failing") ? mark : undefined;
   return {
     tone: check.passed ? "pass" : "fail",
     name: assumption ? `${assumption} · ${name}` : name,
     value: check.value === null ? null : formatMetricValue(check.value),
-    threshold:
-      threshold === null || threshold === ""
-        ? null
-        : typeof threshold === "number"
-          ? formatMetricValue(threshold)
-          : threshold,
+    threshold: formatThreshold(check.threshold),
     detail: check.detail,
+    ...(round ? { round } : {}),
+  };
+}
+
+function roundMarks(comparison: RoundComparison | null | undefined): Map<string, RoundMark> {
+  const marks = new Map<string, RoundMark>();
+  for (const ref of comparison?.resolved ?? []) marks.set(ref.id, "resolved");
+  for (const row of comparison?.still_failing ?? []) marks.set(row.id, "still_failing");
+  return marks;
+}
+
+export function describeRoundComparison(
+  comparison: RoundComparison | null | undefined,
+): RoundComparisonView | null {
+  if (!comparison || comparison.previous_failed.length === 0) return null;
+  const failed = comparison.previous_failed.length;
+  const total = comparison.previous_total;
+  return {
+    auto: comparison.auto,
+    iteration: comparison.iteration,
+    failedOfTotal: total >= failed && total > 0 ? `${failed}/${total}` : String(failed),
+    resolved: comparison.resolved.map(ref => ref.name || ref.id),
+    stillFailing: comparison.still_failing.map(row => ({
+      name: row.name || row.id,
+      value: row.value === null ? null : formatMetricValue(row.value),
+      threshold: formatThreshold(row.threshold),
+    })),
+    notRechecked: comparison.not_rechecked.map(ref => ref.name || ref.id),
   };
 }
 
@@ -85,12 +153,14 @@ export function describeRobustness(
       summary: robustness.summary_text,
     };
   }
+  const marks = roundMarks(robustness.round_comparison);
   return {
     kind: "executed",
     summary: robustness.summary_text,
     total: robustness.checks_total,
     failed: robustness.checks_failed,
-    rows: robustness.checks.map(checkRow),
+    rows: robustness.checks.map(check => checkRow(check, marks)),
+    comparison: describeRoundComparison(robustness.round_comparison),
   };
 }
 

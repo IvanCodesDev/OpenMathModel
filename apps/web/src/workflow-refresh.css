@@ -6642,6 +6642,9 @@ html[data-reduce-motion="on"] .editor-page .editor-stream-caret {
 .clean-data-empty span { line-height: 1.6; }
 .stage-note-list li.is-info > i { color: #4a6fa5; }
 .focused-stage-pane .stage-note-list li.is-info > i { color: var(--ax-accent, #4a6fa5); }
+/* 结果页「较上一轮」条目（跨轮对比只计数与点名、不判好坏）用同一种中性 info 态 */
+.focused-experiment-notes li.is-info > i { color: #4a6fa5; }
+.focused-stage-pane .focused-experiment-notes li.is-info > i { color: var(--ax-accent, #4a6fa5); }
 
 /* 「原始数据」分页与表格产物预览（s27）：每个文件一节，标题行带大小 / 短哈希 / 下载 / 下发状态，
    预览表横向滚动、单元格不折行；加载中 / 不支持 / 失败各一行状态文案 */

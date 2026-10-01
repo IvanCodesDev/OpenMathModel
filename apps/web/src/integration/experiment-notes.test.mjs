@@ -8,7 +8,7 @@ const source = await readFile(new URL("./experiment-notes.ts", import.meta.url),
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { describeCleaning, describeReview, describeRobustness, formatMetricValue } = await import(
+const { describeCleaning, describeReview, describeRobustness, describeRoundComparison, formatMetricValue } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
@@ -93,6 +93,101 @@ test("unfinished sandbox session (status ≠ passed) keeps the honest summary se
 test("absent field (runs before sandboxing / sim nodes) renders nothing about the rerun", () => {
   assert.deepEqual(describeRobustness(null), { kind: "absent" });
   assert.deepEqual(describeRobustness(undefined), { kind: "absent" });
+});
+
+// ── 跨轮对比（契约 robustness.round_comparison，fixture experiment-summary.6） ──
+
+/** fixture.6：第 2 轮自动回退后复检——一项转为通过、一项仍未通过、一项本轮未复检。 */
+function redoRecheck() {
+  return {
+    executed: true,
+    status: "passed",
+    summary_text: "沙盒复跑稳健性检查 3 项，通过 2 项；未通过：重采样稳定性（bootstrap：value 0.18，阈值 0.15）。",
+    checks: [
+      { id: "sensitivity", name: "需求率扰动", passed: true, value: 0.17, threshold: 0.2, detail: "在阈值内", assumption_id: "A1" },
+      { id: "bootstrap", name: "重采样稳定性", passed: false, value: 0.18, threshold: 0.15, detail: "超出阈值", assumption_id: null },
+      { id: "baseline", name: "对基线优势幅度", passed: true, value: 0.62, threshold: "≥ 0.1", detail: "" },
+    ],
+    checks_total: 3,
+    checks_failed: 1,
+    reason: "",
+    review: null,
+    round_comparison: {
+      iteration: 2,
+      auto: true,
+      previous_total: 4,
+      previous_failed: [
+        { id: "sensitivity", name: "需求率扰动" },
+        { id: "bootstrap", name: "重采样稳定性" },
+        { id: "holdout", name: "留出集一致性" },
+      ],
+      resolved: [{ id: "sensitivity", name: "需求率扰动" }],
+      still_failing: [{ id: "bootstrap", name: "重采样稳定性", value: 0.18, threshold: 0.15 }],
+      not_rechecked: [{ id: "holdout", name: "留出集一致性" }],
+    },
+  };
+}
+
+test("redo re-check: three buckets named and counted, still-failing items carry this round's numbers", () => {
+  const section = describeRobustness(redoRecheck());
+  assert.equal(section.kind, "executed");
+  assert.deepEqual(section.comparison, {
+    auto: true,
+    iteration: 2,
+    failedOfTotal: "3/4",
+    resolved: ["需求率扰动"],
+    stillFailing: [{ name: "重采样稳定性", value: "0.18", threshold: "0.15" }],
+    notRechecked: ["留出集一致性"],
+  });
+});
+
+test("redo re-check: rows of previously failing checks are marked, the rest carry no mark", () => {
+  const { rows } = describeRobustness(redoRecheck());
+  assert.deepEqual(rows.map((row) => [row.name, row.round]), [
+    ["A1 · 需求率扰动", "resolved"],
+    ["重采样稳定性", "still_failing"],
+    ["对基线优势幅度", undefined],
+  ]);
+  assert.equal("round" in rows[2], false, "没有标记时不带键，旧消费者的整行比对不受影响");
+});
+
+test("first-round check or previous round all passed: no comparison, no marks", () => {
+  const section = describeRobustness({ ...redoRecheck(), round_comparison: null });
+  assert.equal(section.comparison, null);
+  assert.equal(section.rows.some((row) => "round" in row), false);
+  assert.equal(describeRobustness(executedWithFailure()).comparison, null, "旧运行没有该键");
+  assert.equal(describeRoundComparison({ ...redoRecheck().round_comparison, previous_failed: [] }), null);
+});
+
+test("manual redo without a round number: no iteration, bare failed count, names fall back to ids", () => {
+  assert.deepEqual(
+    describeRoundComparison({
+      iteration: null,
+      auto: false,
+      previous_total: 0,
+      previous_failed: [{ id: "slack", name: "" }, { id: "corr", name: "相关性" }],
+      resolved: [],
+      still_failing: [{ id: "slack", name: "", value: null, threshold: "≤ 0.05" }],
+      not_rechecked: [{ id: "corr", name: "相关性" }],
+    }),
+    {
+      auto: false,
+      iteration: null,
+      failedOfTotal: "2",
+      resolved: [],
+      stillFailing: [{ name: "slack", value: null, threshold: "≤ 0.05" }],
+      notRechecked: ["相关性"],
+    },
+  );
+});
+
+test("a mark that contradicts this round's verdict is dropped instead of shown", () => {
+  const report = redoRecheck();
+  report.round_comparison.resolved = [{ id: "bootstrap", name: "重采样稳定性" }];
+  report.round_comparison.still_failing = [];
+  const bootstrap = describeRobustness(report).rows.find((row) => row.name === "重采样稳定性");
+  assert.equal(bootstrap.tone, "fail");
+  assert.equal("round" in bootstrap, false);
 });
 
 // ── 独立审稿（契约 review / robustness.review，fixture experiment-summary.5） ──
