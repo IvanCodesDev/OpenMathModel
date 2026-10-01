@@ -37,6 +37,20 @@ html:root {
   padding-top: var(--shell-top-inset);
 }
 
+/* 建模流程右侧正文与资源目录页使用同一贴边轮廓：正文铺到视口右侧与底部，
+   左侧 Agent 仍保留原有底部留白。手机端继续沿用双面板切换所需的安全边距。 */
+@media (min-width: 821px) {
+  .modeling-clone-shell .focused-modeling-split {
+    padding-right: 0;
+    padding-bottom: 0;
+  }
+
+  .modeling-clone-shell .focused-agent-pane,
+  .modeling-clone-shell .focused-modeling-resizer {
+    margin-bottom: 18px;
+  }
+}
+
 .composer { border-radius: 24px; }
 .composer .tool-button { border-radius: 999px; }
 
@@ -60,10 +74,26 @@ html:root .search-filter {
   background: transparent;
 }
 
-/* Review: only the upper-right corner is square, including the tab overlay. */
+/* Review: the document surface meets the right edge, so both right corners are square. */
 .focused-stage-pane .focused-workspace-panel.active,
 .focused-stage-pane .focused-workspace-tabs {
   border-top-right-radius: 0;
+}
+
+.focused-stage-pane .focused-workspace-panel.active {
+  border-bottom-right-radius: 0;
+}
+
+/* The tab strip overlays the scrolling document. Keep the workspace as a paint
+   boundary so scrolled text cannot leak into the shell's top inset, and give
+   the opaque strip its own stacking context above the document. */
+.focused-stage-pane .focused-workspace:has(> .focused-workspace-tabs) {
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.focused-stage-pane .focused-workspace-tabs {
+  background: var(--ax-surface, #fff);
 }
 
 html .task-toolbar { border-bottom: 0; }

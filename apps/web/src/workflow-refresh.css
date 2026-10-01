@@ -5122,13 +5122,22 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
   scrollbar-color: var(--ax-border-strong) transparent;
 }
 
-/* ── 页签条 = Toolbar（dividers=bottom）：幽灵分段按钮，元素圆角，覆盖层悬停 ── */
+/* ── 页签条 = Toolbar（dividers=bottom）：幽灵分段按钮，元素圆角，覆盖层悬停 ──
+   面板随 ADR-0022 改成 32px 大圆角后，52px 高、12px 侧距的页签条会让首个页签压进
+   左上角弧线里（业主截图：贴得太紧）。条高与侧距都跟着容器圆角走：条高 60px 让
+   32px 的页签上下各留 14px；侧距取「圆角 − 8px」（32px 圆角 → 24px），弧线最凸处
+   与页签左缘仍有约 18px 空隙。四个带页签的面板 padding-top 用同一变量推算。 */
+.focused-stage-pane {
+  --ax-tabs-height: 60px;
+  --ax-tabs-inset: max(12px, calc(var(--ax-radius-container) - 8px));
+}
+
 .focused-stage-pane .focused-workspace-tabs {
   top: 1px;
   right: 1px;
   left: 1px;
-  height: 52px;
-  padding: 0 12px;
+  height: var(--ax-tabs-height);
+  padding: 0 var(--ax-tabs-inset);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -5183,7 +5192,7 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
 /* ── 面板留白与居中文章列（articleBody 的自适应版：720 起步随容器伸展） ── */
 .focused-stage-pane .data-report-workspace .focused-workspace-panel.active,
 .focused-stage-pane .model-plan-workspace .focused-workspace-panel.active {
-  padding: 76px var(--ax-pad-inline) 32px;
+  padding: calc(var(--ax-tabs-height) + 24px) var(--ax-pad-inline) 32px;
 }
 
 .focused-stage-pane .data-report-workspace .focused-workspace-panel.active > *,
@@ -5195,7 +5204,7 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
 
 .focused-stage-pane .experiment-report-workspace .focused-workspace-panel.active,
 .focused-stage-pane .final-delivery-workspace .focused-workspace-panel.active {
-  padding: 52px 0 0;
+  padding: var(--ax-tabs-height) 0 0;
 }
 
 .focused-stage-pane .experiment-report-workspace .focused-report-card {
@@ -5340,6 +5349,16 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
 
 .focused-stage-pane .focused-metrics article:not(:last-child)::after { background: var(--ax-border); }
 .focused-stage-pane .focused-template-metrics { border-block: 1px solid var(--ax-border); }
+
+/* 三列指标带按「行」对齐：基线的 :first-child / :last-child 只认整组首尾，真实实验
+   给到六个指标时第二行首格被缩进 30px、第一行末格右侧多出一截竖线（业主截图）。
+   改成按列取模：每行首格不缩进、每行末格不画竖线；第二行起加一道横向发丝线，
+   六格读成一张表。≤520px 的单列形态（竖线改横线）另有写法，这里只管三列。 */
+@media (min-width: 521px) {
+  .focused-metrics.three article:nth-child(3n + 1) { padding-left: 2px; }
+  .focused-metrics.three article:nth-child(3n)::after { display: none; }
+  .focused-metrics.three article:nth-child(n + 4) { border-top: 1px solid var(--ax-border, #e7e7e4); }
+}
 
 /* ── 章节标题层级：文章 h2（17/650）与卡片 h4（14/700） ── */
 .focused-stage-pane .focused-section h2 {
@@ -5668,6 +5687,37 @@ html[data-reduce-motion="on"] .focused-step[data-stage-status="RUNNING"] .focuse
   font-size: 14px;
   line-height: 1.7;
 }
+
+/* 「稳健性与风险结论」与「实现思路」改单栏上下堆叠：真实运行下前者是十几条逐项检查、
+   后者只有一段话，对半两栏只会让左边挤成文字墙、右边大片留白（业主截图）。单栏后
+   每条检查一两行就能放下；两块之间用横向发丝线分隔，条目间距放宽一档。去掉两栏时代
+   的底边线——页脚 .focused-run-meta 自带上边线，原来这里是两道线隔着 14px 并排。 */
+.focused-stage-pane .focused-experiment-notes {
+  grid-template-columns: minmax(0, 1fr);
+  border-bottom: 0;
+}
+
+.focused-stage-pane .focused-experiment-notes article {
+  min-height: 0;
+  padding: 18px 0 10px;
+}
+
+.focused-stage-pane .focused-experiment-notes article + article {
+  padding-left: 0;
+  border-left: 0;
+}
+
+/* 分隔线只在上一块真的显示时才画（稳健性小节没有条目时整块 hidden，不能让
+   「实现思路」顶着指标带的底边线再画一道） */
+.focused-stage-pane .focused-experiment-notes article:not([hidden]) + article {
+  border-top: 1px solid var(--ax-border);
+}
+
+.focused-stage-pane .focused-experiment-notes ul { margin-top: 12px; }
+.focused-stage-pane .focused-experiment-notes li { margin: 0; }
+.focused-stage-pane .focused-experiment-notes li + li { margin-top: 12px; }
+.focused-stage-pane .focused-experiment-notes h2 + p,
+.focused-stage-pane .focused-experiment-notes h2 + .stage-rich-text { margin-top: 10px; }
 
 .focused-stage-pane .focused-run-meta {
   padding-top: 12px;
@@ -6445,14 +6495,15 @@ html[data-reduce-motion="on"] .editor-page .editor-stream-caret {
 
 /* 阶段失败的原因段落（2026-09-17）：紧跟「「X」阶段失败。」叙述行，直接可见不折叠，
    主操作「重试当前阶段」随即压在它下面——原因与动作在同一处，不必翻回顶部的摘要。
-   左侧一道淡红竖线标记失败语义，底色只比纸面深一档，不做整块红底。 */
+   2026-09-21 业主复验：不要背景盒子，失败语义只靠一段浅红色文字承担——与首页对话的
+   .home-chat-error 同一红，白底上仍可读；提示句保持灰色，不跟着变红。 */
 .agent-stream .stream-failure {
   margin: 0 0 12px;
-  padding: 9px 14px;
-  border-left: 2px solid #d9a5a0;
-  border-radius: 0 8px 8px 0;
-  background: #faf5f4;
-  color: #3c3c37;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #bd4840;
   font-size: 13.5px;
   line-height: 1.7;
 }
