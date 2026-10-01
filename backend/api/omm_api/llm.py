@@ -1574,6 +1574,31 @@ def salvage_answer_from_reasoning(reasoning: str) -> str:
     return ""
 
 
+#: agent_note 旁白的长度上限：协议要的是一句话，超长多半是模型把推理整段写进了正文。
+AGENT_NOTE_MAX_CHARS = 300
+
+#: 模型原生工具调用的标记（如 DeepSeek 的 ``<｜｜DSML｜｜invoke name="python_run">``）偶尔
+#: 先于 JSON 漏进正文：那是标记不是话，不能当旁白展示。
+_NOTE_MARKUP = re.compile(r"<\s*[｜|/]|<[A-Za-z_][\w:.-]*(?:\s[^<>]*)?>")
+
+
+def lead_in_note(text: str) -> str:
+    """文本协议回复里 JSON 之前的那句话：模型调工具前对这一步的说明，作为旁白进执行轨迹。
+
+    后面确实跟着 JSON 对象（或代码围栏）才算；通篇散文的回复本身不合规，交给内环修复梯，
+    不当旁白展示。
+    """
+    starts = [index for index in (text.find("{"), text.find("```")) if index != -1]
+    if not starts:
+        return ""
+    note = " ".join(text[: min(starts)].split())
+    if _NOTE_MARKUP.search(note):
+        return ""
+    if len(note) > AGENT_NOTE_MAX_CHARS:
+        note = note[: AGENT_NOTE_MAX_CHARS - 1].rstrip() + "…"
+    return note
+
+
 def notes_prompt_block(
     notes: Sequence[tuple[str, str]], node_id: Optional[str]
 ) -> str:
@@ -1747,7 +1772,8 @@ class EngineLlmPort:
         写码/跑码会话经此出网。
 
         与 ``complete`` 同一条出口纪律：传输层瞬态重试、预算预检与记账、过程
-        事件（llm_call_started/thinking/llm_call）、用量监控全部在端口内完成。
+        事件（llm_call_started/thinking/llm_call）、用量监控全部在端口内完成；
+        另外把回复里 JSON 之前的那句说明发成 agent_note 旁白（见 ``lead_in_note``）。
         ``label`` 即提示词 id（experiment_code.sandbox / data_cleaning.sandbox），
         事件展示与预算记账按 ``node_for_prompt`` 归属到节点。运行中用户备注
         （§11.3）拼进系统消息——实验阶段迁到沙盒会话后该特性不随 complete
@@ -1770,7 +1796,11 @@ class EngineLlmPort:
             [[str(m.get("role") or ""), str(m.get("content") or "")] for m in wire],
             ensure_ascii=False,
         )
-        return self._account_and_emit(label, node_id, outcome, prompt_text=canonical)
+        text = self._account_and_emit(label, node_id, outcome, prompt_text=canonical)
+        note = lead_in_note(text)
+        if note:
+            self._emit({"kind": "agent_note", "prompt_id": label, "text": note})
+        return text
 
     def _account_and_emit(
         self,

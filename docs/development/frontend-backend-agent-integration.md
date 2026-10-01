@@ -1147,6 +1147,21 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过：`validate.py`（16 schema / 75 fixture）、`check_compat.py` OK、`generate_python.py --check`、`npm run check --workspace @openmathmodel/contracts`、`export_openapi.py --check`、`pytest backend/api/tests` 479 passed / 2 skipped、`npm run check`（web）。只读探针核对本地库：3 个已完成项目均为实验 1 / 论文 1，2 个失败项目为实验 1 / 论文 0。真实 Chromium 验收：注册一次性 smoke 账号，白盒造「首轮实验 superseded + v2 current、论文 v1 current、MODEL_PLANNING current」与一个从未运行的对照项目，网格卡片显示「文件 0 · 实验 1 · 论文 1」与「0 · 0 · 0」，列表视图三列同值且无 `project-stat-unavailable` 灰化；验收后账号与两个项目已删除。
 
+### 2026-09-27 执行轨迹两级折叠、agent 旁白，以及真实产物被误标「（模拟）」
+
+用户带图反馈任务执行页的执行轨迹：小标题太多，连续做的同类事情应归进可折叠的二级标题；「现在怎么都是写的模拟」；轨迹全是小标题、太单薄，要加 agent 的话。三条拍板：**两级折叠**；**每步一句中文说明**（改工具协议提示词）；**存量误标一起改**。
+
+排查：「模拟」来自 `engine_glue._ARTIFACT_NAMES` 按产物 kind 起展示名——这张表本是模拟链路（SimStageNode 的 `baseline-metrics.svg` / `report-draft.md`）用的，却套在所有产物上，真实实验画的每张图都登记成「基线实验结果图（模拟）」（本地库 6 个运行、34 张图，`artifact.published` 事件同名）。轨迹单薄：`ws_read` / `ws_list` / `env_probe` / `subagent:*` / 各类 `*_review` 没有专门分支，落进「标题 = 工具名、详情 = 原始 JSON」兜底，审稿人的结论和总结也被当 JSON 藏起来；既有 `appendGrouped` 只合并紧挨着的同 key 行，思考行与工具行交替出现，从未触发；沙盒 / 审稿 / 提议人走文本协议，模型在 JSON 前写的那句说明只进 `llm_delta` 实时框，落定即丢。
+
+- **后端** `engine_glue._ARTIFACT_NAMES` 改按 `(kind, 文件名)` 精确匹配，只认模拟链路与论文草稿自己的文件，其余产物按 URI 尾部的真实文件名展示（`stage_outputs._artifact_file_name` 的 docstring 同步）。`llm.py` 新增 `lead_in_note`：取文本协议回复里 JSON（或代码围栏）之前的那句话，超 300 字截断，混有模型原生工具调用标记（DeepSeek 偶尔把 DSML / 尖括号标签漏进正文）时丢弃；`EngineLlmPort.chat_text` 在调用落定后发 `run.log{kind:"agent_note", prompt_id, text}`。
+- **提示词** `chat_adapter.tool_protocol_note`：「只输出一个 JSON 对象」改为「先用一句简短的中文说明这一步要做什么、为什么（原样展示给用户，不要花括号），紧接着一个 JSON 对象」；适配器解析规则不变。
+- **迁移** `0021_artifact_display_names`：把 `artifacts.name` 与 `artifact.published` 载荷里误标的名字改回 URI 尾部的真实文件名，模拟链路自己的文件不动；纯数据修正、可重复执行，downgrade 不回写错误名字。
+- **前端** 新增纯函数模块 `integration/trace-rows.ts`：工具行人话（「读取 experiment.py」「写入 …」「生成数据画像：…」「已在沙箱执行实验代码」等）、子代理组标题（单个「角色：任务」，并行「角色 ×N：各自视角」）与收束状态、审稿结论（加粗一句结论 + 审稿人总结原话）、论文补图 / 成稿 / 定向回改叙述、过程组标题；`isQuietTool` 标出不进轨迹的工具——列目录（`ws_list`，「查看工作区文件」「查看 data/ 下的文件」）、检索知识库、查阅知识卡片、探测运行环境（`env_probe`）这类摸底动作对用户没有信息量，成败都不画，事件照常落库（同日复看时用户点名去掉，组行上「思考 3 次 · 运行代码 2 次」这类计数摘要也一并去掉；读文件 `ws_read` 与数据画像 `table_profile` 经用户确认保留显示）；原控制器里的 `STAGE_BY_PROMPT` 迁入并补齐方案提议 / 汇总 / 定稿、稳健性检验、各审稿与论文补图，多语言模板后缀同口径。`modeling-workspace-controller.ts` 两级折叠：`subagent:<kind>` 的 spawn / result 不再单独成行，而是开 / 收一个子代理会话组——并行派发共用一组、最后一个 result 收束，组行走秒并带失败后缀，阶段推进 / 失败 / 进程重启时收组，会话期间落点换了就在新落点接「（续）」段；会话之外连续的思考 / 工具 / 旁白行归成过程组（按提示词说在做什么），被叙述、阶段产出、审稿结论等关键节点隔断就另起一组；组行下方显示组里最新一句旁白。`auto_redo_exhausted` / `redo_requested` 并入叙述行分支。
+- **CSS** `workflow-refresh.css` 只增量追加：`.stream-group-body[hidden]` 补 `display:none`（折叠体的作者级 `display:flex` 压过 UA 的 `[hidden]`，既有「写入产物文件 ×N」组此前从来收不起来）、组头旁白单行省略、组内旁白样式。
+- **测试** 新增 `test_llm_agent_note.py` 6 项；新增 `test_artifact_display_names_migration.py`（在 0020 上造数据再升到 head，断言真实图改名、模拟文件不动、回退再升级结果不变；`Config()` 不带 alembic.ini——env.py 见到配置文件就 `fileConfig`，默认禁用已存在的 logger，本文件按名字排在最前，会让其后靠 caplog 断言的 `test_db_ready` / `test_graph_mode` 收不到日志）；`test_task_runs_llm_nodes.py` 端到端断言真实链路产物名不含「（模拟）」；`test_chat_adapter.py` 加 2 例；`trace-rows.test.mjs` 10 项。
+
+当日执行并通过：`pytest backend/api/tests` 486 passed / 2 skipped；agents 各包测试 761 passed / 1 skipped；`npm run check`；`npm run build`（index 843.69 kB）；`node --test` 188/188。开发库 `alembic upgrade` 到 0021，只读核对真实产物误标 0，剩余 29 个运行的「（模拟）」产物与事件都是模拟链路自己的文件。无头 Chrome（CDP 拦截 `/api` 回放只读夹具）截改前改后图（`audit-current/2026-09-27-trace-grouping/`，不入库）：截图所用运行的执行轨迹顶层 254 项 → 72 项（24 个组），原始工具名行 85 → 0，「（模拟）」14 → 0；SSE 中途接入与整段回放结构一致。复看后（`quiet-*` 截图）：夹具里 28 条列目录 / 检索知识库调用不再画出，全部行 244 → 213，组 24 → 21（去掉列目录行后只剩一行的不再套组），计数摘要 0；再藏探测运行环境后（`quiet-probe-*` 截图）：10 条 `env_probe` 不再画出，全部行 213 → 203，组 21 → 20。未验：新提示词下真实模型写出的中文旁白——存量运行没有 agent_note 事件，截图里的旁白演示派生自改提示词之前的英文输出。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

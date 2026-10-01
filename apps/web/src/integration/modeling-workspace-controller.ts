@@ -30,6 +30,19 @@ import {
   renderHeaderAttachments,
 } from "./task-header-actions";
 import { mountTaskStartFlow } from "./task-start-controller";
+import {
+  describeToolCall,
+  isQuietTool,
+  paperProgressText,
+  paperRewriteTitle,
+  processGroupTitle,
+  reviewText,
+  subagentGroupTitle,
+  subagentOutcome,
+  thinkingStage,
+  type SubagentRef,
+  type TraceStep,
+} from "./trace-rows";
 
 const ACTIVE_RUN_KEY = "openmathmodel.activeRunId";
 const ACTIVE_PROJECT_KEY = "openmathmodel.activeProjectId";
@@ -264,23 +277,6 @@ function isPlanningPhase(root: HTMLElement, view: ModelingWorkspaceView): boolea
 
 // ── 活动流：思考/工具/叙述交替的细粒度过程（数据 = run.log 等领域事件） ────
 
-const STAGE_BY_PROMPT: Record<string, string> = {
-  "problem_analysis.default": "题意解析",
-  "data_preparation.default": "数据准备",
-  // 沙盒会话（H3）：清洗/实验的多轮写码跑码会话，prompt_id 即会话标签
-  "data_cleaning.sandbox": "数据清洗",
-  "model_planning.default": "建模方案",
-  "experiment_code.default": "实验代码",
-  "experiment_code.sandbox": "实验执行",
-  "validating.default": "结果验证",
-  // 整篇回退路径（总编规划失败时的单次生成）
-  "paper_writing.default": "论文撰写",
-  // 论文分章多轮管线按环节区分：一个阶段里的多次调用各自说清在干什么
-  "paper_outline.default": "论文骨架规划",
-  "paper_section.default": "论文章节写作",
-  "paper_finalize.default": "论文统稿收口",
-};
-
 const STAGE_OUTPUT_LABELS: Record<string, string> = {
   PROBLEM_ANALYSIS: "题意解析",
   DATA_PREPARATION: "数据准备",
@@ -421,6 +417,21 @@ interface AgentStreamState {
   /** 用户刚从主操作按钮发出动作：本次尝试的行到达时视口跟着走到底，直到用户自己
    *  动滚动条或本次尝试落定（见 armFollowTail）。 */
   followTail: boolean;
+  /** 进行中的子代理会话组：spawn 与 result 之间到达的行都收进它（见 openSubagent）。 */
+  subagent: SubagentGroup | null;
+}
+
+/** 子代理会话组（两级折叠的第一种组）：并行派发的一批（如三路方案提议人）共用一组，
+ *  最后一个 result 到达才收束。 */
+interface SubagentGroup {
+  container: HTMLElement;
+  body: HTMLElement;
+  /** 组所在的活动流：落点换了（会话期间对话区多了新的一轮）就在新落点接续段。 */
+  host: HTMLElement;
+  spawns: SubagentRef[];
+  open: number;
+  failedLabel: string;
+  durationMs: number;
 }
 
 const streamByRoot = new WeakMap<HTMLElement, AgentStreamState>();
@@ -437,6 +448,7 @@ function streamState(root: HTMLElement): AgentStreamState {
       revisionRound: 0,
       firstStageSettled: false,
       followTail: false,
+      subagent: null,
     };
     streamByRoot.set(root, state);
   }
@@ -689,19 +701,29 @@ function disarmFollowTail(root: HTMLElement): void {
   streamState(root).followTail = false;
 }
 
-function streamAppend(root: HTMLElement, node: HTMLElement): void {
+/** 把节点放进活动流里的某个容器（活动流本身或组的折叠体）：入场动画、主操作按钮归位、
+ *  吸底跟随与直接追加到活动流同一套。 */
+function placeInStream(root: HTMLElement, container: HTMLElement, node: HTMLElement): void {
   const state = streamState(root);
-  const host = resolveStreamHost(root, state);
-  if (!host) return;
   const scroll = root.querySelector<HTMLElement>(".chat-scroll, .focused-agent-scroll");
   const stick = shouldStickToTail(root, scroll);
   // 首连回放的历史行不重播入场动画：重进任务时执行轨迹应当「本来就在」，
   // 而不是一条条动画重演；只有实时新事件才浮现入场。
   if (!state.replaying) node.classList.add("stream-in");
-  host.append(node);
+  container.append(node);
   // 步骤区可能刚在尾部回复块里新建（replyRunTraceHost 追加在块末）：主操作按钮要重新压到最后
   followConversationTail(root);
   if (stick && scroll) scroll.scrollTop = scroll.scrollHeight;
+}
+
+/** 追加一行：子代理会话进行中收进会话组（会话期间发生的事按时间留在会话里），否则落活动流。 */
+function streamAppend(root: HTMLElement, node: HTMLElement): void {
+  const state = streamState(root);
+  const host = resolveStreamHost(root, state);
+  if (!host) return;
+  const body = subagentBody(root, state, host);
+  placeInStream(root, body ?? host, node);
+  if (body && state.subagent) refreshActivityGroup(state.subagent.container);
 }
 
 function streamNarration(root: HTMLElement, text: string): void {
@@ -709,6 +731,247 @@ function streamNarration(root: HTMLElement, text: string): void {
   paragraph.className = "stream-narration";
   paragraph.textContent = text;
   streamAppend(root, paragraph);
+}
+
+/** 模型调工具前对这一步的一句说明：作为 agent 旁白夹在组内的过程行之间，组行下方显示最新一句。 */
+function streamAgentNote(root: HTMLElement, text: string, promptId: string): void {
+  const paragraph = document.createElement("p");
+  paragraph.className = "stream-agent-note";
+  paragraph.textContent = text;
+  appendProcess(root, paragraph, { step: "note", promptId });
+}
+
+/** 审稿结论：加粗的一句结论 + 审稿人的总结原话，直接可读、不折叠。 */
+function streamReview(root: HTMLElement, review: { heading: string; summary: string }): void {
+  const block = document.createElement("div");
+  block.className = "analysis-copy stream-note stream-review";
+  const lead = document.createElement("p");
+  const strong = document.createElement("strong");
+  strong.textContent = review.heading;
+  lead.append(strong);
+  block.append(lead);
+  if (review.summary) {
+    const body = document.createElement("div");
+    body.innerHTML = renderMarkdown(review.summary);
+    block.append(body);
+    typesetMath(block);
+  }
+  streamAppend(root, block);
+}
+
+// ── 两级折叠：子代理会话组与连续过程行组 ─────────────────────────────────────
+
+interface ProcessMeta {
+  step: TraceStep;
+  promptId?: string;
+  elapsedMs?: number;
+}
+
+/** 可展开行的开合交互：组行、带详情的过程行共用。 */
+function wireExpandable(row: HTMLElement, panel: HTMLElement, onOpen?: () => void): void {
+  const toggle = (): void => {
+    panel.hidden = !panel.hidden;
+    row.setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) onOpen?.();
+  };
+  row.addEventListener("click", toggle);
+  row.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle();
+    }
+  });
+}
+
+/** 组容器：组行（图标 · 标题 · 用时 · 折叠箭头）、组里最新一句 agent 旁白、折叠体。
+ *  沿用「写入产物文件 ×N」的 .stream-group 结构，默认收起。 */
+function createActivityGroup(kind: "process" | "subagent", icon: string, title: string): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "stream-item stream-group stream-activity";
+  container.dataset.activity = kind;
+  container.innerHTML = `
+    <div class="stream-row is-expandable" role="button" tabindex="0" aria-expanded="false">
+      <i class="ph ph-${icon}" aria-hidden="true"></i>
+      <span class="stream-title"><span class="stream-activity-title"></span></span>
+      <time class="stream-elapsed"></time>
+      <i class="ph ph-caret-down stream-chevron" aria-hidden="true"></i>
+    </div>
+    <p class="stream-activity-note" hidden></p>
+    <div class="stream-group-body" hidden></div>`;
+  setActivityTitle(container, title);
+  wireExpandable(
+    container.querySelector<HTMLElement>(":scope > .stream-row")!,
+    container.querySelector<HTMLElement>(":scope > .stream-group-body")!,
+  );
+  return container;
+}
+
+function activityBody(group: HTMLElement): HTMLElement {
+  return group.querySelector<HTMLElement>(":scope > .stream-group-body")!;
+}
+
+function setActivityTitle(group: HTMLElement, title: string): void {
+  const node = group.querySelector<HTMLElement>(":scope > .stream-row .stream-activity-title");
+  if (node) node.textContent = title;
+}
+
+/** 组行随组内变化刷新：过程组的标题与累计用时、进行中的标题扫光。 */
+function refreshActivityGroup(group: HTMLElement): void {
+  if (group.dataset.activity === "process") {
+    const rows = [...activityBody(group).children].filter((node): node is HTMLElement => node instanceof HTMLElement);
+    const steps = rows.map(row => row.dataset.traceStep).filter(Boolean) as TraceStep[];
+    setActivityTitle(group, processGroupTitle(rows.map(row => row.dataset.promptId ?? ""), steps));
+    const total = rows.reduce((sum, row) => sum + (Number(row.dataset.elapsedMs) || 0), 0);
+    const time = group.querySelector<HTMLElement>(":scope > .stream-row > .stream-elapsed");
+    if (time) time.textContent = total > 0 ? formatElapsed(total) : "";
+  }
+  const active = group.dataset.open === "true"
+    || activityBody(group).querySelector(":scope > .stream-item.is-waiting") !== null;
+  group.querySelector(":scope > .stream-row .stream-activity-title")?.classList.toggle("thinking-shimmer", active);
+}
+
+function refreshGroupOf(group: HTMLElement | null): void {
+  if (group?.isConnected) refreshActivityGroup(group);
+}
+
+function containingGroup(node: HTMLElement): HTMLElement | null {
+  return node.parentElement?.closest<HTMLElement>(".stream-activity") ?? null;
+}
+
+/** 组行下方那一行显示组里最新一句 agent 旁白：收起时也能看到它此刻在想什么。 */
+function showLatestNote(group: HTMLElement, item: HTMLElement): void {
+  if (item.dataset.traceStep !== "note") return;
+  const line = group.querySelector<HTMLElement>(":scope > .stream-activity-note");
+  if (!line) return;
+  line.textContent = item.textContent ?? "";
+  line.hidden = false;
+}
+
+/** 过程行（思考 / 工具 / 旁白）的落点：子代理会话中收进会话组；否则与紧挨着的上一条过程行
+ *  归成一组——第二条到达时把上一条一起收进新组（只有一条时套组反而多一层），被叙述、阶段
+ *  产出、审稿结论等关键节点隔断就另起一组。 */
+function appendProcess(root: HTMLElement, item: HTMLElement, meta: ProcessMeta): void {
+  item.dataset.traceStep = meta.step;
+  if (meta.promptId) item.dataset.promptId = meta.promptId;
+  if (meta.elapsedMs) item.dataset.elapsedMs = String(meta.elapsedMs);
+  const state = streamState(root);
+  const host = resolveStreamHost(root, state);
+  if (!host) return;
+  const sessionBody = subagentBody(root, state, host);
+  if (sessionBody && state.subagent) {
+    placeInStream(root, sessionBody, item);
+    showLatestNote(state.subagent.container, item);
+    refreshActivityGroup(state.subagent.container);
+    return;
+  }
+  const tail = host.lastElementChild instanceof HTMLElement ? host.lastElementChild : null;
+  let group = tail?.dataset.activity === "process" ? tail : null;
+  if (!group && tail?.dataset.traceStep) {
+    group = createActivityGroup("process", "list-checks", "");
+    if (!state.replaying) group.classList.add("stream-in");
+    tail.before(group);
+    activityBody(group).append(tail);
+    showLatestNote(group, tail);
+  }
+  if (!group) {
+    placeInStream(root, host, item);
+    return;
+  }
+  placeInStream(root, activityBody(group), item);
+  showLatestNote(group, item);
+  refreshActivityGroup(group);
+}
+
+function startGroupClock(group: HTMLElement, sinceMs: number | null): void {
+  group.dataset.open = "true";
+  const time = group.querySelector<HTMLElement>(":scope > .stream-row > .stream-elapsed");
+  if (!time) return;
+  // 与等待行同规则：锚定服务端时间，刷新重进时接着真实起点走秒
+  const since = Math.min(sinceMs ?? Date.now(), Date.now());
+  time.dataset.elapsedSince = String(since);
+  time.textContent = formatElapsed(Date.now() - since);
+}
+
+function stopGroupClock(group: HTMLElement, durationMs: number): void {
+  delete group.dataset.open;
+  const time = group.querySelector<HTMLElement>(":scope > .stream-row > .stream-elapsed");
+  if (!time) return;
+  delete time.dataset.elapsedSince;
+  if (durationMs > 0) time.textContent = formatElapsed(durationMs);
+}
+
+/** 子代理派发：开一个会话组，或并入同一落点上正在进行的那批并行派发。 */
+function openSubagent(root: HTMLElement, state: AgentStreamState, ref: SubagentRef, eventMs: number | null): void {
+  const host = resolveStreamHost(root, state);
+  if (!host) return;
+  const current = state.subagent;
+  if (current && current.container.isConnected && current.host === host) {
+    current.spawns.push(ref);
+    current.open += 1;
+    setActivityTitle(current.container, subagentGroupTitle(current.spawns));
+    refreshActivityGroup(current.container);
+    return;
+  }
+  const group = createActivityGroup("subagent", "robot", subagentGroupTitle([ref]));
+  startGroupClock(group, eventMs);
+  placeInStream(root, host, group);
+  state.subagent = {
+    container: group,
+    body: activityBody(group),
+    host,
+    spawns: [ref],
+    open: 1,
+    failedLabel: "",
+    durationMs: 0,
+  };
+  refreshActivityGroup(group);
+}
+
+/** 会话中到达的行该落进哪个折叠体。会话期间落点换了（对话区多了新的一轮）就在新落点接一个
+ *  续段组，行与对话仍按发生顺序交替。 */
+function subagentBody(root: HTMLElement, state: AgentStreamState, host: HTMLElement): HTMLElement | null {
+  const current = state.subagent;
+  if (!current) return null;
+  if (!current.container.isConnected) {
+    state.subagent = null;
+    return null;
+  }
+  if (current.host === host) return current.body;
+  const since = Number(current.container.querySelector<HTMLElement>(":scope > .stream-row > .stream-elapsed")
+    ?.dataset.elapsedSince);
+  const previous = current.container;
+  stopGroupClock(previous, 0);
+  refreshActivityGroup(previous);
+  const group = createActivityGroup("subagent", "robot", `${subagentGroupTitle(current.spawns)}（续）`);
+  startGroupClock(group, Number.isFinite(since) ? since : null);
+  placeInStream(root, host, group);
+  Object.assign(current, { container: group, body: activityBody(group), host });
+  return current.body;
+}
+
+/** 子代理收束：result 到达（并行的一批等最后一个），或阶段失败 / 进程重启把会话打断
+ *  （interrupted 为标题后缀）；阶段正常推进时传空串，只收组不标失败。 */
+function closeSubagent(state: AgentStreamState, result: Record<string, unknown> | null, interrupted = ""): void {
+  const current = state.subagent;
+  if (!current) return;
+  if (result) {
+    const outcome = subagentOutcome(String(result.envelope_status ?? ""));
+    if (outcome.failed && !current.failedLabel) current.failedLabel = outcome.label || "未完成";
+    current.durationMs = Math.max(current.durationMs, Number(result.duration_ms) || 0);
+    current.open -= 1;
+    if (current.open > 0) return;
+  } else if (interrupted) {
+    current.failedLabel = interrupted;
+  }
+  state.subagent = null;
+  const group = current.container;
+  stopGroupClock(group, current.durationMs);
+  if (current.failedLabel) {
+    const icon = group.querySelector<HTMLElement>(":scope > .stream-row > i");
+    if (icon) icon.className = "ph-fill ph-warning-circle";
+    setActivityTitle(group, `${subagentGroupTitle(current.spawns)}（${current.failedLabel}）`);
+  }
+  refreshGroupOf(group);
 }
 
 /** 从失败 / 暂停 / 审批门回到 RUNNING 的迁移：重试、恢复、确认——都说明首阶段早已落定过。 */
@@ -767,6 +1030,8 @@ interface StreamRowOptions {
   /** 同类行归组（用户要求：大批同类行平铺难看）：连续同组行折进一个
    *  可展开的组行，组标题计数递增；被其他行隔断则另起新组，时序不乱。 */
   group?: StreamRowGroup;
+  /** 过程行（思考 / 工具调用）：按两级折叠落位（见 appendProcess）。 */
+  process?: ProcessMeta;
 }
 
 interface StreamRowGroup {
@@ -781,7 +1046,8 @@ function appendGrouped(root: HTMLElement, item: HTMLElement, group: StreamRowGro
   const state = streamState(root);
   const host = resolveStreamHost(root, state);
   if (!host) return;
-  const tail = host.lastElementChild instanceof HTMLElement ? host.lastElementChild : null;
+  const parent = subagentBody(root, state, host) ?? host;
+  const tail = parent.lastElementChild instanceof HTMLElement ? parent.lastElementChild : null;
   let body = tail?.classList.contains("stream-group") && tail.dataset.groupKey === group.key
     ? tail.querySelector<HTMLElement>(".stream-group-body")
     : null;
@@ -797,21 +1063,10 @@ function appendGrouped(root: HTMLElement, item: HTMLElement, group: StreamRowGro
       </div>
       <div class="stream-group-body" hidden></div>`;
     container.querySelector<HTMLElement>(".stream-title > span")!.textContent = group.title;
-    const row = container.querySelector<HTMLElement>(".stream-row")!;
     const groupBody = container.querySelector<HTMLElement>(".stream-group-body")!;
-    const toggle = (): void => {
-      groupBody.hidden = !groupBody.hidden;
-      row.setAttribute("aria-expanded", String(!groupBody.hidden));
-    };
-    row.addEventListener("click", toggle);
-    row.addEventListener("keydown", event => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        toggle();
-      }
-    });
+    wireExpandable(container.querySelector<HTMLElement>(".stream-row")!, groupBody);
     if (!state.replaying) container.classList.add("stream-in");
-    host.append(container);
+    parent.append(container);
     groupBody.append(tail); // 把先落下的散行收编进组，保持发生顺序
     body = groupBody;
   }
@@ -846,19 +1101,8 @@ function attachRowDetail(
   row.tabIndex = 0;
   row.setAttribute("aria-expanded", String(Boolean(options.open)));
   row.insertAdjacentHTML("beforeend", '<i class="ph ph-caret-down stream-chevron" aria-hidden="true"></i>');
-  const toggle = (): void => {
-    detail.hidden = !detail.hidden;
-    row.setAttribute("aria-expanded", String(!detail.hidden));
-    // 生成中途展开实时区：直接跳到最新内容处继续跟随
-    if (options.live && !detail.hidden) pre.scrollTop = pre.scrollHeight;
-  };
-  row.addEventListener("click", toggle);
-  row.addEventListener("keydown", event => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      toggle();
-    }
-  });
+  // 生成中途展开实时区：直接跳到最新内容处继续跟随
+  wireExpandable(row, detail, options.live ? () => { pre.scrollTop = pre.scrollHeight; } : undefined);
   return pre;
 }
 
@@ -964,6 +1208,8 @@ function streamRow(root: HTMLElement, options: StreamRowOptions): void {
   }
   if (options.group) {
     appendGrouped(root, item, options.group);
+  } else if (options.process) {
+    appendProcess(root, item, options.process);
   } else {
     streamAppend(root, item);
   }
@@ -976,7 +1222,9 @@ function dropPendingStreamRow(root: HTMLElement, key: string): PendingStreamRow 
   if (!entry) return undefined;
   state.pending.delete(key);
   stopLiveTyping(entry);
+  const group = containingGroup(entry.element);
   entry.element.remove();
+  refreshGroupOf(group);
   return entry;
 }
 
@@ -1008,6 +1256,7 @@ function settleStreamRow(
   if (timeCell) {
     if (entry.sinceServerMs !== null && endedServerMs !== null) {
       timeCell.textContent = formatElapsed(endedServerMs - entry.sinceServerMs);
+      entry.element.dataset.elapsedMs = String(Math.max(0, endedServerMs - entry.sinceServerMs));
     }
     delete timeCell.dataset.elapsedSince;
   }
@@ -1019,6 +1268,7 @@ function settleStreamRow(
     live.hidden = true;
     entry.element.querySelector(".stream-row")?.setAttribute("aria-expanded", "false");
   }
+  refreshGroupOf(containingGroup(entry.element));
 }
 
 /** 把所有进行中的模型调用行落定（步骤失败、运行终态时调用，不碰审批行）。 */
@@ -1062,6 +1312,7 @@ function ingestStreamEvent(
 
   switch (event.type) {
     case "run.node_changed": {
+      closeSubagent(state, null);
       // COMPLETED 是端点不是阶段：服务端给不出中文名（label 落成枚举原文），
       // 且紧随的 run.status_changed 已经叙述「全部阶段完成」，这里不再重复。
       if (String(payload.to ?? "") === "COMPLETED") return;
@@ -1072,6 +1323,8 @@ function ingestStreamEvent(
     case "run.status_changed": {
       const reason = String(payload.reason ?? "").trim();
       const to = String(payload.to ?? "");
+      if (to === "FAILED") closeSubagent(state, null, "已中断");
+      if (to === "CANCELLED") closeSubagent(state, null, "已取消");
       if (to === "FAILED") {
         // 失败原因跟着失败落在同一处（2026-09-17）：此前尾部只有一句「「X」阶段失败。」，
         // 真正的原因只经快照写进首气泡顶部的摘要，用户得翻回顶上才知道为什么。
@@ -1093,7 +1346,7 @@ function ingestStreamEvent(
         // 活动流完全静默、结束时整批闪现。结束事件到达时被 thinking 行整体
         // 替换（推理模型）或就地落定（无思考内容的模型）。
         const key = `llm:${String(payload.prompt_id)}`;
-        const stage = STAGE_BY_PROMPT[String(payload.prompt_id)];
+        const stage = thinkingStage(String(payload.prompt_id ?? ""));
         // repair = 上次输出没过结构校验、这次带着错误反馈重生成：如实标注
         const title = `深度思考${stage ? ` · ${stage}` : ""}${payload.repair === true ? "（修复输出格式）" : ""}`;
         // 同一提示词的上一次调用还没落定（调用失败重试、进程重启续跑、历史
@@ -1123,6 +1376,7 @@ function ingestStreamEvent(
           icon: "sparkle",
           title,
           waitingSinceMs: eventMs,
+          process: { step: "think", promptId: String(payload.prompt_id ?? "") },
         });
         return;
       }
@@ -1155,14 +1409,22 @@ function ingestStreamEvent(
       if (kind === "thinking") {
         const key = `llm:${String(payload.prompt_id)}`;
         const dropped = dropPendingStreamRow(root, key);
-        const stage = STAGE_BY_PROMPT[String(payload.prompt_id)];
+        const promptId = String(payload.prompt_id ?? "");
+        const stage = thinkingStage(promptId);
         const retries = dropped && dropped.attempts > 1 ? `（第 ${dropped.attempts} 次尝试成功）` : "";
+        const elapsedMs = Number(payload.elapsed_ms) || 0;
         streamRow(root, {
           icon: "sparkle",
           title: `深度思考${stage ? ` · ${stage}` : ""}${retries}`,
-          elapsedMs: Number(payload.elapsed_ms) || 0,
+          elapsedMs,
           detail: String(payload.text ?? ""),
+          process: { step: "think", promptId, elapsedMs },
         });
+        return;
+      }
+      if (kind === "agent_note") {
+        const text = String(payload.text ?? "").trim();
+        if (text) streamAgentNote(root, text, String(payload.prompt_id ?? ""));
         return;
       }
       if (kind === "llm_call") {
@@ -1201,33 +1463,54 @@ function ingestStreamEvent(
       }
       if (
         kind === "task_renamed" || kind === "budget_limit" || kind === "user_note"
-        || kind === "executor_restarted"
+        || kind === "executor_restarted" || kind === "auto_redo_exhausted" || kind === "redo_requested"
       ) {
         // 有现成人话 message 的运营事件（改名 / 预算 / 用户补充要求已落成运行备注 /
-        // 后端进程中途重启打断了在途调用并自动重试）：以叙述行呈现，不落进原始
-        // JSON 兜底——兜底会把备注全文连 note_id 一起摊开。executor_restarted 紧跟
-        // 在被打断的思考行（标「本次调用中断」）之后，说明中断原因不是用户的操作。
+        // 后端进程中途重启打断了在途调用并自动重试 / 自动回退用尽 / 按要求从某阶段重做）：
+        // 以叙述行呈现，不落进原始 JSON 兜底——兜底会把备注全文连 note_id 一起摊开。
+        // executor_restarted 紧跟在被打断的思考行（标「本次调用中断」）之后，说明中断
+        // 原因不是用户的操作；进行中的子代理会话随进程一起断了。
+        if (kind === "executor_restarted") closeSubagent(state, null, "已中断");
         const message = String(payload.message ?? "").trim();
         if (message) streamNarration(root, message.endsWith("。") ? message : `${message}。`);
         return;
       }
-      if (payload.tool === "python_run") {
-        // 实验沙箱执行：标题说人话，输入/输出摘要进可展开详情。
-        // 失败时 failure_detail 携带 stderr 尾部（含 traceback）——没有它用户只能看到
-        // 「python exited with code 1」一行，无从判断崩在哪。
-        const failed = payload.status !== "succeeded";
+      const tool = typeof payload.tool === "string" ? payload.tool : "";
+      if (tool.startsWith("subagent:")) {
+        // 子代理的派发与收束审计（TOOL_CALLED{tool:"subagent:<kind>"}）：不单独成行，
+        // 而是开 / 收一个会话组，期间的思考与工具行都收进去（两级折叠）
+        if (payload.phase === "spawn") {
+          openSubagent(root, state, { kind: tool.slice("subagent:".length), goal: String(payload.goal ?? "") }, eventMs);
+        } else if (payload.phase === "result") {
+          closeSubagent(state, payload);
+        }
+        return;
+      }
+      if (isQuietTool(tool)) return;
+      const toolRow = tool ? describeToolCall(payload) : null;
+      if (toolRow) {
         streamRow(root, {
-          icon: failed ? "warning-circle" : "terminal-window",
-          title: failed ? "实验代码执行失败（准备修复重试）" : "已在沙箱执行实验代码",
-          elapsedMs: Number(payload.duration_ms) || undefined,
-          detail: [
-            `状态：${String(payload.status ?? "")}`,
-            payload.input_summary ? `输入：${String(payload.input_summary)}` : "",
-            payload.output_summary ? `输出：${String(payload.output_summary)}` : "",
-            payload.failure_detail ? `报错详情：\n${String(payload.failure_detail)}` : "",
-          ].filter(Boolean).join("\n"),
-          mono: true,
+          icon: toolRow.icon,
+          title: toolRow.title,
+          elapsedMs: toolRow.elapsedMs,
+          detail: toolRow.detail || undefined,
+          mono: toolRow.mono,
+          process: { step: toolRow.step, elapsedMs: toolRow.elapsedMs },
         });
+        return;
+      }
+      const review = reviewText(kind, payload);
+      if (review) {
+        streamReview(root, review);
+        return;
+      }
+      const progress = paperProgressText(kind, payload);
+      if (progress) {
+        streamNarration(root, progress);
+        return;
+      }
+      if (kind === "paper_targeted_rewrite") {
+        streamRow(root, { icon: "pencil-simple", title: paperRewriteTitle(payload) });
         return;
       }
       // 论文分章直播：骨架事件预挂大纲，章节事件把正文实时推进编辑器
@@ -1281,6 +1564,7 @@ function ingestStreamEvent(
       // 阶段完成：先输出智能体的进度叙述正文（progress_note，直接可读、
       // 不折叠——叙述与过程行交替），再挂结构化「阶段产出」可展开明细。
       // 模拟节点只有 {label}，两者都为空则不渲染。
+      closeSubagent(state, null);
       const node = String(payload.node ?? "");
       const label = STAGE_OUTPUT_LABELS[node];
       const outputs = (payload.outputs ?? {}) as Record<string, unknown>;
@@ -1304,9 +1588,10 @@ function ingestStreamEvent(
       return;
     }
     case "step.failed": {
-      // 阶段失败（含进程中断后的修复落定）：进行中的模型调用行一并按失败收尾，
-      // 后续重试会开新的走秒行。
+      // 阶段失败（含进程中断后的修复落定）：进行中的模型调用行与子代理会话一并按失败
+      // 收尾，后续重试会开新的走秒行。
       settlePendingLlmRows(root, eventMs, true);
+      closeSubagent(state, null, "已中断");
       return;
     }
     case "approval.requested": {

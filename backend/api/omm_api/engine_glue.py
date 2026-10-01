@@ -128,10 +128,13 @@ REDO_OPTION_PREFIX = "redo:"
 #: 单个 run 允许发起的修订轮数上限（ADR-0013 §3.1）。
 MAX_REVISION_ROUNDS = 3
 
+#: 固定产物的中文展示名，按 (kind, 文件名) 精确匹配：只认模拟链路（SimStageNode）与论文
+#: 节点草稿自己的文件。其余产物一律按真实文件名展示——实验代码画的图若按 kind 套名，
+#: 每张都会被登记成「基线实验结果图（模拟）」。
 _ARTIFACT_NAMES = {
-    "figure": "基线实验结果图（模拟）",
-    "report": "建模报告草稿（模拟）",
-    "paper": "建模论文草稿",
+    ("figure", "baseline-metrics.svg"): "基线实验结果图（模拟）",
+    ("report", "report-draft.md"): "建模报告草稿（模拟）",
+    ("paper", "paper-draft.md"): "建模论文草稿",
 }
 
 FAIL_EXPERIMENT_MARKER = "[fail:experiment]"
@@ -1384,10 +1387,12 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
 
     if kind is EventType.ARTIFACT_PRODUCED:
         ref = dict(payload["artifact"])
-        # kind 映射优先（模拟链路的中文名不变）；未登记的 kind 取 URI 尾部的
-        # 真实文件名（实验代码产出的 table/figure/code 等按文件名展示）。
         uri_tail = str(ref.get("uri") or "").rstrip("/").rsplit("/", 1)[-1]
-        name = _ARTIFACT_NAMES.get(str(ref.get("kind"))) or uri_tail or str(ref.get("kind"))
+        name = (
+            _ARTIFACT_NAMES.get((str(ref.get("kind")), uri_tail))
+            or uri_tail
+            or str(ref.get("kind"))
+        )
         # v1 契约把 kind 约束为枚举；节点/工具产生的词不在表内时归入 other，
         # 一个新产物类型绝不允许把序列化层打成 500。
         valid_kinds = {member.value for member in ArtifactKind}

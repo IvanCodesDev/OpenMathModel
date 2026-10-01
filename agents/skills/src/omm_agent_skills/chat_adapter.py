@@ -7,10 +7,10 @@
 - 端口侧鸭子契约：``chat_text(messages, label=...) -> str``——收 role∈
   {system,user,assistant} 的 dict 消息序列，返回原始回复文本。传输重试、
   预算记账、过程事件全部留在端口内部（与 ``complete`` 同一条出口纪律）。
-- 模型侧信封约定：需要调用工具时**只输出**一个 JSON 对象
-  ``{"tool": "<工具名>", "arguments": {...}}``；适配器把它解析成合成
-  ToolCall 交给内环，工具观察以 user 消息回给模型。终答是不含 ``tool``
-  键的 JSON，原样透传给内环的 parser/validator（结构违约走 R1 修复梯）。
+- 模型侧信封约定：需要调用工具时先写一句中文说明（端口把它发成执行轨迹里的
+  agent_note 旁白），紧接着一个 JSON 对象 ``{"tool": "<工具名>", "arguments": {...}}``；
+  适配器把它解析成合成 ToolCall 交给内环，工具观察以 user 消息回给模型。终答是不含
+  ``tool`` 键的 JSON，原样透传给内环的 parser/validator（结构违约走 R1 修复梯）。
 
 协议指令文本（:func:`tool_protocol_note`）由本模块单点持有，节点装配任务卡
 时拼进 task_brief——模型看到的协议说明与适配器的解析规则永远同源。
@@ -81,7 +81,8 @@ def tool_protocol_note(tools: Sequence[str], final_hint: str | None = None) -> s
     """
     lines = [_TOOL_USAGE_LINES[name] for name in tools if name in _TOOL_USAGE_LINES]
     return (
-        "工具调用协议：需要执行动作时，只输出一个 JSON 对象（不要任何其它文字）："
+        "工具调用协议：需要执行动作时，先用一句简短的中文说明这一步要做什么、为什么"
+        "（这句话会原样展示给用户，不要使用花括号），紧接着输出一个 JSON 对象，除此之外不要其它文字："
         '{"tool": "<工具名>", "arguments": {...}}。可用工具：\n'
         + "\n".join(lines)
         + "\n工具结果会以下一条消息回给你。全部动作完成并自查达标后，"

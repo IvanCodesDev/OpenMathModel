@@ -4257,6 +4257,29 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+/* 折叠体带作者级 display:flex，压过 UA 的 [hidden]：不补这条，组行点了也收不起来 */
+.stream-group-body[hidden],
+.stream-activity-note[hidden] { display: none !important; }
+/* 两级折叠：子代理会话组与连续过程行组复用上面的组行；组行下方一行是组里最新一句
+   agent 旁白（单行省略），展开后由组内原文承担、这一行让位 */
+.stream-activity-note {
+  margin: 0 0 0 23px;
+  overflow: hidden;
+  color: #6d6d67;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.stream-activity > .stream-row[aria-expanded="true"] ~ .stream-activity-note { display: none; }
+/* 组内 agent 旁白：模型调工具前对这一步的一句说明，正文色，夹在过程行之间 */
+.stream-agent-note {
+  margin: 0;
+  color: #3c3c37;
+  font-size: 13.5px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
 /* 实时生成区（llm_delta 增量流入） */
 .stream-detail.is-live pre { font-size: 12.5px; }
 /* 生成进行中用更矮的视口：内容每秒都在长，矮窗 + 吸底跟随只露最新几行；

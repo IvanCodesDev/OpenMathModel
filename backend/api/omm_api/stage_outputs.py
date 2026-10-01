@@ -246,7 +246,7 @@ _G2_GATE = "G2"
 
 def _artifact_file_name(row: ArtifactRow) -> str:
     """产物的真实文件名：内容 URI 尾部（``local://<sha256>/figures/eda.svg`` → ``eda.svg``）；URI 没带路径时退回
-    登记名的尾部。登记名可能是展示名（图件一律登记成「基线实验结果图（模拟）」），不能当文件名用。"""
+    登记名的尾部。登记名可能是展示名（如模拟链路的「基线实验结果图（模拟）」），不能当文件名用。"""
     uri = str(row.uri or "").replace("\\", "/").rstrip("/")
     _, _, rest = uri.partition("://")
     if "/" in rest:
