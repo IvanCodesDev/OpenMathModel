@@ -11,6 +11,9 @@
   agent_note 旁白），紧接着一个 JSON 对象 ``{"tool": "<工具名>", "arguments": {...}}``；
   适配器把它解析成合成 ToolCall 交给内环，工具观察以 user 消息回给模型。终答是不含
   ``tool`` 键的 JSON，原样透传给内环的 parser/validator（结构违约走 R1 修复梯）。
+- 信封走样的宽容：参数与 ``tool`` 平级的扁平信封、``arguments`` 写成 JSON 字符串，都还原成
+  参数；一条回复写了几个信封只执行第一个，下一条工具结果末尾告知其余没执行；工具报缺参时，
+  在那条工具结果末尾附该工具的正确信封写法。
 
 协议指令文本（:func:`tool_protocol_note`）由本模块单点持有，节点装配任务卡
 时拼进 task_brief——模型看到的协议说明与适配器的解析规则永远同源。
@@ -47,25 +50,25 @@ def supports_chat(llm: Any) -> bool:
 #: 工具目录的协议说明（与 omm_agent_tools 的注册名对齐，装配期契约）：沙盒
 #: 五件套 + 卡片知识库两个只读工具（方案阶段提议人自主检索，§10.3 切片二）。
 #: code_run 是多语言统一入口（§7.4，H7）：language 由任务卡固定，执行体会退回换语言的调用。
-_TOOL_USAGE_LINES = {
-    "python_run": '- python_run：执行完整 Python 脚本。arguments = {"code": "<脚本源码>"}',
+#: 每项 = (用途说明, arguments 写法)；协议说明与缺参提示的信封示例都从这里取。
+_TOOL_USAGE: dict[str, tuple[str, str]] = {
+    "python_run": ("执行完整 Python 脚本。", '{"code": "<脚本源码>"}'),
     "code_run": (
-        "- code_run：按任务卡实现语言执行完整脚本。"
-        'arguments = {"code": "<脚本源码>", '
-        '"language": "<任务卡给定的语言，如 python / r>"}'
+        "按任务卡实现语言执行完整脚本。",
+        '{"code": "<脚本源码>", "language": "<任务卡给定的语言，如 python / r>"}',
     ),
-    "ws_write": '- ws_write：写工作区 UTF-8 文本文件。arguments = {"path": "相对路径", "text": "内容"}',
-    "ws_read": '- ws_read：读工作区文本文件。arguments = {"path": "相对路径"}',
-    "ws_list": '- ws_list：列出工作区文件。arguments = {"prefix": "可选路径前缀"}',
-    "env_probe": "- env_probe：探测运行环境（可用包清单）。arguments = {}",
+    "ws_write": ("写工作区 UTF-8 文本文件。", '{"path": "相对路径", "text": "内容"}'),
+    "ws_read": ("读工作区文本文件。", '{"path": "相对路径"}'),
+    "ws_list": ("列出工作区文件。", '{"prefix": "可选路径前缀"}'),
+    "env_probe": ("探测运行环境（可用包清单）。", "{}"),
     "knowledge_search": (
-        "- knowledge_search：检索赛题与获奖论文卡片库，返回带出处的命中列表。"
-        'arguments = {"query": "关键词", "kind": "可选 problem / paper", '
-        '"task_type": "可选题型或建模方向子串", "limit": 可选整数}'
+        "检索赛题与获奖论文卡片库，返回带出处的命中列表。",
+        '{"query": "关键词", "kind": "可选 problem / paper", '
+        '"task_type": "可选题型或建模方向子串", "limit": 可选整数}',
     ),
     "knowledge_read": (
-        "- knowledge_read：按卡片 id 读全卡（赛题含正文与挂接论文，论文含奖项 / 模型）。"
-        'arguments = {"card_id": "如 problem:cumcm-2021-c"}'
+        "按卡片 id 读全卡（赛题含正文与挂接论文，论文含奖项 / 模型）。",
+        '{"card_id": "如 problem:cumcm-2021-c"}',
     ),
 }
 
@@ -79,7 +82,11 @@ def tool_protocol_note(tools: Sequence[str], final_hint: str | None = None) -> s
     ``final_hint`` 指向终答要求所在的章节（缺省是沙盒任务卡的「工作方式与终答
     要求」），让协议说明与调用方模板的章节名对得上。
     """
-    lines = [_TOOL_USAGE_LINES[name] for name in tools if name in _TOOL_USAGE_LINES]
+    lines = [
+        f"- {name}：{_TOOL_USAGE[name][0]}arguments = {_TOOL_USAGE[name][1]}"
+        for name in tools
+        if name in _TOOL_USAGE
+    ]
     return (
         "工具调用协议：需要执行动作时，先用一句简短的中文说明这一步要做什么、为什么"
         "（这句话会原样展示给用户，不要使用花括号），紧接着输出一个 JSON 对象，除此之外不要其它文字："
@@ -92,29 +99,95 @@ def tool_protocol_note(tools: Sequence[str], final_hint: str | None = None) -> s
 
 
 _FENCE_CHARS = "`"
+#: 整段解析失败后逐个 ``{`` 试解时最多试几处（说明文字里误写的花括号、坏信封里代码的花括号）。
+_MAX_SCAN_STARTS = 8
+#: omm_agent_tools 注册表缺参报错的原文（``ToolRegistry.validate_args``）。
+_MISSING_ARGUMENTS_MARK = "missing required arguments"
 
 
-def _parse_envelope(raw: str) -> dict[str, Any] | None:
-    """尽力解析工具信封；不是信封（或根本不是 JSON）返回 None。"""
+def _is_envelope(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("tool"), str)
+        and bool(value["tool"].strip())
+    )
+
+
+def _parse_envelope(raw: str) -> tuple[dict[str, Any], bool] | None:
+    """尽力解析工具信封，返回 (信封, 其后是否还有信封)；不是信封（或根本不是 JSON）返回 None。"""
     candidate = raw.strip()
     if not candidate:
         return None
+    parsed: Any = None
     if _FENCE_CHARS in candidate or not candidate.startswith("{"):
-        # 复用技能层的宽容解析（围栏/前后杂文），失败即视为非信封
+        # 复用技能层的宽容解析（围栏/前后杂文）
         from .nodes import extract_json
 
         try:
             parsed = extract_json(candidate)
         except (json.JSONDecodeError, ValueError):
-            return None
+            parsed = None
     else:
         try:
             parsed = json.loads(candidate)
         except json.JSONDecodeError:
+            parsed = None
+    if parsed is None:
+        # 整段不是一个 JSON：一条回复写了几个信封（首 { 到末 } 会 Extra data），或说明文字里
+        # 误写了花括号——取第一个能解出来的对象，它是信封才算
+        return _first_envelope(candidate)
+    return (parsed, False) if _is_envelope(parsed) else None
+
+
+def _first_envelope(text: str) -> tuple[dict[str, Any], bool] | None:
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    for _ in range(_MAX_SCAN_STARTS):
+        if start == -1:
             return None
-    if isinstance(parsed, dict) and isinstance(parsed.get("tool"), str) and parsed["tool"].strip():
-        return parsed
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if not _is_envelope(value):
+            return None
+        return value, '"tool"' in text[end:]
     return None
+
+
+def _envelope_arguments(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """信封 → 工具参数：``arguments`` 对象原样；是 JSON 字符串就解开；没有可用的
+    ``arguments``（扁平信封）就把 ``tool`` 以外的顶层键当参数。"""
+    arguments = envelope.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            arguments = None
+    if isinstance(arguments, Mapping):
+        return dict(arguments)
+    return {key: value for key, value in envelope.items() if key not in ("tool", "arguments")}
+
+
+def _missing_arguments_hint(tool: str) -> str:
+    usage = _TOOL_USAGE.get(tool)
+    example = (
+        f'{{"tool": "{tool}", "arguments": {usage[1]}}}'
+        if usage
+        else '{"tool": "<工具名>", "arguments": {...}}'
+    )
+    return (
+        "[协议提示] 参数要放进 arguments 对象、键名照工具说明写，不能与 tool 平级。"
+        f"正确写法：{example}"
+    )
+
+
+def _extra_envelopes_hint(tool: str) -> str:
+    return (
+        f"[协议提示] 上一条回复写了不止一个工具信封，只执行了第一个（{tool}），后面的都没有执行；"
+        "每条回复只写一个信封，等这条结果回来再发下一个。"
+    )
 
 
 def to_wire_messages(messages: Sequence[Message]) -> list[dict[str, str]]:
@@ -143,22 +216,43 @@ def text_protocol_chat(llm: ChatTextPort, *, label: str, on_call=None):
     纪律，内环的 tally 不是计费出处）。
     """
     counter = itertools.count(1)
+    # 追加在工具结果末尾的协议提示：消息序号 → (上一条回复原文, 工具结果原文, 提示)。同一个
+    # chat 会被多波沙盒复用（每波都是新会话），两段原文都对上才贴，新会话里同序号的消息不会误贴。
+    hints: dict[int, tuple[str, str, str]] = {}
+    state: dict[str, Any] = {"tool": "", "pending": []}
 
     def chat(messages: Sequence[Message]) -> Reply:
         if on_call is not None:
             on_call()
-        raw = llm.chat_text(to_wire_messages(messages), label=label)
-        envelope = _parse_envelope(raw)
-        if envelope is not None:
-            arguments = envelope.get("arguments")
-            call = ToolCall(
-                id=f"tp_{next(counter)}",
-                name=envelope["tool"].strip(),
-                arguments=dict(arguments) if isinstance(arguments, Mapping) else {},
-            )
-            return Reply(
-                content=raw, tool_calls=(call,), usage=Usage(0, 0, 0), model="llm-port"
-            )
-        return Reply(content=raw, tool_calls=(), usage=Usage(0, 0, 0), model="llm-port")
+        if len(messages) > 1 and messages[-1].role == "tool":
+            notes = list(state["pending"])
+            if _MISSING_ARGUMENTS_MARK in messages[-1].content:
+                notes.append(_missing_arguments_hint(state["tool"]))
+            if notes:
+                hints[len(messages) - 1] = (
+                    messages[-2].content, messages[-1].content, "\n".join(notes)
+                )
+        state["pending"] = []
+        wire = to_wire_messages(messages)
+        for index, (reply_text, result_text, note) in hints.items():
+            if (
+                0 < index < len(messages)
+                and messages[index].content == result_text
+                and messages[index - 1].content == reply_text
+            ):
+                wire[index]["content"] += "\n\n" + note
+        raw = llm.chat_text(wire, label=label)
+        parsed = _parse_envelope(raw)
+        if parsed is None:
+            return Reply(content=raw, tool_calls=(), usage=Usage(0, 0, 0), model="llm-port")
+        envelope, more = parsed
+        name = envelope["tool"].strip()
+        state["tool"] = name
+        if more:
+            state["pending"] = [_extra_envelopes_hint(name)]
+        call = ToolCall(
+            id=f"tp_{next(counter)}", name=name, arguments=_envelope_arguments(envelope)
+        )
+        return Reply(content=raw, tool_calls=(call,), usage=Usage(0, 0, 0), model="llm-port")
 
     return chat

@@ -2465,6 +2465,7 @@ def _rerun_check(
     节点自己跑、自己比——「复跑核对」不交给模型想象。预算切片不够一次运行
     或脚本正文缺失时如实 ``executed=false``，审稿照常进行（材料里写明未复跑）。
     Python 走 python_run（账本 / 金轨迹逐字不变），其它语言走 code_run 并钉语言。
+    耗时类键不参与比对，它们的差异单列进 ``ignored``。
     """
     governor = (services.extras or {}).get("budget_governor")
     budgets: RunBudget = (
@@ -2497,14 +2498,19 @@ def _rerun_check(
         }
     scratch = _SandboxCapture()
     scratch.observe(result)
-    consistent, diff = compare_metrics(capture.metrics, scratch.metrics)
-    return {
+    ignored: list[str] = []
+    consistent, diff = compare_metrics(capture.metrics, scratch.metrics, ignored=ignored)
+    rerun: dict[str, Any] = {
         "executed": True,
         "consistent": consistent,
         "metrics": dict(scratch.metrics),
         "diff": diff,
         "reason": "" if consistent else "复跑指标与首跑不一致",
     }
+    if ignored:
+        # 不参与比对的耗时类差异：单列进复跑材料，审稿人看得到忽略了什么
+        rerun["ignored"] = ignored
+    return rerun
 
 
 def _spawn_reviewer(
@@ -2616,6 +2622,7 @@ def _run_review_loop(
     sandbox_wave: Callable[[str, int], _SandboxWaveResult | None],
     max_runs: int,
     usage: dict[str, int],
+    before_review: Callable[[_SandboxCapture], object] | None = None,
 ) -> tuple[dict[str, Any], _SandboxWaveResult]:
     """复跑核对 → 独立审稿 → 一票驳回退 R2 修复 → 复审 → 僵持。
 
@@ -2623,6 +2630,8 @@ def _run_review_loop(
     提供（实验节点直跑、清洗 / 稳健性经监督者派发），返回 None 表示修复波没派出去；
     ``usage["runs"|"waves"]`` 就地累加修复波的用量。僵持时保留最后一波**通过验收**的
     结果——审稿意见记进 ``review``，由闸门裁定，不因审稿把能跑的结果扔掉。
+    ``before_review(capture)`` 在每轮复跑核对之前调用：脚本要落固定路径的消费方（实验
+    节点的 experiment.py）在这里落盘，审稿人 ws_read 读到的才是本轮要审的版本。
     """
     review: dict[str, Any] = {"executed": False, "reason": "", "llm_calls": 0}
     report, capture, final_answer = first
@@ -2683,6 +2692,8 @@ def _run_review_loop(
                 break
             report, capture, final_answer = repair_report, repair_capture, repair_final
             continue
+        if before_review is not None:
+            before_review(capture)
         rerun = _rerun_check(ctx, services, capture, language=spec.language)
         verdict, calls, error = _spawn_reviewer(
             ctx, services, supervisor, registry, spec, capture, final_answer, rerun, rounds
@@ -3141,9 +3152,13 @@ class ExperimentExecutionNode(LlmSkillNode):
         run_tool = sandbox_run_tool(language)
         waves: list[_SandboxCapture] = []
         last_loop: dict[str, Any] = {}
+        # 审稿前落到固定路径的那一份（path / code）；之后再跑任何一波就作废——沙盒里的
+        # 模型自己也能 ws_write 同名文件
+        staged: dict[str, str] = {}
 
         def sandbox_wave(brief_suffix: str | None, max_runs: int) -> _SandboxWaveResult:
             """一次独立装配的沙盒任务（首轮 / 按审稿意见修复）：每次自己的证据捕获。"""
+            staged.clear()
             capture = _SandboxCapture()
             waves.append(capture)
             final_answer: dict[str, Any] = {}
@@ -3229,6 +3244,11 @@ class ExperimentExecutionNode(LlmSkillNode):
             )
 
         # ── 生成者-评审者（§8.4）：复跑核对 → 独立审稿 → 驳回退 R2 → 僵持进 G3 ──
+        def stage_for_review(current: _SandboxCapture) -> None:
+            # 回退重做时工作区里还是上一轮的 experiment.py：先落本轮脚本再审
+            staged["path"] = _stage_final_script(ctx, services, current.code, language)
+            staged["code"] = current.code
+
         supervisor = (services.extras or {}).get("subagents")
         if supervisor is None:
             review: dict[str, Any] = {
@@ -3247,6 +3267,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 sandbox_wave=sandbox_wave,
                 max_runs=self.max_sandbox_runs,
                 usage=usage,
+                before_review=stage_for_review,
             )
 
         node_metrics = {
@@ -3280,8 +3301,12 @@ class ExperimentExecutionNode(LlmSkillNode):
         if review.get("executed"):
             summary_bits.append(verdict_summary_text(review))
         # 最终脚本落工作区固定路径（按语言：experiment.py / experiment.R）：验证阶段据此复跑
-        # （steps/<id>/main.py 的即时副本下游拿不到 id）。
-        script_path = _stage_final_script(ctx, services, capture.code, language)
+        # （steps/<id>/main.py 的即时副本下游拿不到 id）。审稿前落的正是采用的这一份就不重写；
+        # 修复波没过验收、回落上一波时，那一波可能写过同名文件，要把采用的版本写回去。
+        if staged.get("path") and staged.get("code") == capture.code:
+            script_path = staged["path"]
+        else:
+            script_path = _stage_final_script(ctx, services, capture.code, language)
         # 所有波的产物并集：修复波重写同名结果文件时沙盒不再报新建，首波引用要留
         artifacts = _union_artifacts(waves, capture)
 

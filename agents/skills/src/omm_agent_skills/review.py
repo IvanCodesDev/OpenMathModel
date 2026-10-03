@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from typing import Any
 
 from omm_agent_harness import LoopBudget
@@ -29,6 +31,7 @@ __all__ = [
     "PAPER_FIGURE_REVIEW_PROMPT_ID",
     "RERUN_ABS_TOL",
     "RERUN_REL_TOL",
+    "RERUN_TIMING_WORDS",
     "REVIEWER_KNOWLEDGE_TOOL_NAMES",
     "REVIEWER_LOOP_BUDGET",
     "REVIEWER_MAX_TOOL_ROUNDS",
@@ -41,6 +44,7 @@ __all__ = [
     "ROBUSTNESS_REVIEW_PROMPT_ID",
     "compare_metrics",
     "findings_material",
+    "is_timing_key",
     "normalize_verdict",
     "rerun_material",
     "review_feedback",
@@ -78,6 +82,13 @@ REVIEW_SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor")
 #: 复跑指标比对容差：同种子应逐位一致，容差只吞并行归约 / BLAS 的浮点抖动。
 RERUN_REL_TOL = 1e-6
 RERUN_ABS_TOL = 1e-9
+#: 复跑核对不比的耗时类指标：墙钟耗时每次运行都不同，比了只会造出「不可复现」的假阳性。
+#: 按键名保守识别：键名切词（下划线 / 连字符 / 点 / 空格 / 驼峰）后，某个词或相邻两词拼起来
+#: 命中其一才算；time / duration / seconds 这类可能是模型本身的量，不认。
+RERUN_TIMING_WORDS: frozenset[str] = frozenset({"runtime", "elapsed", "walltime", "wallclock"})
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_KEY_WORD_SEPARATOR = re.compile(r"[^0-9a-z]+")
 
 _SEVERITY_ALIASES = {
     "blocker": "blocker",
@@ -176,33 +187,51 @@ def _numbers_close(recorded: float, rerun: float) -> bool:
     return math.isclose(recorded, rerun, rel_tol=RERUN_REL_TOL, abs_tol=RERUN_ABS_TOL)
 
 
+def is_timing_key(key: Any) -> bool:
+    """键名是不是耗时类指标：runtime_s、elapsed_sec、wall_time、trainRuntime 都算。"""
+    words = [
+        word
+        for word in _KEY_WORD_SEPARATOR.split(_CAMEL_BOUNDARY.sub("_", str(key)).lower())
+        if word
+    ]
+    candidates = set(words) | {left + right for left, right in pairwise(words)}
+    return not RERUN_TIMING_WORDS.isdisjoint(candidates)
+
+
 def compare_metrics(
-    recorded: Mapping[str, Any], rerun: Mapping[str, Any]
+    recorded: Mapping[str, Any],
+    rerun: Mapping[str, Any],
+    *,
+    ignored: list[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """首跑指标 vs 复跑指标：逐键比对，返回 (一致, 差异行)。
 
     数值按容差比较，其它类型按值 + 类型；嵌套的对象 / 数组递归比（稳健性检查的
     标记行是 ``checks: [{id, value, ...}]``，差异路径写成 ``checks[1].value``）；
     两边键集不同也算差异。空指标（复跑没打印标记行）不算一致——复跑连指标都
-    没打出来就是不可复现。
+    没打出来就是不可复现。耗时类键（:func:`is_timing_key`，任意嵌套层）不参与比对，
+    它们的差异行记进调用方给的 ``ignored``，复跑材料里单列。
     """
     if not rerun:
         return False, ["复跑未打印 OMM_METRICS_JSON 标记行"]
     diffs: list[str] = []
-    _collect_diffs(recorded, rerun, "", diffs)
+    _collect_diffs(recorded, rerun, "", diffs, ignored if ignored is not None else [])
     return not diffs, diffs
 
 
-def _collect_diffs(before: Any, after: Any, path: str, diffs: list[str]) -> None:
+def _collect_diffs(
+    before: Any, after: Any, path: str, diffs: list[str], ignored: list[str]
+) -> None:
     if isinstance(before, Mapping) and isinstance(after, Mapping):
         for key in sorted(set(before) | set(after)):
             child = f"{path}.{key}" if path else str(key)
+            sink = ignored if is_timing_key(key) else diffs
             if key not in after:
-                diffs.append(f"{child}：首跑 {before[key]!r}，复跑缺失")
+                sink.append(f"{child}：首跑 {before[key]!r}，复跑缺失")
             elif key not in before:
-                diffs.append(f"{child}：首跑缺失，复跑 {after[key]!r}")
+                sink.append(f"{child}：首跑缺失，复跑 {after[key]!r}")
             else:
-                _collect_diffs(before[key], after[key], child, diffs)
+                _collect_diffs(before[key], after[key], child, sink, ignored)
         return
     if (
         isinstance(before, Sequence) and isinstance(after, Sequence)
@@ -212,7 +241,7 @@ def _collect_diffs(before: Any, after: Any, path: str, diffs: list[str]) -> None
             diffs.append(f"{path}：首跑 {len(before)} 项，复跑 {len(after)} 项")
             return
         for index, (left, right) in enumerate(zip(before, after)):
-            _collect_diffs(left, right, f"{path}[{index}]", diffs)
+            _collect_diffs(left, right, f"{path}[{index}]", diffs, ignored)
         return
     if _is_number(before) and _is_number(after):
         if not _numbers_close(float(before), float(after)):
@@ -227,12 +256,21 @@ def rerun_material(rerun: Mapping[str, Any]) -> str:
     """复跑核对结果 → 审稿任务卡的一段文字（确定性事实，模型只能引用不能改写）。"""
     if not rerun.get("executed"):
         return "未复跑：" + str(rerun.get("reason") or "无原因说明")
+    ignored = [str(line) for line in rerun.get("ignored") or []]
     if rerun.get("consistent"):
-        return "已用同一份脚本与同一随机种子复跑一次：退出码 0，核心指标与首跑逐键一致。"
-    lines = ["已复跑一次，但结果**与首跑不一致**（可复现性存疑）："]
-    if rerun.get("reason"):
-        lines.append(f"- {rerun['reason']}")
-    lines.extend(f"- {diff}" for diff in rerun.get("diff") or [])
+        lines = [
+            "已用同一份脚本与同一随机种子复跑一次：退出码 0，核心指标与首跑逐键一致"
+            + ("（耗时类指标除外，见下）" if ignored else "")
+            + "。"
+        ]
+    else:
+        lines = ["已复跑一次，但结果**与首跑不一致**（可复现性存疑）："]
+        if rerun.get("reason"):
+            lines.append(f"- {rerun['reason']}")
+        lines.extend(f"- {diff}" for diff in rerun.get("diff") or [])
+    if ignored:
+        lines.append("耗时类指标每次运行本来就不同，不参与比对、不作为可复现性依据：")
+        lines.extend(f"- {line}" for line in ignored)
     return "\n".join(lines)
 
 

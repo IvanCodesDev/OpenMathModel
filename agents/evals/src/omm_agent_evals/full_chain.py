@@ -698,11 +698,12 @@ FULL_CHAIN_GOLDEN_EVENT_TYPES = [
     EventType.TOOL_CALLED,  # env_probe（报告的环境指纹）
     EventType.TOOL_CALLED,  # python_run（模型自主调用，scripted sandbox）
     EventType.TOOL_CALLED,  # ws_list（断言证据：产物清单）
-    # 生成者-评审者（§8.4）：节点用同一脚本确定性复跑核对指标，再派独立审稿人
-    # （审稿任务卡带工作区清单；本评测审稿人一轮接受、不发工具信封）
+    # 生成者-评审者（§8.4）：先把本轮脚本落工作区 experiment.py（审稿人读到的就是要审的
+    # 这一版，验证阶段也据此复跑），再用同一脚本确定性复跑核对指标、派独立审稿人
+    # （审稿任务卡带工作区清单；本评测审稿人一轮接受、不发工具信封，审后不重写同一份脚本）
+    EventType.TOOL_CALLED,  # ws_write（本轮脚本落工作区 experiment.py）
     EventType.TOOL_CALLED,  # python_run（复跑核对）
     EventType.TOOL_CALLED,  # ws_list（审稿任务卡的工作区文件）
-    EventType.TOOL_CALLED,  # ws_write（最终脚本落工作区 experiment.py，供验证阶段复跑）
     EventType.ARTIFACT_PRODUCED,  # results.csv
     EventType.ARTIFACT_PRODUCED,  # experiment.py (generated code, reproducible)
     EventType.STEP_SUCCEEDED,
