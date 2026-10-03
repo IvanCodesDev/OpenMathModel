@@ -2,14 +2,11 @@
  * 论文导出时把正文图件随文件带走的纯数据整形（不碰 DOM，node --test 直接断言）。
  *
  * 编辑器里的插图是同源产物下载链接（/api/v1/artifacts/{id}/download，Cookie 鉴权），
- * 原样写进导出文件后在用户电脑上就是死链——Word / 浏览器打开 .doc / .html 只会看到破图。
- * 所以导出前抓取每张图的字节，再按格式各自打包：
+ * 原样写进导出文件后在用户电脑上就是死链。所以导出前抓取每张图的字节，再按格式各自打包：
  *
- * - Word (.doc)：Word 不渲染 data: URL 图片，只认 MHTML（MIME 1.0 多部件「Web 档案」）——
- *   正文 HTML 与每张图各为一个部件，img src 指向图部件的 Content-Location（Word 自己
- *   「另存为 .mht」就是这个结构，扩展名写 .doc 照样识别）。
- * - HTML / 打印 PDF：data: URL 直接内联，单文件自足。
- * - LaTeX：源码与 figures/ 目录一起打成 .zip，\includegraphics 指向目录里的文件。
+ * - Word (.docx)：图件作为 word/media/ 部件内嵌（paper-docx）；
+ * - HTML / PDF：data: URL 直接内联，单文件自足（paper-html）；
+ * - LaTeX：源码与 figures/ 目录一起打成 .zip，\includegraphics 指向目录里的文件（paper-latex）。
  */
 
 export interface EmbeddedImage {
@@ -17,11 +14,10 @@ export interface EmbeddedImage {
   name: string;
   mediaType: string;
   bytes: Uint8Array;
+  /** 原始像素尺寸（页面上 naturalWidth / naturalHeight）；缺省时由各格式从文件头读取。 */
+  width?: number;
+  height?: number;
 }
-
-/** MHTML 各部件 Content-Location 的公共前缀：Word 只要求各部件地址一致可解析，目录本身不必存在。 */
-export const MHTML_BASE = "file:///C:/OpenMathModel/";
-const MHTML_BOUNDARY = "----=_NextPart_OpenMathModel_Paper";
 
 const EXTENSION_BY_MEDIA: Record<string, string> = {
   "image/png": ".png",
@@ -64,61 +60,32 @@ export function dataUrl(image: EmbeddedImage): string {
   return `data:${image.mediaType};base64,${bytesToBase64(image.bytes)}`;
 }
 
-/** 图部件在 MHTML 里的地址；正文 HTML 的 img src 必须与它逐字一致。 */
-export function mhtmlImageLocation(image: EmbeddedImage): string {
-  return `${MHTML_BASE}figures/${encodeURIComponent(image.name)}`;
-}
-
-/** MIME 规定 base64 正文每行不超过 76 字符。 */
-function wrap76(text: string): string {
-  return text.replace(/(.{76})/g, "$1\r\n");
-}
-
-/**
- * MHTML 文档：multipart/related，首部件是正文 HTML（UTF-8 原文），其后每张图一个 base64 部件。
- * `html` 里的 img src 须已改写成 mhtmlImageLocation(image)。
- */
-export function mhtmlDocument(html: string, images: readonly EmbeddedImage[]): string {
-  const lines: string[] = [
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/related; type="text/html"; boundary="${MHTML_BOUNDARY}"`,
-    "",
-    "",
-    `--${MHTML_BOUNDARY}`,
-    'Content-Type: text/html; charset="utf-8"',
-    `Content-Location: ${MHTML_BASE}paper.htm`,
-    "",
-    html,
-    "",
-  ];
-  for (const image of images) {
-    lines.push(
-      `--${MHTML_BOUNDARY}`,
-      `Content-Type: ${image.mediaType}`,
-      "Content-Transfer-Encoding: base64",
-      `Content-Location: ${mhtmlImageLocation(image)}`,
-      "",
-      wrap76(bytesToBase64(image.bytes)),
-      "",
-    );
+/** 从文件头读像素尺寸（PNG / JPEG / GIF / BMP）；读不出返回 null。 */
+export function imagePixelSize(image: EmbeddedImage): { width: number; height: number } | null {
+  if (image.width && image.height) return { width: image.width, height: image.height };
+  const bytes = image.bytes;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return { width: view.getUint32(16), height: view.getUint32(20) };
   }
-  lines.push(`--${MHTML_BOUNDARY}--`, "");
-  return lines.join("\r\n");
-}
-
-/** LaTeX 文本转义（与编辑器导出的 latexEscape 同规则；图题里没有公式）。 */
-function latexEscape(text: string): string {
-  return String(text)
-    .replace(/\\/g, "\\textbackslash{}")
-    .replace(/([%$#&_{}])/g, "\\$1")
-    .replace(/~/g, "\\textasciitilde{}")
-    .replace(/\^/g, "\\textasciicircum{}");
-}
-
-/** 一张插图的 LaTeX 浮动体：文件放在 figures/ 目录（随 .zip 一起交付）。 */
-export function latexFigure(fileName: string, caption: string): string {
-  // graphicx 对文件名里的空格与特殊字符敏感，路径整体加引号
-  const path = `figures/${fileName}`.replace(/"/g, "");
-  const captionLine = caption.trim() ? `\n\\caption*{${latexEscape(caption.trim())}}` : "";
-  return `\\begin{figure}[htbp]\n\\centering\n\\includegraphics[width=0.8\\textwidth]{"${path}"}${captionLine}\n\\end{figure}`;
+  if (bytes.length >= 10 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+  }
+  if (bytes.length >= 26 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+    return { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) };
+  }
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    // JPEG：逐段跳到 SOFn（C0–CF，除去 C4 / C8 / CC），其后 5 字节起是高、宽
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      const marker = bytes[offset + 1];
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { width: view.getUint16(offset + 7), height: view.getUint16(offset + 5) };
+      }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+      offset += 2 + view.getUint16(offset + 2);
+    }
+  }
+  return null;
 }

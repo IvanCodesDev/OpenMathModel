@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .enums import PaperExportFormat, ProjectMode
 
@@ -44,16 +44,27 @@ class CreateTaskRunInput(InputModel):
 
 
 class CreatePaperExportInput(InputModel):
-    """与 openapi CreatePaperExportInput 一致（ADR-0012 阶段 A）。
+    """与 openapi CreatePaperExportInput 一致（ADR-0012 阶段 A；ADR-0025 增加 HTML 源）。
 
-    source_tex 的 2MB 上限按字符数在此约束；服务端另按 UTF-8 字节数复核。
+    源二选一：source_tex 走 Tectonic 编译（format=pdf / tex）；source_html 是自足的单文件
+    HTML，由服务端无头浏览器打印成 PDF（只用于 format=pdf）。字符数上限在此约束，服务端
+    另按 UTF-8 字节数复核。
     """
 
     project_id: str
     run_id: Optional[str] = None
     format: PaperExportFormat
     title: str = Field(min_length=1, max_length=300)
-    source_tex: str = Field(min_length=1, max_length=2 * 1024 * 1024)
+    source_tex: Optional[str] = Field(default=None, min_length=1, max_length=2 * 1024 * 1024)
+    source_html: Optional[str] = Field(default=None, min_length=1, max_length=32 * 1024 * 1024)
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "CreatePaperExportInput":
+        if (self.source_tex is None) == (self.source_html is None):
+            raise ValueError("source_tex 与 source_html 必须且只能提供一个")
+        if self.source_html is not None and self.format is not PaperExportFormat.pdf:
+            raise ValueError("source_html 只用于 format=pdf")
+        return self
 
 
 class TaskRunAction(str, Enum):

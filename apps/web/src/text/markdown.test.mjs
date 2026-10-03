@@ -90,6 +90,34 @@ test("math becomes data-tex nodes with source fallback", () => {
   assert.ok(!html.includes("<span class=\"md-math\" data-tex=\"\""), "tex 不应为空");
 });
 
+test("display math between two lines of a paragraph splits it instead of nesting a div in <p>", () => {
+  const html = renderMarkdown("学习目标为\n$$ \\min_{\\theta} J(\\theta) $$\n其中 $J_i$ 为交叉熵。\n\n新段落");
+  assert.equal(
+    html,
+    '<p>学习目标为</p><div class="md-math-block" data-tex="\\min_{\\theta} J(\\theta)">$$\\min_{\\theta} J(\\theta)$$</div>'
+    + '<p class="md-continue">其中 <span class="md-math" data-tex="J_i" data-tex-inline="true">$J_i$</span> 为交叉熵。</p>'
+    + "<p>新段落</p>",
+  );
+
+  const sameLine = renderMarkdown("设 \\[x=1\\] 则 $y$ 成立");
+  assert.ok(sameLine.startsWith('<p>设</p><div class="md-math-block" data-tex="x=1">'), "\\[…\\] 同样成块");
+  assert.ok(sameLine.endsWith('<p class="md-continue">则 <span class="md-math" data-tex="y" data-tex-inline="true">$y$</span> 成立</p>'));
+
+  const spaced = renderMarkdown("目标为\n\n$$x$$\n\n下一段");
+  assert.ok(spaced.endsWith("<p>下一段</p>"), "公式后空了一行是新段落，照常缩进");
+  const beforeHeading = renderMarkdown("$$x$$\n## 标题\n正文");
+  assert.ok(beforeHeading.endsWith("<h2>标题</h2><p>正文</p>"), "中间隔了别的块就不是续段");
+});
+
+test("display math inside table cells, list items and quotes stays where it is", () => {
+  const table = renderMarkdown("| 量 | 定义 |\n| --- | --- |\n| J | $$J=\\sum_i \\ell_i$$ |");
+  assert.ok(table.includes('<td><div class="md-math-block" data-tex="J=\\sum_i \\ell_i">'), "表格不被拆散");
+  const list = renderMarkdown("- 目标 $$x$$\n- 约束");
+  assert.ok(list.startsWith('<ul><li>目标 <div class="md-math-block" data-tex="x">$$x$$</div></li><li>约束</li></ul>'));
+  const quote = renderMarkdown("> 引理 $$a=b$$");
+  assert.ok(quote.startsWith('<blockquote>引理 <div class="md-math-block"'));
+});
+
 test("currency amounts are not mistaken for math", () => {
   const html = renderMarkdown("预算 $5 和 $10 都可以");
   assert.ok(!html.includes("md-math"), "$5 和 $10 不是公式");

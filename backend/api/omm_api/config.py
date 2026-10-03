@@ -72,9 +72,14 @@ class Settings(BaseSettings):
     # Tectonic 可执行文件路径；空 = 在 PATH 探测。未安装时导出任务落
     # UNSUPPORTED 并说明启用途径（诚实降级，不阻断其他功能）。
     tectonic_path: str = ""
+    # HTML 源打印 PDF 的无头浏览器（ADR-0025：Chrome / Edge / Chromium 任一）；空 = 按平台
+    # 探测常见安装位置与 PATH。找不到时 HTML 源的 PDF 导出落 UNSUPPORTED，前端退回浏览器打印。
+    chromium_path: str = ""
     paper_export_timeout_seconds: float = 120.0
     # source_tex 的 UTF-8 字节上限
     paper_export_max_bytes: int = 2 * 1024 * 1024
+    # source_html 的 UTF-8 字节上限（图片与公式字体都以 data URL 内联在里面）
+    paper_export_html_max_bytes: int = 32 * 1024 * 1024
     # 编译消费线程：开发链沿 RunnerThread 模式在 API 进程内直跑，目标态随
     # 执行面迁往 backend/worker；测试关闭线程改用手动 process 驱动。
     paper_export_worker_enabled: bool = True

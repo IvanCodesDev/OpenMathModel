@@ -77,6 +77,7 @@
 | [0021 多语言 Runner 与 `code_run`](./adr/0021-multi-language-runner-and-code-run.md) | Accepted，已落地（R 全链；MATLAB / Octave / 北太天元 Runner 待） | 一个 `code_run(language)` 入口按语言分发、`python_run` 为过渡别名；实现语言随 G1 确认钉在任务卡上，实验 / 检验 / 补图三处沙盒按它选模板 variant 与执行工具，执行阶段不换语言；可选语言随本机探测解锁；R 先行（`Rscript --vanilla`）；超时杀整棵进程树；非 Python 的静态检查 / 符号核验如实「未执行」 |
 | [0023 Graph v2 成为缺省调度档位](./adr/0023-graph-v2-default-bounded-and-automatic-redo.md) | Accepted，已落地 | `OMM_GRAPH` 缺省 `modeling-v2`：每次回退经迭代边裁定（3 轮上限，E410 / E430）；G3 推荐重做实验时条件边先自动回实验 ≤ 2 轮；闸门随 `iteration_budget` 预告各回退路径余额，用尽项去推荐；自动回退在时间线上不冒充「用户要求」；`linear-v1` 可显式选回 |
 | [0024 接待：轮次理解 → 路由守卫](./adr/0024-intake-understanding-and-route-guard.md) | Accepted，已落地 | 接待判定只给结构字段，`route`（start / propose / clarify / reply）由规则定；拿不准先在首页对话里提议、回一句「开始」才启动，goal 用提议题面；附件不单独构成开始建模；判定带首页对话上文；首页对话轮注入【接待判定】块、提议落 `meta.intake`；运行页只把 supplement 记为备注 |
+| [0025 论文导出：统一文档模型 + 服务端打印 PDF](./adr/0025-paper-export-document-model-and-headless-pdf.md) | Accepted，已落地 | 编辑器 DOM 先读成 `PaperDocument`，Word（浏览器内生成 `.docx`，公式转 OMML 可编辑）/ LaTeX（zip，表格按内容定列宽）/ HTML / PDF 都从它序列化；PDF 由服务端无头 Chrome / Edge 打印、前端直接下载（`source_html` 与 `source_tex` 二选一，additive），引擎缺失才退回浏览器打印；块级公式成块修复正文丢字；长串插断点、短公式连标点不断行 |
 
 ## 当前文档与历史记录的边界
 

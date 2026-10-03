@@ -310,6 +310,7 @@ export interface TaskRunActionInput {
   client_token?: string | null;
 }
 
+/** 源二选一：source_tex（Tectonic 编译，format=pdf | tex）或 source_html（服务端无头浏览器打印，仅 format=pdf）。 */
 export interface CreatePaperExportInput {
   project_id: string;
   /** 可选，关联工作台运行；须与 project_id 同属一个项目。 */
@@ -317,7 +318,9 @@ export interface CreatePaperExportInput {
   format: PaperExportFormat;
   title: string;
   /** 完整 .tex 文档，≤ 2MB。 */
-  source_tex: string;
+  source_tex?: string;
+  /** 自足的单文件 HTML（图片与公式字体以 data URL 内联），≤ 32MB；只用于 format=pdf。 */
+  source_html?: string;
 }
 
 // ---- 响应包装 ----

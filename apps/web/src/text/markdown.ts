@@ -48,8 +48,10 @@ const STASH_TOKEN = /\uE000(\d+)\uE000/g;
 
 interface Stash {
   entries: string[];
-  /** 块级占位（代码块 / figure）的序号：行级解析遇到它们时直接作为块输出，不裹进 <p>。 */
+  /** 块级占位（代码块 / figure / 块级公式）的序号：行级解析遇到它们时直接作为块输出，不裹进 <p>。 */
   blocks: Set<number>;
+  /** 块级公式的序号：紧跟其后、中间没有空行的文字是同一段的续段（不缩进）。 */
+  displayMath: Set<number>;
 }
 
 function put(stash: Stash, html: string, block = false): string {
@@ -286,7 +288,7 @@ function tableCells(line: string): string[] {
 
 /** 把模型回复渲染成安全的 HTML 片段。 */
 export function renderMarkdown(source: string, options: RenderMarkdownOptions = {}): string {
-  const stash: Stash = { entries: [], blocks: new Set() };
+  const stash: Stash = { entries: [], blocks: new Set(), displayMath: new Set() };
   let text = String(source ?? "").replace(/\r\n?/g, "\n");
 
   // 1. 代码块（未闭合的按到文末处理，流式渲染时代码块随增量增长）。
@@ -304,9 +306,16 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
     });
   }
 
-  // 2. 公式：块级（$$…$$、\[…\]）与行内（\(…\)、$…$）
-  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_match, tex: string) => put(stash, mathHtml(tex, true)));
-  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_match, tex: string) => put(stash, mathHtml(tex, true)));
+  // 2. 公式：块级（$$…$$、\[…\]）与行内（\(…\)、$…$）。
+  //    块级公式是块级占位：模型常把 $$…$$ 夹在段落两行之间（不空行），裹进 <p> 后浏览器会在
+  //    <div> 处掐断段落，公式后的半段文字成了游离文本节点——论文页只收元素节点，那半段就丢了。
+  const displayMath = (_match: string, tex: string): string => {
+    const token = put(stash, mathHtml(tex, true), true);
+    stash.displayMath.add(stash.entries.length - 1);
+    return token;
+  };
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, displayMath);
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, displayMath);
   text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_match, tex: string) => put(stash, mathHtml(tex, false)));
   // 行内 $…$ 要求两侧紧贴内容，避免把「$5 和 $10」当成公式
   text = text.replace(/\$(?!\s)([^$\n]*?[^\s$])\$/g, (_match, tex: string) => put(stash, mathHtml(tex, false)));
@@ -320,11 +329,21 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
   let paragraph: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
   let quote: string[] = [];
+  // 刚输出块级公式、还没遇到空行或别的块：下一段是公式所在段落的续段
+  let afterDisplayMath = false;
+  let paragraphContinues = false;
 
+  const addParagraphLine = (line: string) => {
+    if (!paragraph.length) paragraphContinues = afterDisplayMath;
+    afterDisplayMath = false;
+    paragraph.push(line);
+  };
   const flushParagraph = () => {
     if (paragraph.length) {
-      blocks.push(`<p>${paragraph.map(line => renderInline(stash, line)).join("<br>")}</p>`);
+      const open = paragraphContinues ? '<p class="md-continue">' : "<p>";
+      blocks.push(`${open}${paragraph.map(line => renderInline(stash, line)).join("<br>")}</p>`);
       paragraph = [];
+      paragraphContinues = false;
     }
   };
   const flushList = () => {
@@ -352,29 +371,37 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
 
     if (!trimmed) {
       flushAll();
+      afterDisplayMath = false;
       continue;
     }
 
-    // 块级占位（代码块 / 图）：直接成块，不裹进段落。通常独占一行；模型偶尔把说明
+    // 块级占位（代码块 / 图 / 块级公式）：直接成块，不裹进段落。通常独占一行；模型偶尔把说明
     // 写在闭合围栏同一行（"``` 见上"），这时把两侧文字各自当段落、占位仍然成块。
-    const blockTokens = [...trimmed.matchAll(STASH_TOKEN)].filter(match => stash.blocks.has(Number(match[1])));
+    // 表格行、列表项、引用里的块级公式留在原处（<td> / <li> / <blockquote> 里放 <div> 合法）。
+    const structural = trimmed.startsWith("|") || trimmed.startsWith("&gt;") || /^(?:[-*]|\d+[.)])\s+/.test(trimmed);
+    const blockTokens = [...trimmed.matchAll(STASH_TOKEN)].filter(match => {
+      const id = Number(match[1]);
+      return stash.blocks.has(id) && !(structural && stash.displayMath.has(id));
+    });
     if (blockTokens.length) {
       let cursor = 0;
       for (const match of blockTokens) {
         const before = trimmed.slice(cursor, match.index).trim();
-        if (before) paragraph.push(before);
+        if (before) addParagraphLine(before);
         flushAll();
         blocks.push(match[0]);
+        afterDisplayMath = stash.displayMath.has(Number(match[1]));
         cursor = match.index + match[0].length;
       }
       const after = trimmed.slice(cursor).trim();
-      if (after) paragraph.push(after);
+      if (after) addParagraphLine(after);
       continue;
     }
 
     // 表格：表头行 + 分隔行
     if (trimmed.startsWith("|") && TABLE_DIVIDER.test(lines[index + 1]?.trim() ?? "")) {
       flushAll();
+      afterDisplayMath = false;
       const head = tableCells(trimmed).map(cell => `<th>${renderInline(stash, cell)}</th>`).join("");
       const rows: string[] = [];
       let cursor = index + 2;
@@ -391,6 +418,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
     const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed);
     if (heading) {
       flushAll();
+      afterDisplayMath = false;
       const level = heading[1].length;
       blocks.push(`<h${level}>${renderInline(stash, heading[2])}</h${level}>`);
       continue;
@@ -398,6 +426,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
 
     if (/^(?:-{3,}|\*{3,})$/.test(trimmed)) {
       flushAll();
+      afterDisplayMath = false;
       blocks.push("<hr>");
       continue;
     }
@@ -407,6 +436,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
     if (quoted) {
       flushParagraph();
       flushList();
+      afterDisplayMath = false;
       quote.push(quoted[1]);
       continue;
     }
@@ -416,6 +446,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
     if (unordered || ordered) {
       flushParagraph();
       flushQuote();
+      afterDisplayMath = false;
       const isOrdered = Boolean(ordered);
       if (!list || list.ordered !== isOrdered) {
         flushList();
@@ -427,7 +458,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
 
     flushList();
     flushQuote();
-    paragraph.push(trimmed);
+    addParagraphLine(trimmed);
   }
   flushAll();
 

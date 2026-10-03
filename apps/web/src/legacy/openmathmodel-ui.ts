@@ -37,14 +37,7 @@ import {
   restorePendingTaskReferences,
 } from "../integration/composer-references";
 import { loadConversationLog } from "../tasks/conversation-log";
-import { strToU8, zipSync } from "fflate";
-import {
-  dataUrl as imageDataUrl,
-  exportFileName,
-  latexFigure,
-  mhtmlDocument,
-  mhtmlImageLocation,
-} from "../integration/paper-export-images";
+import { PAPER_EXPORT_CHOICES, exportPaper as exportPaperDocument } from "../integration/paper-export";
 import {
   endpointHost,
   presetMatchesHost,
@@ -4254,247 +4247,22 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     </ul><p class="editor-check-note">以上为本机结构检查；语义与表达质量请在左侧对话中让 Agent 审阅。</p>`);
   }
 
-  /**
-   * 导出前抓取正文里每张图的字节：编辑器里的插图是同源产物下载链接（Cookie 鉴权），原样
-   * 写进文件到了用户电脑上就是死链。返回正文副本（流式光标等编辑态节点已摘掉）与图件清单，
-   * 副本里每个 <img> 记下自己对应清单里的序号；抓不到的图保留原链接、不阻断导出。
-   */
-  async function collectPaperImages(page) {
-    // 副本放在 <template> 的惰性文档里：后面改写 img src 成部件地址 / data URL 时浏览器不会去真加载
-    const template = document.createElement("template");
-    template.innerHTML = `<div>${page.innerHTML}</div>`;
-    const clone = template.content.firstElementChild;
-    clone.querySelectorAll(".editor-stream-caret").forEach(node => node.remove());
-    const sources = [...page.querySelectorAll("img")];
-    const targets = [...clone.querySelectorAll("img")];
-    const images = [];
-    const used = new Set();
-    for (let index = 0; index < targets.length; index += 1) {
-      const target = targets[index];
-      const source = sources[index];
-      const src = target.getAttribute("src") || "";
-      if (!src) continue;
-      try {
-        const response = await fetch(src, { credentials: "same-origin" });
-        if (!response.ok) throw new Error(String(response.status));
-        const blob = await response.blob();
-        const mediaType = blob.type || "image/png";
-        const name = exportFileName(target.dataset.figureName || target.alt || "", images.length + 1, mediaType, used);
-        images.push({
-          name,
-          mediaType,
-          bytes: new Uint8Array(await blob.arrayBuffer()),
-          // 页面上的实际渲染尺寸：Word 需要显式 width/height 才不会把大图撑出页面
-          width: source?.naturalWidth || 0,
-          height: source?.naturalHeight || 0,
-        });
-        target.dataset.exportIndex = String(images.length - 1);
-      } catch {
-        // 抓不到（网络 / 权限）就保留原链接
-      }
-    }
-    return { clone, images };
-  }
-
-  /** 打印窗口里的图全部解码完再调 print，否则预览里图还是空白。 */
-  function waitForImages(doc, timeoutMs = 4000) {
-    const pending = [...doc.images].filter(img => !img.complete).map(img => new Promise(resolve => {
-      img.addEventListener("load", resolve, { once: true });
-      img.addEventListener("error", resolve, { once: true });
-    }));
-    return Promise.race([Promise.all(pending), new Promise(resolve => setTimeout(resolve, timeoutMs))]);
-  }
-
   const paperExportInFlight = new Set();
 
+  /** 导出菜单：生成与下载在 integration/paper-export（Word / LaTeX / HTML 本机生成，PDF 走服务端打印、直接下载）。 */
   async function exportPaper(choice) {
     const page = paperPage();
     if (!page) { toast("当前页面没有可导出的论文正文"); return; }
     if (paperExportInFlight.has(choice)) return;
     paperExportInFlight.add(choice);
     try {
-      await exportPaperAs(page, choice);
+      await exportPaperDocument(page, choice, toast);
     } catch (error) {
       console.error("论文导出失败", error);
       toast("导出失败，请稍后重试");
     } finally {
       paperExportInFlight.delete(choice);
     }
-  }
-
-  async function exportPaperAs(page, choice) {
-    const title = $("h1", page)?.textContent.trim() || "论文草稿";
-    const { clone, images } = await collectPaperImages(page);
-    // 开源字体 + KaTeX 的 CDN 样式一并带上：HTML/打印导出里选用的思源宋体与
-    // 已排版的公式照常渲染（Word 忽略外链样式，正文仍完整）。
-    const fontLinks = [
-      ...PAPER_WEBFONT_LINKS,
-      "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css",
-    ].map(href => `<link rel="stylesheet" href="${href}">`).join("");
-    const styles = 'body{max-width:760px;margin:40px auto;padding:0 24px;font-family:"Songti SC",SimSun,"Noto Serif SC",serif;font-size:16px;line-height:2;color:#171717}h1{text-align:center;font-size:26px}h2,h3,h4{font-family:"Heiti SC",SimHei,"Microsoft YaHei","Noto Sans SC",sans-serif;line-height:1.5}h2{margin:28px 0 14px}h3{margin:22px 0 12px}p{text-indent:2em;text-align:justify;margin:0 0 16px}.paper-abstract-heading{text-align:center;letter-spacing:.5em;text-indent:.5em}.paper-keywords{text-indent:0}ul,ol{margin:0 0 16px;padding-left:2em}table{width:100%;border-collapse:collapse;margin:0 0 18px}td,th{border:1px solid #999;padding:6px 10px;text-indent:0}img{max-width:100%}figure{margin:18px 0 22px;text-align:center}figure img{display:block;margin:0 auto 8px}figcaption{font-size:13px;color:#555;text-align:center}.editor-formula,.md-math-block{text-align:center;margin:18px 0;overflow-x:auto}pre{padding:10px 12px;border:1px solid #ddd;border-radius:6px;background:#fafafa;overflow-x:auto;font-size:13px}.md-inline-code{padding:1px 5px;border-radius:4px;background:#f0f0ee;font-size:.85em}.source-chip{border:1px solid #ddd;border-radius:6px;padding:4px 10px;background:#fff;font-size:12px}';
-    const documentHtml = body => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>${fontLinks}<style>${styles}</style></head><body>${body}</body></html>`;
-    // 图件按格式各自落地（见 integration/paper-export-images）：Word 只认 MHTML 部件，
-    // HTML / 打印内联 data: URL，LaTeX 随 zip 附 figures/ 目录
-    const rewriteImages = toSrc => {
-      clone.querySelectorAll("img[data-export-index]").forEach(img => {
-        const image = images[Number(img.dataset.exportIndex)];
-        if (!image) return;
-        img.setAttribute("src", toSrc(image));
-        delete img.dataset.exportIndex;
-      });
-    };
-    const download = (blob, filename) => {
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(link.href);
-    };
-    if (choice === "导出 Word (.doc)") {
-      clone.querySelectorAll("img[data-export-index]").forEach(img => {
-        const image = images[Number(img.dataset.exportIndex)];
-        if (!image || !image.width || !image.height) return;
-        // Word 按 width/height 属性排版，缺了会按原始像素撑破页面（A4 正文宽约 600px）
-        const width = Math.min(image.width, 600);
-        img.setAttribute("width", String(width));
-        img.setAttribute("height", String(Math.round(image.height * width / image.width)));
-      });
-      rewriteImages(mhtmlImageLocation);
-      const mhtml = mhtmlDocument(documentHtml(clone.innerHTML), images);
-      download(new Blob([mhtml], { type: "application/msword" }), `${title}.doc`);
-      toast(images.length ? `已导出 Word 文档（含 ${images.length} 张图）` : "已导出 Word 文档");
-    } else if (choice === "导出 LaTeX (.tex)") {
-      const tex = paperToLatex(clone, title, images);
-      if (!images.length) {
-        download(new Blob([tex], { type: "application/x-tex;charset=utf-8" }), `${title}.tex`);
-        toast("已导出 LaTeX 源文件，可用 xelatex 直接编译");
-      } else {
-        const files = { [`${title}.tex`]: strToU8(tex) };
-        images.forEach(image => { files[`figures/${image.name}`] = image.bytes; });
-        // 图片本身已压缩，存储级即可；.tex 用默认压缩
-        const zipped = zipSync(files, { level: 6 });
-        download(new Blob([zipped], { type: "application/zip" }), `${title}.zip`);
-        toast(`已导出 LaTeX 源文件与 ${images.length} 张图（zip），解压后用 xelatex 编译`);
-      }
-    } else if (choice === "导出 HTML") {
-      rewriteImages(imageDataUrl);
-      download(new Blob([documentHtml(clone.innerHTML)], { type: "text/html;charset=utf-8" }), `${title}.html`);
-      toast(images.length ? `已导出 HTML 文件（含 ${images.length} 张图）` : "已导出 HTML 文件");
-    } else {
-      const preview = window.open("", "_blank");
-      if (!preview) { toast("浏览器拦截了打印窗口，请允许弹出窗口后重试"); return; }
-      rewriteImages(imageDataUrl);
-      preview.document.write(documentHtml(clone.innerHTML));
-      preview.document.close();
-      preview.focus();
-      await waitForImages(preview.document);
-      setTimeout(() => preview.print(), 260);
-    }
-  }
-
-  /** LaTeX 文本转义（公式除外——公式保留原始 LaTeX）。 */
-  function latexEscape(text) {
-    return String(text)
-      .replace(/\\/g, "\\textbackslash{}")
-      .replace(/([%$#&_{}])/g, "\\$1")
-      .replace(/~/g, "\\textasciitilde{}")
-      .replace(/\^/g, "\\textasciicircum{}");
-  }
-
-  /** 行内节点 → LaTeX：加粗/斜体/下划线/上下标按语义映射，其余取文本。 */
-  function latexInline(node) {
-    if (node.nodeType === Node.TEXT_NODE) return latexEscape(node.textContent);
-    if (node.nodeType !== Node.ELEMENT_NODE) return "";
-    // 行内公式节点（markdown 渲染的 .md-math）：KaTeX 排版后 innerHTML 是排版
-    // 标记，必须取 data-tex 上的原始 LaTeX，不能往下取文本。
-    if (node.dataset?.tex) return `$${node.dataset.tex}$`;
-    const inner = [...node.childNodes].map(latexInline).join("");
-    switch (node.tagName) {
-      case "STRONG": case "B": return `\\textbf{${inner}}`;
-      case "EM": case "I": return `\\textit{${inner}}`;
-      case "U": return `\\underline{${inner}}`;
-      case "SUB": return `\\textsubscript{${inner}}`;
-      case "SUP": return `\\textsuperscript{${inner}}`;
-      case "BR": return "\\\\ ";
-      case "IMG": return "\\textit{（插图）}";
-      case "BUTTON": return "";
-      default: return inner;
-    }
-  }
-
-  /**
-   * 整篇正文 → 可编译的 .tex：标题、章节、公式、表格、插图、来源注记逐块序列化。
-   * `images` 是 collectPaperImages 抓到的图件（随 zip 放在 figures/），插图按它写
-   * \includegraphics；没抓到字节的图只留注释占位。
-   */
-  function paperToLatex(page, title, images = []) {
-    const body = [];
-    const figureBlock = (img, caption) => {
-      const image = images[Number(img?.dataset.exportIndex)];
-      if (image) return latexFigure(image.name, caption);
-      return `% 插图：${latexEscape(caption || img?.getAttribute("alt") || "未命名")}（图片文件未能随导出带走，另存到 figures/ 后替换路径并取消注释）\n% \\includegraphics[width=0.8\\textwidth]{figures/figure}`;
-    };
-    [...page.children].forEach(node => {
-      if (node.matches("figure")) {
-        body.push(figureBlock(node.querySelector("img"), node.querySelector("figcaption")?.textContent.trim() || ""));
-        return;
-      }
-      if (node.matches("h1")) return;
-      if (node.matches("h2")) { body.push(`\\section*{${latexInline(node)}}`); return; }
-      if (node.matches("h3")) { body.push(`\\subsection*{${latexInline(node)}}`); return; }
-      if (node.matches(".editor-formula, .md-math-block")) {
-        const tex = node.dataset.tex || latexEscape(node.textContent.trim());
-        body.push(`\\begin{equation}\n${tex}\n\\end{equation}`);
-        return;
-      }
-      if (node.matches("pre")) {
-        body.push(`\\begin{verbatim}\n${node.textContent.replace(/\n$/, "")}\n\\end{verbatim}`);
-        return;
-      }
-      if (node.matches("button.source-chip")) {
-        body.push(`\\noindent{\\small\\emph{${latexEscape(node.textContent.trim())}}}`);
-        return;
-      }
-      if (node.matches("table")) {
-        const rows = [...node.querySelectorAll("tr")];
-        if (!rows.length) return;
-        const columnCount = Math.max(...rows.map(row => row.children.length));
-        // 三线表列内容居中，贴近赛事论文习惯；左对齐反而像代码清单
-        const spec = Array(columnCount).fill("c").join(" ");
-        const lines = rows.map(row => `${[...row.children].map(cell => latexInline(cell)).join(" & ")} \\\\`);
-        body.push(`\\begin{table}[htbp]\n\\centering\n\\begin{tabular}{${spec}}\n\\toprule\n${lines[0]}\n\\midrule\n${lines.slice(1).join("\n")}\n\\bottomrule\n\\end{tabular}\n\\end{table}`);
-        return;
-      }
-      if (node.matches("img")) {
-        body.push(figureBlock(node, node.getAttribute("alt") || ""));
-        return;
-      }
-      const text = latexInline(node).trim();
-      if (text) body.push(text);
-    });
-    return [
-      "% !TEX program = xelatex",
-      "% 由 OpenMathModel 论文编辑器导出；公式保留原始 LaTeX，可直接用 xelatex 编译",
-      "\\documentclass[12pt]{article}",
-      "\\usepackage[UTF8]{ctex}",
-      "\\usepackage{amsmath, amssymb, graphicx, booktabs}",
-      // 图题正文已带「图 N」编号，用 \\caption* 免得再编一遍
-      "\\usepackage{caption}",
-      "\\usepackage[margin=2.5cm]{geometry}",
-      "% 赛事论文排版习惯：正文 1.5 倍行距；链接可点击但不带彩色边框",
-      "\\usepackage{setspace}",
-      "\\onehalfspacing",
-      "\\usepackage[hidelinks]{hyperref}",
-      `\\title{\\textbf{${latexEscape(title)}}}`,
-      "\\date{}",
-      "\\begin{document}",
-      "\\maketitle",
-      "",
-      body.join("\n\n"),
-      "",
-      "\\end{document}",
-      "",
-    ].join("\n");
   }
 
   function refreshPaperToolbar() {
@@ -4739,7 +4507,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
         if (!demoMode()) toast("请先创建任务，论文正文由运行生成");
         else { toast("正在生成第 4 章实证分析"); setTimeout(() => go("complete"), 520); }
       }
-      if (action === "export-paper") popupMenu(target, ["导出 Word (.doc)", "导出 LaTeX (.tex)", "导出 HTML", "打印 / PDF"], exportPaper);
+      if (action === "export-paper") popupMenu(target, [...PAPER_EXPORT_CHOICES], exportPaper);
       if (action === "source-detail") quotePaperSourceToComposer(target);
       if (action === "fake-close") toast("这是演示界面，窗口保持打开");
       if (action === "attach") target.closest(".composer")?.querySelector(".file-input")?.click();

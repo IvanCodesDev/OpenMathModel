@@ -374,7 +374,10 @@ components:
           description: 创建后立即开始推进（MVP 由内嵌 worker 驱动）。
     CreatePaperExportInput:
       type: object
-      required: [project_id, format, title, source_tex]
+      required: [project_id, format, title]
+      description: >-
+        源二选一（ADR-0012 / ADR-0025）：source_tex 走 Tectonic 编译（format=pdf | tex）；
+        source_html 由服务端无头浏览器打印成 PDF（只用于 format=pdf）。两者都给或都不给返回 422。
       properties:
         project_id: { type: string }
         run_id:
@@ -389,6 +392,13 @@ components:
           minLength: 1
           maxLength: 2097152
           description: 完整 .tex 文档；服务端另按字节数校验 2MB 上限。
+        source_html:
+          type: string
+          minLength: 1
+          maxLength: 33554432
+          description: >-
+            自足的单文件 HTML（图片与公式字体以 data URL 内联，打印样式写在 @page 里）；
+            服务端另按字节数校验上限（默认 32MB，OMM_PAPER_EXPORT_HTML_MAX_BYTES）。
     TaskRunActionInput:
       type: object
       required: [action]

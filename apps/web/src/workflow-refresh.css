@@ -6126,6 +6126,11 @@ html[data-reduce-motion="on"] .editor-page .editor-stream-caret {
   text-indent: 0;
 }
 
+/* 块级公式后紧接的「其中……」是公式所在段落的续段：不再首行缩进（与 LaTeX 公式后不空行一致） */
+.editor-page p.md-continue {
+  text-indent: 0;
+}
+
 /* 图件请求中：给一个有高度的占位盒，别让未到的图只剩 2px 边框（看着就是「没有图」） */
 .editor-page .md-figure.is-loading img {
   min-height: 180px;

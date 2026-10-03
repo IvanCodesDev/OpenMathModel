@@ -86,6 +86,12 @@ cd backend/api
 | `OMM_RUN_MAX_LLM_CALLS` | 无上限 | 单次运行的模型调用次数硬停（E310），同上 |
 | `OMM_RUN_MAX_SANDBOX_RUNS` | 无上限 | 单次运行的沙箱执行次数硬停（E310，按次预付），同上 |
 | `OMM_NODE_MAX_TOKENS` | 无上限 | 单个阶段节点的 token 硬停（E320），同上 |
+| `OMM_TECTONIC_PATH` | 空（探测 PATH） | `.tex` 源编译 PDF 用的 Tectonic 可执行文件（ADR-0012）；找不到时该类导出落 `UNSUPPORTED` 并说明启用途径 |
+| `OMM_CHROMIUM_PATH` | 空（自动探测） | HTML 源打印 PDF 用的 Chrome / Edge / Chromium（ADR-0025，论文编辑器「导出 PDF」走这条）；空 = 先 PATH、再各平台默认安装位置。找不到时落 `UNSUPPORTED`，前端退回浏览器打印 |
+| `OMM_PAPER_EXPORT_TIMEOUT_SECONDS` | `120` | 单次编译 / 打印的超时，到点强杀子进程 |
+| `OMM_PAPER_EXPORT_MAX_BYTES` | `2097152` | `source_tex` 的 UTF-8 字节上限 |
+| `OMM_PAPER_EXPORT_HTML_MAX_BYTES` | `33554432` | `source_html` 的 UTF-8 字节上限：图片与 KaTeX 字体都以 data URL 内联在 HTML 里，所以比 `.tex` 宽得多 |
+| `OMM_PAPER_EXPORT_QUEUE_LIMIT` | `20` | 全局排队上限（超出 409 `QUEUE_FULL`）；另有每用户同时只排一个 PDF（409 `CONCURRENCY_LIMIT`） |
 
 > 四项资源预算 2026-09-08 起默认关闭。它们原本要防的失控是「后端进程反复重启 →
 > 阶段无上限重跑」，那条的根子是热重载监视到了沙盒目录（启动参数问题）：2026-09-19
@@ -126,6 +132,7 @@ $env:OMM_TEST_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel@127
 - **Artifact 存储闭环（B4）**：二进制内容按 sha256 内容寻址存放在 `data/artifacts/`（协议可替换，MinIO/S3 待底座就绪）；上传 `POST /api/v1/projects/{id}/artifacts`（multipart，服务端重算哈希），下载 `GET /api/v1/artifacts/{id}/download`（下载即核验，哈希不一致返回 `ARTIFACT_CORRUPTED`）；模拟工作流产物经同一存储端口真实落盘、可下载。
 - **附件正文抽取**：`GET /api/v1/artifacts/{id}/text` 返回 Agent 可读的纯文本。抽取放在读取时而不是上传时——上传要对用户即时响应，而几十兆的 PDF 抽一遍要好几秒；产物内容寻址、字节不可变，因此结果缓存在 `artifact_texts` 表里长期复用，服务端补装依赖后用 `?refresh=true` 重跑。`status` 五档：`ready`/`partial`/`empty`/`unsupported`/`failed`，后三档也是 200，调用方要的是原因而不是错误码。docx/pptx/xlsx/ODF/压缩包/纯文本全部用标准库 `zipfile` + `ElementTree` 解（零额外依赖），PDF 用 `pypdf`；旧版 `.doc`（按 FIB 分片表抽正文）、`.xls`、RTF 需要 `pip install -e "backend/api[legacy-docs]"`。图片与扫描件 PDF 的识别走**远程 OCR**（讯飞星辰 MaaS 上的 PaddleOCR，OpenAI 兼容协议，配置 `OMM_OCR_API_KEY` 启用；输出 Markdown、公式为 LaTeX、`engine="paddleocr-api"`），其中扫描件 PDF 还需 `[pdf-ocr]` 附加项（pypdfium2 逐页渲染成图片再上送）；未配置 key 时图片回落本地 Tesseract（`[ocr]` 附加项 + 系统 Tesseract 与语言包）。缺依赖/未配置时返回 `unsupported`/`empty` 并说明原因，不抛 500。
 - **用户头像**：`POST /api/account/avatar`（multipart）、`DELETE /api/account/avatar`、`GET /api/account/avatar`。内容走与 Artifact 相同的内容寻址实现但独立目录 `data/avatars/`（归属与回收边界不同），`users` 表只存 `avatar_sha256` 与服务端识别的 `avatar_media_type`。格式按**文件魔数**判定（PNG/JPEG/WebP/GIF），声明的 Content-Type 不作数——头像以同源 URL 回给浏览器，放行 SVG 等同于同源脚本注入；响应固定带 `X-Content-Type-Options: nosniff`。读取只按当前会话返回本人头像，不提供按 user_id 的公开地址。`user_payload.avatar_url` 带内容摘要查询串，换图后 URL 自动变化。
+- **论文导出（ADR-0012 / ADR-0025）**：`POST /api/v1/paper-exports` 的源二选一——`source_tex` 交 Tectonic 编译（`format=pdf|tex`），`source_html` 交无头 Chrome / Edge 按 A4 打印（只用于 `format=pdf`）。源与 PDF 都落 `kind="paper"` 产物，PDF 的 `inputs` 指向源产物，编译失败时源仍可下载排查。论文编辑器的「导出 PDF」走 HTML 源；Word / LaTeX / HTML 三种在浏览器本机生成，不经服务端。打印隔离：HTML 经 DevTools `Page.setDocumentContent` 写进 `about:blank`（读不到 `file://`），文档最前强插 CSP（禁脚本、禁外部资源，只认 `data:` 图片与字体），浏览器进程再挂一个不存在的代理让漏网请求落空；独立临时用户目录、超时强杀。Linux 服务器要装中文字体（如 `fonts-noto-cjk`），否则中文打印成方框。Tectonic 首次编译要联网拉宏包，离线部署需在镜像里先编译一份样例预热缓存（Windows 在 `%LOCALAPPDATA%\TectonicProject\Tectonic`，Linux 在 `~/.cache/Tectonic`）。两种引擎缺失时任务都落 `UNSUPPORTED`、`detail` 写明启用途径。
 - **SQLite 补列机制（仅显式 SQLite 路径生效）**：`create_all` 只建新表、不改已存在的表，因此对 SQLite 库启动时额外补齐模型新增的**可空**列（`omm_api/db.py`）。数据库已限定 PostgreSQL（以 Alembic 为准）后，该机制只服务测试夹具与应急排查场景；两种方言的 schema 一致性由 `tests/test_migrations.py` 守住。
 
 ## 当前与目标边界

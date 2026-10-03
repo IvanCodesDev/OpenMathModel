@@ -22,7 +22,13 @@ from ..errors import ApiError, ConflictError, NotFoundError
 from ..idempotency import with_idempotency
 from ..ids import new_id
 from ..orm import ArtifactRow, PaperExportRow, ProjectRow, TaskRunRow
-from ..paper_export import UNSUPPORTED_HINT, find_tectonic
+from ..paper_export import (
+    CHROMIUM_UNSUPPORTED_HINT,
+    HTML_MEDIA_TYPE,
+    UNSUPPORTED_HINT,
+    find_chromium,
+    find_tectonic,
+)
 from ..serialize import paper_export_to_contract, utcnow
 
 router = APIRouter(prefix="/v1/paper-exports", tags=["paper-exports"])
@@ -53,23 +59,27 @@ def create_paper_export(
     request: Request,
     ctx: AuthContext = Depends(get_auth_context),
 ) -> JSONResponse:
-    """提交论文导出（ADR-0012 阶段 A：客户端直传 .tex）。
+    """提交论文导出（ADR-0012 阶段 A：客户端直传 .tex；ADR-0025：或直传自足 HTML）。
 
-    受理即把 .tex 源落为 kind=paper 的 Artifact——编译失败源文件仍可下载排查。
-    format=tex 只落源产物并立即 READY；format=pdf 排队编译，未安装 Tectonic
-    时直接落 UNSUPPORTED（诚实降级，不占队列）。
+    受理即把源落为 kind=paper 的 Artifact——生成失败源文件仍可下载排查。
+    format=tex 只落源产物并立即 READY；format=pdf 排队生成：.tex 源交给 Tectonic，
+    HTML 源交给无头浏览器打印。对应引擎缺失时直接落 UNSUPPORTED（诚实降级，不占队列）。
     """
     settings = request.app.state.settings
     blobs = request.app.state.blobs
     session_factory = request.app.state.db.session_factory
 
-    source_bytes = payload.source_tex.encode("utf-8")
-    if len(source_bytes) > settings.paper_export_max_bytes:
+    is_html = payload.source_html is not None
+    source_text = payload.source_html if is_html else payload.source_tex
+    source_bytes = (source_text or "").encode("utf-8")
+    limit = settings.paper_export_html_max_bytes if is_html else settings.paper_export_max_bytes
+    if len(source_bytes) > limit:
         raise ApiError(
             413,
             "SOURCE_TOO_LARGE",
-            f"tex 源超过 {settings.paper_export_max_bytes} 字节上限，请精简正文或图片注记",
+            f"{'html' if is_html else 'tex'} 源超过 {limit} 字节上限，请精简正文或减少、压缩插图",
         )
+    extension, media_type = ("html", HTML_MEDIA_TYPE) if is_html else ("tex", "application/x-tex")
 
     def _create(session: Session) -> dict[str, Any]:
         project = session.get(ProjectRow, payload.project_id)
@@ -120,11 +130,11 @@ def create_paper_export(
             project_id=payload.project_id,
             run_id=payload.run_id,
             kind=ArtifactKind.paper.value,
-            name=f"{payload.title[:290]}.tex",
+            name=f"{payload.title[:290]}.{extension}",
             uri=f"local://{sha256}",
             sha256=sha256,
             size_bytes=size,
-            media_type="application/x-tex",
+            media_type=media_type,
             producer_step=None,
             inputs=[],
             status=ArtifactStatus.READY.value,
@@ -146,9 +156,9 @@ def create_paper_export(
             row.status = PaperExportStatus.READY.value
             row.artifact_id = source_artifact.id
             row.ended_at = now
-        elif find_tectonic(settings) is None:
+        elif (find_chromium(settings) if is_html else find_tectonic(settings)) is None:
             row.status = PaperExportStatus.UNSUPPORTED.value
-            row.detail = UNSUPPORTED_HINT[:500]
+            row.detail = (CHROMIUM_UNSUPPORTED_HINT if is_html else UNSUPPORTED_HINT)[:500]
             row.ended_at = now
         session.add(row)
         session.flush()

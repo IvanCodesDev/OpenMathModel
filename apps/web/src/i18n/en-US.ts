@@ -1123,6 +1123,31 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "导出 Word": "Export Word",
   "导出 PDF": "Export PDF",
   "导出 LaTeX": "Export LaTeX",
+  "导出 Word (.docx)": "Export Word (.docx)",
+  "导出 LaTeX (.zip)": "Export LaTeX (.zip)",
+  "导出 HTML": "Export HTML",
+  "当前页面没有可导出的论文正文": "There is no paper text on this page to export",
+  "导出失败，请稍后重试": "Export failed — please try again later",
+  "已导出 Word 文档": "Word document exported",
+  "已导出 Word 文档（含 {count} 张图，公式可在 Word 里编辑）":
+    "Word document exported ({count} figures; equations stay editable in Word)",
+  "已导出 LaTeX 工程（main.tex）：xelatex 编译，或整包上传 Overleaf":
+    "LaTeX project exported (main.tex): compile with xelatex, or upload the whole package to Overleaf",
+  "已导出 LaTeX 工程（main.tex + {count} 张图）：解压后 xelatex 编译，或整包上传 Overleaf":
+    "LaTeX project exported (main.tex + {count} figures): unzip and compile with xelatex, or upload the whole package to Overleaf",
+  "已导出 HTML 文件": "HTML file exported",
+  "已导出 HTML 文件（含 {count} 张图）": "HTML file exported ({count} figures)",
+  "正在生成 PDF，约需几秒……": "Generating the PDF — this takes a few seconds…",
+  "PDF 已生成，正在下载": "PDF ready — downloading",
+  "PDF 导出失败，请稍后重试": "PDF export failed — please try again later",
+  "当前论文没有关联项目": "this paper is not linked to a project",
+  "服务端生成超时": "the server timed out",
+  "服务端未能生成 PDF": "the server could not generate the PDF",
+  "服务端暂时无法生成 PDF（{reason}）": "The server can’t generate the PDF right now ({reason})",
+  "{reason}，已改用浏览器打印：在打印窗口选择「另存为 PDF」":
+    "{reason}. Switched to browser printing — choose “Save as PDF” in the print dialog",
+  "{reason}；浏览器又拦截了打印窗口，请允许弹出窗口后重试":
+    "{reason}. The browser also blocked the print window — allow pop-ups and try again",
   "已插入公式": "Equation inserted",
   "图片插入面板已打开": "Image panel opened",
   "已打开引用资料列表": "Reference list opened",

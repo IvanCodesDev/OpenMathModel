@@ -1723,7 +1723,7 @@
         "type": "object"
       },
       "CreatePaperExportInput": {
-        "description": "与 openapi CreatePaperExportInput 一致（ADR-0012 阶段 A）。\n\nsource_tex 的 2MB 上限按字符数在此约束；服务端另按 UTF-8 字节数复核。",
+        "description": "与 openapi CreatePaperExportInput 一致（ADR-0012 阶段 A；ADR-0025 增加 HTML 源）。\n\n源二选一：source_tex 走 Tectonic 编译（format=pdf / tex）；source_html 是自足的单文件\nHTML，由服务端无头浏览器打印成 PDF（只用于 format=pdf）。字符数上限在此约束，服务端\n另按 UTF-8 字节数复核。",
         "properties": {
           "format": {
             "$ref": "#/components/schemas/Format"
@@ -1743,11 +1743,31 @@
             ],
             "title": "Run Id"
           },
+          "source_html": {
+            "anyOf": [
+              {
+                "maxLength": 33554432,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Html"
+          },
           "source_tex": {
-            "maxLength": 2097152,
-            "minLength": 1,
-            "title": "Source Tex",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 2097152,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Tex"
           },
           "title": {
             "maxLength": 300,
@@ -1759,8 +1779,7 @@
         "required": [
           "project_id",
           "format",
-          "title",
-          "source_tex"
+          "title"
         ],
         "title": "CreatePaperExportInput",
         "type": "object"
@@ -8264,7 +8283,7 @@
     },
     "/api/v1/paper-exports": {
       "post": {
-        "description": "提交论文导出（ADR-0012 阶段 A：客户端直传 .tex）。\n\n受理即把 .tex 源落为 kind=paper 的 Artifact——编译失败源文件仍可下载排查。\nformat=tex 只落源产物并立即 READY；format=pdf 排队编译，未安装 Tectonic\n时直接落 UNSUPPORTED（诚实降级，不占队列）。",
+        "description": "提交论文导出（ADR-0012 阶段 A：客户端直传 .tex；ADR-0025：或直传自足 HTML）。\n\n受理即把源落为 kind=paper 的 Artifact——生成失败源文件仍可下载排查。\nformat=tex 只落源产物并立即 READY；format=pdf 排队生成：.tex 源交给 Tectonic，\nHTML 源交给无头浏览器打印。对应引擎缺失时直接落 UNSUPPORTED（诚实降级，不占队列）。",
         "operationId": "create_paper_export_api_v1_paper_exports_post",
         "requestBody": {
           "content": {
