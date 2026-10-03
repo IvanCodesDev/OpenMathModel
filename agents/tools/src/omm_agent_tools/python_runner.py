@@ -6,7 +6,7 @@ Executes model/experiment code inside the run workspace with:
 - a scrubbed environment (small Windows-safe allowlist; no user secrets),
 - a hard wall-clock timeout with process kill,
 - capped stdout/stderr capture,
-- automatic artifact capture of files the code creates in the workspace.
+- automatic artifact capture of files the code creates or rewrites in the workspace.
 
 The subprocess runs with cwd at the WORKSPACE ROOT, not the per-step script
 directory: every other surface the model sees (ws_list/ws_read/ws_write,

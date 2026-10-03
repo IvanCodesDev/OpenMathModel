@@ -1799,6 +1799,12 @@ FIGURE_NOTES_FINAL_KEY = (
 )
 
 
+def _artifact_key(ref: Any) -> tuple[str, str]:
+    """产物的同一性：kind + 文件名（引用里只剩 basename，工作区相对路径不在 ArtifactRef 上）。"""
+    name = str(getattr(ref, "uri", "") or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return str(getattr(ref, "kind", "") or ""), name
+
+
 class _SandboxCapture:
     """节点侧执行证据：最后一次 python_run 的 stdout/指标 + 全部产物 + 最终代码。
 
@@ -1806,6 +1812,10 @@ class _SandboxCapture:
     节点输出（stage_outputs 正文）需要它们——在工具执行器上就地截获，不改
     执行体的报告形状。``code`` 由 publish 回调顺手记下：执行体只回传产物 id，
     节点要把脚本落到工作区固定路径还得有正文。
+
+    产物按 :func:`_artifact_key` 每个只留一份、位置按首次出现：沙盒新建和改写都采集，
+    同一个文件跑几次就报几版，留后一次运行的那版（工作区里就是它）；同一次运行里
+    重名的取第一个。
     """
 
     def __init__(self) -> None:
@@ -1813,7 +1823,16 @@ class _SandboxCapture:
         self.metrics: dict[str, Any] = {}
         self.artifacts: list[Any] = []
         self.code = ""
-        self._seen: set[str] = set()
+        self._slots: dict[tuple[str, str], int] = {}
+
+    def add(self, ref: Any) -> None:
+        key = _artifact_key(ref)
+        slot = self._slots.get(key)
+        if slot is None:
+            self._slots[key] = len(self.artifacts)
+            self.artifacts.append(ref)
+        else:
+            self.artifacts[slot] = ref
 
     def observe(self, result: ToolResult) -> None:
         output = result.output or {}
@@ -1827,10 +1846,12 @@ class _SandboxCapture:
             if isinstance(candidate, dict):
                 parsed = candidate
         self.metrics = parsed
+        this_run: set[tuple[str, str]] = set()
         for ref in result.artifacts:
-            if ref.artifact_id not in self._seen:
-                self._seen.add(ref.artifact_id)
-                self.artifacts.append(ref)
+            key = _artifact_key(ref)
+            if key not in this_run:
+                this_run.add(key)
+                self.add(ref)
 
 
 def _sandbox_tool_executor(
@@ -1913,7 +1934,7 @@ def _publish_code_callback(
             media_type,
             ctx.step_id,
         )
-        capture.artifacts.append(ref)
+        capture.add(ref)
         return ref.artifact_id
 
     return publish
@@ -2078,8 +2099,8 @@ class DataPreparationNode(LlmSkillNode):
     ) -> tuple[dict[str, Any], list[Any]]:
         """清洗沙盒（子代理）→ 验收通过后进生成者-评审者环；返回 (cleaning, 产物引用)。
 
-        产物引用取所有波的并集：修复波只重写 cleaned/ 同名文件，沙盒按「新建文件」
-        捕获产物，首波的清洗数据引用不能因为修复而丢。
+        产物引用取所有波的并集（:func:`_union_artifacts`）：修复波常只重写 cleaned/ 同名文件，
+        同名只留采用波那份，首波独有的清洗数据引用不能因为修复而丢。
         """
         def skipped(reason: str) -> tuple[dict[str, Any], list[Any]]:
             return {"executed": False, "reason": reason}, []
@@ -2419,21 +2440,28 @@ _SandboxWaveResult = tuple[dict[str, Any], _SandboxCapture, dict[str, Any]]
 def _union_artifacts(
     waves: Sequence[_SandboxCapture], adopted: _SandboxCapture | None
 ) -> list[Any]:
-    """所有波的产物引用并集（按出现顺序、uri 去重），未被采用那些波的脚本除外。
+    """所有波的产物引用并集：同一产物（:func:`_artifact_key`）只留一份，位置按首次出现。
 
-    沙盒按「新建文件」捕获产物：修复波只重写同名文件时不会再报一次，首波产出的
-    数据 / 结果文件引用要留下来；脚本（kind=code）只留最终**采用**那一波的（僵持
-    时采用的可能不是最后一波）——其余版本在各波验收报告 ``final_code_artifact``
-    里仍可追溯。
+    修复波常重写首波的同名结果文件 / 图，沙盒每波都会再报一次：采用的那一波有就用它的
+    那版（和采用的指标对得上），没有就用最后一波的；只有首波产出过的数据 / 结果文件照样
+    留下。脚本（kind=code）只留最终**采用**那一波的（僵持时采用的可能不是最后一波）——
+    其余版本在各波验收报告 ``final_code_artifact`` 里仍可追溯。
     """
-    seen: set[str] = set()
     merged: list[Any] = []
+    slots: dict[tuple[str, str], tuple[int, bool]] = {}
     for capture in waves:
+        from_adopted = capture is adopted
         for ref in capture.artifacts:
-            if ref.uri in seen or (ref.kind == "code" and capture is not adopted):
+            if ref.kind == "code" and not from_adopted:
                 continue
-            seen.add(ref.uri)
-            merged.append(ref)
+            key = _artifact_key(ref)
+            slot = slots.get(key)
+            if slot is None:
+                slots[key] = (len(merged), from_adopted)
+                merged.append(ref)
+            elif from_adopted or not slot[1]:
+                merged[slot[0]] = ref
+                slots[key] = (slot[0], from_adopted)
     return merged
 
 
@@ -3389,7 +3417,7 @@ class ExperimentExecutionNode(LlmSkillNode):
             script_path = staged["path"]
         else:
             script_path = _stage_final_script(ctx, services, capture.code, language)
-        # 所有波的产物并集：修复波重写同名结果文件时沙盒不再报新建，首波引用要留
+        # 所有波的产物并集：同名只留采用波那份，首波独有的引用要留
         artifacts = _union_artifacts(waves, capture)
 
         return NodeResult.succeeded(
@@ -4740,8 +4768,8 @@ def _figures_rendered_check(
 ):
     """断言：规划的每张图都在工作区 ``directory`` 下、被采集为非空 figure 产物。
 
-    看的是本波节点侧累计采集（沙盒只采集每次运行**新建**的文件：重画同名文件不会
-    再次采集，所以修复波换 ``figures/revN/`` 目录、只看最后一次运行会误判）。
+    看的是本波节点侧累计采集：一波里可能分几次运行才画完，只看最后一次运行会漏掉
+    早先画好的图；盘上有文件但本波没新建或改写过它（上一波 / 上一轮留下的）不算。
     """
 
     def check(evidence) -> tuple[bool, str]:
@@ -4755,7 +4783,7 @@ def _figures_rendered_check(
             if f"{directory}{name}" not in files:
                 problems.append(f"{name} 未保存到 {directory}")
             elif name not in captured:
-                problems.append(f"{name} 未被采集为非空图件产物（须由本次 python_run 新建、≥ {_PAPER_FIGURE_MIN_BYTES} 字节）")
+                problems.append(f"{name} 未被采集为非空图件产物（须由本波运行新建或改写、≥ {_PAPER_FIGURE_MIN_BYTES} 字节）")
         if problems:
             return False, "；".join(problems)
         return True, f"{len(expected)} 张图已渲染并采集：{'、'.join(expected)}"
@@ -5291,8 +5319,8 @@ class PaperWritingNode(LlmSkillNode):
         def sandbox_wave(brief_suffix: str | None, max_runs: int) -> _SandboxWaveResult | None:
             """一次经监督者派发的补图沙盒波（首波 / 按审稿或静态检查意见修复）。
 
-            修复波换目录 ``figures/rev<N>/``：沙盒只采集**新建**文件，重画同名文件不会再次
-            采集，也就没法把修好的图当产物登记；文件名不变、目录带轮次，清单仍按 basename 记。
+            修复波换目录 ``figures/rev<N>/``：上一波的图原样留在盘上，僵持回落到上一波时盘上
+            文件与采用的产物仍是同一版；文件名不变、目录带轮次，清单仍按 basename 记。
             """
             wave_no["count"] += 1
             directory = _PAPER_FIGURE_DIR if wave_no["count"] == 1 else f"{_PAPER_FIGURE_DIR}rev{wave_no['count']}/"
@@ -5302,7 +5330,7 @@ class PaperWritingNode(LlmSkillNode):
             if wave_no["count"] > 1:
                 brief += (
                     f"\n\n本波修复请把全部图保存到 `{directory}` 目录（文件名不变；"
-                    "沙盒只采集新建文件，覆盖旧文件不算重新渲染）。"
+                    "上一波的图不要覆盖）。"
                 )
             if brief_suffix:
                 brief += "\n\n" + brief_suffix

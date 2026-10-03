@@ -1,8 +1,8 @@
 """多语言 Runner（设计 §7.4，H7 切片 1）：统一 ``code_run`` 入口按 ``language`` 分发。
 
 统一执行契约（§7.4，语言中立）：脚本落到 ``steps/<step_id>/<main.ext>``、子进程
-cwd = 工作区根、环境白名单、超时杀进程、stdout / stderr 截断、新建文件按后缀
-归类采集为产物；指标协议同样语言中立——脚本自己打印 ``OMM_METRICS_JSON: {...}``
+cwd = 工作区根、环境白名单、超时杀进程、stdout / stderr 截断、新建或改写的文件
+按后缀归类采集为产物；指标协议同样语言中立——脚本自己打印 ``OMM_METRICS_JSON: {...}``
 行 / 落 ``metrics.json``，执行核不解析（那是执行体与节点的事）。
 
 每语言一个 :class:`LanguageSpec`（启动命令、脚本名、可执行文件候选、额外需要
@@ -622,6 +622,17 @@ def artifact_kind(name: str) -> str:
     return KIND_BY_SUFFIX.get(os.path.splitext(name)[1].lower(), "other")
 
 
+def _file_states(root: Path) -> dict[Path, tuple[int, int]]:
+    """``root`` 下每个文件的（大小, 修改时间 ns）：运行前后各取一次，新出现或变了的就是本次产物。"""
+    states: dict[Path, tuple[int, int]] = {}
+    for path in root.rglob("*"):
+        with contextlib.suppress(OSError):
+            if path.is_file():
+                stat = path.stat()
+                states[path] = (stat.st_size, stat.st_mtime_ns)
+    return states
+
+
 def clip_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
     if len(text) > limit:
         return text[:limit] + f"\n...(+{len(text) - limit} chars truncated)"
@@ -634,7 +645,9 @@ class SubprocessRunner:
     与 python_run 的历史行为逐字节一致（PythonSandbox 现在只是它的薄壳）：脚本写到
     ``steps/<step_id>/<script_name>``、cwd = 工作区根（ws_* / 断言 / 下发数据都说
     工作区相对路径，生成代码里的相对路径必须落到同一个根）、快照在写脚本之后
-    （脚本本身不算产物）、扫全工作区（代码可在根下任意位置建文件）。
+    （脚本本身不算产物）、扫全工作区（代码可在根下任意位置建文件）。快照记每个文件的
+    大小与修改时间，新建和改写都算本次产物：回退重做那一轮重写上一轮同名的图 / 结果表，
+    只认新建就采集不到。
     """
 
     def __init__(
@@ -684,7 +697,7 @@ class SubprocessRunner:
         )
 
         scan_root = self._workspace.root
-        before = {path for path in scan_root.rglob("*") if path.is_file()}
+        before = _file_states(scan_root)
 
         completed = run_process_tree(
             self.spec.command(executable, str(script_path)),
@@ -722,16 +735,14 @@ class SubprocessRunner:
         return ToolResult(status="succeeded", output=output, artifacts=tuple(artifacts))
 
     def _collect_artifacts(
-        self, scan_root: Path, before: set[Path], ctx: ToolCallContext
+        self, scan_root: Path, before: dict[Path, tuple[int, int]], ctx: ToolCallContext
     ) -> tuple[list[ArtifactRef], list[str]]:
         artifacts: list[ArtifactRef] = []
         skipped: list[str] = []
-        created = sorted(
-            path
-            for path in scan_root.rglob("*")
-            if path.is_file() and path not in before
+        changed = sorted(
+            path for path, state in _file_states(scan_root).items() if before.get(path) != state
         )
-        for path in created:
+        for path in changed:
             if len(artifacts) >= MAX_ARTIFACTS:
                 skipped.append(f"{path.name} (artifact limit {MAX_ARTIFACTS})")
                 continue

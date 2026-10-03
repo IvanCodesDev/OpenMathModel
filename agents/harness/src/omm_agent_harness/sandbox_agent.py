@@ -454,10 +454,11 @@ def run_sandbox_task(
     if publish_code is not None and tracker.last_code:
         final_code_artifact = publish_code(tracker.last_code)
 
+    # 改写过的文件每次运行都会再报一版：取最后一次运行的那份（工作区里就是它）
     metrics_source = next(
         (
             artifact_id
-            for artifact_id, name in tracker.artifact_names.items()
+            for artifact_id, name in reversed(tracker.artifact_names.items())
             if name == "metrics.json"
         ),
         None,
