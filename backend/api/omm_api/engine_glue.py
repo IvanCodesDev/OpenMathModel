@@ -717,14 +717,51 @@ _FAILURE_CLASS_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("NON_PROGRESS", ("[E33",)),
 )
 
+#: 载荷里带独立 ``error_code`` 的失败直接按码归类（先于文案规则）。
+_FAILURE_CLASS_BY_CODE: dict[str, str] = {
+    # 读题准入门：题面不全是输入缺陷，不是代码缺陷
+    ErrorCode.INPUT_INSUFFICIENT.value: "DATA_DEFECT",
+}
 
-def _classify_failure(error: str) -> str:
-    """按失败文案归类 v1 failure_class（旧行为无脑 CODE_DEFECT，网络断连也
+
+def _classify_failure(error: str, error_code: str | None = None) -> str:
+    """按错误码与失败文案归类 v1 failure_class（旧行为无脑 CODE_DEFECT，网络断连也
     被标成代码缺陷，误导用户去查代码而不是重试）。"""
+    by_code = _FAILURE_CLASS_BY_CODE.get(str(error_code or ""))
+    if by_code is not None:
+        return by_code
     for failure_class, markers in _FAILURE_CLASS_RULES:
         if any(marker in error for marker in markers):
             return failure_class
     return "CODE_DEFECT"
+
+
+_STEP_LIFECYCLE_EVENTS = (
+    EventType.STEP_STARTED.value,
+    EventType.STEP_SUCCEEDED.value,
+    EventType.STEP_FAILED.value,
+)
+
+
+def last_step_error_code(session: Session, run_id: str) -> str | None:
+    """最近一次 STEP_FAILED 载荷里的错误码（RUN_FAILED 载荷不带码，失败归类与对话控制面靠它）。
+
+    只认最近一条步骤事件：之后又开过步骤（重试后通过、再在两步之间 ``fail_run``），
+    更早那次失败的码就不代表这次失败。
+    """
+    row = session.execute(
+        select(DomainEventRow)
+        .where(
+            DomainEventRow.run_id == run_id,
+            DomainEventRow.event_type.in_(_STEP_LIFECYCLE_EVENTS),
+        )
+        .order_by(DomainEventRow.seq.desc())
+        .limit(1)
+    ).scalars().first()
+    if row is None or row.event_type != EventType.STEP_FAILED.value:
+        return None
+    code = (row.payload or {}).get("error_code")
+    return str(code) if code else None
 
 
 def _budget_stop_message(error: AgentError) -> str:
@@ -1423,7 +1460,7 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
         step = session.get(StepRunRow, str(payload["step_id"]))
         if step is not None:
             error = str(payload.get("error") or "step failed")
-            failure_class = _classify_failure(error)
+            failure_class = _classify_failure(error, payload.get("error_code"))
             step.status = StepRunStatus.FAILED.value
             step.failure_class = failure_class
             step.detail = error
@@ -1785,7 +1822,7 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
             run.ended_at = now
             _project_status(session, run, TaskRunStatus.CANCELLED.value, "用户取消")
             return
-        run.failure_class = _classify_failure(error)
+        run.failure_class = _classify_failure(error, last_step_error_code(session, run.id))
         run.failure_message = error
         # 失败原因带真实阶段名（旧文案硬编码「实验步骤失败」——论文写作阶段
         # 断连也报成实验失败，用户按错误的方向排查）。failed_state 由引擎在

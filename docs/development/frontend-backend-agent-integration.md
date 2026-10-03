@@ -1175,6 +1175,19 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过：`pytest backend/api/tests` 532 passed / 2 skipped、`npm run check --workspace @openmathmodel/web`、`npm run build --workspace @openmathmodel/web`（index 848.58 kB）、`node --test`（194/194）、`npm run check --workspace @openmathmodel/contracts`、`export_openapi.py --check`（基线已重导出）、`check_compat.py`、`validate.py`。未验：真实模型下的判定质量（用例全部打桩），以及首页「提议 → 回一句开始 → 进入执行页」的浏览器走查。
 
+### 2026-10-03 题目信息不足带错误码 E610；任务页对话里补题面后自动重新解析
+
+真实运行 `run_278ee396`（题面被截断的能源调度题）18 秒失败于题意解析：节点判「题目信息不足」却不带错误码，`_classify_failure` 按文案没命中、兜底成 CODE_DEFECT，E6 看板记「无错误码」；失败文案让用户新建任务，下面却跟着「重试当前阶段」——同输入重试只会再判一次不足（08-28 那条早就点过「语义上是输入问题，却被渲染成带重试按钮的工作流故障」）。用户 1 分钟后新建任务重贴了完整题面。拍板两处：方向 = 任务页对话里就地补题面、补完自动重新解析；错误码 = 新开 E6xx 输入码段，只开 E610。
+
+- **错误码（`agents/core/src/omm_agent_core/errors.py`）**：`ErrorCode.INPUT_INSUFFICIENT = "E610"` + `Disposition.NEEDS_INPUT`（用户补了输入才重试）+ CATALOG 一条（owner `node`）；E6 看板 `by_code` 经 CATALOG 带出 owner / 处置。
+- **题意解析（`agents/skills/src/omm_agent_skills/nodes.py`）**：判 insufficient → `NodeResult.failed(..., error_code=E610)`；文案改为「可以直接在本任务的对话里补充缺的内容（整段粘贴题面也行），补充后会自动重新解析题意；也可以新建任务、附上完整题面与数据文件重新发起」。
+- **失败归类（`engine_glue.py`）**：`_classify_failure(error, error_code=None)` 码优先（E610 → DATA_DEFECT，契约 `FailureClass` 八类不改），再走文案规则、最后兜底 CODE_DEFECT；STEP_FAILED 投影传载荷里的码。RUN_FAILED 载荷不带码 → `last_step_error_code`：按 seq 倒序取最近一条步骤事件（STEP_STARTED / STEP_SUCCEEDED / STEP_FAILED），是 STEP_FAILED 才取它的码——之后又开过步骤，更早那次失败的码就不代表这次失败。
+- **运行页（`run_control.py`）**：10-02「运行页只把补充要求记为备注」在这里有一个例外。`RunControlContext.awaiting_problem_supplement`（FAILED、停在题意解析、码 E610 三者同时成立）时，失败运行上不触发动作的话照样分类（超 800 字的长文走只分类的 `judge_utterance`），判为 supplement 就改判 retry：原话加「【题面补充】」前缀落成 `scope=PROBLEM_ANALYSIS` 的备注（只进题意解析的提示词，上限放宽到 2 万字），随后自动重试，回执说「已把你补充的题面交给『题意解析』，重新解析题意」；判定提示词在这个状态下说明补的题目内容（包括整段粘贴同一道题）算 supplement、明显是另一道题才算 new_task。问句 / 新题照旧只回对话；别的原因失败（含题意解析的其它码）不受影响。运行输入 `goal` 记在 RUN_CREATED 里、事件溯源不可改，且只有题意解析读原始题面，所以补充走备注而不是改题面。
+- **前端**：零改动——失败文案本身就是引导。已知局限：「重试当前阶段」按钮照旧跟在失败叙述下面，不补题面直接点 = 同输入再判一次不足（多花一次模型调用）；隐藏或改写它属于界面交互改动，本次不做。事件日志不可变，历史失败不回填码。
+- **测试**：`test_failure_error_codes.py` +2（码优先于文案；判不足的运行步骤与运行分型都是 DATA_DEFECT、看板 `uncoded == 0`）；`test_run_control.py` +6（状态判定只在三条件同时成立时为真；计划与判定提示词；端到端：真题意解析节点 + 打桩模型，判不足 → 对话补题面 → 备注 scope 与前缀 → 自动重试 → 第二次解析的提示词同时带原题面与补充 → 通过，`last_step_error_code` 先 E610、通过后为空；长文补充；问句不动作；普通失败运行补要求照旧不重试）；core `test_errors.py`、skills `test_nodes.py` 在既有用例里加断言。
+
+当日执行并通过：`pytest backend/api/tests` 552 passed / 2 skipped；agents 五包 + worker 844 passed / 1 skipped；strict mypy 与 ruff 对照改动前零新增；临时 worktree 检出改动前代码跑新测试，5 条行为用例全红、守卫用例全绿。未验：真实模型下的补题面判定与重新解析（用例全部打桩）。注意 `npm run dev` 拉起的 API 不带热重载、且会复用 8000 端口上已在运行的 API——要在真实运行里用上这次改动，须把旧 API 进程整个停掉再启动。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

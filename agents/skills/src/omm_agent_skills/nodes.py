@@ -330,8 +330,10 @@ class ProblemAnalysisNode(LlmSkillNode):
             detail = "、".join(missing) if missing else "题目正文与求解目标"
             return NodeResult.failed(
                 f"题目信息不足，无法启动建模：缺少{detail}。"
-                "请在新任务中提供完整题面（可附题目文档与数据文件）后重新发起。",
+                "可以直接在本任务的对话里补充缺的内容（整段粘贴题面也行），补充后会自动重新解析题意；"
+                "也可以新建任务、附上完整题面与数据文件重新发起。",
                 metrics={"llm_attempts": attempts, "viability": "insufficient"},
+                error_code=ErrorCode.INPUT_INSUFFICIENT.value,
             )
         return super().to_result(parsed, attempts)
 

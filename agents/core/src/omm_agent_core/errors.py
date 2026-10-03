@@ -55,6 +55,9 @@ class ErrorCode(str, Enum):
     SUBAGENT_TIMEOUT_REAPED = "E530"
     SUBAGENT_DEPTH_VIOLATION = "E540"
 
+    # E6xx — input / admission (thrown by skill nodes)
+    INPUT_INSUFFICIENT = "E610"  # problem statement too incomplete to start modeling
+
 
 class Disposition(str, Enum):
     """Default handling per D2.1; consumers may escalate but not soften."""
@@ -65,6 +68,7 @@ class Disposition(str, Enum):
     DEFECT = "defect"  # assembly/config bug: fail fast, alert
     PARENT_POLICY = "parent_policy"  # parent decides: retry → degrade → gate
     FORCED_GATE = "forced_gate"  # E430: force a human gate
+    NEEDS_INPUT = "needs_input"  # step fails; retry only after the user supplements the input
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,8 @@ CATALOG: dict[ErrorCode, ErrorInfo] = {
                   "子代理超时被收割"),
         ErrorInfo(ErrorCode.SUBAGENT_DEPTH_VIOLATION, "supervisor", Disposition.DEFECT,
                   "子代理深度违规（深度=1 强制）"),
+        ErrorInfo(ErrorCode.INPUT_INSUFFICIENT, "node", Disposition.NEEDS_INPUT,
+                  "题目信息不足（读题准入门拦下，补充题面后重试）"),
     )
 }
 

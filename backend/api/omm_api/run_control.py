@@ -36,6 +36,8 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from omm_agent_core import TaskState
+from omm_agent_core.errors import ErrorCode
 from omm_contracts import (
     AgentEventType,
     ApprovalStatus,
@@ -51,6 +53,7 @@ from .engine_glue import (
     MAX_REVISION_ROUNDS,
     REDO_STATUSES,
     accept_revision,
+    last_step_error_code,
     redo_run,
     revision_rounds,
     suggest_revision_stage,
@@ -81,6 +84,13 @@ JUDGE_HISTORY_USER_CHARS = 200
 JUDGE_HISTORY_REPLY_CHARS = 240
 #: 备注正文上限（与 RunNoteInput 一致）。
 NOTE_TEXT_LIMIT = 2000
+#: 题面补充（E610 之后在对话里补的题目内容）的上限：整段题面常有几千字，只进题意解析一处提示词。
+PROBLEM_SUPPLEMENT_LIMIT = 20_000
+#: 题面补充落成备注时的前缀：备注段的标题是「用户补充要求」，要让题意解析把它当成题面的一部分。
+PROBLEM_SUPPLEMENT_PREFIX = (
+    "【题面补充】以下是用户在题意解析判定信息不足后补充的题目内容，与上文题目正文合起来是完整题面，"
+    "准入判定与信息提取都以合并后的题面为准：\n"
+)
 
 _TERMINAL = frozenset(status.value for status in TERMINAL_TASK_RUN_STATUSES)
 
@@ -218,6 +228,17 @@ class RunControlContext:
     pending_proposal: Optional[dict[str, Any]] = None
     #: 本任务的题面：长文本分类时用来分辨「补充材料」还是「另一道题」。
     goal: str = ""
+    #: FAILED 时最近一次步骤失败的错误码（D2.1；没有码 = ""）。
+    failure_code: str = ""
+
+    @property
+    def awaiting_problem_supplement(self) -> bool:
+        """题意解析被读题准入门拦下（E610）：用户这时补的内容就是题面的一部分。"""
+        return (
+            self.status == TaskRunStatus.FAILED.value
+            and self.node == TaskState.PROBLEM_ANALYSIS.value
+            and self.failure_code == ErrorCode.INPUT_INSUFFICIENT.value
+        )
 
     @property
     def stage_label(self) -> str:
@@ -299,6 +320,8 @@ def load_context(
         revision_rounds=revision_rounds(session, run.id),
         goal=run.goal or "",
     )
+    if run.status == TaskRunStatus.FAILED.value:
+        context.failure_code = last_step_error_code(session, run.id) or ""
     if run.status == TaskRunStatus.WAITING_APPROVAL.value:
         approval = session.execute(
             select(ApprovalRequestRow)
@@ -348,7 +371,8 @@ class ControlDecision:
     kind: str
     option_id: Optional[str] = None
     stage: Optional[str] = None
-    #: "rule"（本地规则）/ "judge"（弱模型）/ "proposal"（回应上一轮提案）/ "none"。
+    #: "rule"（本地规则）/ "judge"（弱模型）/ "proposal"（回应上一轮提案）/
+    #: "supplement"（E610 之后的题面补充改判为重试）/ "none"。
     source: str = "none"
     #: 不触发动作时这句话的类别（UTTERANCE_KINDS 之一）；"" = 判定没给，由本地兜底分类。
     utterance: str = ""
@@ -654,6 +678,14 @@ def _hint_line(hint: Optional[ControlDecision]) -> str:
     )
 
 
+#: 运行停在 E610 时给判定器的说明：题面本来就不全，贴来的同一道题不能判成新题。
+_PROBLEM_SUPPLEMENT_HINT = (
+    "运行停在题意解析是因为题目信息不足：用户补充的题目内容（正文、小问、数据说明、约束等，"
+    "包括整段粘贴同一道题的完整题面）属于 supplement，系统会据此重新解析；"
+    "只有明显是另一道题才算 new_task。"
+)
+
+
 def _judge_prompt(
     text: str,
     context: RunControlContext,
@@ -679,6 +711,8 @@ def _judge_prompt(
     ]
     if context.failure_message:
         lines.append(f"失败原因：{context.failure_message[:300]}")
+    if context.awaiting_problem_supplement:
+        lines.append(_PROBLEM_SUPPLEMENT_HINT)
     if context.approval_id:
         lines.append(f"待确认事项：{context.approval_title}")
         for option in context.options:
@@ -795,6 +829,8 @@ def _utterance_prompt(text: str, context: RunControlContext) -> str:
     ]
     if context.goal.strip():
         lines.append(f"本任务的题目：{' '.join(context.goal.split())[:300]}")
+    if context.awaiting_problem_supplement:
+        lines.append(_PROBLEM_SUPPLEMENT_HINT)
     lines.append(f"用户粘贴的文字（共 {len(text)} 字，以下是开头）：{head}")
     return "\n".join(lines)
 
@@ -878,12 +914,19 @@ def decide(
 # ── 执行 ─────────────────────────────────────────────────────────────────────
 
 
-def record_run_note(session: Session, run: TaskRunRow, text: str, scope: str = "global") -> RunNoteRow:
+def record_run_note(
+    session: Session,
+    run: TaskRunRow,
+    text: str,
+    scope: str = "global",
+    *,
+    limit: int | None = NOTE_TEXT_LIMIT,
+) -> RunNoteRow:
     """落一条运行备注 + run.log 回执（§11.3 方案 A）。HTTP /notes 与对话控制面共用。"""
     note = RunNoteRow(
         id=new_id("note"),
         run_id=run.id,
-        text=text[:NOTE_TEXT_LIMIT],
+        text=text[:limit],
         scope=scope,
         created_at=utcnow(),
     )
@@ -918,6 +961,17 @@ def record_run_note(session: Session, run: TaskRunRow, text: str, scope: str = "
         },
     )
     return note
+
+
+def record_problem_supplement(session: Session, run: TaskRunRow, text: str) -> RunNoteRow:
+    """题面补充（E610 之后用户在对话里补的题目内容）：只进题意解析的提示词，上限比普通备注宽。"""
+    return record_run_note(
+        session,
+        run,
+        PROBLEM_SUPPLEMENT_PREFIX + text.strip()[:PROBLEM_SUPPLEMENT_LIMIT],
+        scope=TaskState.PROBLEM_ANALYSIS.value,
+        limit=None,
+    )
 
 
 def _proposal_label(proposal: dict[str, Any]) -> str:
@@ -1001,17 +1055,22 @@ def execute(
     try:
         if kind == "retry":
             execute_action(session, run.id, TaskRunActionInput(action=TaskRunAction.RETRY), actor=actor)
-            note = record_run_note(session, run, text) if text.strip() else None
+            supplement = context.awaiting_problem_supplement and bool(text.strip())
+            if supplement:
+                note: RunNoteRow | None = record_problem_supplement(session, run, text)
+                message = f"已把你补充的题面交给「{stage_label}」，重新解析题意"
+            else:
+                note = record_run_note(session, run, text) if text.strip() else None
+                message = f"已重试「{stage_label}」阶段" + (
+                    "，并把你的要求作为备注注入该阶段的执行提示词" if note else ""
+                )
             return {
                 "kind": "retry",
                 "status": "executed",
                 "stage": stage,
                 "stage_label": stage_label,
                 "note_id": note.id if note else None,
-                "message": (
-                    f"已重试「{stage_label}」阶段"
-                    + ("，并把你的要求作为备注注入该阶段的执行提示词" if note else "")
-                ),
+                "message": message,
             }
         if kind == "resume":
             execute_action(session, run.id, TaskRunActionInput(action=TaskRunAction.RESUME), actor=actor)
@@ -1296,7 +1355,9 @@ def describe_plan(
     if kind not in ACTION_KINDS:
         return []
     stage_label = context.stage_label
-    if kind == "retry":
+    if kind == "retry" and context.awaiting_problem_supplement and text.strip():
+        message = f"把用户这段话作为题面补充交给「{stage_label}」，重新解析题意"
+    elif kind == "retry":
         message = f"重试「{stage_label}」阶段" + (
             "，并把用户这句话作为备注注入该阶段的执行提示词" if text.strip() else ""
         )
@@ -1401,16 +1462,22 @@ def plan_control_step(
             )
 
         decision = decide(text, context, judge=judge, history=history)
-        planned = describe_plan(decision, text, context)
-        settled = [action for action in planned if action.get("status") in ("proposed", "dismissed")]
         # 不触发动作的话先分类，只有 supplement 才落备注（ADR-0024）：「谢谢」「太慢了吧」
-        # 「这个模型的精度多少」、在任务页贴来的新题都不是给后续阶段的要求
+        # 「这个模型的精度多少」、在任务页贴来的新题都不是给后续阶段的要求。失败运行本不落备注，
+        # 唯独题意解析被准入门拦下（E610）时，补充内容就是题面的一部分：改判为带题面补充的重试
         utterance = ""
-        if not decision.actionable and run.status not in _TERMINAL and text.strip():
+        if not decision.actionable and text.strip() and (
+            run.status not in _TERMINAL or context.awaiting_problem_supplement
+        ):
             utterance = decision.utterance
             if not utterance and len(text.strip()) > JUDGE_TEXT_LIMIT:
                 utterance = judge_utterance(config, text.strip(), context, on_usage=on_judge_usage)
             utterance = utterance or classify_utterance(text)
+            if context.awaiting_problem_supplement and utterance == "supplement":
+                decision = ControlDecision(kind="retry", source="supplement")
+                utterance = ""
+        planned = describe_plan(decision, text, context)
+        settled = [action for action in planned if action.get("status") in ("proposed", "dismissed")]
         note_planned = utterance == "supplement"
         logger.info(
             "run control plan run=%s status=%s decision=%s source=%s planned=%s utterance=%s note=%s",
@@ -1522,6 +1589,7 @@ __all__ = [
     "CONFIRM_REQUIRED",
     "JUDGE_HISTORY_TURNS",
     "JUDGE_TEXT_LIMIT",
+    "PROBLEM_SUPPLEMENT_LIMIT",
     "UTTERANCE_KINDS",
     "ControlDecision",
     "ControlPlan",
@@ -1544,6 +1612,7 @@ __all__ = [
     "pending_proposal_of",
     "plan_control_step",
     "prompt_block",
+    "record_problem_supplement",
     "record_run_note",
     "reply_rules",
 ]
