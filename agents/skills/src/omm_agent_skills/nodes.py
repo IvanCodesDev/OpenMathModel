@@ -1895,16 +1895,51 @@ def _workspace_files(ctx: NodeContext, services: NodeServices) -> list[str]:
     return [str(path) for path in listing.output.get("files") or []]
 
 
+#: 节点侧整读的每页长度：与 omm_agent_tools.WS_READ_MAX_CHARS 同值（skills 不 import tools）。
+_WORKSPACE_READ_PAGE_CHARS = 20_000
+
+#: 整读最多翻几页（next_offset 异常时不至于空转；40 万字符，脚本到不了）。
+_WORKSPACE_READ_MAX_PAGES = 20
+
+
 def _workspace_reader(ctx: NodeContext, services: NodeServices):
+    """节点侧整读：ws_read 一次至多一页，按 ``next_offset`` 翻页拼回全文。"""
+
     def read_text(path: str) -> str:
-        result = services.tools.invoke(
-            ctx.run_id, ctx.step_id, "ws_read", {"path": path}
-        )
-        if not result.ok:
-            raise FileNotFoundError(result.error or f"无法读取 {path}")
-        return str(result.output.get("text") or "")
+        pieces: list[str] = []
+        arguments: dict[str, Any] = {"path": path, "limit": _WORKSPACE_READ_PAGE_CHARS}
+        for _ in range(_WORKSPACE_READ_MAX_PAGES):
+            result = services.tools.invoke(ctx.run_id, ctx.step_id, "ws_read", arguments)
+            if not result.ok:
+                raise FileNotFoundError(result.error or f"无法读取 {path}")
+            pieces.append(str(result.output.get("text") or ""))
+            next_offset = result.output.get("next_offset")
+            if (
+                not result.output.get("truncated")
+                or not isinstance(next_offset, int)
+                or next_offset <= int(arguments.get("offset") or 0)
+            ):
+                break
+            arguments = {**arguments, "offset": next_offset}
+        return "".join(pieces)
 
     return read_text
+
+
+def _finalize_note(services: NodeServices, label: str) -> Callable[[int], None]:
+    """收尾运行的执行轨迹旁白：那次运行没有模型说明，补一句为什么多跑了一次。"""
+
+    def note(source_run: int) -> None:
+        _emit_progress(services, {
+            "kind": "agent_note",
+            "prompt_id": label,
+            "text": (
+                f"最后一次运行没过验收，第 {source_run} 次运行的结果曾全部通过："
+                "按那次的代码原样复跑收尾，产物与指标以它为准。"
+            ),
+        })
+
+    return note
 
 
 def _env_fingerprint(ctx: NodeContext, services: NodeServices) -> dict[str, Any]:
@@ -2210,6 +2245,7 @@ class DataPreparationNode(LlmSkillNode):
                         ctx, services, capture, "cleaning.py"
                     ),
                     on_final_answer=final_answer.update,
+                    on_finalize=_finalize_note(services, CLEANING_PROMPT_ID),
                 )
                 return ResultEnvelope(
                     status="done",
@@ -3325,6 +3361,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 on_loop_exit=lambda outcome: last_loop.update(
                     ok=outcome.ok, error_code=outcome.error_code
                 ),
+                on_finalize=_finalize_note(services, template_id),
             )
             return report, capture, final_answer
 
@@ -3605,7 +3642,9 @@ def _clip_code(code: str, path: str = EXPERIMENT_SCRIPT_PATH) -> str:
         return code
     return (
         code[:_EXPERIMENT_CODE_CARD_CHARS]
-        + f"\n# …（脚本共 {len(code)} 字符，此处截断；完整内容请 ws_read {path}）"
+        + f"\n# …（脚本共 {len(code)} 字符，此处截断于第 {_EXPERIMENT_CODE_CARD_CHARS} 字符；"
+        f"后文用 ws_read 读 {path}，"
+        f"从 offset={_EXPERIMENT_CODE_CARD_CHARS} 起按返回的 next_offset 续读）"
     )
 
 
@@ -4120,6 +4159,7 @@ class ValidationNode(LlmSkillNode):
                     ),
                     on_final_answer=final_answer.update,
                     normalize_language=normalize_language,
+                    on_finalize=_finalize_note(services, template_id),
                 )
                 return ResultEnvelope(
                     status="done",
@@ -5375,6 +5415,7 @@ class PaperWritingNode(LlmSkillNode):
                     ),
                     on_final_answer=final_answer.update,
                     normalize_language=normalize_language,
+                    on_finalize=_finalize_note(services, figures_template_id),
                 )
                 return ResultEnvelope(
                     status="done",

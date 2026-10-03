@@ -14,6 +14,11 @@ sandbox-run-report.v1 同构的报告 dict。
    是一次独立装配的内环（结构化反馈接续，不转录全对话，上下文纪律 §10.1）。
 3. **运行预算按次预付**：沙箱运行（python_run / code_run）超过 max_runs 的那一次
    不会执行（§4.7 "a started run is spent money" 的镜像），预算尽即收束报告。
+   每次运行的观察都附「已用 k / N」，失败的运行另附 stderr / stdout 尾部（内环对失败
+   结果只渲染 error，回溯不并进来模型就得再花一次运行把它打出来）。
+   **收尾运行**：波末最后一次运行没过验收、而更早某次运行的结果能全过时，执行体把那次
+   的代码原样再跑一遍——不占 R2 预算、不计 usage.runs（与节点复跑核对同口径），经同一个
+   执行器，所以工作区、产物采集、发布代码与指标都回到那一版，下游「最后一次运行」口径不变。
 4. **实现语言由任务卡定，模型无权换（§7.4，H7）**：``SandboxTask.language`` 是 G1
    确认下来的语言；执行体把 ``code_run`` 的 ``language`` 固定成它——模型漏传就补上，
    传了别的语言就退回一条观察（不执行、不计预算）；语言不是 python 时 ``python_run``
@@ -71,6 +76,11 @@ _METRICS_LINE = re.compile(r"^OMM_METRICS_JSON:\s*(\{.*\})\s*$", re.MULTILINE)
 
 #: 断言反馈里上一波代码的截断长度。
 _FEEDBACK_CODE_CHARS = 3000
+
+#: 失败运行回给模型的 stderr / stdout 尾部长度（内环观察整段上限 4000 字符，两段加
+#: 报错与预算行要装得下）。
+_OBSERVED_STDERR_CHARS = 1500
+_OBSERVED_STDOUT_CHARS = 800
 
 _FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$", re.MULTILINE)
 
@@ -186,13 +196,43 @@ def _default_normalize_language(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _budget_note(used: int, total: int) -> str:
+    left = max(total - used, 0)
+    if left == 0:
+        return f"已用 {used} / {total} 次运行，预算已用尽：之后的运行不会执行，请直接输出终答"
+    return f"已用 {used} / {total} 次运行，剩 {left} 次（读文件用 ws_read，不占运行次数）"
+
+
+def _failure_observation(result: ToolResult) -> str:
+    """失败运行的观察正文：报错 + stderr 尾部（回溯在最后）+ stdout 尾部（跑到了哪一步）。"""
+    output = result.output or {}
+    parts = [str(result.error or result.status)]
+    stderr = str(output.get("stderr") or "").strip()
+    if stderr:
+        parts.append("stderr（尾部）：\n" + stderr[-_OBSERVED_STDERR_CHARS:])
+    stdout = str(output.get("stdout") or "").strip()
+    if stdout:
+        parts.append("stdout（尾部）：\n" + stdout[-_OBSERVED_STDOUT_CHARS:])
+    return "\n".join(parts)
+
+
+@dataclass(frozen=True)
+class _RunRecord:
+    """一次真执行的模型运行：钉好语言的调用 + 原始结果（收尾运行据此重评、重跑）。"""
+
+    call: ToolCall
+    result: ToolResult
+
+
 class _RunTracker:
     """沙箱运行（python_run / code_run）的预算、语言路由与证据跟踪：包装注入的工具执行器。
 
     - 预算按次预付：超过 max_runs 的调用不执行，返回失败观察并置 exhausted；
     - 语言固定：code_run 缺 language 就补任务卡的语言；传了别的语言、或语言不是
       python 却调 python_run → 退回观察（不执行、不计预算）；
-    - 证据采集：记录最后一次调用的代码/结果与全部产物 id。
+    - 证据采集：记录最后一次运行的代码/结果、每次模型运行的记录与全部产物 id；
+    - 观察加注：回给模型的那份附运行预算，失败的另附 stderr / stdout 尾部（原始结果照存）；
+    - 收尾运行（:meth:`finalize`）：原样重跑某次模型运行，不计 ``runs``。
     """
 
     def __init__(
@@ -214,6 +254,9 @@ class _RunTracker:
         self.last_result: ToolResult | None = None
         self.artifact_ids: list[str] = []
         self.artifact_names: dict[str, str] = {}
+        self.history: list[_RunRecord] = []
+        #: 已被拿来收尾过的模型运行（history 下标）：每次运行最多收尾一次
+        self.finalized_from: set[int] = set()
 
     def _route(self, call: ToolCall) -> ToolCall | ToolResult:
         """把一次运行调用钉在任务卡语言上；违约返回失败观察而不是改写模型的意图。"""
@@ -266,20 +309,41 @@ class _RunTracker:
                 )
                 continue
             self.runs += 1
-            self.last_code = str(routed.arguments.get("code") or "")
-            outcome = list(self._inner([routed]))[0]
-            self.last_result = outcome
-            for ref in outcome.artifacts:
-                self.artifact_ids.append(ref.artifact_id)
-                self.artifact_names[ref.artifact_id] = ref.uri.rstrip("/").rsplit("/", 1)[-1]
-            results.append(outcome)
+            outcome = self._execute(routed)
+            self.history.append(_RunRecord(call=routed, result=outcome))
+            results.append(self._observed(outcome))
         return results
+
+    def finalize(self, index: int) -> ToolResult:
+        """收尾运行：``history[index]`` 那次模型运行的调用原样再跑一遍（不计 R2 预算）。"""
+        self.finalized_from.add(index)
+        return self._execute(self.history[index].call)
+
+    def _execute(self, call: ToolCall) -> ToolResult:
+        self.last_code = str(call.arguments.get("code") or "")
+        outcome = list(self._inner([call]))[0]
+        self.last_result = outcome
+        for ref in outcome.artifacts:
+            self.artifact_ids.append(ref.artifact_id)
+            # 先删后插：同一 id 再报一次也排到最后（「最后一次运行的那份」按插入序取）
+            self.artifact_names.pop(ref.artifact_id, None)
+            self.artifact_names[ref.artifact_id] = ref.uri.rstrip("/").rsplit("/", 1)[-1]
+        return outcome
+
+    def _observed(self, outcome: ToolResult) -> ToolResult:
+        note = _budget_note(self.runs, self._max)
+        if outcome.ok:
+            return replace(outcome, output={"run_budget": note, **(outcome.output or {})})
+        return replace(outcome, error=f"{_failure_observation(outcome)}\n[运行预算] {note}")
 
 
 def _assemble_wave_prompt(
-    task: SandboxTask, feedback: str | None
+    task: SandboxTask, feedback: str | None, runs_left: int | None = None
 ) -> tuple[Message, ...]:
-    """一波内环的任务卡 prompt：分节装配（§4.2），反馈段只在修复波出现。"""
+    """一波内环的任务卡 prompt：分节装配（§4.2），反馈段只在修复波出现。
+
+    ``runs_left`` 是本波开始时还剩的 R2 运行次数（缺省 = 整张任务卡的 max_runs）。
+    """
     sections = [
         Section(name="system", content=task.system_prompt),
         Section(name="task_frame", heading="任务目标", content=task.goal),
@@ -306,6 +370,7 @@ def _assemble_wave_prompt(
             heading="工作方式与终答要求",
             content=(
                 _run_tool_instruction(task)
+                + _run_budget_instruction(task, task.max_runs if runs_left is None else runs_left)
                 + "运行成功并自查达标后，只输出一个 JSON 对象作为终答："
                 + _final_answer_example(task)
                 + "。终答会触发验收断言评估，未通过会把差异反馈给你继续修复。"
@@ -323,6 +388,13 @@ def _run_tool_instruction(task: SandboxTask) -> str:
     return (
         f"用 {task.run_tool} 工具执行代码，参数 language 固定为 \"{task.language}\""
         f"（实现语言已在方案阶段确认，不要换用其它语言；需要留档的辅助文件用 ws_write）；"
+    )
+
+
+def _run_budget_instruction(task: SandboxTask, runs_left: int) -> str:
+    return (
+        f"本任务还剩 {runs_left} 次运行（每调一次 {task.run_tool} 计 1 次，用尽后不再执行），"
+        "读文件用 ws_read、不占运行次数，运行留给完整脚本；"
     )
 
 
@@ -349,7 +421,7 @@ def _evaluate(
 
 
 def _feedback_from(
-    assertion_results: Sequence[Mapping[str, Any]], last_code: str
+    assertion_results: Sequence[Mapping[str, Any]], last_code: str, note: str = ""
 ) -> str:
     failed = [item for item in assertion_results if not item["passed"]]
     lines = [f"- [{item['id']}] {item['detail']}" for item in failed]
@@ -358,7 +430,8 @@ def _feedback_from(
         if last_code
         else ""
     )
-    return "以下验收断言未通过：\n" + "\n".join(lines) + code_part
+    head = f"{note}\n" if note else ""
+    return head + "以下验收断言未通过：\n" + "\n".join(lines) + code_part
 
 
 def run_sandbox_task(
@@ -374,12 +447,19 @@ def run_sandbox_task(
     on_final_answer: Callable[[dict[str, Any]], None] | None = None,
     normalize_language: Callable[[Any], str] | None = None,
     on_loop_exit: Callable[[LoopOutcome], None] | None = None,
+    on_finalize: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """驱动一张任务卡到 sandbox-run-report.v1 形状的报告 dict。
 
     波次语义：一波 = 一次独立装配的内环（模型写码/跑码/终答）+ 一次断言
     评估；未过则携带断言差异进入下一波。attempts 上报波次数（每波至少一次
-    评估）；usage.runs 上报真实沙箱运行次数（python_run 与 code_run 同计）。
+    评估）；usage.runs 上报模型发起的沙箱运行次数（python_run 与 code_run 同计，
+    即 R2 预算账本；收尾运行不计）。
+
+    收尾运行：波末断言没过时，从新到旧找一次没收尾过、拿它的结果重评能全过的
+    模型运行（当前工作区清单 + 那次的 stdout / 指标；断言都是证据的纯函数，事后重评
+    是准的），把它的代码原样再跑一遍，再用真实证据重评一次。过了即按通过收束；没过
+    就带着「曾通过、复跑未复现」的说明进下一波。取消后不收尾。
 
     ``on_final_answer`` 在收束前回传最后一个通过结构校验的终答对象（含
     extra_final_keys 声明的叙事键）——报告本身保持 sandbox-run-report.v1
@@ -387,6 +467,9 @@ def run_sandbox_task(
 
     ``on_loop_exit`` 每波内环收束后回传其 LoopOutcome：报告契约里没有退出原因，
     父节点据最后一波判定失败码（内环自己的 E120 / E330 / E331 / E332，或 R2 用尽）。
+
+    ``on_finalize`` 在收尾运行开跑前回传被复跑的是第几次模型运行（从 1 数），
+    父节点据此给执行轨迹补一句说明（那次运行没有模型旁白）。
 
     ``normalize_language`` 是语言别名归一（python3 → python、Rscript → r …），由
     调用方注入以与方案卡 / 执行器同一张表；缺省只做小写去空白。
@@ -403,16 +486,35 @@ def run_sandbox_task(
     waves = 0
     final_answer: dict[str, Any] | None = None
 
-    def evidence() -> SandboxEvidence:
-        last = tracker.last_result
-        stdout = str((last.output or {}).get("stdout") or "") if last is not None else ""
+    def evidence_of(result: ToolResult | None, files: Sequence[str]) -> SandboxEvidence:
+        stdout = str((result.output or {}).get("stdout") or "") if result is not None else ""
         return SandboxEvidence(
-            files=tuple(workspace_files()),
+            files=tuple(files),
             read_text=read_text,
-            last_run=last,
+            last_run=result,
             stdout=stdout,
             metrics=_extract_metrics(stdout),
         )
+
+    def evidence() -> SandboxEvidence:
+        return evidence_of(tracker.last_result, workspace_files())
+
+    def finalize() -> tuple[list[dict[str, Any]], bool, int] | None:
+        """收尾运行；找不到能全过的更早运行返回 None，否则 (重评结果, 是否通过, 来源下标)。"""
+        files = tuple(workspace_files())
+        for index in reversed(range(len(tracker.history))):
+            record = tracker.history[index]
+            if index in tracker.finalized_from or record.result is tracker.last_result:
+                continue
+            if _evaluate(task, evidence_of(record.result, files))[1]:
+                break
+        else:
+            return None
+        if on_finalize is not None:
+            on_finalize(index + 1)
+        tracker.finalize(index)
+        results, ok = _evaluate(task, evidence())
+        return results, ok, index
 
     passed = False
     while waves < task.max_waves:
@@ -420,7 +522,7 @@ def run_sandbox_task(
         outcome: LoopOutcome = run_inner_loop(
             LoopTask(
                 task_id=f"{task.task_id}:wave{waves}",
-                messages=_assemble_wave_prompt(task, feedback),
+                messages=_assemble_wave_prompt(task, feedback, task.max_runs - tracker.runs),
                 validator=_final_answer_validator(task),
                 parser=_lenient_parse,
                 budget=LoopBudget(max_turns=task.max_turns_per_wave),
@@ -437,6 +539,16 @@ def run_sandbox_task(
             final_answer = outcome.value
 
         assertion_results, passed = _evaluate(task, evidence())
+        finalize_note = ""
+        if not passed and not (cancelled is not None and cancelled()):
+            finalized = finalize()
+            if finalized is not None:
+                assertion_results, passed, source = finalized
+                if not passed:
+                    finalize_note = (
+                        f"（第 {source + 1} 次运行的结果曾全部通过验收，执行体收尾时把那份代码原样"
+                        "复跑了一遍，复跑没能通过——下面是复跑的结果与代码）"
+                    )
         if passed and outcome.ok:
             break
         if not outcome.ok:
@@ -445,7 +557,7 @@ def run_sandbox_task(
             break
         if tracker.exhausted or tracker.runs >= task.max_runs:
             break  # R2 运行预算已尽（§5.4）：收束为 failed 报告
-        feedback = _feedback_from(assertion_results, tracker.last_code)
+        feedback = _feedback_from(assertion_results, tracker.last_code, finalize_note)
 
     if on_final_answer is not None and final_answer is not None:
         on_final_answer(dict(final_answer))

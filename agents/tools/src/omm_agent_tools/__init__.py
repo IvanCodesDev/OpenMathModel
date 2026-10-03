@@ -56,6 +56,7 @@ from .runners import (
 )
 from .sandbox_tools import (
     ENV_PROBE_PACKAGE_CANDIDATES,
+    WS_READ_DEFAULT_CHARS,
     WS_READ_MAX_CHARS,
     env_fingerprint,
     language_fingerprint,
@@ -97,6 +98,7 @@ __all__ = [
     "ToolNotAllowed",
     "ToolRegistry",
     "ToolSpec",
+    "WS_READ_DEFAULT_CHARS",
     "WS_READ_MAX_CHARS",
     "WorkspaceArtifactStore",
     "WorkspaceViolation",

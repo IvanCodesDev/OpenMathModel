@@ -58,7 +58,11 @@ _TOOL_USAGE: dict[str, tuple[str, str]] = {
         '{"code": "<脚本源码>", "language": "<任务卡给定的语言，如 python / r>"}',
     ),
     "ws_write": ("写工作区 UTF-8 文本文件。", '{"path": "相对路径", "text": "内容"}'),
-    "ws_read": ("读工作区文本文件。", '{"path": "相对路径"}'),
+    "ws_read": (
+        "读工作区文本文件，一次一段（约 3000 字符）；结果 truncated 为 true 时"
+        "带返回的 next_offset 作 offset 再读下一段。",
+        '{"path": "相对路径", "offset": 可选整数（从第几个字符起读，缺省 0）}',
+    ),
     "ws_list": ("列出工作区文件。", '{"prefix": "可选路径前缀"}'),
     "env_probe": ("探测运行环境（可用包清单）。", "{}"),
     "knowledge_search": (

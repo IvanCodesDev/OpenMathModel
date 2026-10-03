@@ -29,6 +29,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -47,6 +48,7 @@ __all__ = [
     "KIND_BY_SUFFIX",
     "LANGUAGE_ALIASES",
     "LANGUAGE_SPECS",
+    "MPLCONFIGDIR",
     "PLANNED_LANGUAGES",
     "PYTHON_SPEC",
     "R_SPEC",
@@ -198,9 +200,15 @@ _PYTHON_PROBE_SCRIPT = (
     "print('OMM_PROBE_JSON: ' + json.dumps(info))\n"
 )
 
+#: matplotlib 的配置 / 字体缓存目录：清洗环境里没有 HOME / USERPROFILE，不给它就每次运行
+#: 新建临时目录、重建字体缓存，还往 stderr 打一段警告（混进失败诊断）。放工作区外的固定
+#: 目录跨运行复用——放工作区里会被产物扫描当成本次产物。
+MPLCONFIGDIR = os.path.join(tempfile.gettempdir(), "omm-sandbox-matplotlib")
+
 #: ``-I`` 隐含 ``-E``：沙盒解释器本身不读任何 ``PYTHON*`` 环境变量，UTF-8 模式只能由命令行
 #: ``-X utf8`` 给（缺了它 Windows 上 stdout 与不写 encoding 的 open() 都按 GBK）。
-#: ``env_overrides`` 的两个变量仍要留：脚本自己再起的、不带 ``-I`` 的 Python 子进程靠它们走 UTF-8。
+#: ``env_overrides`` 的两个 PYTHON* 变量仍要留：脚本自己再起的、不带 ``-I`` 的 Python 子进程
+#: 靠它们走 UTF-8。
 PYTHON_SPEC = LanguageSpec(
     language="python",
     label="python",
@@ -210,7 +218,11 @@ PYTHON_SPEC = LanguageSpec(
     version_argv=("--version",),
     probe_argv=("{executable}", "-I", "-X", "utf8", "-c", _PYTHON_PROBE_SCRIPT),
     package_candidates=_PYTHON_PACKAGE_CANDIDATES,
-    env_overrides=(("PYTHONIOENCODING", "utf-8"), ("PYTHONUTF8", "1")),
+    env_overrides=(
+        ("PYTHONIOENCODING", "utf-8"),
+        ("PYTHONUTF8", "1"),
+        ("MPLCONFIGDIR", MPLCONFIGDIR),
+    ),
 )
 
 #: R 侧包候选：jsonlite 是指标协议的首选序列化器（基础 R 不带，缺席时模板退回

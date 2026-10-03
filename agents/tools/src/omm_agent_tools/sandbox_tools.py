@@ -31,6 +31,7 @@ from .workspace import TaskWorkspace, WorkspaceViolation
 
 __all__ = [
     "ENV_PROBE_PACKAGE_CANDIDATES",
+    "WS_READ_DEFAULT_CHARS",
     "WS_READ_MAX_CHARS",
     "env_fingerprint",
     "language_fingerprint",
@@ -40,9 +41,12 @@ __all__ = [
 #: env_probe 输出里逐语言块的形状（探测事实 + 该语言的三键指纹），供接线刀直接取用。
 ProbeSource = Callable[[], Mapping[str, LanguageProbe]]
 
-#: ws_read 单次返回的正文上限：观察进内环 prompt，必须有界（§5.2 观察截断
-#: 在 loops 层还有一道；这里是工具层的第一道闸）。
+#: ws_read 单次返回的正文硬上限（``limit`` 封顶；节点侧整读按它翻页）。
 WS_READ_MAX_CHARS = 20_000
+
+#: ws_read 缺省一段的长度：模型经内环读文件，loops 层把整段观察 JSON 截在 4000 字符，
+#: 一段连同元数据与 JSON 转义要装得下，``next_offset`` 才对得上模型真看到的位置。
+WS_READ_DEFAULT_CHARS = 3_000
 
 #: env_probe 探测的第三方包候选：与实验提示词的 import 白名单同一来源口径
 #: （engine_glue 侧按 sys.executable 探测注入提示词；此处探测的是工具进程
@@ -131,9 +135,32 @@ def _ws_list(workspace: TaskWorkspace):
     return handler
 
 
+def _non_negative_int(arguments: Mapping[str, Any], key: str, default: int) -> int:
+    raw = arguments.get(key)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} 必须是非负整数，收到 {raw!r}") from None
+    if value < 0:
+        raise ValueError(f"{key} 必须是非负整数，收到 {raw!r}")
+    return value
+
+
 def _ws_read(workspace: TaskWorkspace):
+    """按字符分段读：``offset`` 起读至多 ``limit`` 字符；没读完给 ``next_offset`` 续读。
+
+    元数据排在 ``text`` 之前：观察被下游截断时丢的也只是正文尾巴，续读位置不丢。
+    """
+
     def handler(arguments: dict[str, Any], _ctx: ToolCallContext) -> ToolResult:
         path = str(arguments.get("path") or "")
+        try:
+            offset = _non_negative_int(arguments, "offset", 0)
+            limit = _non_negative_int(arguments, "limit", WS_READ_DEFAULT_CHARS)
+        except ValueError as exc:
+            return ToolResult(status="failed", error=str(exc))
         try:
             text = workspace.read_text(path)
         except WorkspaceViolation as exc:
@@ -145,14 +172,23 @@ def _ws_read(workspace: TaskWorkspace):
                 status="failed",
                 error=f"文件不是 UTF-8 文本（二进制产物请经 artifact 通道读取）：{path}",
             )
-        truncated = len(text) > WS_READ_MAX_CHARS
+        if offset > len(text):
+            return ToolResult(
+                status="failed",
+                error=f"offset={offset} 超出文件长度（{path} 共 {len(text)} 字符）",
+            )
+        chunk = text[offset : offset + min(max(limit, 1), WS_READ_MAX_CHARS)]
+        end = offset + len(chunk)
+        truncated = end < len(text)
         return ToolResult(
             status="succeeded",
             output={
                 "path": path,
-                "text": text[:WS_READ_MAX_CHARS],
-                "truncated": truncated,
+                "offset": offset,
                 "total_chars": len(text),
+                "truncated": truncated,
+                "next_offset": end if truncated else None,
+                "text": chunk,
             },
         )
 
@@ -204,7 +240,11 @@ def sandbox_workspace_specs(
         ),
         ToolSpec(
             name="ws_read",
-            description=f"读取工作区内的 UTF-8 文本文件（单次至多 {WS_READ_MAX_CHARS} 字符，超长截断并标注）；只读。",
+            description=(
+                f"读取工作区内的 UTF-8 文本文件：从 offset（缺省 0）起读 limit 字符（缺省 "
+                f"{WS_READ_DEFAULT_CHARS}、至多 {WS_READ_MAX_CHARS}）；"
+                "没读完时 truncated=true 并给 next_offset，带它续读；只读。"
+            ),
             handler=_ws_read(workspace),
             risk="low",
             timeout_s=15.0,
