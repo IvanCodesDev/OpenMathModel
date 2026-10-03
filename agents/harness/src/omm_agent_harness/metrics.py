@@ -877,7 +877,7 @@ def _llm_section(
 
 
 def _code_section(events: Sequence[_Ev]) -> dict[str, Any]:
-    """代码版本面：控制面每开一个步骤，都在 STEP_STARTED 上盖执行进程的代码身份
+    """代码版本面：控制面 API 与 worker 执行面每开一个步骤，都在 STEP_STARTED 上盖执行进程的代码身份
     （``executor``：进程启动时源码的内容指纹 ``code``、``git.head`` / ``git.dirty_count``、
     ``pid`` 与 ``started_at``；启动之后磁盘源码又改过时带 ``stale``）。``versions`` 按指纹
     归并、按首次出现排序，列每版跑了几步、哪些阶段；``stale_steps`` = 跑在旧进程上的步骤——

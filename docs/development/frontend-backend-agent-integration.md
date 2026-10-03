@@ -1212,6 +1212,18 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过：`pytest backend/api/tests` 575 passed / 2 skipped；`npm run check --workspace @openmathmodel/web`；`node --test` 236/236；`npm run build --workspace @openmathmodel/web`；strict mypy 与 v3.65 基线逐条相同、ruff 对照改动前零新增；临时 worktree 检出改动前代码、只放入新模块跑新测试，接线用例红、7 条纯函数用例绿。浏览器验收（开发服务 + 模拟链测试运行，截图在 `audit-current/h4-approval-feedback-20261003/`，不入库）：首轮 G1 没有块 → 从建模方案重做（附言「换成更简单的贪心调度方案，先保证能跑通」）→ 重做轮 G1 在运行页与建模方案页的主操作上方出现块（来由 + 你的要求 + 作废的上一轮产出）→ 点「确认 Agent 当前方案并继续」后块随门摘掉，运行跑完后终态页也没有残留。未验：G2 / G3 / G4 重做轮的块在真实运行里的样子（模拟链批准 G1 后直接跑完、不再开门，这三道门的摘要口径只由单测覆盖）；模拟链的建模方案没有候选方案，验收里看不到「上一轮推荐的方案」一行；测试账号没配模型接口，运行页对话走不到「确认重做」那步，验收里的重做直接调用对话控制面同一个 `engine_glue.redo_run`。
 
+### 2026-10-03 worker 执行面也记下执行代码的身份；代码身份实现移入 harness
+
+同日那次只在 API 进程里给步骤盖代码身份：`backend/worker` 执行面（H6 原型，事件写进 `runs/agent-runtime/events/<run_id>/events.jsonl`，同一份日志也是重放来源）推进的步骤没有章，E6 看板只能记成未盖章；而代码身份模块放在 `omm_api` 里，worker 不依赖 `omm_api`，用不上。用户拍板：通用实现搬进 API 与 worker 都依赖的 harness，API 留适配层；评测会话不盖，只盖真实 worker。
+
+- **通用实现（新增 `agents/harness/src/omm_agent_harness/code_identity.py`）**：快照、指纹、git 身份、旧代码检查、盖章与同一组改动只告警一次的逻辑原样搬入；快照哪些包（`packages`）、提示词模板目录（`prompts_dir`）、告警里怎么称呼进程（`process_label`）与怎么重启（`restart_hint`）改成 `ProcessCode` 的参数。harness 不导入 skills，提示词目录由各执行面传入。
+- **API（`backend/api/omm_api/code_identity.py`）**：收成适配层——API 的包清单（omm_api / omm_contracts / omm_agent_core / harness / skills / tools）、「API 进程 / npm run dev 先 Ctrl+C」的告警口径与进程级单例。`engine_glue` 盖章、`main.py` 启动时拍照与 `/api/system` 摘要的调用方式不变，告警原文不变。
+- **worker（新增 `backend/worker/src/omm_worker/code_identity.py`）**：worker 的包清单（omm_worker / core / harness / skills / tools，执行面不导入控制面）与「worker 进程」告警口径；`StampingSink` 包住 `JsonlEventStore`，STEP_STARTED 落盘前复制一份加 `executor`（`code` / `git` / `pid` / `started_at`，启动后源码又改过时加 `stale`），引擎内存里的事件不动，盖章出错只缺章、照常落盘。`WorkerRuntime` 构造时先拍快照（记推进任何步骤之前的代码），新参数 `stamp_executor` 缺省开；评测的 `build_runtime` 用固定时钟与顺序 id、事件日志要逐字节可复现，传 `False` 关掉。reducer 处理 STEP_STARTED 只读 state / step_id / attempt，带章的日志重放结果不变。
+- **E6 看板**：口径不变；worker 的事件交给 `aggregate_run` 即可读出代码版本，评测会话照旧记未盖章。
+- **测试**：harness 新增 `test_code_identity.py` 12 项（原 backend/api 的 10 条通用用例随实现搬来，另补按包名解析源码根、不给 roots 时按包快照 2 条）；backend/api 的代码身份用例收为 5 条接线用例（旧进程用例改用适配层并断言 API 口径的告警）；worker 新增 6 项（日志里步骤开始事件带章、其余事件不带、E6 读回；旧进程盖 `stale` 且按 worker 口径只告警一次；盖章出错不拦步骤；关掉开关不盖；带章日志重放与实时快照一致；真进程快照只覆盖执行面的包）；评测 +1（评测会话不带章）。
+
+当日执行并通过：`pytest backend/api/tests` 565 passed / 2 skipped（10 条通用用例移到 harness）；agents 五包 + worker 869 passed / 1 skipped；strict mypy 与改动前基线逐条相同（多检查两个新模块）、ruff 对照改动前零新增；临时 worktree 检出改动前代码、只放入两个新模块跑 worker 新测试，3 条接线用例红、3 条守卫用例绿；再放入运行时接线但不关评测，评测「不带章」用例红、金轨迹照绿，补上评测开关后全绿。未验：长驻 worker 进程的实机走查（worker 仍是原型，没有生产调用方）。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

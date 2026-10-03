@@ -8,6 +8,10 @@ Execution-plane rules implemented here (PROJECT_STRUCTURE / system-overview):
 - dangling RUNNING steps from a dead executor are failed ("healed") before
   new work starts, so retries are explicit attempts, not silent overwrites;
 - events/artifacts are persisted before state moves (engine + JSONL sink);
+- every STEP_STARTED written to the log carries the executing process's code
+  identity (``code_identity``: fingerprint, git, pid, and ``stale`` once the
+  sources on disk changed after start), the same stamp the API puts on its
+  domain events; eval sessions opt out so their logs stay reproducible;
 - the job loop is budgeted — a runaway registry cannot spin forever;
 - tools are minimally granted: the per-run invoker allowlists the two sandbox
   run tools (``python_run`` and the multi-language ``code_run``), the workspace
@@ -66,6 +70,7 @@ from omm_agent_tools import (
     table_profile_spec,
 )
 
+from .code_identity import StampingSink, process_code
 from .event_store import JsonlEventStore
 from .lease import RunLeaseStore
 from .queue import FileJobQueue, JobEnvelope
@@ -117,6 +122,7 @@ class WorkerRuntime:
         ids: IdGenerator | None = None,
         knowledge: Any = None,
         graph_mode: str | None = None,
+        stamp_executor: bool = True,
     ) -> None:
         self.config = config
         self.events = JsonlEventStore(config.events_dir)
@@ -143,6 +149,11 @@ class WorkerRuntime:
             logger.warning("%s", warning)
         #: 主 / 影子调度器的分歧记录（进程内累计；每条也进 warning 日志）。
         self.shadow_divergences: list[SchedulingDivergence] = []
+        # STEP_STARTED 落盘时盖执行代码身份（code_identity）；评测会话关掉——固定时钟与顺序 id
+        # 的事件日志要逐字节可复现。快照记的是进程启动时的代码，所以在推进任何步骤之前先拍。
+        self._stamp_executor = stamp_executor
+        if stamp_executor:
+            process_code().snapshot()
 
     @property
     def knowledge(self) -> Any:
@@ -264,7 +275,7 @@ class WorkerRuntime:
             )
 
         engine = TaskRunEngine(
-            sink=self.events,
+            sink=StampingSink(self.events) if self._stamp_executor else self.events,
             clock=self._clock,
             ids=self._ids,
             nodes=self._nodes,

@@ -258,6 +258,7 @@ def build_runtime(root: Path, require_confirmation: bool = True) -> WorkerRuntim
         worker_id="worker_eval",
         clock=FixedClock(),
         ids=SequentialIdGenerator(),
+        stamp_executor=False,
     )
 
 
