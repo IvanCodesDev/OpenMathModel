@@ -28,6 +28,7 @@ __all__ = [
     "parse_figure_notes",
     "render_figure_material",
     "renderable_data_files",
+    "stage_figure_names",
 ]
 
 #: 与 omm_agent_tools.python_runner._KIND_BY_SUFFIX 的图件 kind 一致（契约 artifact.kind enum）。
@@ -149,6 +150,20 @@ def figure_inventory(
         if isinstance(item, Mapping) and str(item.get("name") or "").strip():
             add(item, PAPER_FIGURE_STAGE)
     return inventory
+
+
+def stage_figure_names(stage: str, outputs: Mapping[str, Any]) -> set[str]:
+    """某阶段产出里登记的图件文件名：数据准备 / 实验 / 检验按各自的清单；论文阶段的清单是全文编号表
+    （含上游各阶段的图），只认它自己补画的那些。"""
+    if stage == PAPER_FIGURE_STAGE:
+        items = [
+            item for item in _stage_figures(outputs, ("figures",))
+            if str(item.get("source_stage") or "") == PAPER_FIGURE_STAGE
+        ]
+    else:
+        path = dict(_FIGURE_SOURCES).get(stage)
+        items = _stage_figures(outputs, path) if path else []
+    return {_basename(str(item.get("name"))) for item in items}
 
 
 def renderable_data_files(files: Iterable[str]) -> list[str]:

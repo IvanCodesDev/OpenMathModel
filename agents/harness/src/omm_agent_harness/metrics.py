@@ -543,32 +543,65 @@ def _count_subagent(rows: dict[str, dict[str, int]], payload: Mapping[str, Any])
     return True
 
 
+def _tool_failed(payload: Mapping[str, Any]) -> bool:
+    return str(payload.get("status") or "succeeded") != "succeeded"
+
+
+def _interrupted_tool_calls(events: Sequence[_Ev]) -> set[int]:
+    """被进程重启打断的工具调用（``events`` 里的下标）：没成功、且所在步骤随后以
+    ``INTERRUPTED_STEP_ERROR`` 收尾——这一趟尝试被重启作废、引擎按 attempt+1 重跑，其中的失败
+    不是这趟尝试的结论。不只看最后一次调用：Ctrl+C / 热重载常先杀掉沙盒子进程、执行器稍后才死，
+    中间模型还会再跑一两次。代价是作废尝试里模型真写错的那次也一并单列——事件里分不出两者，
+    不按 stderr 文案去猜。"""
+    failed_calls: dict[str, list[int]] = {}
+    interrupted: set[int] = set()
+    for index, event in enumerate(events):
+        step_id = str(event.payload.get("step_id") or "")
+        if not step_id:
+            continue
+        if event.type == EventType.TOOL_CALLED.value and _tool_failed(event.payload):
+            failed_calls.setdefault(step_id, []).append(index)
+        elif (
+            event.type == EventType.STEP_FAILED.value
+            and event.payload.get("error") == INTERRUPTED_STEP_ERROR
+        ):
+            interrupted.update(failed_calls.pop(step_id, ()))
+    return interrupted
+
+
 def _tool_section(
     events: Sequence[_Ev], process_events: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
-    """工具面：TOOL_CALLED 按工具名计调用 / 失败（``status != succeeded``）/ 累计时长；
-    ``sandbox`` 只看 ``SANDBOX_TOOLS``（python_run / code_run）——即「沙盒运行次数」；
+    """工具面：TOOL_CALLED 按工具名计调用 / 失败（``status != succeeded``）/ 被打断 / 累计时长；
+    被打断（:func:`_interrupted_tool_calls`）= 进程重启连带杀掉的那一次，单列、不计失败——
+    它说明的是部署环境，不是生成的代码；``sandbox`` 只看 ``SANDBOX_TOOLS``（python_run /
+    code_run）——即「沙盒运行次数」；
     ``knowledge`` 只看知识库两工具（检索**命中率**要读结果正文，事件里没有，不编）；
     ``subagents`` 来自子代理审计（``tool = subagent:<kind>``，spawn / result 两相），
     生产在 run.log 过程事件里、worker 装配可能落在 TOOL_CALLED——两路都认，调用方传其一。"""
+    interrupted_calls = _interrupted_tool_calls(events)
     by_tool: dict[str, dict[str, int]] = {}
     subagents: dict[str, dict[str, int]] = {}
-    for event in events:
+    for index, event in enumerate(events):
         if event.type != EventType.TOOL_CALLED.value:
             continue
         payload = event.payload
         if _count_subagent(subagents, payload):
             continue
         tool = str(payload.get("tool") or "unknown")
-        row = by_tool.setdefault(tool, {"calls": 0, "failed": 0, "duration_ms": 0})
+        row = by_tool.setdefault(
+            tool, {"calls": 0, "failed": 0, "interrupted": 0, "duration_ms": 0}
+        )
         row["calls"] += 1
-        if str(payload.get("status") or "succeeded") != "succeeded":
+        if index in interrupted_calls:
+            row["interrupted"] += 1
+        elif _tool_failed(payload):
             row["failed"] += 1
         row["duration_ms"] += _int(payload.get("duration_ms"))
     for payload in process_events:
         _count_subagent(subagents, payload)
     sandbox = {
-        tool: {"calls": row["calls"], "failed": row["failed"]}
+        tool: {"calls": row["calls"], "failed": row["failed"], "interrupted": row["interrupted"]}
         for tool, row in by_tool.items()
         if tool in SANDBOX_TOOLS
     }
@@ -576,10 +609,12 @@ def _tool_section(
     return {
         "calls": sum(row["calls"] for row in by_tool.values()),
         "failed": sum(row["failed"] for row in by_tool.values()),
+        "interrupted": sum(row["interrupted"] for row in by_tool.values()),
         "by_tool": _sorted_dict(by_tool),
         "sandbox": {
             "runs": sum(row["calls"] for row in sandbox.values()),
             "failed": sum(row["failed"] for row in sandbox.values()),
+            "interrupted": sum(row["interrupted"] for row in sandbox.values()),
             "by_tool": _sorted_dict(sandbox),
         },
         "knowledge": {
@@ -910,11 +945,13 @@ def aggregate_batch(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     计数直接求和；比率**用求和后的分子分母重算**（不是各运行比率的平均，避免小样本运行放大权重）；
     费用与时长只对有值的运行求和 / 求均值，一趟都没有就是 None。``audit_clean_rate`` = 有终稿审计的
-    运行里发现数为 0 的占比（审计违规数目标 0 的批次口径）。"""
+    运行里发现数为 0 的占比（审计违规数目标 0 的批次口径）。``sandbox_failure_rate`` 的分子分母都
+    不含被进程重启打断的运行——它们既没失败也没跑完，算进分母同样会把失败率摊薄。"""
     outcomes = {"completed": 0, "failed": 0, "cancelled": 0, "in_progress": 0}
     totals: dict[str, Any] = {
         "llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-        "cost_usd": None, "sandbox_runs": 0, "sandbox_failed": 0, "steps_failed": 0,
+        "cost_usd": None, "sandbox_runs": 0, "sandbox_failed": 0, "sandbox_interrupted": 0,
+        "steps_failed": 0,
         "redo_total": 0, "auto_redo": 0, "retries": 0, "revisions": 0, "gates_requested": 0,
         "rollbacks": 0, "review_loops": 0, "review_executed": 0, "review_first_round_accept": 0,
         "review_stalemates": 0, "audit_findings_total": 0, "quality_warnings": 0,
@@ -953,6 +990,7 @@ def aggregate_batch(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         sandbox = _mapping(tools.get("sandbox"))
         totals["sandbox_runs"] += _int(sandbox.get("runs"))
         totals["sandbox_failed"] += _int(sandbox.get("failed"))
+        totals["sandbox_interrupted"] += _int(sandbox.get("interrupted"))
         for tool, row in _mapping(tools.get("by_tool")).items():
             calls = _int(_mapping(row).get("calls"))
             tools_by_tool[str(tool)] = tools_by_tool.get(str(tool), 0) + calls
@@ -1000,7 +1038,9 @@ def aggregate_batch(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "recommended_followed_rate": _rate(recommended_followed, recommended_available),
             "violation_rate": _rate(repair_calls, started),
             "repair_success_rate": _rate(max(repair_calls - schema_failures, 0), repair_calls),
-            "sandbox_failure_rate": _rate(totals["sandbox_failed"], totals["sandbox_runs"]),
+            "sandbox_failure_rate": _rate(
+                totals["sandbox_failed"], totals["sandbox_runs"] - totals["sandbox_interrupted"]
+            ),
             "audit_clean_rate": _rate(audits_clean, audits),
         },
         "failures_by_code": _sorted_dict(failures_by_code),
@@ -1187,15 +1227,18 @@ def _md_tools(tools: Mapping[str, Any]) -> list[str]:
     knowledge = _mapping(tools.get("knowledge"))
     lines = [
         _bullet(
-            f"工具调用 {tools.get('calls')}（失败 {tools.get('failed')}）",
-            f"沙盒运行 {sandbox.get('runs')}（失败 {sandbox.get('failed')}）",
+            f"工具调用 {tools.get('calls')}（失败 {tools.get('failed')}"
+            f"，被进程重启打断 {tools.get('interrupted')}）",
+            f"沙盒运行 {sandbox.get('runs')}（失败 {sandbox.get('failed')}"
+            f"，被进程重启打断 {sandbox.get('interrupted')}）",
             f"知识库检索 {knowledge.get('calls')}",
         )
     ]
     by_tool = _mapping(tools.get("by_tool"))
     if by_tool:
-        headers = ["工具", "调用", "失败", "累计时长 ms"]
-        lines += ["", *_table(headers, _rows(by_tool, "calls", "failed", "duration_ms"))]
+        headers = ["工具", "调用", "失败", "被打断", "累计时长 ms"]
+        rows = _rows(by_tool, "calls", "failed", "interrupted", "duration_ms")
+        lines += ["", *_table(headers, rows)]
     subagents = _mapping(tools.get("subagents"))
     if subagents:
         headers = ["子代理", "派发", "done", "failed", "exhausted", "timeout"]

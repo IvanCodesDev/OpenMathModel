@@ -28,7 +28,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from omm_agent_core import KnowledgePort, NodeContext, NodeResult, NodeServices, TaskState
+from omm_agent_core import (
+    WORK_SEQUENCE,
+    KnowledgePort,
+    NodeContext,
+    NodeResult,
+    NodeServices,
+    TaskState,
+)
 from omm_agent_core.errors import AgentError, ErrorCode
 from omm_agent_core.models import ToolResult
 from omm_agent_harness import (
@@ -55,6 +62,7 @@ from .figures import (
     mark_inserted,
     render_figure_material,
     renderable_data_files,
+    stage_figure_names,
 )
 from .frozen_numbers import (
     AUDIT_SAMPLE_LIMIT,
@@ -2286,7 +2294,7 @@ class DataPreparationNode(LlmSkillNode):
                 "rerun_report": rerun_material(rerun),
                 "cleaning_summary": str(final_answer.get("summary") or "无"),
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
-                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+                "workspace_files": workspace_files_material(ctx, files),
                 "previous_round": previous_round,
             }
 
@@ -2867,6 +2875,80 @@ def superseded_stage(
     return previous, feedback
 
 
+#: 各沙盒阶段会往工作区写的路径前缀：静态检查口径的允许写前缀；实验阶段另有节点落的固定脚本。
+_STAGE_WRITE_PREFIXES: dict[TaskState, tuple[str, ...]] = {
+    TaskState.DATA_PREPARATION: CLEANING_STATIC_PROFILE.allowed_write_prefixes,
+    TaskState.EXPERIMENTING: (
+        *EXPERIMENT_STATIC_PROFILE.allowed_write_prefixes, *EXPERIMENT_SCRIPT_PATHS.values()
+    ),
+    TaskState.VALIDATING: VALIDATION_STATIC_PROFILE.allowed_write_prefixes,
+    TaskState.PAPER_WRITING: PAPER_FIGURE_STATIC_PROFILE.allowed_write_prefixes,
+}
+_STAGE_SHORT_NAMES = {
+    TaskState.DATA_PREPARATION: "数据准备",
+    TaskState.EXPERIMENTING: "实验",
+    TaskState.VALIDATING: "检验",
+    TaskState.PAPER_WRITING: "论文",
+}
+
+
+def leftover_files(ctx: NodeContext, files: Sequence[str]) -> dict[str, tuple[TaskState, ...]]:
+    """回退重做时工作区里上一轮下游阶段留下的文件 → 可能写它的下游阶段；只认能确定归属的。
+
+    下游阶段本轮还没重跑，它们上一轮写的文件必然是旧的。归属两条：① 只有下游阶段才写的路径前缀
+    （与本阶段及上游的写前缀互不覆盖，如重做实验时的 ``validation/``）；② 作废的下游阶段产出里登记
+    过的图件——``figures/`` 各阶段共用，只能按文件名认。本阶段自己上一轮写的文件本轮可能已经重写，
+    分不出新旧，不标。
+    """
+    feedback = ctx.iteration_feedback
+    if not feedback or ctx.state not in WORK_SEQUENCE:
+        return {}
+    position = WORK_SEQUENCE.index(ctx.state)
+    claimed = [
+        prefix
+        for stage in WORK_SEQUENCE[: position + 1]
+        for prefix in _STAGE_WRITE_PREFIXES.get(stage, ())
+    ]
+    superseded = feedback.get("superseded") or {}
+    owners: dict[str, list[TaskState]] = {}
+    for stage in WORK_SEQUENCE[position + 1 :]:
+        prefixes = [
+            prefix
+            for prefix in _STAGE_WRITE_PREFIXES.get(stage, ())
+            if not any(prefix.startswith(other) or other.startswith(prefix) for other in claimed)
+        ]
+        outputs = superseded.get(stage.value)
+        figures = (
+            stage_figure_names(stage.value, outputs) if isinstance(outputs, Mapping) else set()
+        )
+        for path in files:
+            if any(path.startswith(prefix) for prefix in prefixes) or (
+                path.startswith("figures/") and path.rsplit("/", 1)[-1] in figures
+            ):
+                owners.setdefault(path, []).append(stage)
+    return {path: tuple(stages) for path, stages in owners.items()}
+
+
+def workspace_files_material(ctx: NodeContext, files: Sequence[str]) -> str:
+    """审稿任务卡的「工作区文件」段：回退重做时把上一轮下游阶段的遗留文件逐个打标。"""
+    leftovers = leftover_files(ctx, files)
+    lines: list[str] = []
+    for path in files:
+        stages = leftovers.get(path)
+        tag = (
+            f"【上一轮遗留｜{' / '.join(_STAGE_SHORT_NAMES[stage] for stage in stages)}阶段】"
+            if stages
+            else ""
+        )
+        lines.append(f"- {path}{tag}")
+    if leftovers:
+        lines.append(
+            "标【上一轮遗留】的文件是回退前那一轮下游阶段的产出：本轮还没重跑到那一阶段，它们不是本轮"
+            "代码写的——不得当作本轮的产物或证据，也不得据此判「旧值未重算」。"
+        )
+    return "\n".join(lines) or "无"
+
+
 def reviewer_redo_note(
     feedback: Mapping[str, Any],
     *,
@@ -3383,7 +3465,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 "rerun_report": rerun_material(rerun),
                 "approach_summary": str(final_answer.get("approach_summary") or "无"),
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
-                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+                "workspace_files": workspace_files_material(ctx, files),
                 "previous_round": previous_round,
             }
 
@@ -4147,7 +4229,7 @@ class ValidationNode(LlmSkillNode):
                 "checks_summary": str(final_answer.get("summary") or "无"),
                 "risk_points": risk_points or "无",
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
-                "workspace_files": "\n".join(f"- {path}" for path in files) or "无",
+                "workspace_files": workspace_files_material(ctx, files),
                 "previous_round": previous_round,
             }
 
