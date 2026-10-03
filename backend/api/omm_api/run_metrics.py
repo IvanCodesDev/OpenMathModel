@@ -84,7 +84,7 @@ def catalog_prices(
 
 
 def run_metrics_report(session: Session, run: TaskRunRow) -> dict[str, Any]:
-    """一条运行的 E6 报告：harness ``aggregate_run`` 的 12 节字典（结构见该函数）。
+    """一条运行的 E6 报告：harness ``aggregate_run`` 的分节字典（结构见该函数）。
 
     运行 id / 项目 id 以运行行补齐：早于领域事件日志的老运行一条事件都没有，聚合器读不到。
     """

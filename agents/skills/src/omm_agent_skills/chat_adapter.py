@@ -14,6 +14,9 @@
 - 信封走样的宽容：参数与 ``tool`` 平级的扁平信封、``arguments`` 写成 JSON 字符串，都还原成
   参数；一条回复写了几个信封只执行第一个，下一条工具结果末尾告知其余没执行；工具报缺参时，
   在那条工具结果末尾附该工具的正确信封写法。
+- 模型原生工具调用标记漏进正文（DeepSeek 的 ``<｜｜DSML｜｜ invoke …>`` 块）：没有 JSON 信封
+  时按第一个 invoke 还原成信封执行，下一条工具结果末尾提示改回信封写法；与 JSON 信封同时
+  出现时只执行信封，并告知原生标记里的调用没有执行。
 
 协议指令文本（:func:`tool_protocol_note`）由本模块单点持有，节点装配任务卡
 时拼进 task_brief——模型看到的协议说明与适配器的解析规则永远同源。
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -108,6 +112,20 @@ _MAX_SCAN_STARTS = 8
 #: omm_agent_tools 注册表缺参报错的原文（``ToolRegistry.validate_args``）。
 _MISSING_ARGUMENTS_MARK = "missing required arguments"
 
+#: DeepSeek 原生工具调用标记（真库所见：``<`` + 两个全角竖线 + ``DSML`` + 两个全角竖线 + 空格 +
+#: 标签名）；竖线个数与空白放宽。``parameter`` 的 ``string="false"`` 表示取值是 JSON。
+_DSML_BAR = "[\uff5c|]+"
+_DSML_OPEN = rf"<\s*{_DSML_BAR}\s*DSML\s*{_DSML_BAR}\s*"
+_DSML_CLOSE = rf"<\s*/\s*{_DSML_BAR}\s*DSML\s*{_DSML_BAR}\s*"
+_DSML_INVOKE = re.compile(
+    rf'{_DSML_OPEN}invoke\s+name\s*=\s*"([^"]*)"\s*>(.*?){_DSML_CLOSE}invoke\s*>', re.DOTALL
+)
+_DSML_PARAMETER = re.compile(
+    rf'{_DSML_OPEN}parameter\s+name\s*=\s*"([^"]*)"(?:\s+string\s*=\s*"(true|false)")?\s*>'
+    rf"(.*?){_DSML_CLOSE}parameter\s*>",
+    re.DOTALL,
+)
+
 
 def _is_envelope(value: Any) -> bool:
     return (
@@ -174,6 +192,31 @@ def _envelope_arguments(envelope: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in envelope.items() if key not in ("tool", "arguments")}
 
 
+def _dsml_value(raw: str, string_flag: str) -> Any:
+    if string_flag != "false":
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _native_envelopes(text: str) -> list[dict[str, Any]]:
+    """正文里漏出的原生（DSML）工具调用 → 信封，按出现顺序；没有就是空列表。"""
+    envelopes: list[dict[str, Any]] = []
+    for name, body in _DSML_INVOKE.findall(text):
+        if not name.strip():
+            continue
+        parameters = {
+            key: _dsml_value(value, string_flag)
+            for key, string_flag, value in _DSML_PARAMETER.findall(body)
+        }
+        # 整个参数对象塞进一个名为 arguments 的 parameter（真库沙盒里的常见写法）
+        arguments: Any = parameters["arguments"] if set(parameters) == {"arguments"} else parameters
+        envelopes.append({"tool": name.strip(), "arguments": arguments})
+    return envelopes
+
+
 def _missing_arguments_hint(tool: str) -> str:
     usage = _TOOL_USAGE.get(tool)
     example = (
@@ -191,6 +234,22 @@ def _extra_envelopes_hint(tool: str) -> str:
     return (
         f"[协议提示] 上一条回复写了不止一个工具信封，只执行了第一个（{tool}），后面的都没有执行；"
         "每条回复只写一个信封，等这条结果回来再发下一个。"
+    )
+
+
+def _native_markup_hint(tool: str, skipped: Sequence[str]) -> str:
+    rest = f"，后面的 {'、'.join(skipped)} 没有执行" if skipped else ""
+    return (
+        "[协议提示] 上一条回复用的是模型原生的工具调用标记（DSML），"
+        f"已当作 JSON 信封执行了第一个（{tool}）{rest}；之后请按工具说明直接写 "
+        '{"tool": "<工具名>", "arguments": {...}}，每条回复只写一个。'
+    )
+
+
+def _native_skipped_hint(tools: Sequence[str]) -> str:
+    return (
+        f"[协议提示] 上一条回复里还有用模型原生标记（DSML）写的工具调用（{'、'.join(tools)}），"
+        "没有执行——只认 JSON 信封；每条回复只写一个信封，等这条结果回来再发下一个。"
     )
 
 
@@ -247,16 +306,34 @@ def text_protocol_chat(llm: ChatTextPort, *, label: str, on_call=None):
                 wire[index]["content"] += "\n\n" + note
         raw = llm.chat_text(wire, label=label)
         parsed = _parse_envelope(raw)
+        native = _native_envelopes(raw)
+        follow_ups: list[str] = []
+        alongside: list[dict[str, Any]] = []
+        if parsed is None and native:
+            parsed = (native[0], False)
+            follow_ups.append(
+                _native_markup_hint(native[0]["tool"], [item["tool"] for item in native[1:]])
+            )
+        else:
+            alongside = native
         if parsed is None:
             return Reply(content=raw, tool_calls=(), usage=Usage(0, 0, 0), model="llm-port")
         envelope, more = parsed
         name = envelope["tool"].strip()
-        state["tool"] = name
+        arguments = _envelope_arguments(envelope)
+        # 原生标记只是把同一个调用又写了一遍的不算「没执行」
+        missed = [
+            item["tool"]
+            for item in alongside
+            if (item["tool"], _envelope_arguments(item)) != (name, arguments)
+        ]
+        if missed:
+            follow_ups.append(_native_skipped_hint(missed))
         if more:
-            state["pending"] = [_extra_envelopes_hint(name)]
-        call = ToolCall(
-            id=f"tp_{next(counter)}", name=name, arguments=_envelope_arguments(envelope)
-        )
+            follow_ups.append(_extra_envelopes_hint(name))
+        state["tool"] = name
+        state["pending"] = follow_ups
+        call = ToolCall(id=f"tp_{next(counter)}", name=name, arguments=arguments)
         return Reply(content=raw, tool_calls=(call,), usage=Usage(0, 0, 0), model="llm-port")
 
     return chat

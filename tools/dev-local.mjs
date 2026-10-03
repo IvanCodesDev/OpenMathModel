@@ -99,6 +99,53 @@ async function apiHealthy() {
   }
 }
 
+async function apiSystem() {
+  try {
+    const response = await fetch(new URL("/api/system", healthUrl), { signal: AbortSignal.timeout(1_500) });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function formatLocalTime(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = value => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+// /api/system 的 code 摘要（backend/api/omm_api/code_identity.py）→「（代码 014c49d（+2 处未提交改动），
+// 启动于 10-03 12:13:50）」；老版本后端没有这一项时返回空串。
+function describeCode(code) {
+  if (!code?.available) return "";
+  const parts = [];
+  if (typeof code.git === "string") {
+    parts.push(`代码 ${code.git}${code.dirty ? `（+${code.dirty} 处未提交改动）` : ""}`);
+  } else if (typeof code.code === "string") {
+    parts.push(`代码指纹 ${code.code}`);
+  }
+  const started = typeof code.started_at === "string" ? formatLocalTime(code.started_at) : "";
+  if (started) parts.push(`启动于 ${started}`);
+  return parts.length ? `（${parts.join("，")}）` : "";
+}
+
+// 复用的 API 不会因为这次启动而重载，它启动之后改过的后端 / 智能体源码一概没加载。照常复用
+// （它可能有在途任务，不替用户停），但要醒目提醒，免得把旧代码的真跑结果算到新代码头上。
+async function reportReusedApi(origin) {
+  const code = (await apiSystem())?.code;
+  console.log(`[dev] 复用已运行的 API：${origin}${describeCode(code)}`);
+  if (code?.available && code.stale) {
+    console.warn(
+      `[dev] 注意：这个 API 进程启动之后有 ${code.stale_files} 个后端 / 智能体源文件改过，它不带热重载，`
+        + `真跑仍按启动时的旧代码执行。要验证新代码，请先停掉它（确认 ${origin} 上的 Python 进程已退出）`
+        + "再重新 npm run dev。",
+    );
+  }
+}
+
 function childExitCode(code, signal) {
   if (typeof code === "number") return code;
   return signal ? 1 : 0;
@@ -268,7 +315,7 @@ async function main() {
   healthUrl = new URL("/api/health", apiUrl);
 
   if (await apiHealthy()) {
-    console.log(`[dev] 复用已运行的 API：${apiOrigin}`);
+    await reportReusedApi(apiOrigin);
   } else {
     const binding = localApiBinding();
     if (!binding) {
@@ -279,7 +326,7 @@ async function main() {
       proxyTarget = apiUrl.origin;
       healthUrl = new URL("/api/health", apiUrl);
       if (await apiHealthy()) {
-        console.log(`[dev] 复用已运行的 API：${proxyTarget}`);
+        await reportReusedApi(proxyTarget);
       }
     }
     if (!(await apiHealthy())) {
@@ -310,7 +357,7 @@ async function main() {
         { zeroExitIsError: true },
       );
       await waitForApi(apiChild);
-      console.log(`[dev] API 健康检查通过：${healthUrl}`);
+      console.log(`[dev] API 健康检查通过：${healthUrl}${describeCode((await apiSystem())?.code)}`);
     }
   }
 

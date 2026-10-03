@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.engine import make_url
 
-from . import engine_glue, model_catalog
+from . import code_identity, engine_glue, model_catalog
 from .blobstore import LocalContentStore
 from .chat_turns import ChatTurnHub
 from .config import Settings, get_settings
@@ -45,6 +45,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # 启动即给本进程执行的源码拍快照：之后磁盘源码再改，步骤盖章与 /api/system 才认得出
+        # 「这个进程在跑旧代码」（进程级单例，同一进程里只拍一次）。
+        code_identity.process_code().snapshot()
         # 先探库再建表：连不上时给一行能照着做的提示（本地 pg-dev 实例还会自动拉起），
         # 而不是让 create_all 抛出百行 psycopg 超时 traceback。
         ensure_database_ready(db, resolved)
@@ -169,6 +172,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     # 供设置中心「诊断」使用的运行时信息。只暴露后端方言名等非敏感事实，
     # 不含连接串、路径或凭据；与 /api/health 一样无需登录。
+    # code：本进程启动时的代码指纹 / 提交与「启动后磁盘源码是否又改过」（只给计数），
+    # tools/dev-local.mjs 复用已运行的 API 时据此提醒先重启。
     @app.get("/api/system", tags=["ops"])
     def api_system() -> dict[str, object]:
         return {
@@ -178,6 +183,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             "database": make_url(resolved.database_url).get_backend_name(),
             "runner_enabled": resolved.runner_enabled,
             "time": datetime.now(timezone.utc).isoformat(),
+            "code": code_identity.process_code().summary(),
         }
 
     return app

@@ -507,7 +507,7 @@ API 层 `/actions` 另支持 `cancel`（按状态机校验）；当前 workspace
 npm run dev
 ```
 
-统一入口启动或复用 `127.0.0.1:8000` 的 API；健康检查必须返回成功状态码（2xx）、JSON 且 `status: ok`，随后才启动 Web。登录、账户设置与带 `run_id` 的工作台都需要 API；`npm run dev:web` 只启动 Vite，主要用于静态页面预览或与手工启动的 API 配合。Vite 参数通过 `npm run dev -- --host <HOST> --port <PORT>` 传入。
+统一入口启动或复用 `127.0.0.1:8000` 的 API；健康检查必须返回成功状态码（2xx）、JSON 且 `status: ok`，随后才启动 Web。登录、账户设置与带 `run_id` 的工作台都需要 API；`npm run dev:web` 只启动 Vite，主要用于静态页面预览或与手工启动的 API 配合。Vite 参数通过 `npm run dev -- --host <HOST> --port <PORT>` 传入。这样拉起的 API 不带热重载：改了后端或智能体代码要把 API 整个停掉再启动。复用已运行的 API 时会打印它的代码版本与启动时间（`/api/system` 的 `code`），它启动之后源码又改过就醒目提醒；运行中每一步也会记下执行代码的身份（见 2026-10-03 记录）。
 
 默认 Vite 代理：
 
@@ -1187,6 +1187,19 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 - **测试**：`test_failure_error_codes.py` +2（码优先于文案；判不足的运行步骤与运行分型都是 DATA_DEFECT、看板 `uncoded == 0`）；`test_run_control.py` +6（状态判定只在三条件同时成立时为真；计划与判定提示词；端到端：真题意解析节点 + 打桩模型，判不足 → 对话补题面 → 备注 scope 与前缀 → 自动重试 → 第二次解析的提示词同时带原题面与补充 → 通过，`last_step_error_code` 先 E610、通过后为空；长文补充；问句不动作；普通失败运行补要求照旧不重试）；core `test_errors.py`、skills `test_nodes.py` 在既有用例里加断言。
 
 当日执行并通过：`pytest backend/api/tests` 552 passed / 2 skipped；agents 五包 + worker 844 passed / 1 skipped；strict mypy 与 ruff 对照改动前零新增；临时 worktree 检出改动前代码跑新测试，5 条行为用例全红、守卫用例全绿。未验：真实模型下的补题面判定与重新解析（用例全部打桩）。注意 `npm run dev` 拉起的 API 不带热重载、且会复用 8000 端口上已在运行的 API——要在真实运行里用上这次改动，须把旧 API 进程整个停掉再启动。
+
+### 2026-10-03 模型原生工具调用标记兼容；每一步记下执行代码的身份，旧 API 进程告警
+
+复盘 10-01 以来的三个真跑时查出两件事。①`run_e898…` 里提议人两次 `knowledge_search` 收到空参数，看上去像 10-02 的扁平信封容错没生效；实际是它跑在 10-02 那次修复之前起的 API 进程上——`npm run dev` 拉起的 API 不带热重载，还会复用 8000 端口上已在运行的 API，改了代码不整个重启，真跑就一直用旧代码，而事件日志里没有任何字段能说明一步是哪版代码跑的，只能靠旧代码的行为特征倒推。②09-01 以来 322 条文本协议回复里有 10 条夹带 DeepSeek 原生工具调用标记（`<｜｜DSML｜｜ invoke name=…>` 加 `parameter` 块）：其中 4 条只有原生标记、没有 JSON 信封，适配器把它当终答、解析失败，结构修复提示把本想调工具的模型推去交卷，白烧一轮；另外 6 条「JSON 信封 + 原生标记」里，原生那个调用被静默丢掉，模型不知道它没执行。
+
+- **原生调用兼容（`agents/skills/src/omm_agent_skills/chat_adapter.py`）**：正文里的 DSML `invoke` 块按出现顺序还原成信封（竖线全角 / 半角、个数与空白放宽；`string="false"` 的参数值按 JSON 解析、解不开保留原文；只有一个名为 `arguments` 的参数时它就是整个参数对象；`name` 为空的块跳过）。没有 JSON 信封时执行第一个原生调用，下一条工具结果末尾提示「已当作信封执行了 X、后面的 Y 没有执行，之后请直接写 JSON 信封」；与 JSON 信封同时出现时只执行信封，并点名原生标记里没执行的调用（与已执行信封同工具同参数的不算）。半截标签、终答里提到 DSML 照旧当终答。
+- **执行代码身份（新增 `backend/api/omm_api/code_identity.py`）**：API 进程启动时给它执行的源码拍快照——`omm_api` / `omm_contracts` / `omm_agent_core` / `omm_agent_harness` / `omm_agent_skills` / `omm_agent_tools` 六个包的 `*.py` 与 `agents/prompts/*.prompt.md`（提示词注册表同样是进程内缓存）：逐文件 sha256 汇总成 12 位指纹；git HEAD 与分支直接读 `.git`（loose ref → packed-refs → linked worktree 的 commondir）；相对 HEAD 有改动的源码文件在拍照时跑一次 `git --no-optional-locks status`（不刷新索引、不抢 index.lock），git 不在或报错记「未知」而不是「没改动」。快照约 130 ms、只拍一次。
+- **步骤盖章（`engine_glue._ProjectingSink`）**：STEP_STARTED 领域事件落库时 payload 多一个 `executor`：`code`（启动时指纹）、`git`（`head` / `branch` / `dirty_count` / `dirty` 最多 8 个）、`pid`、`started_at`；进程启动后磁盘源码又改过时加 `stale`（`count` / `files` 最多 8 个）。只进 `run_domain_events`：v1 `step.started` 投影与页面不变；引擎内存里的事件不带它，重放时 reducer 忽略多出的键；盖章出错只缺章、不拦步骤。
+- **旧进程告警**：「改过」先比修改时间与大小，对不上再比内容摘要（切分支再切回、原样保存不算改动），每 5 秒最多查一次。步骤照常执行，盖章记下 `stale`，服务端日志打一块醒目 WARNING（同一组改动只打一次，改动多了再打）说明本进程不热重载、这一步按启动时的旧代码执行、怎么重启。`GET /api/system` 增加 `code`：`available` / `code` / `git` / `dirty`（改动文件数）/ `started_at` / `stale` / `stale_files`——只给计数，不带文件名与路径。`tools/dev-local.mjs` 复用已运行的 API 时打印它的代码版本与启动时间，旧进程就醒目提醒先停掉再启动；自己拉起的 API 在健康检查通过时也打印代码版本。
+- **E6 看板（`agents/harness/src/omm_agent_harness/metrics.py`）**：报告新增 `code` 节——按指纹归并的版本列表（git / 相对 HEAD 改动数 / 步骤数 / 旧进程步骤数 / 阶段，按首次出现排序）、`stale_steps`、`processes`、`unstamped_steps`（本次之前的运行与评测会话没有章，如实计数、不推断版本）；Markdown 加「代码版本」一节；批次 totals 加 `stale_steps` / `unstamped_steps`。端点响应模型 `RunMetricsReport` 的顶层键是固定字段，新键不加进去会被静默丢掉，因此补了 `code`，OpenAPI 基线重新导出。
+- **测试**：`test_chat_adapter.py` +4（真库原文还原、原生调用回提示、信封与原生标记并存、半截标签 / 空 name 照旧当终答）；新增 `test_code_identity.py` 15 项（快照口径、git 身份四种形态与真仓库的改 / 删 / 重命名 / 未跟踪、节流与只告警一次、快照失败不盖章、领域事件盖章而 v1 投影不变、旧进程盖章、`/api/system` 不带路径、E6 端点读回）；`test_e6_metrics.py` +2；`test_run_metrics.py` / `test_metrics_home.py` 顶层键加 `code`。`backend/worker` 的 `test_lease.py` 两个依赖墙钟余量的用例（被抢的租约与抢到的租约共用 50 ms TTL）改为同目录开两个存储——该过期的一方短 TTL、抢 / 续的一方 60 s，负载下失败率 1/100 → 0/100，`lease.py` 未改。
+
+当日执行并通过：`pytest backend/api/tests` 567 passed / 2 skipped；agents 五包 + worker 850 passed / 1 skipped；strict mypy 与 v3.64 基线逐条相同、ruff 对照改动前零新增；`export_openapi.py --check`；临时 worktree 检出改动前代码跑新测试，行为用例全红（原生调用 3 条、代码身份 5 条）、守卫用例全绿。未验：真实模型下原生调用还原后的工具执行（用例用真库原文打桩）；旧进程告警的实机走查。要在真实运行里用上 10-03 的几次改动，仍须把旧 API 进程整个停掉再启动——之后的运行可以在 E6 看板「代码版本」一节直接核对每一步跑的是哪版代码。
 
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 

@@ -126,8 +126,9 @@ class StageOutputs(BaseModel):
 class RunMetricsReport(BaseModel):
     """E6 看板运行级报告：GET /v1/task-runs/{run_id}/metrics（harness ``aggregate_run`` 的输出）。
 
-    顶层 12 键固定；各节内部随聚合器演进（加键不升 version，删键 / 改语义才升），看板页面落地前
-    不把节内形状冻进公开契约，这里按开放对象透传。
+    顶层 13 键固定；各节内部随聚合器演进（加键不升 version，删键 / 改语义才升），看板页面落地前
+    不把节内形状冻进公开契约，这里按开放对象透传。``code``（各步骤执行进程的代码版本）是后加的
+    键，旧客户端忽略即可。
     """
 
     version: int
@@ -142,6 +143,7 @@ class RunMetricsReport(BaseModel):
     audit: dict[str, Any]
     llm: dict[str, Any]
     process: dict[str, Any]
+    code: dict[str, Any]
 
 
 class TaskIntakeAttachment(BaseModel):

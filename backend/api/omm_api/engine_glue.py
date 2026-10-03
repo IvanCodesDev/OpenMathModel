@@ -95,6 +95,7 @@ from omm_contracts import (
     TaskRunStatus,
 )
 
+from . import code_identity
 from .blobstore import ArtifactBlobStore, LocalContentStore
 from .config import Settings, get_settings
 from .errors import ApiError
@@ -1862,18 +1863,37 @@ class _ProjectingSink:
         self._checkpoint = checkpoint
 
     def emit(self, event: CoreEvent) -> None:
+        payload = event.payload
+        if event.event_type is EventType.STEP_STARTED:
+            payload = _stamp_executor(self._run, payload)
         self._session.add(
             DomainEventRow(
                 run_id=event.run_id,
                 seq=event.seq,
                 event_type=event.event_type.value,
-                payload=event.payload,
+                payload=payload,
                 created_at=event.created_at,
             )
         )
         _project(self._session, self._run, event)
         if self._checkpoint:
             self._session.commit()
+
+
+def _stamp_executor(run: TaskRunRow, payload: dict[str, Any]) -> dict[str, Any]:
+    """STEP_STARTED 落库时盖上执行进程的代码身份（``code_identity``）。
+
+    日后要查某一步是哪版代码跑的，看这一章即可，不必再从行为特征反推（10-03 排查 e898 时
+    只能靠「扁平信封被解析成空参数」这类旧代码特征倒推它跑在 v3.60 之前的进程上）。只进
+    领域事件：v1 投影与页面不变；引擎内存里的事件不带它，重放时 reducer 忽略多出的键。
+    盖章失败只缺章，不影响推进。
+    """
+    try:
+        stamp = code_identity.executor_stamp(run_id=run.id, stage=str(payload.get("state") or ""))
+    except Exception:  # 身份缺项不许拦住步骤
+        logger.exception("run %s: 执行代码身份盖章失败", run.id)
+        return payload
+    return {**payload, "executor": stamp} if stamp else payload
 
 
 # ── 适配器：runner / actions / router 的统一入口 ──────────────────────────

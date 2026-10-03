@@ -876,6 +876,52 @@ def _llm_section(
     }
 
 
+def _code_section(events: Sequence[_Ev]) -> dict[str, Any]:
+    """代码版本面：控制面每开一个步骤，都在 STEP_STARTED 上盖执行进程的代码身份
+    （``executor``：进程启动时源码的内容指纹 ``code``、``git.head`` / ``git.dirty_count``、
+    ``pid`` 与 ``started_at``；启动之后磁盘源码又改过时带 ``stale``）。``versions`` 按指纹
+    归并、按首次出现排序，列每版跑了几步、哪些阶段；``stale_steps`` = 跑在旧进程上的步骤——
+    这些步骤的表现不能算到磁盘上最新代码的头上。``processes`` 按（pid, 启动时间）计。
+    没有盖章的步骤（盖章上线之前的运行、评测会话）如实计 ``unstamped_steps``，不推断版本。"""
+    versions: dict[str, dict[str, Any]] = {}
+    processes: set[tuple[str, str]] = set()
+    stamped = unstamped = stale_steps = 0
+    for event in events:
+        if event.type != EventType.STEP_STARTED.value:
+            continue
+        executor = _mapping(event.payload.get("executor"))
+        code = executor.get("code")
+        if not isinstance(code, str) or not code:
+            unstamped += 1
+            continue
+        stamped += 1
+        git = _mapping(executor.get("git"))
+        row = versions.setdefault(code, {
+            "code": code,
+            "git": git.get("head") if isinstance(git.get("head"), str) else None,
+            "dirty": _int(git["dirty_count"]) if "dirty_count" in git else None,
+            "steps": 0,
+            "stale_steps": 0,
+            "states": [],
+        })
+        row["steps"] += 1
+        state = str(event.payload.get("state") or "UNKNOWN")
+        if state not in row["states"]:
+            row["states"].append(state)
+        if _mapping(executor.get("stale")):
+            row["stale_steps"] += 1
+            stale_steps += 1
+        processes.add((str(executor.get("pid")), str(executor.get("started_at"))))
+    return {
+        "available": stamped > 0,
+        "stamped_steps": stamped,
+        "unstamped_steps": unstamped,
+        "stale_steps": stale_steps,
+        "processes": len(processes),
+        "versions": list(versions.values()),
+    }
+
+
 def _process_section(process_events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """过程事件面：按 ``kind`` 计数，另点名三类运维事实——预算硬限触发（``budget_limit``）、
     自动回退轮次用尽（``auto_redo_exhausted``）、执行进程重启（``executor_restarted``）。"""
@@ -905,8 +951,8 @@ def aggregate_run(
     payload（可省）；``prices``：型号单价（USD / 1M tokens），只用于费用。
 
     顶层键：``version`` / ``run`` / ``stages`` / ``gates`` / ``iterations`` / ``failures`` /
-    ``tools`` / ``reviews`` / ``robustness`` / ``audit`` / ``llm`` / ``process``——各节含义见
-    对应 ``_*_section``。
+    ``tools`` / ``reviews`` / ``robustness`` / ``audit`` / ``llm`` / ``process`` / ``code``——
+    各节含义见对应 ``_*_section``。
     """
     normalized = _normalize(events)
     process = [item for item in process_events if isinstance(item, Mapping)]
@@ -928,6 +974,7 @@ def aggregate_run(
         "audit": _audit_section(steps),
         "llm": _llm_section(process, schema_failures, prices),
         "process": _process_section(process),
+        "code": _code_section(normalized),
     }
 
 
@@ -955,6 +1002,7 @@ def aggregate_batch(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "redo_total": 0, "auto_redo": 0, "retries": 0, "revisions": 0, "gates_requested": 0,
         "rollbacks": 0, "review_loops": 0, "review_executed": 0, "review_first_round_accept": 0,
         "review_stalemates": 0, "audit_findings_total": 0, "quality_warnings": 0,
+        "stale_steps": 0, "unstamped_steps": 0,
         "duration_s": None,
     }
     recommended_followed = recommended_available = 0
@@ -1021,6 +1069,9 @@ def aggregate_batch(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         totals["audit_findings_total"] += _int(audit.get("findings_total"))
         for row in _mapping(report.get("stages")).values():
             totals["quality_warnings"] += _int(_mapping(row).get("quality_warnings"))
+        code_versions = _mapping(report.get("code"))
+        totals["stale_steps"] += _int(code_versions.get("stale_steps"))
+        totals["unstamped_steps"] += _int(code_versions.get("unstamped_steps"))
     totals["cost_usd"] = round(sum(costs), 6) if costs else None
     totals["duration_s"] = round(sum(durations), 3) if durations else None
     runs = len(reports)
@@ -1361,6 +1412,34 @@ def _md_llm(llm: Mapping[str, Any], process: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _md_code(code: Mapping[str, Any]) -> list[str]:
+    if not code.get("available"):
+        return ["（步骤没有代码身份盖章：盖章上线之前的运行或评测会话，不推断版本）"]
+    rows: list[list[Any]] = []
+    for row in _mappings(code.get("versions")):
+        states = "、".join(str(state) for state in _sequence(row.get("states")))
+        rows.append([
+            row.get("code"), row.get("git"), row.get("dirty"), row.get("steps"),
+            row.get("stale_steps"), states,
+        ])
+    lines = [
+        _bullet(
+            f"盖章步骤 {code.get('stamped_steps')}",
+            f"未盖章 {code.get('unstamped_steps')}",
+            f"执行进程 {code.get('processes')}",
+            f"旧进程上的步骤 {code.get('stale_steps')}",
+        ),
+        "",
+        *_table(["代码指纹", "git", "相对 HEAD 改动", "步骤", "旧进程步骤", "阶段"], rows),
+    ]
+    if _int(code.get("stale_steps")):
+        lines += [
+            "",
+            "- 注意：有步骤跑在「启动之后磁盘源码又改过」的旧进程上，这些步骤的表现不代表最新代码",
+        ]
+    return lines
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     """运行级 E6 看板（Markdown）：给 evals 记录与人工验收看的那一页。"""
     run = _mapping(report.get("run"))
@@ -1377,6 +1456,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         ("生成者-评审者", _md_reviews(part("reviews"))),
         ("稳健性与终稿审计", _md_quality(part("robustness"), part("audit"))),
         ("模型调用", _md_llm(part("llm"), part("process"))),
+        ("代码版本", _md_code(part("code"))),
     ]
     lines = [f"# E6 看板 · {run.get('run_id') or '(unknown run)'}", "", *_md_run(run)]
     for title, body in sections:
