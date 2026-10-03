@@ -1201,6 +1201,17 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过：`pytest backend/api/tests` 567 passed / 2 skipped；agents 五包 + worker 850 passed / 1 skipped；strict mypy 与 v3.64 基线逐条相同、ruff 对照改动前零新增；`export_openapi.py --check`；临时 worktree 检出改动前代码跑新测试，行为用例全红（原生调用 3 条、代码身份 5 条）、守卫用例全绿。未验：真实模型下原生调用还原后的工具执行（用例用真库原文打桩）；旧进程告警的实机走查。要在真实运行里用上 10-03 的几次改动，仍须把旧 API 进程整个停掉再启动——之后的运行可以在 E6 看板「代码版本」一节直接核对每一步跑的是哪版代码。
 
+### 2026-10-03 审批卡「上一轮反馈」：回退重做轮的闸门写明这轮为什么重做、上一轮错在哪
+
+回退重做有三种来由：用户在对话里要求从某阶段重做、在闸门上选了重做选项、图按条件边自动回退。reducer 在回退落地前把被作废的上一轮产出打成反馈包 `TaskRunSnapshot.iteration_feedback`（回退原因、谁触发的、第几轮、作废了哪几段），重做的节点与三条审稿环一直在读，拍板的人却看不到：重做轮的 G1 / G2 / G4 审批卡与首轮一模一样，只有 G3 在标题里多一句「较上一轮」。契约里工作台视图 `pending_approval.description` 与审批接口 `ApprovalRequest.description` 两个字段早就定义了，却一直是 null，前端也从未渲染。用户拍板：卡片里加「上一轮反馈」块——后端把摘要写进 `description`，前端在选项上方渲染，并重启开发服务做浏览器验收。
+
+- **摘要口径（新增 `backend/api/omm_api/approval_feedback.py`）**：`feedback_digest(feedback, gate_state)` 把反馈包摘成几行。第一行是来由：从哪一段起回退重做、谁触发的（按你的要求 / 在某阶段的闸门上选了重做 / 图按条件边自动回退）、第几轮；之后每行一条「- 」开头的事实：你的要求或回退原因（自动回退去掉「图 X 条件边自动回退：」前缀，闸门选项 id 不另列）、作废的上一轮产出，再按闸门所在阶段取材——结果验证（G3）取上一轮未过的稳健性检查（检验脚本真跑通才算，口径同 G3 闸门）与实验审稿、检验脚本审稿未解决的阻断意见，论文撰写（G4）取上一轮终稿审计发现（分类计数 + 前 3 处）与质量告警，建模方案（G1）取上一轮推荐的方案与候选数，数据准备（G2）取上一轮的画像与清洗结论。每类只点名前几条，引用原文与回退原因单独封顶。只转述事实、数字原样，不评判本轮好坏；首轮闸门（没有反馈包）和位于回退起点上游的闸门不出。
+- **接线（`engine_glue.py` / `workspace_view.py` / `serialize.py`）**：`_ProjectingSink` 绑定引擎正在推进的快照（`open_engine` 重放后 `sink.follow(snapshot)`），REVIEW_REQUESTED 投影成审批行时把摘要存进 `evidence["feedback"]`——开门那一刻算好，之后读视图不再重放事件。工作台视图与审批接口的 `description` 都由它生成，按契约上限（2000 / 4000 字）在整行处截断。契约、OpenAPI 基线、引擎与 reducer 不动。
+- **前端**：新增纯函数模块 `integration/approval-feedback.ts`（`describeApprovalFeedback`：`description` → 来由 + 逐条事实 + 幂等戳，不碰 DOM）；`modeling-workspace-controller.ts` 新增 `renderApprovalFeedback`，在 `followConversationTail` 之后调用，把块贴在每个主操作按钮上方「选项列表 / G4 证据块」整组之前（按属性认块，不打乱它们按「前一个兄弟」认位置的约定），门解决或首轮闸门即摘掉；`workflow-refresh.css` 只增量追加 `.approval-feedback*`（与 G4 证据块同一套紧凑排版、左侧色条，紧跟主操作时补 12px 上边距）；英文词典加「上一轮反馈」。受保护入口、页面模板与路由零改动。
+- **测试**：新增 `test_approval_feedback.py` 8 项（无包与上游闸门不出；G3 自动回退逐行全文、检验脚本没跑通不列检查；G4 闸门选项回退的审计分类与质量告警、零发现；G1 用户原话 + 推荐方案，同一个反馈包下游的 G3 只给来由与作废范围；G2 画像与清洗；坏数据不抛；长文整行截断；端到端：模拟链首轮 G1 无 `description` → `redo_run` → 重做轮 G1 视图与审批接口同文、过两份契约 schema、审批行存了摘要、被作废的首轮门没有、批准跑完卡片消失）；新增 `approval-feedback.test.mjs` 4 项。
+
+当日执行并通过：`pytest backend/api/tests` 575 passed / 2 skipped；`npm run check --workspace @openmathmodel/web`；`node --test` 236/236；`npm run build --workspace @openmathmodel/web`；strict mypy 与 v3.65 基线逐条相同、ruff 对照改动前零新增；临时 worktree 检出改动前代码、只放入新模块跑新测试，接线用例红、7 条纯函数用例绿。浏览器验收（开发服务 + 模拟链测试运行，截图在 `audit-current/h4-approval-feedback-20261003/`，不入库）：首轮 G1 没有块 → 从建模方案重做（附言「换成更简单的贪心调度方案，先保证能跑通」）→ 重做轮 G1 在运行页与建模方案页的主操作上方出现块（来由 + 你的要求 + 作废的上一轮产出）→ 点「确认 Agent 当前方案并继续」后块随门摘掉，运行跑完后终态页也没有残留。未验：G2 / G3 / G4 重做轮的块在真实运行里的样子（模拟链批准 G1 后直接跑完、不再开门，这三道门的摘要口径只由单测覆盖）；模拟链的建模方案没有候选方案，验收里看不到「上一轮推荐的方案」一行；测试账号没配模型接口，运行页对话走不到「确认重做」那步，验收里的重做直接调用对话控制面同一个 `engine_glue.redo_run`。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

@@ -21,6 +21,7 @@ from omm_contracts import (
 )
 
 from . import orm
+from .approval_feedback import API_DESCRIPTION_CHARS, approval_description
 
 
 def utcnow() -> datetime:
@@ -153,7 +154,7 @@ def approval_to_contract(row: orm.ApprovalRequestRow) -> ApprovalRequest:
         run_id=row.run_id,
         decision_type=row.decision_type,
         title=row.title,
-        description=None,
+        description=approval_description(row.evidence, API_DESCRIPTION_CHARS),
         options=row.options,
         evidence_snapshot_id=None,  # Evidence 体系落地前允许为空（v1 契约注释）
         status=row.status,

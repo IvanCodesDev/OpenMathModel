@@ -1327,6 +1327,8 @@ const PAPER_AND_DELIVERY: Record<string, string> = {
   "来源可核": "source verified",
   "按标题匹配": "matched by title",
   "未验证": "unverified",
+  // 审批卡的「上一轮反馈」（H4）：正文是服务端摘好的中文原文
+  "上一轮反馈": "Feedback from the previous round",
   // G4 定稿闸门卡片的内嵌证据（H5 切片 s30）
   "定稿前的事实核对": "Facts to check before final approval",
   "终稿审计发现": "Final-draft audit found",

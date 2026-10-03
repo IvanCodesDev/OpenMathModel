@@ -4400,6 +4400,27 @@ html[data-reduce-motion="on"] .assistant-block-reveal { animation: none; }
 .approval-evidence-figure.is-viewable:hover img,
 .approval-evidence-figure.is-viewable:focus-visible img { border-color: #9a9a94; }
 .approval-evidence-figure.is-viewable:focus-visible { outline: 2px solid #1f5f8b; outline-offset: 2px; }
+/* 审批卡的「上一轮反馈」（H4）：回退重做轮的闸门在选项上方摆出这轮为什么重做、上一轮错在哪。
+   与 G4 证据块同一套紧凑排版；左侧色条标明这是被作废的上一轮的事实，不是本轮结论 */
+.approval-feedback {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #e4e4e1;
+  border-left: 3px solid #c9a66b;
+  border-radius: 10px;
+  background: #fcfbf8;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #4c4c48;
+}
+.approval-feedback-title { margin: 0 0 4px; font-weight: 650; color: #3a3a36; }
+.approval-feedback-lead { margin: 0; color: #3a3a36; }
+.approval-feedback-items { margin: 4px 0 0; padding-left: 1.2em; }
+.approval-feedback-items li { margin: 2px 0; font-size: 12px; color: #5d5d57; overflow-wrap: anywhere; }
+/* 块不留下边距（后面是选项列表 / 证据块时由它们的上边距隔开）；紧跟主操作时补足同样的 12px，
+   否则阶段页左栏整宽按钮只剩自带的 6px，贴在块下沿 */
+.approval-feedback + .running-live-cta,
+.approval-feedback + .focused-stage-cta { margin-top: 12px; }
 html[data-reduce-motion="on"] .stream-in,
 html[data-reduce-motion="on"] .stream-item.is-waiting .stream-row > i { animation: none; }
 html[data-reduce-motion="on"] .stream-title.title-shine-once {

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from omm_contracts import ModelingWorkspaceView
 
+from .approval_feedback import VIEW_DESCRIPTION_CHARS, approval_description
 from .blobstore import ArtifactBlobStore, has_readable_local_content
 from .orm import (
     AgentEventRow,
@@ -232,7 +233,8 @@ def _approval_projection(row: ApprovalRequestRow | None) -> dict[str, Any] | Non
     return {
         "id": row.id,
         "title": row.title,
-        "description": None,
+        # 回退重做轮里开的门才有：审批卡上的「上一轮反馈」正文（approval_feedback）
+        "description": approval_description(row.evidence, VIEW_DESCRIPTION_CHARS),
         "options": list(row.options or []),
     }
 

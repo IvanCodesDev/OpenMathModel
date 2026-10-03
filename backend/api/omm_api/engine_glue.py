@@ -95,7 +95,7 @@ from omm_contracts import (
     TaskRunStatus,
 )
 
-from . import code_identity
+from . import approval_feedback, code_identity
 from .blobstore import ArtifactBlobStore, LocalContentStore
 from .config import Settings, get_settings
 from .errors import ApiError
@@ -1388,8 +1388,16 @@ def _annotate_redo_options(options: list[dict[str, Any]], budget: Any) -> list[d
     return options
 
 
-def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
-    """把一条领域事件翻译成 v1 行与 v1 事件（agent_events 自己维护 sequence）。"""
+def _project(
+    session: Session,
+    run: TaskRunRow,
+    event: CoreEvent,
+    feedback: dict[str, Any] | None = None,
+) -> None:
+    """把一条领域事件翻译成 v1 行与 v1 事件（agent_events 自己维护 sequence）。
+
+    ``feedback`` 是引擎快照此刻的反馈包（回退重做轮才有），只有闸门投影用得上。
+    """
     kind = event.event_type
     payload = event.payload
     at = _dt(event.created_at)
@@ -1559,6 +1567,10 @@ def _project(session: Session, run: TaskRunRow, event: CoreEvent) -> None:
                 "requested_by_step": str(payload.get("requested_by_step") or ""),
             }
             status_reason = "等待方案确认"
+        # 回退重做轮里开的门：拍板时要看得到这轮为什么重做、上一轮错在哪（审批卡「上一轮反馈」）
+        digest = approval_feedback.feedback_digest(feedback, str(payload.get("resume_state") or ""))
+        if digest is not None:
+            evidence["feedback"] = digest
         approval = ApprovalRequestRow(
             id=new_id("appr"),
             run_id=run.id,
@@ -1861,6 +1873,11 @@ class _ProjectingSink:
         self._session = session
         self._run = run
         self._checkpoint = checkpoint
+        self._snapshot: TaskRunSnapshot | None = None
+
+    def follow(self, snapshot: TaskRunSnapshot) -> None:
+        """绑定引擎正在推进的那份快照：投影闸门时读它此刻的反馈包。"""
+        self._snapshot = snapshot
 
     def emit(self, event: CoreEvent) -> None:
         payload = event.payload
@@ -1875,7 +1892,8 @@ class _ProjectingSink:
                 created_at=event.created_at,
             )
         )
-        _project(self._session, self._run, event)
+        feedback = self._snapshot.iteration_feedback if self._snapshot is not None else None
+        _project(self._session, self._run, event, feedback)
         if self._checkpoint:
             self._session.commit()
 
@@ -1919,7 +1937,7 @@ def _load_core_events(session: Session, run_id: str) -> list[CoreEvent]:
 
 def _build_engine(
     session: Session, run: TaskRunRow, checkpoint: bool = False
-) -> tuple[TaskRunEngine, NodeServices]:
+) -> tuple[TaskRunEngine, NodeServices, _ProjectingSink]:
     llm_port, node_overrides, extras = _llm_wiring(session, run, checkpoint=checkpoint)
     services = NodeServices(
         clock=_ApiClock(),
@@ -1929,8 +1947,9 @@ def _build_engine(
         extras=extras,
     )
     scheduler, shadow = schedulers_for_mode(_graph_mode())
+    sink = _ProjectingSink(session, run, checkpoint=checkpoint)
     engine = TaskRunEngine(
-        sink=_ProjectingSink(session, run, checkpoint=checkpoint),
+        sink=sink,
         clock=_ApiClock(),
         ids=_ApiIds(),
         nodes={**SIM_NODES, **node_overrides},
@@ -1939,7 +1958,7 @@ def _build_engine(
         shadow=shadow,
         on_divergence=_divergence_logger(run.id),
     )
-    return engine, services
+    return engine, services, sink
 
 
 #: 附件数据下发：单运行至多 5 个 CSV、单文件 ≤10MB（画像判读用，超限不下发）。
@@ -2072,9 +2091,10 @@ def _build_tool_invoker(
 def open_engine(
     session: Session, run: TaskRunRow, checkpoint: bool = False
 ) -> tuple[TaskRunEngine, TaskRunSnapshot]:
-    engine, services = _build_engine(session, run, checkpoint=checkpoint)
+    engine, services, sink = _build_engine(session, run, checkpoint=checkpoint)
     events = _load_core_events(session, run.id)
     snapshot = replay_events(run.id, run.project_id, events)
+    sink.follow(snapshot)
     if services.llm is not None:
         # 工具事件要挂在当前快照的事件序列上，因此在快照重放之后绑定。
         invoker = _build_tool_invoker(
@@ -2094,7 +2114,7 @@ def create_run_events(session: Session, run: TaskRunRow, goal: str, auto_start: 
     PostgreSQL 会以外键违规拒绝先插入的事件行（SQLite 默认不查外键，掩盖此序）。
     """
     session.flush()
-    engine, _ = _build_engine(session, run)
+    engine, _, _ = _build_engine(session, run)
     engine.create_run(
         project_id=run.project_id,
         inputs={"goal": goal, "params": run.params or {}, "auto_start": auto_start},

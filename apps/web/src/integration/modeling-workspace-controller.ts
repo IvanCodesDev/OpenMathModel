@@ -4,6 +4,7 @@ import { invalidateMe } from "../auth/api";
 import { currentLocale, t } from "../i18n/locale";
 import { configureConversation, hydrateConversation } from "./agent-chat";
 import { redirectToLogin } from "./auth-guard";
+import { describeApprovalFeedback, type ApprovalFeedback } from "./approval-feedback";
 import {
   applyChosenOption,
   REJECT_OPTION_ID,
@@ -1751,6 +1752,75 @@ function renderApprovalOptions(
   });
 }
 
+const APPROVAL_FEEDBACK_ATTR = "data-approval-feedback";
+
+function fillApprovalFeedback(block: HTMLElement, feedback: ApprovalFeedback): void {
+  const title = document.createElement("p");
+  title.className = "approval-feedback-title";
+  title.textContent = t("上一轮反馈");
+  const children: HTMLElement[] = [title];
+  if (feedback.lead) {
+    const lead = document.createElement("p");
+    lead.className = "approval-feedback-lead";
+    lead.textContent = feedback.lead;
+    children.push(lead);
+  }
+  if (feedback.items.length) {
+    const list = document.createElement("ul");
+    list.className = "approval-feedback-items";
+    feedback.items.forEach(text => {
+      const item = document.createElement("li");
+      item.textContent = text;
+      list.append(item);
+    });
+    children.push(list);
+  }
+  block.replaceChildren(...children);
+  block.className = "approval-feedback";
+  block.setAttribute(APPROVAL_FEEDBACK_ATTR, feedback.approvalId);
+  block.dataset.approvalFeedbackStamp = feedback.stamp;
+  block.setAttribute("role", "note");
+  block.setAttribute("aria-label", t("上一轮反馈"));
+}
+
+/**
+ * 审批卡的「上一轮反馈」（H4）：回退重做轮里开出的闸门，在选项列表（与 G4 证据块）上方摆出服务端
+ * 摘好的反馈包——这轮为什么重做、第几轮、上一轮错在哪。首轮闸门 description 为空，不出现；门一解决
+ * 就摘掉。
+ *
+ * 选项列表与 G4 证据块各自按「前一个兄弟」认自己的位置，这块只能贴在它们整组的上方；
+ * followConversationTail 只搬选项列表与按钮，所以在它之后调用，每次渲染都重新贴回这组上方，
+ * 搬走后留在原处的旧块随之摘掉。
+ */
+function renderApprovalFeedback(root: HTMLElement, view: ModelingWorkspaceView, hidden: boolean): void {
+  const feedback = describeApprovalFeedback(view.pending_approval);
+  const placed = new Set<HTMLElement>();
+  if (feedback) {
+    root.querySelectorAll<HTMLButtonElement>("[data-agent-cta]").forEach(cta => {
+      let anchor: HTMLElement = cta;
+      let previous = anchor.previousElementSibling;
+      while (
+        previous instanceof HTMLElement
+        && (previous.dataset.approvalOptions !== undefined || previous.hasAttribute("data-approval-evidence"))
+      ) {
+        anchor = previous;
+        previous = anchor.previousElementSibling;
+      }
+      const existing = previous instanceof HTMLElement && previous.hasAttribute(APPROVAL_FEEDBACK_ATTR)
+        ? previous
+        : null;
+      const block = existing ?? document.createElement("div");
+      if (block.dataset.approvalFeedbackStamp !== feedback.stamp) fillApprovalFeedback(block, feedback);
+      block.hidden = hidden;
+      if (!existing) anchor.insertAdjacentElement("beforebegin", block);
+      placed.add(block);
+    });
+  }
+  root.querySelectorAll<HTMLElement>(`[${APPROVAL_FEEDBACK_ATTR}]`).forEach(block => {
+    if (!placed.has(block)) block.remove();
+  });
+}
+
 function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspaceView): void {
   const planning = isPlanningPhase(root, view);
 
@@ -1850,6 +1920,7 @@ function renderAgent(root: HTMLElement, screen: ScreenId, view: ModelingWorkspac
   // 主操作跟着运行事件所在的块走（followConversationTail）：选项列表刚由
   // renderApprovalOptions 摆在按钮上方，一起搬。
   followConversationTail(root);
+  renderApprovalFeedback(root, view, ctaHidden);
 }
 
 function formatBytes(value: number | null): string {
