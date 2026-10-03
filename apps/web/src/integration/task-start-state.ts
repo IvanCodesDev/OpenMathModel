@@ -36,7 +36,14 @@ export interface TaskDraft {
   attachments: TaskAttachmentDraft[];
   project_id?: string;
   run_request_token?: string;
+  /** 接待判定给出的任务题面（ADR-0024：确认提议时是提议记下的那份）；失败重试时沿用。 */
+  task_goal?: string;
+  /** 接待判定给出的首页对话摘录，随任务进问题分析节点；失败重试时沿用。 */
+  conversation_context?: string;
 }
+
+/** 首页对话摘录在草稿里的上限（与服务端 CONTEXT_EXCERPT_MAX_CHARS 一致）。 */
+export const MAX_CONVERSATION_CONTEXT = 3000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -108,6 +115,8 @@ export function parseTaskDraft(raw: string | null): TaskDraft | null {
 
   const projectId = boundedString(payload.project_id, 64);
   const runRequestToken = boundedString(payload.run_request_token, 64);
+  const taskGoal = boundedString(payload.task_goal, MAX_GOAL_LENGTH).trim();
+  const conversationContext = boundedString(payload.conversation_context, MAX_CONVERSATION_CONTEXT).trim();
   return {
     version: 1,
     description: boundedString(payload.description, MAX_GOAL_LENGTH + 1),
@@ -116,6 +125,8 @@ export function parseTaskDraft(raw: string | null): TaskDraft | null {
     attachments,
     ...(PROJECT_ID_PATTERN.test(projectId) ? { project_id: projectId } : {}),
     ...(TOKEN_PATTERN.test(runRequestToken) ? { run_request_token: runRequestToken } : {}),
+    ...(taskGoal ? { task_goal: taskGoal } : {}),
+    ...(conversationContext ? { conversation_context: conversationContext } : {}),
   };
 }
 

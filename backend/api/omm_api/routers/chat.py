@@ -30,6 +30,7 @@ from ..chat_turns import ChatTurnHub, sse_line, terminal_event_for
 from ..db import get_db
 from ..deps import AuthContext, get_auth_context
 from ..errors import ApiError
+from ..intake import HOME_CHAT_SYSTEM_PROMPT, home_prompt_block
 from ..llm import (
     ChatOutcome,
     LlmConfig,
@@ -51,6 +52,7 @@ from ..run_control import (
     plan_control_step,
 )
 from ..schemas import (
+    ChatIntakeModel,
     ChatRequest,
     ChatTurnFeedbackRequest,
     ChatTurnStartRequest,
@@ -153,6 +155,21 @@ def refresh_model_catalog(request: Request, ctx: AuthContext = Depends(get_auth_
     return catalog.view()
 
 
+def _system_prompt(intake: Optional[ChatIntakeModel]) -> str:
+    """任务页用通用对话提示词；首页对话轮（带接待结论）换成首页提示词 +【接待判定】块。"""
+    if intake is None:
+        return CHAT_SYSTEM_PROMPT
+    block = home_prompt_block(
+        intake.route,
+        kind=intake.kind,
+        speech_act=intake.speech_act,
+        domain=intake.domain,
+        missing=intake.missing,
+        task_goal=intake.task_goal,
+    )
+    return f"{HOME_CHAT_SYSTEM_PROMPT}\n\n{block}"
+
+
 def _latest_user_text(body: ChatRequest) -> str:
     for message in reversed(body.messages):
         if message.role == "user":
@@ -181,7 +198,13 @@ class PreparedCall:
 UsageHook = Callable[[str, ChatOutcome, Optional[int]], None]
 
 
-def _prepare_call(body: ChatRequest, ctx: AuthContext, db: Session) -> PreparedCall:
+def _prepare_call(
+    body: ChatRequest,
+    ctx: AuthContext,
+    db: Session,
+    *,
+    intake: Optional[ChatIntakeModel] = None,
+) -> PreparedCall:
     config = parse_llm_config(ctx.user.llm_config)
     if not config.endpoints:
         raise ApiError(
@@ -191,7 +214,7 @@ def _prepare_call(body: ChatRequest, ctx: AuthContext, db: Session) -> PreparedC
         )
     # 预算硬限制：达标后只留本地/免费接口；全是付费接口时直接 429（用量监控）。
     gated = enforce_budget(db, ctx.user, config)
-    messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}] + [
+    messages = [{"role": "system", "content": _system_prompt(intake)}] + [
         {"role": m.role, "content": m.content} for m in body.messages
     ]
     # 视觉直通图片（ADR-0010）：挂到最后一条 user 消息，各协议格式在 llm.py 转换。
@@ -316,7 +339,7 @@ def chat(
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
-    prepared = _prepare_call(body, ctx, db)
+    prepared = _prepare_call(body, ctx, db, intake=body.intake)
     record_outcome, record_stream_done = _usage_hooks(request, ctx.user.id)
     chain, route_meta = _resolve_chain(prepared, record_outcome)
 
@@ -395,7 +418,9 @@ def start_chat_turn(
     hub = _hub(request)
     if hub.has_running(ctx.user.id, body.scope_id):
         raise ApiError(409, "CHAT_TURN_IN_PROGRESS", "上一轮回复还在生成中，请等它结束或先暂停")
-    prepared = _prepare_call(body, ctx, db)
+    # 接待结论只属于首页对话（ADR-0024）：任务页有自己的运行状态块
+    intake = None if body.scope_id.startswith("run_") else body.intake
+    prepared = _prepare_call(body, ctx, db, intake=intake)
     record_outcome, record_stream_done = _usage_hooks(request, ctx.user.id)
 
     # 对话即控制面（ADR-0018 / ADR-0020）：任务归属的追问分两步经过运行控制——回复之前
@@ -424,6 +449,9 @@ def start_chat_turn(
     plan_slot: dict[str, ControlPlan] = {}
 
     def produce() -> Iterator[dict[str, Any]]:
+        if intake is not None:
+            # 首个 meta 事件带接待结论 → 落 meta.intake：刷新 / 重进后前端据此恢复待确认的提议
+            yield {"type": "meta", "intake": intake.model_dump()}
         if control is not None:
             plan = plan_control_step(
                 control["session_factory"],

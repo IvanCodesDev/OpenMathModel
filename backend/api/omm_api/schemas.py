@@ -301,6 +301,21 @@ class ChatRouteStateModel(BaseModel):
     turns: int = Field(default=0, ge=0, le=1000)
 
 
+class ChatIntakeModel(BaseModel):
+    """首页对话轮的接待结论（ADR-0024）：服务端据此注入【接待判定】块，托管轮随轮落 meta.intake。
+
+    route=propose 时 task_goal 是待确认的题面：首页刷新 / 从侧栏重进后，前端从最后一轮的
+    meta.intake 恢复这份提议，下一句「开始」才有所指。任务页（run_…）的轮忽略本字段。
+    """
+
+    route: Literal["propose", "clarify", "reply"]
+    kind: Literal["chat", "knowledge", "file_analysis", "modeling_task"] = "chat"
+    speech_act: str = Field(default="", max_length=20)
+    domain: str = Field(default="", max_length=40)
+    missing: list[Literal["problem", "objective", "data"]] = Field(default_factory=list, max_length=3)
+    task_goal: str = Field(default="", max_length=4000)
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessageModel] = Field(min_length=1, max_length=100)
     # None = 跟随设置中心「流式输出」开关
@@ -319,6 +334,8 @@ class ChatRequest(BaseModel):
     # 直通给视觉模型的图片（仅当前消息生效，历史轮不重发）：前端只在生效
     # 模型判定为视觉时携带，并同时钉住该接口绕过 Auto 难度路由。
     images: list[ChatImageModel] = Field(default_factory=list, max_length=CHAT_IMAGE_MAX_COUNT)
+    # 首页对话轮的接待结论（ADR-0024）：换用首页系统提示词并注入【接待判定】块。
+    intake: Optional[ChatIntakeModel] = None
 
 
 #: 托管对话轮的归属：任务页 run_…，首页对话 chat_…（契约 Id 格式）。

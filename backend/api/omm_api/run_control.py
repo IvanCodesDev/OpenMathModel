@@ -123,11 +123,40 @@ _REVISION_VERBS = (
 #: 「可以解释一下方案吗」里的「可以」不是放行。
 _BARE_APPROVE_MAX_CHARS = 12
 #: 问句标记：只有问句、没有命令词时按普通对话处理（模型带着状态块能答）。
+#: 「怎么 / 多少 / 什么」是 2026-10-02 复现补上的：「这个模型的精度多少」「怎么还没好」此前
+#: 不算问句，会被记成补充要求注入后续节点。
 _INQUIRY_MARKERS = (
     "为什么", "为啥", "怎么回事", "什么原因", "原因是", "是什么", "什么意思", "怎么办",
     "如何", "能不能", "可不可以", "行不行", "吗", "呢", "?", "？", "解释", "说明一下",
-    "介绍", "总结一下", "分析一下", "看看", "讲讲", "告诉我",
+    "介绍", "总结一下", "分析一下", "看看", "讲讲", "告诉我", "怎么", "多少", "什么",
+    "哪个", "哪些", "哪里", "多久", "是否", "有没有",
 )
+
+#: 不触发动作的一句话属于哪一类（ADR-0024）：只有 supplement 记为运行备注、注入后续节点。
+UTTERANCE_KINDS = ("supplement", "question", "feedback", "chat", "new_task")
+_UTTERANCE_ALIASES = {
+    "requirement": "supplement", "note": "supplement", "补充": "supplement", "补充要求": "supplement",
+    "要求": "supplement", "ask": "question", "inquiry": "question", "提问": "question", "询问": "question",
+    "反馈": "feedback", "情绪": "feedback", "complaint": "feedback", "praise": "feedback",
+    "闲聊": "chat", "寒暄": "chat", "greeting": "chat", "thanks": "chat", "致谢": "chat",
+    "new task": "new_task", "new-task": "new_task", "newtask": "new_task", "新任务": "new_task", "新题": "new_task",
+}
+#: 判定缺席时的本地兜底词表：寒暄致谢、情绪反馈短句不进备注；运行页贴来的新题单列。
+_SOCIAL_PHRASES = (
+    "谢谢", "多谢", "感谢", "辛苦了", "辛苦", "厉害", "不错", "很好", "好的", "收到", "明白", "了解",
+    "知道了", "嗯", "哦", "哈哈", "棒", "赞", "牛", "加油", "ok", "okay", "thanks", "你好", "您好",
+)
+_FEEDBACK_PHRASES = (
+    "太慢", "好慢", "真慢", "慢死", "还没好", "还没完", "还要多久", "等了好久", "等太久", "卡住了",
+    "卡了", "什么情况", "急死", "离谱", "无语",
+)
+_NEW_TASK_MARKERS = (
+    "另外一道题", "另一道题", "另一个题", "新的题", "新题", "换一道题", "再做一道", "另外一个任务",
+    "新任务", "另一题", "下一道题",
+)
+#: 寒暄 / 情绪短句的长度上限：更长的话即便带「谢谢」也多半夹着要求（「谢谢，另外目标改成…」）
+_SOCIAL_MAX_CHARS = 12
+_SOCIAL_PARTICLES = "啊呀呢吧哦嘛啦了~～!！。.,，、…"
 #: 命令词前的否定：「不要重试」「先别跑」不是命令。
 _NEGATIONS = ("不要", "不用", "先不", "暂不", "无需", "不必", "急着", "别", "不", "勿", "莫")
 _CONFIRM_WORDS = (
@@ -187,6 +216,8 @@ class RunControlContext:
     revision_rounds: int = 0
     #: 上一轮对话留下、尚待确认的提案（{"kind": "cancel", ...}）。
     pending_proposal: Optional[dict[str, Any]] = None
+    #: 本任务的题面：长文本分类时用来分辨「补充材料」还是「另一道题」。
+    goal: str = ""
 
     @property
     def stage_label(self) -> str:
@@ -266,6 +297,7 @@ def load_context(
         node=run.current_node or "",
         failure_message=run.failure_message or "",
         revision_rounds=revision_rounds(session, run.id),
+        goal=run.goal or "",
     )
     if run.status == TaskRunStatus.WAITING_APPROVAL.value:
         approval = session.execute(
@@ -318,6 +350,8 @@ class ControlDecision:
     stage: Optional[str] = None
     #: "rule"（本地规则）/ "judge"（弱模型）/ "proposal"（回应上一轮提案）/ "none"。
     source: str = "none"
+    #: 不触发动作时这句话的类别（UTTERANCE_KINDS 之一）；"" = 判定没给，由本地兜底分类。
+    utterance: str = ""
 
     @property
     def actionable(self) -> bool:
@@ -354,6 +388,47 @@ def _has_word(normalized: str, words: tuple[str, ...]) -> bool:
 def is_inquiry(text: str) -> bool:
     normalized = _normalize(text)
     return any(marker in normalized for marker in _INQUIRY_MARKERS)
+
+
+def _only_social(normalized: str) -> bool:
+    remaining = normalized.strip(_SOCIAL_PARTICLES)
+    phrases = sorted(_SOCIAL_PHRASES, key=len, reverse=True)
+    while remaining:
+        for phrase in phrases:
+            if remaining.startswith(phrase):
+                remaining = remaining[len(phrase) :].lstrip(_SOCIAL_PARTICLES)
+                break
+        else:
+            return False
+    return True
+
+
+def classify_utterance(text: str) -> str:
+    """判定缺席时不触发动作的一句话的本地兜底分类（ADR-0024）。
+
+    寒暄致谢、情绪反馈短句、问句、运行页贴来的新题都不是给后续阶段的要求；其余维持旧行为
+    按补充要求处理——判定缺席时宁可多记一条，也别把用户真正的要求吞掉。
+    """
+    normalized = _normalize(text)
+    if not normalized:
+        return "chat"
+    if any(marker in normalized for marker in _NEW_TASK_MARKERS):
+        return "new_task"
+    short = len(normalized) <= _SOCIAL_MAX_CHARS
+    if short and any(phrase in normalized for phrase in _FEEDBACK_PHRASES):
+        return "feedback"
+    if is_inquiry(text):
+        return "question"
+    if short and _only_social(normalized):
+        return "chat"
+    return "supplement"
+
+
+def _normalize_utterance(raw: object) -> str:
+    value = str(raw or "").strip().strip("\"'").lower()
+    if value in UTTERANCE_KINDS:
+        return value
+    return _UTTERANCE_ALIASES.get(value, "")
 
 
 def _label_chunks(label: str) -> set[str]:
@@ -589,10 +664,16 @@ def _judge_prompt(
     lines = [
         "你是数学建模工作台的运行控制判定器。用户在任务页聊天框里发了一句话，"
         "请结合运行状态与最近对话，判断这句话是否是在**要求系统执行**下面某个动作。",
-        "只输出一行 JSON：{\"action\": \"<动作或 none>\", \"option_id\": \"\", \"stage\": \"\", \"reason\": \"\"}。",
+        "只输出一行 JSON：{\"action\": \"<动作或 none>\", \"option_id\": \"\", \"stage\": \"\", "
+        "\"utterance\": \"\", \"reason\": \"\"}。",
         "规则：询问原因 / 解释 / 讨论结果 / 表达情绪 / 提供背景信息一律 none；用户要求系统去做、去改、"
         "去重来（不一定用固定词，可以是任何说法，也可以承接上文——「就按你说的那个改」）才返回动作；"
         "动作必须在下面列出的允许范围内；拿不准一律 none（误执行的代价远大于漏判）。",
+        "utterance：action 为 none 时这句话属于哪一类——supplement（对本任务的具体要求或修改意见，需要后续"
+        "阶段照做：「目标函数改成加权成本」「论文用英文写」）/ question（在提问：「这个模型的精度多少」"
+        "「为什么失败」）/ feedback（情绪或评价：「太慢了吧」「辛苦了」「效果不错」）/ chat（寒暄、致谢、"
+        "与本任务无关的闲聊）/ new_task（另一道与本任务无关的新题目或新任务）。只有 supplement 会被记下来"
+        "交给后续阶段的智能体执行，提问、情绪、寒暄和新题都不是要求。",
         f"运行状态：{_STATUS_LABELS.get(context.status, context.status)}（{context.status}），当前阶段：{context.stage_label}。",
         f"阶段顺序与进度：{_stage_progress(context)}",
     ]
@@ -639,14 +720,17 @@ def _parse_judge_reply(text: str, context: RunControlContext, user_text: str = "
             continue
         if not isinstance(data, dict):
             continue
+        utterance = _normalize_utterance(data.get("utterance"))
+        # 不执行时仍带上判定给的类别：备注只记 supplement（ADR-0024）
+        declined = ControlDecision(kind="none", source="judge", utterance=utterance)
         kind = str(data.get("action") or "none").strip().strip("\"'").lower()
         if kind not in context.legal:
-            return NONE_DECISION
+            return declined
         option_id = str(data.get("option_id") or "").strip() or None
         stage = str(data.get("stage") or "").strip().upper() or None
         if kind == "approve":
             if option_id is None or context.option(option_id) is None or option_id == REJECT_OPTION_ID:
-                return NONE_DECISION
+                return declined
         elif kind == "reject":
             option_id = REJECT_OPTION_ID
         elif kind == "revision":
@@ -656,10 +740,10 @@ def _parse_judge_reply(text: str, context: RunControlContext, user_text: str = "
             if stage not in STAGES and user_text:
                 stage = explicit_stage(user_text) or suggest_revision_stage(user_text)
             if stage is None or stage not in STAGES:
-                return NONE_DECISION
+                return declined
             if context.stage_index >= 0 and STAGES.index(stage) > context.stage_index:
                 # 要改的是还没开始的阶段：没有东西可重做，这句话作为备注等那一阶段执行时读
-                return NONE_DECISION
+                return ControlDecision(kind="none", source="judge", utterance="supplement")
             return _redo_or_retry(stage, context, source="judge")
         else:
             option_id, stage = None, None
@@ -698,6 +782,65 @@ def judge_intent(
         except Exception:  # noqa: BLE001 - 记账绝不影响对话
             logger.exception("run control judge usage callback failed")
     return _parse_judge_reply(outcome.text, context, user_text=text)
+
+
+def _utterance_prompt(text: str, context: RunControlContext) -> str:
+    head = text[:JUDGE_TEXT_LIMIT]
+    lines = [
+        "你是数学建模工作台的运行控制判定器。用户在任务页聊天框里粘贴了一大段文字，这一步只判断它属于"
+        "哪一类，不触发任何动作。",
+        "只输出一行 JSON：{\"utterance\": \"supplement / new_task / question / chat 之一\"}。",
+        "supplement：给本任务的补充材料、数据说明或修改要求；new_task：一道与本任务无关的新题目或新任务；"
+        "question：在提问；chat：其它。",
+    ]
+    if context.goal.strip():
+        lines.append(f"本任务的题目：{' '.join(context.goal.split())[:300]}")
+    lines.append(f"用户粘贴的文字（共 {len(text)} 字，以下是开头）：{head}")
+    return "\n".join(lines)
+
+
+def judge_utterance(
+    config: LlmConfig,
+    text: str,
+    context: RunControlContext,
+    on_usage: Optional[Callable[[ChatOutcome], None]] = None,
+) -> str:
+    """超长文本（粘贴的材料）只分类、不触发动作：是本任务的补充，还是另一道新题。
+
+    ``decide`` 对超长文本不送动作判定（粘贴的材料不是命令）；但「贴一道新题」与「贴一段数据
+    说明」都超长，只有分类才能把前者挡在备注之外。任何异常返回 ""，由本地兜底分类。
+    """
+    candidates = [
+        endpoint for endpoint in config.endpoints if config.allow_proxy or not is_third_party_host(endpoint.host)
+    ]
+    if not candidates:
+        return ""
+    judge = min(candidates, key=endpoint_strength)
+    try:
+        outcome = complete_once(
+            judge,
+            [{"role": "user", "content": _utterance_prompt(text, context)}],
+            max_tokens=JUDGE_MAX_TOKENS,
+            read_timeout=JUDGE_READ_TIMEOUT_S,
+        )
+    except Exception as error:  # noqa: BLE001 - 分类挂了只是回落本地兜底
+        logger.warning("run control utterance judge failed on %s: %s", judge.name, error)
+        return ""
+    if on_usage is not None:
+        try:
+            on_usage(outcome)
+        except Exception:  # noqa: BLE001 - 记账绝不影响对话
+            logger.exception("run control utterance judge usage callback failed")
+    for match in _JSON_OBJECT.finditer(outcome.text):
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            utterance = _normalize_utterance(data.get("utterance"))
+            if utterance:
+                return utterance
+    return ""
 
 
 #: 判定器签名：(用户这句话, 运行上下文, 最近对话, 本地词表候选) → 决定。
@@ -1063,11 +1206,14 @@ def prompt_block(
     actions: list[dict[str, Any]],
     *,
     note_planned: bool = False,
+    utterance: str = "",
 ) -> str:
     """注入系统提示词的状态块：模型据此知道运行在哪、本轮安排了什么、用户还能说什么。
 
     ``note_planned``：这句话不触发动作、但会在回复结束后记为运行备注——告诉模型这件事，
     它才不会把「记录」说成「已修改」，也不会对用户的补充要求装作没听见。
+    ``utterance="new_task"``：用户在任务页贴了另一道题——不记为本任务的补充要求，回复里要
+    告诉用户回首页新建（ADR-0024）。
     """
     lines = ["【当前运行状态】"]
     status_label = _STATUS_LABELS.get(context.status, context.status)
@@ -1108,6 +1254,11 @@ def prompt_block(
         lines.append(
             "- 无动作；这句话会在你回复结束后记为运行备注，供后续阶段的智能体执行时读到"
             "（只是记录下来，不是已经修改）"
+        )
+    elif utterance == "new_task":
+        lines.append(
+            "- 无动作；这句话像是另一道与本任务无关的新题，不会记为本任务的补充要求——在回复里用一句话"
+            "告诉用户：要做这道新题，请回首页新建任务（当前任务不受影响）；不要把它当成对本任务的修改"
         )
     else:
         lines.append("- 无（这一轮是普通问答，运行状态没有变化）")
@@ -1252,19 +1403,23 @@ def plan_control_step(
         decision = decide(text, context, judge=judge, history=history)
         planned = describe_plan(decision, text, context)
         settled = [action for action in planned if action.get("status") in ("proposed", "dismissed")]
-        note_planned = (
-            not decision.actionable
-            and run.status not in _TERMINAL
-            and bool(text.strip())
-            and not is_inquiry(text)
-        )
+        # 不触发动作的话先分类，只有 supplement 才落备注（ADR-0024）：「谢谢」「太慢了吧」
+        # 「这个模型的精度多少」、在任务页贴来的新题都不是给后续阶段的要求
+        utterance = ""
+        if not decision.actionable and run.status not in _TERMINAL and text.strip():
+            utterance = decision.utterance
+            if not utterance and len(text.strip()) > JUDGE_TEXT_LIMIT:
+                utterance = judge_utterance(config, text.strip(), context, on_usage=on_judge_usage)
+            utterance = utterance or classify_utterance(text)
+        note_planned = utterance == "supplement"
         logger.info(
-            "run control plan run=%s status=%s decision=%s source=%s planned=%s note=%s",
+            "run control plan run=%s status=%s decision=%s source=%s planned=%s utterance=%s note=%s",
             run_id,
             context.status,
             decision.kind,
             decision.source,
             [f"{item.get('kind')}:{item.get('status')}" for item in planned],
+            utterance or "-",
             note_planned,
         )
         return ControlPlan(
@@ -1275,7 +1430,7 @@ def plan_control_step(
             context=context,
             settled=settled,
             note_planned=note_planned,
-            prompt_block=prompt_block(context, planned, note_planned=note_planned),
+            prompt_block=prompt_block(context, planned, note_planned=note_planned, utterance=utterance),
         )
     except Exception:  # noqa: BLE001 - 控制面出错不能拖垮对话
         logger.exception("run control planning failed for %s", run_id)
@@ -1367,12 +1522,14 @@ __all__ = [
     "CONFIRM_REQUIRED",
     "JUDGE_HISTORY_TURNS",
     "JUDGE_TEXT_LIMIT",
+    "UTTERANCE_KINDS",
     "ControlDecision",
     "ControlPlan",
     "GateOption",
     "History",
     "RunControlContext",
     "action_events",
+    "classify_utterance",
     "decide",
     "decide_locally",
     "describe_plan",
@@ -1380,6 +1537,7 @@ __all__ = [
     "execute_control_plan",
     "explicit_stage",
     "judge_intent",
+    "judge_utterance",
     "legal_actions",
     "load_context",
     "match_option",

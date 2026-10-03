@@ -152,24 +152,68 @@ class TaskIntakeAttachment(BaseModel):
     characters: int = Field(default=0, ge=0)
 
 
-class TaskIntakeInput(BaseModel):
-    """发送前接待判定的输入：首页/确认页的任务描述与附件证据。
+class TaskIntakeTurn(BaseModel):
+    """首页对话里的一轮原话（不含前端注入的任务 / 附件 / 模式指令块）。"""
 
-    attachments 有正文摘录时，服务端把附件内容纳入判定；
-    没有摘录（未解析、纯图片、关闭了自动解析）才维持「带附件即放行」。
+    role: Literal["user", "assistant"]
+    text: str = Field(default="", max_length=4000)
+
+
+class TaskIntakePendingTask(BaseModel):
+    """上一轮接待提议、正等用户确认的建模任务（ADR-0024）。"""
+
+    goal: str = Field(min_length=1, max_length=4000)
+    domain: str = Field(default="", max_length=40)
+
+
+class TaskIntakeInput(BaseModel):
+    """发送前接待判定的输入：首页/确认页的任务描述、附件证据与首页对话状态。
+
+    attachments 有正文摘录时，服务端把附件内容纳入判定；附件本身不构成「开始建模」。
+    history / pending_task 让「好的，开始吧」「就用刚才那个数据」有所指；confirmed = 确认页
+    点了「开始任务」（明确的执行意图）。三者都可省略，省略时按首轮、无提议处理。
     """
 
     goal: str = Field(min_length=1, max_length=4000)
     has_attachments: bool = False
     attachments: list[TaskIntakeAttachment] = Field(default_factory=list, max_length=20)
+    history: list[TaskIntakeTurn] = Field(default_factory=list, max_length=12)
+    pending_task: Optional[TaskIntakePendingTask] = None
+    confirmed: bool = False
+
+
+class TaskIntakeUnderstanding(BaseModel):
+    """一句话的结构化理解（ADR-0024）：路由守卫的输入，前端只做展示与排障。"""
+
+    kind: Literal["chat", "knowledge", "file_analysis", "modeling_task"]
+    speech_act: Literal["greet", "ask", "command", "confirm", "cancel", "modify", "supplement"]
+    #: 是否明确要求系统现在就开始执行
+    execution: bool
+    requires_modeling: bool
+    continuation: Literal["new", "continue"]
+    domain: Literal["optimization", "prediction", "evaluation", "simulation", "data_analysis", "statistics", "none"]
+    missing: list[Literal["problem", "objective", "data"]] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
 
 
 class TaskIntakeResult(BaseModel):
-    """接待判定结果：modeling_task 才继续创建任务，其余原地展示 reply。"""
+    """接待判定结果：route=start 才创建任务；propose / clarify / reply 由首页对话原地回应。
+
+    intent 保留旧三值并与 route 对齐（start → modeling_task，propose / clarify → needs_info，
+    reply → chat），只认 intent 的旧前端照常工作。reply 是模板回应（确认页状态行用）。
+    task_goal：start / propose 时的任务题面（确认提议时是提议记下的那份）；context_excerpt：
+    start 时的首页对话摘录，前端随任务放进 ``params.conversation_context``。
+    """
 
     intent: Literal["modeling_task", "needs_info", "chat"]
     reply: str = ""
     source: Literal["heuristic", "judge", "fallback"]
+    route: Literal["start", "propose", "clarify", "reply"]
+    understanding: TaskIntakeUnderstanding
+    task_goal: str = ""
+    context_excerpt: str = ""
+    #: 首页对话模型是否可用（已配置自定义 API）：false 时前端直接展示 reply，不发起对话轮。
+    chat_ready: bool = True
 
 
 class ArtifactText(BaseModel):

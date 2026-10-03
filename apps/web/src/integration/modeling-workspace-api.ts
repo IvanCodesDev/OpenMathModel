@@ -82,11 +82,46 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
-/** 发送前接待判定的结果：modeling_task 才继续创建任务，其余原地展示 reply。 */
+export type TaskIntakeRoute = "start" | "propose" | "clarify" | "reply";
+export type TaskIntakeKind = "chat" | "knowledge" | "file_analysis" | "modeling_task";
+export type TaskIntakeMissing = "problem" | "objective" | "data";
+
+/** 首页对话里的一轮原话（不含注入的任务 / 附件 / 模式块），随接待判定上送。 */
+export interface TaskIntakeTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+/** 上一轮接待提议、等用户确认的建模任务（ADR-0024）。 */
+export interface TaskIntakePendingTask {
+  goal: string;
+  domain: string;
+}
+
+/**
+ * 发送前接待判定的结果（ADR-0024）：route=start 才创建任务（goal 用 task_goal），
+ * propose / clarify / reply 由首页对话原地回应。intent 是旧三值、与 route 对齐；
+ * route 等字段旧后端没有，读取时按 intent 兜底。
+ */
 export interface TaskIntakeResult {
   intent: "modeling_task" | "needs_info" | "chat";
   reply: string;
   source: "heuristic" | "judge" | "fallback";
+  route?: TaskIntakeRoute;
+  understanding?: {
+    kind: TaskIntakeKind;
+    speech_act: string;
+    execution: boolean;
+    requires_modeling: boolean;
+    continuation: "new" | "continue";
+    domain: string;
+    missing: TaskIntakeMissing[];
+    confidence: number;
+  };
+  task_goal?: string;
+  context_excerpt?: string;
+  /** 首页对话模型是否可用；false = 未配置接口，直接展示 reply。 */
+  chat_ready?: boolean;
 }
 
 /** POST /task-runs/{id}/revisions 的受理回执（ADR-0013）。
@@ -140,13 +175,19 @@ export const modelingWorkspaceApi = {
     });
   },
 
-  /** 发送前接待判定（对话优先门控）：判定失败时服务端已放行，前端无需兜底分支。 */
+  /** 发送前接待判定（ADR-0024）：服务端绝不报错，判定失败时按本地强证据给出路由。 */
   runTaskIntake(
     input: {
       goal: string;
       has_attachments: boolean;
-      /** 浏览器已解析的附件证据（名字+正文摘录）；有摘录时服务端按内容判定而非放行 */
+      /** 浏览器已解析的附件证据（名字+正文摘录）；附件本身不构成「开始建模」 */
       attachments?: { name: string; excerpt: string; characters: number }[];
+      /** 首页对话的最近几轮原话（≤12 条）：「好的，开始吧」「就用刚才那个数据」才有所指 */
+      history?: TaskIntakeTurn[];
+      /** 上一轮接待提议、等确认的任务 */
+      pending_task?: TaskIntakePendingTask;
+      /** 确认页点了「开始任务」：明确的执行意图 */
+      confirmed?: boolean;
     },
     signal?: AbortSignal,
   ): Promise<TaskIntakeResult> {

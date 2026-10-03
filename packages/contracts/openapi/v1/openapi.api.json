@@ -1014,6 +1014,67 @@
         "title": "ChatImageModel",
         "type": "object"
       },
+      "ChatIntakeModel": {
+        "description": "首页对话轮的接待结论（ADR-0024）：服务端据此注入【接待判定】块，托管轮随轮落 meta.intake。\n\nroute=propose 时 task_goal 是待确认的题面：首页刷新 / 从侧栏重进后，前端从最后一轮的\nmeta.intake 恢复这份提议，下一句「开始」才有所指。任务页（run_…）的轮忽略本字段。",
+        "properties": {
+          "domain": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Domain",
+            "type": "string"
+          },
+          "kind": {
+            "default": "chat",
+            "enum": [
+              "chat",
+              "knowledge",
+              "file_analysis",
+              "modeling_task"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "enum": [
+                "problem",
+                "objective",
+                "data"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Missing",
+            "type": "array"
+          },
+          "route": {
+            "enum": [
+              "propose",
+              "clarify",
+              "reply"
+            ],
+            "title": "Route",
+            "type": "string"
+          },
+          "speech_act": {
+            "default": "",
+            "maxLength": 20,
+            "title": "Speech Act",
+            "type": "string"
+          },
+          "task_goal": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Task Goal",
+            "type": "string"
+          }
+        },
+        "required": [
+          "route"
+        ],
+        "title": "ChatIntakeModel",
+        "type": "object"
+      },
       "ChatMessageModel": {
         "properties": {
           "content": {
@@ -1054,6 +1115,16 @@
             "maxItems": 4,
             "title": "Images",
             "type": "array"
+          },
+          "intake": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatIntakeModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "messages": {
             "items": {
@@ -1231,6 +1302,16 @@
             "maxItems": 4,
             "title": "Images",
             "type": "array"
+          },
+          "intake": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatIntakeModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "messages": {
             "items": {
@@ -5445,7 +5526,7 @@
         "type": "object"
       },
       "TaskIntakeInput": {
-        "description": "发送前接待判定的输入：首页/确认页的任务描述与附件证据。\n\nattachments 有正文摘录时，服务端把附件内容纳入判定；\n没有摘录（未解析、纯图片、关闭了自动解析）才维持「带附件即放行」。",
+        "description": "发送前接待判定的输入：首页/确认页的任务描述、附件证据与首页对话状态。\n\nattachments 有正文摘录时，服务端把附件内容纳入判定；附件本身不构成「开始建模」。\nhistory / pending_task 让「好的，开始吧」「就用刚才那个数据」有所指；confirmed = 确认页\n点了「开始任务」（明确的执行意图）。三者都可省略，省略时按首轮、无提议处理。",
         "properties": {
           "attachments": {
             "items": {
@@ -5454,6 +5535,11 @@
             "maxItems": 20,
             "title": "Attachments",
             "type": "array"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
           },
           "goal": {
             "maxLength": 4000,
@@ -5465,6 +5551,24 @@
             "default": false,
             "title": "Has Attachments",
             "type": "boolean"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/TaskIntakeTurn"
+            },
+            "maxItems": 12,
+            "title": "History",
+            "type": "array"
+          },
+          "pending_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskIntakePendingTask"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -5473,9 +5577,41 @@
         "title": "TaskIntakeInput",
         "type": "object"
       },
-      "TaskIntakeResult": {
-        "description": "接待判定结果：modeling_task 才继续创建任务，其余原地展示 reply。",
+      "TaskIntakePendingTask": {
+        "description": "上一轮接待提议、正等用户确认的建模任务（ADR-0024）。",
         "properties": {
+          "domain": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Domain",
+            "type": "string"
+          },
+          "goal": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "title": "TaskIntakePendingTask",
+        "type": "object"
+      },
+      "TaskIntakeResult": {
+        "description": "接待判定结果：route=start 才创建任务；propose / clarify / reply 由首页对话原地回应。\n\nintent 保留旧三值并与 route 对齐（start → modeling_task，propose / clarify → needs_info，\nreply → chat），只认 intent 的旧前端照常工作。reply 是模板回应（确认页状态行用）。\ntask_goal：start / propose 时的任务题面（确认提议时是提议记下的那份）；context_excerpt：\nstart 时的首页对话摘录，前端随任务放进 ``params.conversation_context``。",
+        "properties": {
+          "chat_ready": {
+            "default": true,
+            "title": "Chat Ready",
+            "type": "boolean"
+          },
+          "context_excerpt": {
+            "default": "",
+            "title": "Context Excerpt",
+            "type": "string"
+          },
           "intent": {
             "enum": [
               "modeling_task",
@@ -5490,6 +5626,16 @@
             "title": "Reply",
             "type": "string"
           },
+          "route": {
+            "enum": [
+              "start",
+              "propose",
+              "clarify",
+              "reply"
+            ],
+            "title": "Route",
+            "type": "string"
+          },
           "source": {
             "enum": [
               "heuristic",
@@ -5498,13 +5644,133 @@
             ],
             "title": "Source",
             "type": "string"
+          },
+          "task_goal": {
+            "default": "",
+            "title": "Task Goal",
+            "type": "string"
+          },
+          "understanding": {
+            "$ref": "#/components/schemas/TaskIntakeUnderstanding"
           }
         },
         "required": [
           "intent",
-          "source"
+          "source",
+          "route",
+          "understanding"
         ],
         "title": "TaskIntakeResult",
+        "type": "object"
+      },
+      "TaskIntakeTurn": {
+        "description": "首页对话里的一轮原话（不含前端注入的任务 / 附件 / 模式指令块）。",
+        "properties": {
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "TaskIntakeTurn",
+        "type": "object"
+      },
+      "TaskIntakeUnderstanding": {
+        "description": "一句话的结构化理解（ADR-0024）：路由守卫的输入，前端只做展示与排障。",
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "continuation": {
+            "enum": [
+              "new",
+              "continue"
+            ],
+            "title": "Continuation",
+            "type": "string"
+          },
+          "domain": {
+            "enum": [
+              "optimization",
+              "prediction",
+              "evaluation",
+              "simulation",
+              "data_analysis",
+              "statistics",
+              "none"
+            ],
+            "title": "Domain",
+            "type": "string"
+          },
+          "execution": {
+            "title": "Execution",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "chat",
+              "knowledge",
+              "file_analysis",
+              "modeling_task"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "enum": [
+                "problem",
+                "objective",
+                "data"
+              ],
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "requires_modeling": {
+            "title": "Requires Modeling",
+            "type": "boolean"
+          },
+          "speech_act": {
+            "enum": [
+              "greet",
+              "ask",
+              "command",
+              "confirm",
+              "cancel",
+              "modify",
+              "supplement"
+            ],
+            "title": "Speech Act",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "speech_act",
+          "execution",
+          "requires_modeling",
+          "continuation",
+          "domain",
+          "confidence"
+        ],
+        "title": "TaskIntakeUnderstanding",
         "type": "object"
       },
       "TaskRoutesModel": {

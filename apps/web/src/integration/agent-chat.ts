@@ -27,6 +27,7 @@ import {
   readChatTurnEvents,
   startChatTurn,
   stopChatTurn,
+  type ChatIntakeState,
   type ChatMeta,
   type ChatRouteMeta,
   type ChatTurnEvent,
@@ -36,7 +37,7 @@ import {
 import { actionTraceRow } from "./run-control-view";
 
 export { ChatError };
-export type { ChatMeta, ChatRouteMeta, ChatTurnView, RunControlAction };
+export type { ChatIntakeState, ChatMeta, ChatRouteMeta, ChatTurnView, RunControlAction };
 
 export interface ChatHandlers {
   /** 每个增量回调一次；full 为累计文本，直接渲染即可。 */
@@ -280,6 +281,8 @@ export interface ChatTurnOptions {
   images?: ChatImagePayload[];
   /** 携图时钉住的接口 id：绕过 Auto 难度路由，确保图片落在视觉模型上。 */
   pinEndpointId?: string;
+  /** 首页对话轮的接待结论（ADR-0024）：服务端据此注入【接待判定】块并落 meta.intake。 */
+  intake?: ChatIntakeState;
   /** 暂停生成：托管轮向服务端发 stop（已生成的部分定格为完整回复）；无状态通道
    *  中止请求。一字未收则抛 GENERATION_STOPPED，由调用方安静收尾（不按错误渲染）。 */
   signal?: AbortSignal;
@@ -339,6 +342,7 @@ export async function sendConversationTurn(
     ...routing,
     ...routeExtras(routing, text),
     ...(images ? { images } : {}),
+    ...(options.intake ? { intake: options.intake } : {}),
   };
 
   let outcome: StreamOutcome;

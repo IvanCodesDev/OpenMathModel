@@ -1,8 +1,9 @@
 /**
  * 首页轻量对话（对话优先接待的「聊天态」）。
  *
- * 发送先经接待判定（POST /task-intake）分流：完整题面走既有任务创建链路；
- * 闲聊或缺题面的输入进入本模块。视觉与执行页对话严格同构——复用全局的
+ * 发送先经接待判定（POST /task-intake，ADR-0024）分流：route=start 走既有任务创建链路；
+ * 提议 / 追问 / 直接回答进入本模块，接待结论随对话轮上送（服务端注入【接待判定】块），
+ * 首页对话的原话与待确认的提议也由本模块记着，供下一次接待判定看上文。视觉与执行页对话严格同构——复用全局的
  * user-bubble / assistant-block / assistant-id（水母 Logo）/ reply-thinking
  * （思考过程折叠块）/ analysis-copy（Markdown 正文）类与交互，不另造样式。
  * 对话历史由 agent-chat 维护（走用户配置的模型与 Auto 路由）。
@@ -17,6 +18,8 @@
  * DOM 由本模块动态插入（与执行计划面板同模式），不改动页面模板与路由。
  */
 
+import { collectConversationAttachments } from "../attachments/conversation-context";
+import type { AttachmentStore } from "../attachments/store";
 import { fetchMe } from "../auth/api";
 import { openAuthDialog } from "../auth/auth-dialog";
 import { t } from "../i18n/locale";
@@ -46,8 +49,10 @@ import {
   resetConversation,
   sendConversationTurn,
   type ChatHandlers,
+  type ChatIntakeState,
   type ChatTurnResult,
 } from "./agent-chat";
+import type { TaskIntakePendingTask, TaskIntakeResult, TaskIntakeTurn } from "./modeling-workspace-api";
 import { hydrateRecentTasks } from "./recent-tasks";
 import { mountReplyActions } from "./reply-actions";
 
@@ -242,9 +247,61 @@ async function ensureChatSession(firstText: string): Promise<boolean> {
   return true;
 }
 
+// ── 接待状态（ADR-0024）：首页对话的原话与待确认的提议 ──────────────────────
+
+/** 进接待判定的最近几轮原话：条数与服务端 TaskIntakeInput.history 上限一致，单条截断。 */
+const INTAKE_HISTORY_LIMIT = 12;
+const INTAKE_TURN_CHARS = 1500;
+
+let intakeTurns: TaskIntakeTurn[] = [];
+let pendingTask: TaskIntakePendingTask | null = null;
+/** 已随对话注入过正文的托盘附件（按附件 id）：每个只注入一次，托盘保留作后续任务材料。 */
+const injectedAttachments = new Set<string>();
+
+function rememberTurn(role: TaskIntakeTurn["role"], text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  intakeTurns.push({ role, text: trimmed.slice(0, INTAKE_TURN_CHARS) });
+  if (intakeTurns.length > INTAKE_HISTORY_LIMIT) intakeTurns = intakeTurns.slice(-INTAKE_HISTORY_LIMIT);
+}
+
+function resetIntakeState(): void {
+  intakeTurns = [];
+  pendingTask = null;
+  injectedAttachments.clear();
+}
+
+/** 下一次接待判定要看的上文：最近几轮原话 + 上一轮待确认的提议。 */
+export function homeIntakeContext(): { history: TaskIntakeTurn[]; pending_task?: TaskIntakePendingTask } {
+  return { history: [...intakeTurns], ...(pendingTask ? { pending_task: { ...pendingTask } } : {}) };
+}
+
+/**
+ * 接待结论落定且没有进任务：propose 记下待确认的题面（下一句「开始」才有所指），
+ * 其余路由让旧提议作废。返回随这一轮对话上送的接待状态（服务端注入【接待判定】块）。
+ */
+export function rememberIntake(result: TaskIntakeResult): ChatIntakeState {
+  const route = result.route === "propose" || result.route === "clarify" || result.route === "reply"
+    ? result.route
+    : result.intent === "needs_info" ? "clarify" : "reply";
+  const understanding = result.understanding;
+  const domain = understanding?.domain && understanding.domain !== "none" ? understanding.domain : "";
+  const goal = route === "propose" ? (result.task_goal ?? "").trim() : "";
+  pendingTask = goal ? { goal, domain } : null;
+  return {
+    route,
+    kind: understanding?.kind ?? (route === "reply" ? "chat" : "modeling_task"),
+    ...(understanding?.speech_act ? { speech_act: understanding.speech_act } : {}),
+    ...(domain ? { domain } : {}),
+    ...(understanding?.missing?.length ? { missing: understanding.missing } : {}),
+    ...(goal ? { task_goal: goal } : {}),
+  };
+}
+
 /** 首页回到欢迎态（地址栏没带 ?chat=）：下一条消息另开一段对话。 */
 export function resetHomeChat(): void {
   activeChatId = null;
+  resetIntakeState();
   resetConversation();
 }
 
@@ -277,12 +334,24 @@ function appendSettledReply(thread: HTMLElement, entry: ConversationLogEntry): v
 export async function restoreHomeChat(root: HTMLElement, chatId: string): Promise<boolean> {
   if (!findChatSession(chatId)) return false;
   activeChatId = chatId;
+  resetIntakeState();
   configureConversation(chatId);
   const legacyEntries = loadConversationLog(chatId);
   const turns = await hydrateConversation(chatId);
   // 等待期间用户已切到别的对话 / 回到欢迎态：这批记录不再属于眼前的页面
   if (activeChatId !== chatId) return false;
   if (legacyEntries.length === 0 && turns.length === 0) return false;
+  // 接待判定的上文随现场一起重建；最后一轮若是提议，「开始」照样有所指（提议落在 meta.intake）
+  for (const entry of legacyEntries) rememberTurn(entry.role, entry.text);
+  for (const turn of turns) {
+    rememberTurn("user", turn.text);
+    // 仍在生成的那一轮只有半截正文：等续接落定后再记整段
+    if (turn.status !== "running") rememberTurn("assistant", turn.reply);
+  }
+  const lastIntake = turns[turns.length - 1]?.meta?.intake;
+  pendingTask = lastIntake?.route === "propose" && lastIntake.task_goal
+    ? { goal: lastIntake.task_goal, domain: lastIntake.domain ?? "" }
+    : null;
   const thread = ensureThread(root);
   if (!thread) return false;
   thread.replaceChildren();
@@ -296,7 +365,11 @@ export async function restoreHomeChat(root: HTMLElement, chatId: string): Promis
     if (turn.status === "running") {
       const block = appendAssistantBlock(thread);
       void presentReply(root, thread, block, (handlers, signal) => attachConversationTurn(turn, handlers, signal))
-        .then(ok => { if (ok && activeChatId) touchChatSession(activeChatId); });
+        .then(reply => {
+          if (reply === null || activeChatId !== chatId) return;
+          rememberTurn("assistant", reply);
+          touchChatSession(chatId);
+        });
       continue;
     }
     appendSettledReply(thread, entryFromTurn(turn));
@@ -377,20 +450,26 @@ export interface HomeChatTurnOptions {
   referenceTitles?: string[];
   /** 发送瞬间已落地的占位（beginHomeChatTurn）：回复写进它，不再另起一对。 */
   pending?: PendingHomeTurn | null;
+  /** 接待结论（ADR-0024）：随请求上送，服务端注入【接待判定】块并落 meta.intake。 */
+  intake?: ChatIntakeState;
+  /** 输入框的附件托盘：还没注入过的附件正文随本轮一起送给模型。 */
+  attachments?: AttachmentStore;
+  /** 未配置模型接口时的本地回应：不发起对话轮，直接定格在占位块里。 */
+  localReply?: string;
 }
 
 /**
  * 一轮回复从流式呈现到落定的公共骨架：首发（sendConversationTurn）与重进续接
  * （attachConversationTurn）共用——半截续上的回复与从头看着生成的长得一样。
  * 生成期间发送键变暂停键（中止 → 服务端真正停止生成，不是本页不看了）。
- * 返回是否成功收到回复。
+ * 返回收到的回复正文（可能为空串）；没收到（暂停 / 出错 / 需要登录）返回 null。
  */
 async function presentReply(
   root: HTMLElement,
   thread: HTMLElement,
   block: HTMLElement,
   run: (handlers: ChatHandlers, signal: AbortSignal) => Promise<ChatTurnResult>,
-): Promise<boolean> {
+): Promise<string | null> {
   const copy = block.querySelector<HTMLElement>(".analysis-copy")!;
   // 容器对象而非裸 let：闭包内的赋值不参与 TS 控制流收窄，避免外部读取被推成 never
   const state: {
@@ -436,18 +515,18 @@ async function presentReply(
     renderer.finish(reply);
     // 回复右下角：复制 + 赞 / 踩（评价落在这一轮托管对话上；与任务页同一组件）
     if (reply) mountReplyActions(block, { text: reply, turnId });
-    return true;
+    return reply;
   } catch (error) {
     state.thinking?.finish();
     renderer.cancel();
     if (error instanceof ChatError && error.code === "GENERATION_STOPPED") {
       copy.innerHTML = `<p class="muted">${t("已暂停生成。")}</p>`;
-      return false;
+      return null;
     }
     if (error instanceof ChatError && error.code === "AUTH_REQUIRED") {
       copy.innerHTML = `<p class="muted">${t("请先登录后再继续对话。")}</p>`;
       openAuthDialog({});
-      return false;
+      return null;
     }
     const message = error instanceof Error && error.message ? error.message : t("对话请求失败，请稍后再试");
     copy.innerHTML = "";
@@ -455,13 +534,34 @@ async function presentReply(
     failure.className = "home-chat-error";
     failure.textContent = message;
     copy.append(failure);
-    return false;
+    return null;
   } finally {
     if (activeAbort === abort) {
       activeAbort = null;
       setSendButtonGenerating(root, false);
     }
   }
+}
+
+/** 未配置模型接口时的本地回应：直接定格在占位块里，不发起对话轮、不落记录。 */
+function settleLocalReply(block: HTMLElement, reply: string): void {
+  const copy = block.querySelector<HTMLElement>(".analysis-copy")!;
+  copy.innerHTML = renderMarkdown(reply);
+  typesetMath(copy);
+  decorateCodeBlocks(copy);
+}
+
+/**
+ * 托盘里还没随对话注入过的附件 → 正文上下文块（ADR-0024：首页对话也能「分析文件」）。
+ * 附件留在托盘里作后续任务的材料，正文只注入一次，下一轮不重复占上下文。
+ */
+async function collectFreshAttachments(
+  store: AttachmentStore,
+): Promise<{ block: string; names: string[]; ids: string[] } | null> {
+  const fresh = store.list().filter(item => !injectedAttachments.has(item.id)).map(item => item.id);
+  if (fresh.length === 0) return null;
+  const context = await collectConversationAttachments(store, undefined, new Set(fresh));
+  return context.block ? { ...context, ids: fresh } : null;
 }
 
 /**
@@ -480,23 +580,36 @@ export async function runHomeChatTurn(
     if (!pending) return false;
   }
   const { thread, block } = pending;
+  rememberTurn("user", text);
+  if (options.localReply !== undefined) {
+    settleLocalReply(block, options.localReply);
+    rememberTurn("assistant", options.localReply);
+    return true;
+  }
   // 领身份期间发送键就已是暂停键（与之前的节奏一致）
   setSendButtonGenerating(root, true);
   // 归属要在发送前定下：有归属这一轮才走服务端托管（生成与记录都在服务端）。
   const startedNewSession = await ensureChatSession(text);
-  const delivered = await presentReply(root, thread, block, (handlers, signal) => sendConversationTurn(
+  const files = options.attachments ? await collectFreshAttachments(options.attachments) : null;
+  const attachmentContext = [options.referenceContext, files?.block].filter(Boolean).join("\n\n");
+  const attachmentNames = [...(options.referenceTitles ?? []), ...(files?.names ?? [])];
+  const reply = await presentReply(root, thread, block, (handlers, signal) => sendConversationTurn(
     text,
     handlers,
     {
-      ...(options.referenceContext ? { attachmentContext: options.referenceContext } : {}),
-      ...(options.referenceTitles?.length ? { attachmentNames: options.referenceTitles } : {}),
+      ...(attachmentContext ? { attachmentContext } : {}),
+      ...(attachmentNames.length ? { attachmentNames } : {}),
+      ...(options.intake ? { intake: options.intake } : {}),
       signal,
     },
   ));
-  if (delivered && activeChatId) {
+  if (reply === null) return false;
+  rememberTurn("assistant", reply);
+  for (const id of files?.ids ?? []) injectedAttachments.add(id);
+  if (activeChatId) {
     touchChatSession(activeChatId);
     // 新对话要立刻出现在侧栏；后续轮次只更新本机时间戳，不为每条消息重拉清单
     if (startedNewSession) void hydrateRecentTasks();
   }
-  return delivered;
+  return true;
 }

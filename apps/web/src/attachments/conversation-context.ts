@@ -67,9 +67,11 @@ async function resolveText(store: AttachmentStore, attachment: Attachment): Prom
 export async function collectConversationAttachments(
   store: AttachmentStore,
   passthroughIds?: ReadonlySet<string>,
+  /** 只折算这些附件（首页对话：每个附件只注入一次）；缺省为托盘里的全部附件。 */
+  only?: ReadonlySet<string>,
 ): Promise<ConversationAttachmentContext> {
   await store.settled();
-  const items = store.list();
+  const items = store.list().filter(item => !only || only.has(item.id));
   if (items.length === 0) return { block: "", names: [] };
 
   let budget = TOTAL_BUDGET;

@@ -52,6 +52,19 @@ export interface RunControlAction {
   code?: string;
 }
 
+/**
+ * 首页对话轮的接待结论（ADR-0024）：随请求上送（服务端注入【接待判定】块），
+ * 托管轮落在 meta.intake——重进首页对话时从最后一轮恢复待确认的提议。
+ */
+export interface ChatIntakeState {
+  route: "propose" | "clarify" | "reply";
+  kind: "chat" | "knowledge" | "file_analysis" | "modeling_task";
+  speech_act?: string;
+  domain?: string;
+  missing?: Array<"problem" | "objective" | "data">;
+  task_goal?: string;
+}
+
 export interface ChatMeta {
   endpoint?: string;
   host?: string;
@@ -67,6 +80,8 @@ export interface ChatMeta {
   error?: { code: string; message: string };
   /** 本轮服务端执行 / 提议的运行控制动作（ADR-0018），刷新后据此重画轨迹行。 */
   actions?: RunControlAction[];
+  /** 首页对话轮的接待结论（ADR-0024）。 */
+  intake?: ChatIntakeState;
 }
 
 export interface ChatTurnView {
@@ -149,6 +164,7 @@ export interface StartChatTurnBody {
   route_context?: string;
   route_state?: { difficulty: number; endpoint_id?: string; turns: number };
   images?: unknown[];
+  intake?: ChatIntakeState;
 }
 
 /** 发起一轮托管对话：202 即返回视图（status=running），随后用 readChatTurnEvents 附着。 */

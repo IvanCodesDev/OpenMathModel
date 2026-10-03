@@ -19,13 +19,21 @@ import {
 import { demoMode } from "./demo-mode";
 import {
   beginHomeChatTurn,
+  homeIntakeContext,
+  rememberIntake,
   resetHomeChat,
   restoreHomeChat,
   runHomeChatTurn,
   stopHomeChatGeneration,
   type PendingHomeTurn,
 } from "./home-chat";
-import { modelingWorkspaceApi, WorkspaceApiError } from "./modeling-workspace-api";
+import {
+  modelingWorkspaceApi,
+  WorkspaceApiError,
+  type TaskIntakePendingTask,
+  type TaskIntakeResult,
+  type TaskIntakeTurn,
+} from "./modeling-workspace-api";
 import {
   showTaskLaunchOverlay,
   type TaskLaunchOverlay,
@@ -34,6 +42,7 @@ import {
 import {
   buildRunningUrl,
   deriveProjectName,
+  MAX_CONVERSATION_CONTEXT,
   MAX_GOAL_LENGTH,
   normalizeTaskDescription,
   parseTaskDraft,
@@ -95,6 +104,17 @@ function attachmentsFor(store: AttachmentStore | undefined, fallback: TaskAttach
   return store ? toDraftAttachments(store.list()) : fallback;
 }
 
+/** 同一份内容的失败重试：沿用已写回的项目标识、幂等 token 与接待给出的题面 / 对话摘录。 */
+function withRetryState(next: TaskDraft, from: TaskDraft): TaskDraft {
+  return {
+    ...next,
+    ...(from.project_id ? { project_id: from.project_id } : {}),
+    ...(from.run_request_token ? { run_request_token: from.run_request_token } : {}),
+    ...(from.task_goal ? { task_goal: from.task_goal } : {}),
+    ...(from.conversation_context ? { conversation_context: from.conversation_context } : {}),
+  };
+}
+
 function navigate(path: string): void {
   window.location.href = path;
 }
@@ -126,13 +146,20 @@ function currentTaskType(root: HTMLElement, fallback: string): string {
 type SubmitOutcome =
   | { status: "created"; url: string }
   | { status: "auth-required" }
-  /** 接待判定认为不该启动任务（闲聊/缺题面）：原地展示回应，不建项目。 */
-  | { status: "guidance"; reply: string };
+  /** 接待判定没有路由到 start（提议 / 追问 / 直接回答）：原地回应，不建项目。 */
+  | { status: "guidance"; intake: TaskIntakeResult };
+
+/** 接待判定要看的首页对话状态：最近几轮原话 + 上一轮待确认的提议。 */
+type IntakeContext = () => { history: TaskIntakeTurn[]; pending_task?: TaskIntakePendingTask };
 
 interface SubmitOptions {
   signal: AbortSignal;
   /** 首页输入框的附件集合；确认页只有草稿元数据时为空 */
   attachments?: AttachmentStore;
+  /** 首页对话的接待上下文；确认页没有对话。 */
+  intakeContext?: IntakeContext;
+  /** 确认页点了「开始任务」：明确的执行意图。 */
+  confirmed?: boolean;
   onProgress: (message: string) => void;
   onDraft: (draft: TaskDraft) => void;
   /** 接待判定放行后各阶段真实开始时回调：过场遮罩据此推进步骤。 */
@@ -153,14 +180,13 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   const me = await fetchMe();
   if (!me) return { status: "auth-required" };
 
-  // 接待判定（对话优先，Codex/opencode 式门控）：闲聊或缺题面的输入不建任务、
-  // 不产生垃圾项目，转入首页对话由用户配置的模型正常回应；判定异常由服务端
-  // 放行，这里不会被卡住。已写回 project_id 的失败重试跳过判定——那份内容
-  // 此前已被放行过。@ 引用了赛题 = 带着题面来的（「做这道题」），直接放行；
-  // 引用论文/方法不算题面，照常判定（多半是想聊方法）。附件不再无条件放行：
-  // 等浏览器解析完成后把文件名与正文摘录一并交给判定，内容与建模无关的文件
-  // 不该启动六阶段；解析不出文字的附件（纯图片/关闭自动解析/确认页只有
-  // 元数据）服务端维持放行，由问题分析节点的 viability 门兜底。
+  // 接待判定（ADR-0024，轮次理解 → 路由守卫）：只有 route=start 才建任务；拿不准先在
+  // 首页对话里提议、下一句确认才启动，缺题面先问，寒暄 / 问知识 / 问文件直接回答。判定
+  // 带着首页对话的最近几轮与上一轮提议，「好的，开始吧」才有所指；服务端绝不报错，判定
+  // 失败时按本地强证据给出路由。已写回 project_id 的失败重试跳过判定——那份内容此前已被
+  // 放行过，题面沿用草稿里记下的 task_goal。附件与 @ 引用只是证据：浏览器解析出的摘录随
+  // 判定上送，单独的「上传文件」不构成开始建模。
+  let goal = draft.task_goal || draft.description;
   if (!draft.project_id) {
     options.onProgress("正在确认任务类型…");
     const hasProblemReference = listComposerReferences().some(item => item.kind === "problem");
@@ -179,12 +205,24 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
         goal: draft.description,
         has_attachments: draft.attachments.length > 0 || hasProblemReference,
         ...(intakeAttachments ? { attachments: intakeAttachments } : {}),
+        ...(options.intakeContext?.() ?? {}),
+        ...(options.confirmed ? { confirmed: true } : {}),
       },
       options.signal,
     );
-    if (intake.intent !== "modeling_task") {
-      return { status: "guidance", reply: intake.reply };
+    // 旧后端的结果没有 route：按旧三值意图兜底
+    const route = intake.route ?? (intake.intent === "modeling_task" ? "start" : "reply");
+    if (route !== "start") {
+      return { status: "guidance", intake };
     }
+    // 确认提议 / 指代上文时题面由接待拼好（不是「好的，开始吧」这一句）；首页对话摘录随任务
+    // 交给问题分析节点。两者写进草稿：后续步骤失败重试时不再过判定，靠它们保住题面。
+    goal = normalizeTaskDescription(intake.task_goal ?? "").slice(0, MAX_GOAL_LENGTH) || draft.description;
+    const context = (intake.context_excerpt ?? "").trim().slice(0, MAX_CONVERSATION_CONTEXT);
+    persist(
+      { ...draft, task_goal: goal, ...(context ? { conversation_context: context } : {}) },
+      "任务草稿保存失败，请允许当前站点使用会话存储后重试",
+    );
   }
 
   // 判定已放行（或重试时此前放行过）：过场遮罩从这里接管视口
@@ -192,8 +230,8 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   let projectId = draft.project_id;
   if (!projectId) {
     const projectInput: CreateProjectInput = {
-      name: deriveProjectName(draft.description),
-      description: draft.description.slice(0, 2000),
+      name: deriveProjectName(goal),
+      description: goal.slice(0, 2000),
       mode: modeFor(draft),
     };
     const project = await modelingWorkspaceApi.createProject(projectInput, options.signal);
@@ -235,12 +273,14 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   }
   const runInput: CreateTaskRunInput = {
     project_id: projectId,
-    goal: draft.description,
+    goal,
     auto_start: true,
     params: {
       task_type: draft.task_type,
       selected_model: draft.selected_model,
       attachment_metadata: draft.attachments,
+      // 首页对话摘录（ADR-0024）：任务由对话里的提议确认而来时，题意的补充说明散在对话里
+      ...(draft.conversation_context ? { conversation_context: draft.conversation_context } : {}),
       // @ 引用的赛题/论文/方法正文摘要：问题分析靠它看到真实题面
       // （「这道题」+ 引用赛题的发送方式，题面全在引用里）。
       reference_metadata: listComposerReferences().map(reference => ({
@@ -259,9 +299,9 @@ async function submitDraft(initial: TaskDraft, options: SubmitOptions): Promise<
   }
   sessionStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
   sessionStorage.setItem(ACTIVE_RUN_KEY, run.id);
-  sessionStorage.setItem(LEGACY_PROMPT_KEY, draft.description);
+  sessionStorage.setItem(LEGACY_PROMPT_KEY, goal);
   // 运行页首屏气泡按 run 隔离取题面；全局键只服务演示态兜底。
-  sessionStorage.setItem(`openmathmodel.taskGoal.${run.id}`, draft.description);
+  sessionStorage.setItem(`openmathmodel.taskGoal.${run.id}`, goal);
   // 首页挂着的知识库引用 chips 随任务交接到运行页（按 run 存取，一次性消费）。
   persistPendingTaskReferences(run.id);
   // 浏览器解析摘录随任务交接：运行页开场分析在服务端正文没赶上时以它兜底，
@@ -280,10 +320,14 @@ interface TaskSubmitterOptions {
   root: HTMLElement;
   signal: AbortSignal;
   attachments?: AttachmentStore;
+  /** 首页对话的接待上下文（最近几轮 + 待确认的提议）；确认页没有。 */
+  intakeContext?: IntakeContext;
+  /** 确认页：点「开始任务」本身就是明确的执行意图。 */
+  confirmed?: boolean;
   setBusy: (busy: boolean) => void;
   isDisposed: () => boolean;
-  /** 接待判定不放行时的处理；缺省显示在状态行（确认页）。首页转对话气泡。 */
-  onGuidance?: (reply: string, sentText: string) => void;
+  /** 接待判定没有路由到 start 时的处理；缺省把模板回应显示在状态行（确认页）。首页转对话。 */
+  onGuidance?: (intake: TaskIntakeResult, sentText: string) => void;
   /**
    * 首页的对话优先体感：点发送的瞬间先把消息落到对话区（`begin`），接待判定在后台
    * 静默进行；判定不放行时回复写进同一个占位，放行则过场遮罩接管；需要登录或出错
@@ -325,6 +369,8 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
     void submitDraft(draft, {
       signal: options.signal,
       attachments: options.attachments,
+      intakeContext: options.intakeContext,
+      confirmed: options.confirmed,
       onProgress: message => {
         if (showProgress) renderStatus(root, message);
         overlay?.setNote(message);
@@ -352,9 +398,9 @@ function createTaskSubmitter(options: TaskSubmitterOptions): TaskSubmitter {
         root.dataset.taskStartState = "guidance";
         if (options.onGuidance) {
           clearStatus(root);
-          options.onGuidance(outcome.reply, sentText);
+          options.onGuidance(outcome.intake, sentText);
         } else {
-          renderStatus(root, outcome.reply);
+          renderStatus(root, outcome.intake.reply);
         }
         return;
       }
@@ -443,6 +489,7 @@ function mountNewTask(root: HTMLElement): () => void {
     root,
     signal: abortController.signal,
     attachments,
+    intakeContext: homeIntakeContext,
     isDisposed: () => disposed,
     // 首页发送键只有图标没有文案，忙碌态用禁用 + aria-busy 表达。
     setBusy: busy => {
@@ -467,11 +514,12 @@ function mountNewTask(root: HTMLElement): () => void {
         if (textarea && !textarea.value && draft.description) textarea.value = draft.description;
       },
     },
-    // 接待判定不放行 → 进入首页对话：回复由用户配置的模型流式生成，写进发送时
-    // 已落地的那个占位块；@ 引用的资料随本轮消息送给模型（与执行页同语义：
-    // 发送成功后清空引用，失败保留以便重试）。后续发送仍会先过接待判定，
-    // 题面完整时自动升级为任务。
-    onGuidance: (_reply, sentText) => {
+    // 接待判定没有路由到 start → 进入首页对话：回复由用户配置的模型流式生成，写进发送时
+    // 已落地的那个占位块；接待结论随本轮上送（服务端注入【接待判定】块，提议落 meta.intake），
+    // @ 引用的资料与托盘里还没注入过的附件正文随本轮消息送给模型（与执行页同语义：发送
+    // 成功后清空引用，失败保留以便重试；附件留在托盘作后续任务材料）。提议之后的下一句
+    // 「开始」由接待判定直接启动任务。
+    onGuidance: (intake, sentText) => {
       // 输入框在发送瞬间就腾出来了，这里不再碰它——用户可能已经在敲下一句；
       // 只把草稿按输入框现状重写（这句已是对话消息，不再是待办题面）。
       persistCurrent();
@@ -488,6 +536,10 @@ function mountNewTask(root: HTMLElement): () => void {
         pending,
         referenceContext: composerReferenceBlock(),
         referenceTitles: references.map(reference => reference.title),
+        intake: rememberIntake(intake),
+        ...(attachments ? { attachments } : {}),
+        // 未配置模型接口：首页没有对话模型，接待的模板回应就是这一轮的回复
+        ...(intake.chat_ready === false ? { localReply: intake.reply } : {}),
       }).then(delivered => {
         if (delivered && references.length > 0) clearComposerReferences();
       });
@@ -504,9 +556,7 @@ function mountNewTask(root: HTMLElement): () => void {
     };
     // 内容一旦变化就丢弃已写回的 project_id 与幂等 token：旧标识只对创建它们的
     // 那份内容有效，带着旧 token 提交新内容会命中幂等键冲突（409）。
-    draft = sameSubmission(draft, next)
-      ? { ...next, project_id: draft.project_id, run_request_token: draft.run_request_token }
-      : next;
+    draft = sameSubmission(draft, next) ? withRetryState(next, draft) : next;
     return saveDraft(draft);
   };
 
@@ -562,9 +612,7 @@ function mountNewTask(root: HTMLElement): () => void {
     // 重新发送未修改的同一份草稿视为失败重试：沿用已写回的 project_id 与幂等
     // token，不重复建项目、不换 Idempotency-Key；内容变化则视为新提交，重置两者。
     const persisted = readDraft();
-    draft = sameSubmission(persisted, next)
-      ? { ...next, project_id: persisted.project_id, run_request_token: persisted.run_request_token }
-      : next;
+    draft = sameSubmission(persisted, next) ? withRetryState(next, persisted) : next;
     if (!saveDraft(draft)) {
       renderStatus(root, "任务草稿保存失败，请允许当前站点使用会话存储后重试。", "error");
       return;
@@ -675,6 +723,7 @@ function mountConfirmTask(root: HTMLElement): () => void {
   const submitter = createTaskSubmitter({
     root,
     signal: abortController.signal,
+    confirmed: true,
     isDisposed: () => disposed,
     setBusy: busy => {
       if (startButton) setStartBusy(startButton, busy);

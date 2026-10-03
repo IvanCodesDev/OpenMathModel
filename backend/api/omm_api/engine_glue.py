@@ -283,6 +283,8 @@ SIM_NODES = {state: SimStageNode(state) for state in TaskState if state.name in 
 #: 附件摘要总量与单附件正文上限：控制进入提示词的 token 规模
 _ATTACHMENT_SUMMARY_LIMIT = 4000
 _ATTACHMENT_EXCERPT_LIMIT = 1200
+#: 首页对话摘录（ADR-0024，params.conversation_context）在摘要段里占用的上限
+_CONVERSATION_CONTEXT_LIMIT = 1500
 
 
 _REFERENCE_KIND_LABELS = {"problem": "赛题", "paper": "优秀论文", "method": "方法"}
@@ -294,10 +296,17 @@ def _attachments_summary(params: dict[str, Any]) -> str:
     真实题面常在附件或 @ 引用的赛题里而不在首句指令里；把 excerpt 交给
     问题分析节点，分析产出（含 title 与 viability 判定）才反映实际要解决
     的问题。附件（attachment_metadata）与知识库引用（reference_metadata，
-    首页「添加上下文」挑选的赛题/论文/方法）共用同一份预算。
+    首页「添加上下文」挑选的赛题/论文/方法）共用同一份预算。首页对话摘录
+    （conversation_context，ADR-0024：任务由首页对话里的提议确认而来时，
+    题意的补充说明散在对话里）排在最前、单独封顶，不会被附件挤掉。
     """
     parts: list[str] = []
     used = 0
+    conversation = str(params.get("conversation_context") or "").strip()
+    if conversation:
+        piece = f"【发起任务前的首页对话摘录】\n{conversation[:_CONVERSATION_CONTEXT_LIMIT]}"
+        parts.append(piece)
+        used += len(piece)
 
     def push(piece: str) -> bool:
         nonlocal used

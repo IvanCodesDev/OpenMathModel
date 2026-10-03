@@ -1162,6 +1162,19 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过：`pytest backend/api/tests` 486 passed / 2 skipped；agents 各包测试 761 passed / 1 skipped；`npm run check`；`npm run build`（index 843.69 kB）；`node --test` 188/188。开发库 `alembic upgrade` 到 0021，只读核对真实产物误标 0，剩余 29 个运行的「（模拟）」产物与事件都是模拟链路自己的文件。无头 Chrome（CDP 拦截 `/api` 回放只读夹具）截改前改后图（`audit-current/2026-09-27-trace-grouping/`，不入库）：截图所用运行的执行轨迹顶层 254 项 → 72 项（24 个组），原始工具名行 85 → 0，「（模拟）」14 → 0；SSE 中途接入与整段回放结构一致。复看后（`quiet-*` 截图）：夹具里 28 条列目录 / 检索知识库调用不再画出，全部行 244 → 213，组 24 → 21（去掉列目录行后只剩一行的不再套组），计数摘要 0；再藏探测运行环境后（`quiet-probe-*` 截图）：10 条 `env_probe` 不再画出，全部行 213 → 203，组 21 → 20。未验：新提示词下真实模型写出的中文旁白——存量运行没有 agent_note 事件，截图里的旁白演示派生自改提示词之前的英文输出。
 
+### 2026-10-02 接待改为「轮次理解 → 路由守卫」，拿不准先提议；运行页只把补充要求记为备注（ADR-0024）
+
+用户反馈「意图识别 + 状态判断 + 路由守卫整体有问题」，列出意图、是否要求执行、是否需要建模、事件、会话状态、续接还是新任务、言语行为、题型、缺失信息、把握、路由十一个维度。复现（判定打桩、不出网）：首页「美赛和国赛有什么区别」「我想学数模，从哪开始」「这张图是什么意思」+ 截图、「看看」+ PDF、长篇提问都直接建任务；首页对话里「好的，开始吧」孤立判定、放行后 goal 只剩这一句；未配置接口时「你好」也建项目；接待结论被前端丢弃，对话模型不知道路由；首页对话不带附件。运行页「谢谢」「辛苦了」「太慢了吧」「怎么还没好」「这个模型的精度多少」、贴来的新题全部记成补充要求注入后续节点。用户拍板三处策略：拿不准先提议、确认再启动；首页确认 = 对话里回一句；未配置接口也用本地规则拦。
+
+- **接待（`intake.py` 重写）**：本地信号（赛题标识 / 任务信号 / 问句 / 知识问句 / 请求与执行措辞 / 寒暄 / 光秃秃的「开始」/ 指代上文 / 修改 / 附件指代 / 题型）先判，拿不准的交最弱模型做一次 JSON 判定，判定只给 `intent`（五值）/ `execution` / `continuation` / `domain` / `missing` / `confidence`，不写回复；`route`（start / propose / clarify / reply）由规则定，顺序与取值见 ADR-0024 §1。附件与 @ 引用只是证据；问句判断按长度分档（60 字内任何问句标记都算，更长只认句首句尾）；needs_info 的本地否决收窄为「要求动手 → start，没说 → propose」；判定失败只有执行措辞 + 任务信号 / 题面 / 附件才 start。
+- **契约**：`TaskIntakeInput` 加 `history` / `pending_task` / `confirmed`；`TaskIntakeResult` 加 `route` / `understanding` / `task_goal` / `context_excerpt` / `chat_ready`，`intent` 旧三值保留并与 route 对齐；`ChatRequest.intake`（首页对话轮的接待结论）。OpenAPI 基线已重导出。
+- **首页对话（`routers/chat.py`）**：带 `intake` 的轮换用首页系统提示词（不得自称已开始建模）并注入【接待判定】块（提议时复述题意并问是否开始、缺信息时说清缺什么、问知识时直接答、问文件时按附件内容答）；托管轮首个 `meta` 事件带 `intake` 落 `meta.intake`；任务页的轮忽略它。`engine_glue._attachments_summary` 把 `params.conversation_context` 排在最前、单独封顶 1500 字。
+- **运行页（`run_control.py`）**：判定 JSON 加 `utterance`（supplement / question / feedback / chat / new_task），只有 supplement 落备注；判定缺席时本地兜底（`classify_utterance`：新题 / 情绪短句 / 问句 / 寒暄不进备注，其余照旧记下）；超过 800 字仍不送动作判定，但做一次只分类的判定（`judge_utterance`，带本任务题面）；new_task 的状态块让模型提示回首页新建。问句标记补「怎么 / 多少 / 什么 / 哪个 / 哪些 / 哪里 / 多久 / 是否 / 有没有」。执行安全（合法集、提案确认、回复后执行）不变。
+- **前端**：`home-chat.ts` 记着首页对话原话与上一轮提议（`homeIntakeContext` / `rememberIntake`），重进时从最后一轮的 `meta.intake` 恢复提议；对话轮带 `intake` 上送；托盘里还没注入过的附件正文随这一轮送给模型（`collectConversationAttachments` 新增 `only` 过滤，每个附件只注入一次，托盘保留作任务材料）；`chat_ready=false` 时直接展示模板回应、不发起对话轮。`task-start-controller.ts` 随接待判定上送 `history` / `pending_task`（确认页 `confirmed`），start 时 goal 用 `task_goal`、`params.conversation_context` 用 `context_excerpt`，两者写进草稿（`TaskDraft.task_goal` / `conversation_context`）供失败重试。受保护入口、页面模板与路由零改动。
+- **测试**：`test_task_intake.py` 重写为 23 例；`test_run_control.py` +6（本地兜底表、判定类别解析、新题状态块、三条端到端）；`test_chat_turns.py` +5（【接待判定】注入与 `meta.intake` 落库、无 intake / 任务页不变、无状态通道、校验、问题分析摘要）；`task-start-state.test.mjs` +1。
+
+当日执行并通过：`pytest backend/api/tests` 532 passed / 2 skipped、`npm run check --workspace @openmathmodel/web`、`npm run build --workspace @openmathmodel/web`（index 848.58 kB）、`node --test`（194/194）、`npm run check --workspace @openmathmodel/contracts`、`export_openapi.py --check`（基线已重导出）、`check_compat.py`、`validate.py`。未验：真实模型下的判定质量（用例全部打桩），以及首页「提议 → 回一句开始 → 进入执行页」的浏览器走查。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

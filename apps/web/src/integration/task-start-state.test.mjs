@@ -65,6 +65,30 @@ test("keeps a positive image count and drops junk values (ADR-0010)", () => {
   assert.equal(draft.attachments[2].images, undefined);
 });
 
+test("keeps the intake task goal and conversation excerpt for retries (ADR-0024)", () => {
+  const draft = parseTaskDraft(JSON.stringify({
+    version: 1,
+    description: "好的，开始吧",
+    task_goal: "  我们想优化共享单车的夜间调度  ",
+    conversation_context: `用户：${"甲".repeat(5000)}`,
+    attachments: [],
+  }));
+  assert.ok(draft);
+  assert.equal(draft.task_goal, "我们想优化共享单车的夜间调度");
+  assert.equal(draft.conversation_context.length, 3000);
+
+  const bare = parseTaskDraft(JSON.stringify({
+    version: 1,
+    description: "读题",
+    task_goal: "   ",
+    conversation_context: 42,
+    attachments: [],
+  }));
+  assert.ok(bare);
+  assert.equal("task_goal" in bare, false);
+  assert.equal("conversation_context" in bare, false);
+});
+
 test("builds the canonical run-aware workspace URL", () => {
   assert.equal(
     buildRunningUrl(`run_${"a".repeat(32)}`, `proj_${"b".repeat(32)}`),
