@@ -1,0 +1,78 @@
+/* Existing document slots remain the source of truth for empty/populated state. */
+[data-modeling-shell] .has-workflow-empty:is(.focused-conclusion-strip, .focused-report-conclusion) {
+  display: block; padding: 0; background: transparent; border: 0; box-shadow: none;
+}
+.has-workflow-empty > [data-stage-empty],
+.deliverables.has-workflow-empty > .deliverable-head,
+.deliverables.has-workflow-empty > [data-artifact-empty],
+.paper-editor.has-workflow-empty > .editor-page { display: none; }
+[data-workspace-panel="model-plan"]:has(.workflow-empty) > :is(.focused-plan-list, .selected-plan-overview):empty { display: none; }
+[data-modeling-shell] .deliverables.has-workflow-empty { border: 0; background: transparent; }
+[data-modeling-shell] .workflow-empty {
+  min-height: clamp(300px, 52vh, 560px);
+  width: 100%; padding: 52px 24px 64px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  text-align: center; color: #20262e; box-sizing: border-box;
+}
+[data-modeling-shell] .workflow-empty .workflow-scene {
+  position: relative; display: block; width: 300px; max-width: 100%; height: 188px;
+  flex-shrink: 0; margin: 0 0 24px; padding: 0; border: 0; background: transparent;
+  color: #8492a3; cursor: pointer; border-radius: 20px;
+}
+.workflow-scene:focus-visible { outline: 2px solid #91a1b5; outline-offset: 4px; }
+.workflow-scene-art { position: absolute; inset: 0; display: block; transition: transform 220ms ease; }
+.workflow-scene:hover .workflow-scene-art { transform: translateY(-3px); }
+.workflow-scene:active .workflow-scene-art { transform: scale(.98); }
+.workflow-scene-board { width: 100%; height: 100%; overflow: visible; }
+.workflow-scene-jelly { position: absolute; width: 106px; height: 118px; left: 19px; top: 57px; animation: stage-jelly-drift 4.8s ease-in-out infinite; }
+.workflow-scene-jelly svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.workflow-scene .jelly-tentacles { transform-origin: 100px 115px; animation: stage-tentacles 3.4s ease-in-out infinite alternate; }
+.workflow-scene .jelly-eyes { transform-box: fill-box; transform-origin: center; animation: stage-blink 6s infinite; }
+.workflow-scene .jelly-pencil { transform-origin: 48px 155px; animation: stage-pencil 3s ease-in-out infinite; }
+.workflow-scene .jelly-book-page { transform-origin: 103px 145px; animation: stage-page 4s ease-in-out infinite; }
+.workflow-scene .jelly-wave-hand { transform-origin: 159px 145px; animation: stage-wave .6s ease-in-out infinite alternate; }
+.scene-board { animation: stage-board 6s ease-in-out infinite; }
+.scene-floating-sheet { animation: stage-sheet 4.6s ease-in-out infinite; }
+.scene-data-row { animation: stage-row 5s ease-in-out infinite; }
+.scene-scan { animation: stage-scan 5s ease-in-out infinite; }
+.scene-draw { stroke-dasharray: 1; animation: stage-draw 6s ease-in-out infinite; }
+.scene-node { animation: stage-node 5s ease-in-out infinite; }
+.scene-signal { offset-path: path("M143 106L191 74L241 106L191 139Z"); animation: stage-signal 5s linear infinite; }
+.scene-line path { stroke-dasharray: 1; animation: stage-draw 6s ease-in-out infinite; animation-delay: inherit; }
+.scene-file { animation: stage-file 5s ease-in-out infinite; }
+.scene-delay-1 { animation-delay: .55s; }
+.scene-delay-2 { animation-delay: 1.1s; }
+.scene-reaction { animation: stage-reaction 1.3s ease-out both; }
+[data-reacting="yes"] .scene-board { animation: stage-celebrate 1.3s ease-out; }
+.workflow-scene[data-moving="off"] *, .workflow-scene[data-moving="off"] *::before { animation-play-state: paused !important; }
+@keyframes stage-jelly-drift { 0%,100% { transform: translateY(1px) rotate(-3deg); } 50% { transform: translateY(-7px) rotate(2deg); } }
+@keyframes stage-tentacles { to { transform: skewX(5deg) scaleY(.95); } }
+@keyframes stage-blink { 0%,44%,48%,100% { transform: scaleY(1); } 46% { transform: scaleY(.12); } }
+@keyframes stage-pencil { 0%,65%,100% { transform: rotate(0); } 25%,45% { transform: rotate(7deg); } 35%,55% { transform: rotate(-3deg); } }
+@keyframes stage-page { 0%,65%,100% { transform: scaleX(1); } 80% { transform: scaleX(.25); } }
+@keyframes stage-wave { to { transform: rotate(-14deg); } }
+@keyframes stage-board { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes stage-sheet { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+@keyframes stage-row { 0%,100% { opacity: .45; transform: translateX(-3px); } 25%,80% { opacity: 1; transform: translateX(0); } }
+@keyframes stage-scan { 0% { transform: translateY(0); opacity: 0; } 15%,75% { opacity: .7; } 90%,100% { transform: translateY(72px); opacity: 0; } }
+@keyframes stage-draw { 0% { stroke-dashoffset: 1; opacity: .3; } 45%,85% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: .3; } }
+@keyframes stage-node { 0%,100% { opacity: .5; } 40%,70% { opacity: 1; } }
+@keyframes stage-signal { to { offset-distance: 100%; } }
+@keyframes stage-file { 0%,100% { transform: translateY(2px); } 40%,65% { transform: translateY(-6px); } }
+@keyframes stage-reaction { 0% { opacity: 0; } 20%,65% { opacity: 1; } 100% { opacity: 0; transform: translateY(-10px); } }
+@keyframes stage-celebrate { 0%,100% { transform: translateY(0); } 25% { transform: translateY(-9px); } 50% { transform: translateY(1px); } 75% { transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .workflow-scene *, .workflow-scene *::before { animation: none !important; transition: none !important; } }
+[data-modeling-shell] .workflow-empty-title { font-size: 19px; font-weight: 600; line-height: 1.6; }
+[data-modeling-shell] .workflow-empty-detail { max-width: 360px; margin: 10px 0 0; color: #89919e; font-size: 14px; line-height: 1.8; }
+[data-modeling-shell] .workflow-empty-write { margin-top: 22px; border: 0; border-bottom: 1px solid #ccd0d6; border-radius: 0; background: transparent; padding: 4px 0; color: #555f6c; cursor: pointer; }
+.paper-editor.has-workflow-empty { display: flex; flex-direction: column; }
+.paper-editor > .workflow-empty { flex: 1; }
+html[data-reduce-motion="on"] .workflow-empty *,
+html[data-reduce-motion="on"] .workflow-empty *::before,
+html[data-reduce-motion="on"] .workflow-empty *::after { animation: none !important; transition: none !important; }
+@media (max-width: 640px) {
+  [data-modeling-shell] .workflow-empty { min-height: 310px; padding: 40px 14px; }
+  [data-modeling-shell] .workflow-empty .workflow-scene { width: 250px; height: 156px; margin-bottom: 20px; }
+  .workflow-scene-jelly { width: 88px; height: 98px; left: 16px; top: 47px; }
+  [data-modeling-shell] .workflow-empty-title { font-size: 17px; }
+}

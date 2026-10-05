@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import LoginPage from "./auth/LoginPage";
 import {
   ConfirmTaskScreen,
   DataScreen,
@@ -17,6 +18,7 @@ import {
 } from "./screens";
 
 const routes = new Map<string, ComponentType>([
+  ["/login", LoginPage],
   ["/", NewTaskScreen],
   ["/confirm", ConfirmTaskScreen],
   ["/task/running", TaskRunningScreen],

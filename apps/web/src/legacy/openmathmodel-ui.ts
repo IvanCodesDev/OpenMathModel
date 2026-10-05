@@ -109,6 +109,7 @@ import {
   TEXT_BASE_PX,
 } from "../preferences/display-preferences";
 import { mountTaskAutosave } from "../tasks/task-autosave";
+import { mountWorkflowEmptyStates } from "../integration/workflow-empty";
 
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
@@ -969,7 +970,7 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
                   <button class="source-chip" contenteditable="false" data-action="source-detail" title="点击引用到左侧对话，直接提问或要求修改">来源：Run #04 · 结果表 2　${icon("arrow-square-out")}</button>
                   <h3>3.3 模型设定</h3><p>采用基于图卷积网络（GCN）的时空预测模型，结合区域间拓扑关系与动态特征，捕捉需求的时空相关性。</p><p>模型目标函数如下：</p>
                   <div class="editor-formula" data-tex="\\min\\;\\sum_{i=1}^{N}\\sum_{t=1}^{T}\\left(y_{it}-\\hat{y}_{it}\\right)^{2}+\\lambda\\lVert\\Theta\\rVert_{2}^{2}" contenteditable="false" title="点击编辑公式"><em>min</em>　∑<sub>i=1</sub><sup>N</sup> ∑<sub>t=1</sub><sup>T</sup> (y<sub>it</sub> − ŷ<sub>it</sub>)² + λ‖Θ‖²<sub>2</sub></div>
-                  <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>` : `<p class="editor-placeholder">论文正文将在写作阶段生成，也可以直接在这里开始撰写。</p>`}
+                  <p>其中，y<sub>it</sub> 表示区域 i 在时段 t 的真实需求，ŷ<sub>it</sub> 表示模型预测值，Θ 为模型参数，λ 为正则化系数。</p>` : `<p class="editor-placeholder"><br></p>`}
                 </div>
                 <input type="file" accept="image/*" hidden data-editor-image-input>
                 <footer class="editor-statusbar">
@@ -1517,10 +1518,11 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
     const recipe = methodRecipes[entry.id];
 
     return `
-      <div class="method-heading">
+      <article class="method-article" aria-labelledby="method-article-title">
+      <header class="method-heading">
         <div>
           <div class="method-category-tag">${escapeHtml(entry.category)}</div>
-          <h1 data-method-title>${escapeHtml(entry.name)}</h1>
+          <h1 id="method-article-title" data-method-title>${escapeHtml(entry.name)}</h1>
           <div class="method-sub">${escapeHtml(entry.subtitle)}</div>
         </div>
         <div class="method-actions">
@@ -1528,24 +1530,25 @@ import { mountTaskAutosave } from "../tasks/task-autosave";
           <button data-action="method-compare-toggle" data-method-id="${escapeHtml(entry.id)}" class="${comparing ? "saved" : ""}" aria-pressed="${comparing}">${icon(comparing ? "check" : "columns")} ${comparing ? "已加入对比" : "加入对比"}</button>
           <button class="primary" data-action="use-method" data-method-id="${escapeHtml(entry.id)}" data-method-name="${escapeHtml(entry.name)}">用于当前任务</button>
         </div>
+      </header>
+      <div class="method-article-body">
+        <section><h2>方法简介</h2><p>${escapeHtml(entry.introduction)}</p></section>
+        <section><h2>适用场景</h2>${methodListMarkup(entry.scenarios)}</section>
+        <section><h2>何时不要用</h2>${methodListMarkup(entry.antipatterns)}</section>
+        <section><h2>标准流程</h2><ol class="method-workflow">${entry.workflow.map(step => `<li>${escapeHtml(step)}</li>`).join("")}</ol></section>
+        <section><h2>输入与输出</h2><p><strong>输入：</strong>${escapeHtml(entry.input)}</p><p><strong>输出：</strong>${escapeHtml(entry.output)}</p></section>
+        <section><h2>核心假设</h2>${methodListMarkup(entry.assumptions)}</section>
+        <section><h2>优点</h2>${methodListMarkup(entry.advantages)}</section>
+        <section><h2>限制</h2>${methodListMarkup(entry.limitations)}</section>
+        <section><h2>常见失败与修正</h2>${methodPitfallMarkup(entry.pitfalls)}</section>
+        <section><h2>稳健性检查</h2>${methodListMarkup(entry.robustness)}</section>
+        <section><h2>评价指标</h2><p>${escapeHtml(entry.metrics.join("、"))}</p></section>
+        <section><h2>核心公式</h2><div class="formula" data-tex="${escapeHtml(recipe.formula)}">${escapeHtml(recipe.formula)}</div></section>
+        <section><h2>代码示例</h2>${codeBlockMarkup(entry.id, recipe)}</section>
+        <section><h2>相关赛题</h2>${resourceLinks(relatedProblems, routes.problemDetail, item => item.code)}</section>
+        <section><h2>相关优秀论文</h2>${resourceLinks(relatedPapers, routes.paperDetail, item => `${item.award} · ${item.team_id || item.problem_code}`)}</section>
       </div>
-      <table class="method-table"><tbody>
-        <tr><th>方法简介</th><td>${escapeHtml(entry.introduction)}</td></tr>
-        <tr><th>适用场景</th><td>${methodListMarkup(entry.scenarios)}</td></tr>
-        <tr class="method-row-warn"><th>${icon("warning-octagon")}何时不要用</th><td>${methodListMarkup(entry.antipatterns)}</td></tr>
-        <tr><th>标准流程</th><td><ol class="method-workflow">${entry.workflow.map(step => `<li>${escapeHtml(step)}</li>`).join("")}</ol></td></tr>
-        <tr><th>输入与输出</th><td><strong>输入：</strong>${escapeHtml(entry.input)}<br><strong>输出：</strong>${escapeHtml(entry.output)}</td></tr>
-        <tr><th>核心假设</th><td>${methodListMarkup(entry.assumptions)}</td></tr>
-        <tr><th>优点</th><td>${methodListMarkup(entry.advantages)}</td></tr>
-        <tr><th>限制</th><td>${methodListMarkup(entry.limitations)}</td></tr>
-        <tr class="method-row-pitfall"><th>${icon("first-aid-kit")}常见失败与修正</th><td>${methodPitfallMarkup(entry.pitfalls)}</td></tr>
-        <tr class="method-row-check"><th>${icon("shield-check")}稳健性检查</th><td>${methodListMarkup(entry.robustness)}</td></tr>
-        <tr><th>评价指标</th><td>${escapeHtml(entry.metrics.join("、"))}</td></tr>
-        <tr><th>核心公式</th><td><div class="formula" data-tex="${escapeHtml(recipe.formula)}">${escapeHtml(recipe.formula)}</div></td></tr>
-        <tr><th>代码示例</th><td>${codeBlockMarkup(entry.id, recipe)}</td></tr>
-        <tr><th>相关赛题</th><td>${resourceLinks(relatedProblems, routes.problemDetail, item => item.code)}</td></tr>
-        <tr><th>相关优秀论文</th><td>${resourceLinks(relatedPapers, routes.paperDetail, item => `${item.award} · ${item.team_id || item.problem_code}`)}</td></tr>
-      </tbody></table>`;
+      </article>`;
   }
 
   const COMPARE_ROWS = [
@@ -5391,6 +5394,7 @@ export function activateScreen(screen: ScreenId): void {
   // 论文大纲按编辑器里实际的章标题重建，不让恢复出来的正文配一个「将在论文生成后显示」
   // 的空目录。演示夹具的大纲是固定样张，不动。
   if (!demoMode()) syncPaperOutlineFromEditor();
+  mountWorkflowEmptyStates();
   // 模型选择器换成真实接口池（Auto + 已保存接口），未配置时保持演示选项。
   void hydrateModelPickers();
 }

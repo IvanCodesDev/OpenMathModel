@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { useLayoutEffect } from "react";
-import parse from "html-react-parser";
+import parse, { Element } from "html-react-parser";
+import HomeMascot from "./HomeMascot";
+import HomeIntro from "./HomeIntro";
 import { t } from "../i18n/locale";
 import { activateScreen, getScreenMarkup } from "../legacy/openmathmodel-ui";
 import type { ScreenId } from "../types/screens";
@@ -25,5 +27,19 @@ export default function OpenMathModelScreen({ screen, title }: OpenMathModelScre
     return <div className="react-html-root" dangerouslySetInnerHTML={{ __html: markup }} />;
   }
 
-  return parse(markup);
+  return parse(markup, screen === "new" ? {
+    replace(node) {
+      if (node instanceof Element && node.name === "img" && node.attribs.class?.split(/\s+/).includes("hero-logo")) {
+        return <HomeMascot />;
+      }
+      if (node instanceof Element && node.parent instanceof Element && node.parent.attribs.class?.split(/\s+/).includes("new-screen")) {
+        if (node.name === "h1") {
+          const subtitle = node.parent.children.find(child => child instanceof Element && child.name === "p" && child.attribs.class?.split(/\s+/).includes("lead"));
+          const textOf = (element: Element) => element.children.filter(child => child.type === "text").map(child => child.data).join("");
+          if (subtitle instanceof Element) return <HomeIntro title={textOf(node)} subtitle={textOf(subtitle)} />;
+        }
+        if (node.name === "p" && node.attribs.class?.split(/\s+/).includes("lead")) return <></>;
+      }
+    },
+  } : undefined);
 }

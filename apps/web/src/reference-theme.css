@@ -226,16 +226,20 @@ html:root .settings-backdrop {
 
 html:root .settings-dialog {
   background: #fff;
-  border-color: var(--line);
+  border-color: transparent;
   color: var(--ink);
   box-shadow: 0 28px 90px rgb(24 36 54 / 18%);
 }
 
-html:root .settings-sidebar { background: var(--soft); border-color: var(--line); }
-html:root .settings-scroll { background: #f8fafc; }
-html:root .settings-dialog :is(.settings-header, .settings-footer, .settings-section, .usage-stat, .provider-card, .usage-table) {
+html:root .settings-sidebar { background: var(--soft); border-color: transparent; }
+html:root :is(.settings-content, .settings-scroll) { background: #f8fafc; }
+html:root .settings-dialog :is(.settings-header, .settings-footer) {
+  background: transparent;
+  border-color: transparent;
+}
+html:root .settings-dialog :is(.settings-section, .usage-stat, .provider-card, .usage-table) {
   background: #fff;
-  border-color: var(--line);
+  border-color: transparent;
 }
 
 html:root .settings-dialog :is(.settings-nav button, .settings-field, .settings-range, .settings-row-copy strong) { color: #465263; }
@@ -245,7 +249,8 @@ html:root .settings-nav button:hover { background: #eaf0f5; color: var(--ink); }
 html:root .settings-nav button.active { background: var(--soft-2); color: var(--ink); }
 html:root .settings-nav button.active i { color: var(--ink); }
 
-html:root .settings-dialog :is(.settings-row, .settings-account-card, .security-item, .device-item, .endpoint-item, .api-advanced, .settings-plan) { border-color: var(--line); }
+/* Hide box outlines and dividers without changing their geometry or palette. */
+html:root .settings-dialog :is(.settings-row, .settings-account-card, .security-item, .device-item, .endpoint-item, .api-advanced, .settings-plan, .usage-table > div) { border-color: transparent; }
 html:root .settings-dialog :is(.settings-field input, .settings-field select, .settings-field textarea, .field-with-unit, .secret-field button) {
   border-color: var(--line);
   background: #fff;

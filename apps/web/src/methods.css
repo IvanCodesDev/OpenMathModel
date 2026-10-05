@@ -1,0 +1,89 @@
+/* Method details read as a continuous article; comparison keeps its table. */
+.method-article {
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
+  container-type: inline-size;
+  margin-inline: auto;
+  color: var(--ink);
+}
+.method-article .method-heading {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 36px;
+}
+.method-article .method-category-tag {
+  height: auto;
+  margin-bottom: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+.method-article h1 { font-size: clamp(26px, 2.3vw, 34px); line-height: 1.4; text-wrap: pretty; }
+.method-article .method-sub { margin-top: 10px; font-size: 15px; line-height: 1.7; color: var(--muted); }
+.method-article .method-actions { flex-shrink: 0; flex-wrap: nowrap; margin: 0 0 0 auto; gap: 10px; }
+html:root .method-tree .tree-child.active {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: inherit;
+  font-weight: 600;
+}
+.method-article-body { font-size: 16px; line-height: 1.9; overflow-wrap: anywhere; }
+.method-article-body > section { margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.method-article-body > section + section { margin-top: 32px; }
+.method-article h2 { margin: 0 0 12px; color: var(--ink); font-size: 20px; font-weight: 650; line-height: 1.5; }
+.method-article p { margin: 0; }
+.method-article p + p { margin-top: 10px; }
+.method-article :is(.method-copy-list, .method-workflow) { padding-left: 1.5em; }
+.method-article li { padding-left: 4px; }
+.method-article li + li { margin-top: 8px; }
+.method-article li::marker { color: var(--muted); }
+.method-article strong { font-weight: 600; }
+.method-article .pitfall-symptom { font-weight: 500; }
+.method-article .pitfall-fix { margin-top: 4px; color: var(--muted); }
+.method-article .method-pitfall-list li + li { margin-top: 18px; }
+.method-article .formula {
+  max-width: 100%;
+  margin: 20px 0;
+  padding: 12px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  font-size: 17px;
+}
+.method-article .formula .katex-display { margin: 0; padding-block: 4px; }
+.method-article .formula .katex { font-size: 1.05em; }
+.method-article .formula:not([data-tex-done]) { font: 13px/1.7 "JetBrains Mono", monospace; }
+.method-article .code-block { min-width: 0; margin-top: 16px; }
+.method-article .code-tabs { flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.method-article .code-tabs button { height: 32px; font-size: 13px; }
+.method-article .code-snippet { max-width: 100%; padding: 20px; border: 0; border-radius: 8px; background: var(--soft); color: var(--ink); font: 13px/1.8 "JetBrains Mono", Consolas, monospace; }
+.method-article .related-resource-list { gap: 10px; }
+.method-article .related-resource-link { color: inherit; line-height: 1.8; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 4px; }
+.method-article .related-resource-link:hover { text-decoration-color: currentColor; }
+@container (max-width: 600px) {
+  .method-article .method-heading { flex-wrap: wrap; }
+  .method-article .method-heading > div:first-child { flex-basis: 100%; }
+  .method-article .method-actions { order: -1; }
+}
+@container (max-width: 300px) {
+  .method-article .method-actions { gap: 6px; }
+  .method-article .method-actions button { padding-inline: 8px; font-size: 12px; }
+}
+@media (max-width: 600px) {
+  .method-article .method-heading { margin-bottom: 30px; }
+  .method-article-body { font-size: 15px; line-height: 1.85; }
+  .method-article h2 { font-size: 19px; }
+  .method-article .code-snippet { padding: 16px; }
+}
+@container (min-width: 301px) and (max-width: 600px) {
+  .method-article .method-actions { gap: 8px; }
+  .method-article .method-actions button { padding-inline: 12px; }
+}

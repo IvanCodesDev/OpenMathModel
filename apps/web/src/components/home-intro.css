@@ -1,0 +1,18 @@
+.home-intro-line { position: relative; }
+.home-intro-readable {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.home-intro-character {
+  opacity: var(--character-opacity, 1);
+}
+html[data-reduce-motion="on"] .home-intro-character { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .home-intro-character { opacity: 1; }
+}

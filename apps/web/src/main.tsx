@@ -20,6 +20,7 @@ import "./projects.css";
 import "./attachments/attachments.css";
 import "./reference-theme.css";
 import "./papers.css";
+import "./methods.css";
 // 放在最后：可读性覆盖需要在同等特异性下压过上面两张基线样式表
 import "./accessibility.css";
 
