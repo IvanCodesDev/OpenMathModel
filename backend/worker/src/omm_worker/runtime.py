@@ -294,6 +294,9 @@ class WorkerRuntime:
 
         workspace = TaskWorkspace(self.config.workspaces_dir, run_id)
         services.artifacts = WorkspaceArtifactStore(workspace)
+        # 收尾运行通过后删掉失败运行留下的文件（节点经 extras 调用，只删本运行工作区内的文件；
+        # 与 API 侧 open_engine 同构）
+        services.extras["discard_workspace_files"] = workspace.discard
 
         # 沙箱共用 run 的产物存储实例：实验代码创建的文件与节点发布的产物走同
         # 一条存储路径（与 API 侧把沙箱 store 指向其 ApiArtifactStore 同构）。

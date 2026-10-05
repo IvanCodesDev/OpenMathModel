@@ -1836,6 +1836,13 @@ class _SandboxCapture:
         else:
             self.artifacts[slot] = ref
 
+    def forget(self, artifact_ids: Collection[str]) -> None:
+        """收尾清理删掉的文件：它们当时报上来的产物不再算本阶段产出。"""
+        if not artifact_ids:
+            return
+        self.artifacts = [ref for ref in self.artifacts if ref.artifact_id not in artifact_ids]
+        self._slots = {_artifact_key(ref): index for index, ref in enumerate(self.artifacts)}
+
     def observe(self, result: ToolResult) -> None:
         output = result.output or {}
         self.stdout = str(output.get("stdout") or "")
@@ -1942,6 +1949,43 @@ def _finalize_note(services: NodeServices, label: str) -> Callable[[int], None]:
         })
 
     return note
+
+
+#: 收尾清理旁白里点名的文件数上限。
+_CLEANUP_LISTED_FILES = 8
+
+
+def _finalize_cleanup(
+    services: NodeServices, capture: _SandboxCapture, label: str
+) -> Callable[[Mapping[str, Sequence[str]]], list[str]] | None:
+    """收尾运行通过后删掉失败运行留下的文件，并从本阶段采集里拿掉它们报过的产物。
+
+    删除能力由执行侧经 ``extras["discard_workspace_files"]`` 注入（只删工作区内的文件）；没有就
+    返回 None，执行体不做收尾清理（与 v3.63 行为一致）。删了什么补一句执行轨迹旁白，内容仍在
+    产物记录里可查。
+    """
+    remover = (services.extras or {}).get("discard_workspace_files")
+    if remover is None:
+        return None
+
+    def discard(leftovers: Mapping[str, Sequence[str]]) -> list[str]:
+        removed = [str(path) for path in remover(list(leftovers))]
+        capture.forget({artifact_id for path in removed for artifact_id in leftovers.get(path, ())})
+        if removed:
+            names = "、".join(removed[:_CLEANUP_LISTED_FILES])
+            if len(removed) > _CLEANUP_LISTED_FILES:
+                names += " 等"
+            _emit_progress(services, {
+                "kind": "agent_note",
+                "prompt_id": label,
+                "text": (
+                    f"收尾时删掉了失败运行留下的 {len(removed)} 个文件（复跑的那一版没有写它们）："
+                    f"{names}。"
+                ),
+            })
+        return removed
+
+    return discard
 
 
 def _env_fingerprint(ctx: NodeContext, services: NodeServices) -> dict[str, Any]:
@@ -2248,6 +2292,7 @@ class DataPreparationNode(LlmSkillNode):
                     ),
                     on_final_answer=final_answer.update,
                     on_finalize=_finalize_note(services, CLEANING_PROMPT_ID),
+                    discard_files=_finalize_cleanup(services, capture, CLEANING_PROMPT_ID),
                 )
                 return ResultEnvelope(
                     status="done",
@@ -3364,6 +3409,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                     ok=outcome.ok, error_code=outcome.error_code
                 ),
                 on_finalize=_finalize_note(services, template_id),
+                discard_files=_finalize_cleanup(services, capture, template_id),
             )
             return report, capture, final_answer
 
@@ -4162,6 +4208,7 @@ class ValidationNode(LlmSkillNode):
                     on_final_answer=final_answer.update,
                     normalize_language=normalize_language,
                     on_finalize=_finalize_note(services, template_id),
+                    discard_files=_finalize_cleanup(services, capture, template_id),
                 )
                 return ResultEnvelope(
                     status="done",
@@ -5418,6 +5465,7 @@ class PaperWritingNode(LlmSkillNode):
                     on_final_answer=final_answer.update,
                     normalize_language=normalize_language,
                     on_finalize=_finalize_note(services, figures_template_id),
+                    discard_files=_finalize_cleanup(services, capture, figures_template_id),
                 )
                 return ResultEnvelope(
                     status="done",

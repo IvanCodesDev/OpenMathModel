@@ -199,13 +199,15 @@ def _ws_write(workspace: TaskWorkspace):
     def handler(arguments: dict[str, Any], _ctx: ToolCallContext) -> ToolResult:
         path = str(arguments.get("path") or "")
         text = str(arguments.get("text") or "")
+        # 新建还是覆盖：收尾运行清理失败运行留下的文件时，只删它们新建的
+        created = not workspace.exists(path)
         try:
             workspace.write_text(path, text)
         except WorkspaceViolation as exc:
             return ToolResult(status="failed", error=str(exc))
         return ToolResult(
             status="succeeded",
-            output={"path": path, "bytes": len(text.encode("utf-8"))},
+            output={"path": path, "bytes": len(text.encode("utf-8")), "created": created},
         )
 
     return handler

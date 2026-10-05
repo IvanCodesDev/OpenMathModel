@@ -19,6 +19,8 @@ sandbox-run-report.v1 同构的报告 dict。
    **收尾运行**：波末最后一次运行没过验收、而更早某次运行的结果能全过时，执行体把那次
    的代码原样再跑一遍——不占 R2 预算、不计 usage.runs（与节点复跑核对同口径），经同一个
    执行器，所以工作区、产物采集、发布代码与指标都回到那一版，下游「最后一次运行」口径不变。
+   调用方给了 ``discard_files`` 时，晚于来源运行、失败版新建且复跑没有重新写出的文件在验收
+   时当作不存在，复跑通过后交给它删掉——工作区与节点采集里都不再留失败版的文件。
 4. **实现语言由任务卡定，模型无权换（§7.4，H7）**：``SandboxTask.language`` 是 G1
    确认下来的语言；执行体把 ``code_run`` 的 ``language`` 固定成它——模型漏传就补上，
    传了别的语言就退回一条观察（不执行、不计预算）；语言不是 python 时 ``python_run``
@@ -33,12 +35,13 @@ harness 不 import skills（prompt 文本由调用方给）、不 import tools�
 from __future__ import annotations
 
 import json
+import posixpath
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from omm_agent_core.models import ToolResult
+from omm_agent_core.models import ArtifactRef, ToolResult
 
 from .budget import LoopBudget
 from .context import ContextAssembler, Section
@@ -66,6 +69,10 @@ CODE_RUN_TOOL_NAME = "code_run"
 
 #: 两个名字都算「一次沙箱运行」：R2 预算、证据采集、最终代码回收一视同仁。
 RUN_TOOL_NAMES = frozenset({PYTHON_TOOL_NAME, CODE_RUN_TOOL_NAME})
+
+#: 工作区写文件工具名（与 omm_agent_tools 的 ws_write 一致）：收尾清理要知道模型在哪次运行
+#: 之后新建过哪些文件。
+_WS_WRITE_TOOL = "ws_write"
 
 #: 任务卡缺省实现语言（python_run 时代的唯一语言；方案卡 language 缺省也是它）。
 DEFAULT_LANGUAGE = "python"
@@ -224,6 +231,57 @@ class _RunRecord:
     result: ToolResult
 
 
+@dataclass(frozen=True)
+class _Writes:
+    """一次真执行（模型运行 / 收尾复跑）或一次 ws_write 在工作区里留下的痕迹：新建、写过（含新建）、
+    删掉的工作区相对路径，以及运行报上来的产物。"""
+
+    created: frozenset[str] = frozenset()
+    written: frozenset[str] = frozenset()
+    deleted: frozenset[str] = frozenset()
+    artifacts: tuple[ArtifactRef, ...] = ()
+
+
+def _workspace_path(value: Any) -> str:
+    """工作区相对路径归一：反斜杠换成 /、去掉 ./ 与重复分隔（ws_write 的 path 是模型原样给的）。"""
+    text = str(value or "").strip().replace("\\", "/")
+    normalized = posixpath.normpath(text) if text else ""
+    return "" if normalized in {"", "."} else normalized
+
+
+def _path_set(value: Any) -> frozenset[str]:
+    if not isinstance(value, (list, tuple)):
+        return frozenset()
+    return frozenset(path for path in map(_workspace_path, value) if path)
+
+
+def _run_writes(result: ToolResult) -> _Writes:
+    """执行器报上来的本次新建 / 改写 / 删掉的路径（tools 的 created_files 等，缺席当作没有）。"""
+    output = result.output or {}
+    created = _path_set(output.get("created_files"))
+    return _Writes(
+        created=created,
+        written=created | _path_set(output.get("modified_files")),
+        deleted=_path_set(output.get("deleted_files")),
+        artifacts=tuple(result.artifacts),
+    )
+
+
+def _basename(path: str) -> str:
+    return path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _hiding(read_text: Callable[[str], str], gone: frozenset[str]) -> Callable[[str], str]:
+    """读文件时把 ``gone`` 里的路径当作不存在（收尾验收不许靠失败版留下的文件）。"""
+
+    def read(path: str) -> str:
+        if _workspace_path(path) in gone:
+            raise FileNotFoundError(path)
+        return read_text(path)
+
+    return read
+
+
 class _RunTracker:
     """沙箱运行（python_run / code_run）的预算、语言路由与证据跟踪：包装注入的工具执行器。
 
@@ -232,7 +290,9 @@ class _RunTracker:
       python 却调 python_run → 退回观察（不执行、不计预算）；
     - 证据采集：记录最后一次运行的代码/结果、每次模型运行的记录与全部产物 id；
     - 观察加注：回给模型的那份附运行预算，失败的另附 stderr / stdout 尾部（原始结果照存）；
-    - 收尾运行（:meth:`finalize`）：原样重跑某次模型运行，不计 ``runs``。
+    - 收尾运行（:meth:`finalize`）：原样重跑某次模型运行，不计 ``runs``；
+    - 收尾清理：按执行顺序记下每次真执行与 ws_write 新建 / 写过 / 删掉的路径，
+      :meth:`leftovers` 据此找出晚于来源运行、失败版留下的文件。
     """
 
     def __init__(
@@ -257,6 +317,9 @@ class _RunTracker:
         self.history: list[_RunRecord] = []
         #: 已被拿来收尾过的模型运行（history 下标）：每次运行最多收尾一次
         self.finalized_from: set[int] = set()
+        #: 执行时间线（模型运行、收尾复跑、ws_write 按发生顺序）与模型运行在其中的位置
+        self._timeline: list[_Writes] = []
+        self._positions: list[int] = []
 
     def _route(self, call: ToolCall) -> ToolCall | ToolResult:
         """把一次运行调用钉在任务卡语言上；违约返回失败观察而不是改写模型的意图。"""
@@ -292,7 +355,11 @@ class _RunTracker:
         results: list[ToolResult] = []
         for call in calls:
             if call.name not in RUN_TOOL_NAMES:
-                results.extend(self._inner([call]))
+                passed_through = list(self._inner([call]))
+                if call.name == _WS_WRITE_TOOL:
+                    for result in passed_through:
+                        self._note_ws_write(call, result)
+                results.extend(passed_through)
                 continue
             routed = self._route(call)
             if isinstance(routed, ToolResult):
@@ -310,6 +377,7 @@ class _RunTracker:
                 continue
             self.runs += 1
             outcome = self._execute(routed)
+            self._positions.append(len(self._timeline) - 1)
             self.history.append(_RunRecord(call=routed, result=outcome))
             results.append(self._observed(outcome))
         return results
@@ -319,10 +387,53 @@ class _RunTracker:
         self.finalized_from.add(index)
         return self._execute(self.history[index].call)
 
+    def leftovers(self, source: int, *, rerun_done: bool = True) -> dict[str, list[str]]:
+        """晚于 ``history[source]`` 的执行新建、收尾复跑没有重新写出的路径 → 它们报上来的产物 id。
+
+        ``rerun_done`` 为 False 是挑来源时的预估：复跑还没跑，按那次运行自己写过的路径算。
+        来源运行（含）之前写过的路径不算——那时它就在工作区里；来源运行之后被删过的路径也不算——
+        可能是原本就在、被失败运行删掉又重建的文件，宁可留着。
+        """
+        position = self._positions[source]
+        if rerun_done:
+            later, rerun = self._timeline[position + 1 : -1], self._timeline[-1].written
+        else:
+            later, rerun = self._timeline[position + 1 :], self._timeline[position].written
+        keep = set(rerun)
+        for entry in self._timeline[: position + 1]:
+            keep |= entry.written
+        for entry in later:
+            keep |= entry.deleted
+        paths = sorted({path for entry in later for path in entry.created} - keep)
+        return {
+            path: [
+                ref.artifact_id
+                for entry in later
+                if path in entry.written
+                for ref in entry.artifacts
+                if _basename(ref.uri) == _basename(path)
+            ]
+            for path in paths
+        }
+
+    def forget(self, artifact_ids: Iterable[str]) -> None:
+        """删掉的文件报过的产物不再参与「最后一次运行的那份」（指标来源）；报告里的全量产物照列。"""
+        for artifact_id in artifact_ids:
+            self.artifact_names.pop(artifact_id, None)
+
+    def _note_ws_write(self, call: ToolCall, result: ToolResult) -> None:
+        output = result.output or {}
+        path = _workspace_path(output.get("path") or call.arguments.get("path"))
+        if not result.ok or not path:
+            return
+        created = frozenset({path}) if output.get("created") else frozenset()
+        self._timeline.append(_Writes(created=created, written=frozenset({path})))
+
     def _execute(self, call: ToolCall) -> ToolResult:
         self.last_code = str(call.arguments.get("code") or "")
         outcome = list(self._inner([call]))[0]
         self.last_result = outcome
+        self._timeline.append(_run_writes(outcome))
         for ref in outcome.artifacts:
             self.artifact_ids.append(ref.artifact_id)
             # 先删后插：同一 id 再报一次也排到最后（「最后一次运行的那份」按插入序取）
@@ -448,6 +559,7 @@ def run_sandbox_task(
     normalize_language: Callable[[Any], str] | None = None,
     on_loop_exit: Callable[[LoopOutcome], None] | None = None,
     on_finalize: Callable[[int], None] | None = None,
+    discard_files: Callable[[Mapping[str, Sequence[str]]], Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """驱动一张任务卡到 sandbox-run-report.v1 形状的报告 dict。
 
@@ -471,6 +583,11 @@ def run_sandbox_task(
     ``on_finalize`` 在收尾运行开跑前回传被复跑的是第几次模型运行（从 1 数），
     父节点据此给执行轨迹补一句说明（那次运行没有模型旁白）。
 
+    ``discard_files`` 给了就开收尾清理：晚于来源运行、失败版新建（运行写出或模型 ws_write）且
+    复跑没有重新写出的文件，在挑来源与复跑后的重评里都当作不存在（通过不能靠它们）；复跑通过后
+    以「路径 → 它们报过的产物 id」交给它删，它回传真删掉的路径，这些产物不再当指标来源。复跑
+    没过就进下一波，模型还要接着改，文件不动。
+
     ``normalize_language`` 是语言别名归一（python3 → python、Rscript → r …），由
     调用方注入以与方案卡 / 执行器同一张表；缺省只做小写去空白。
     """
@@ -486,11 +603,14 @@ def run_sandbox_task(
     waves = 0
     final_answer: dict[str, Any] | None = None
 
-    def evidence_of(result: ToolResult | None, files: Sequence[str]) -> SandboxEvidence:
+    def evidence_of(
+        result: ToolResult | None, files: Sequence[str], hidden: Collection[str] = ()
+    ) -> SandboxEvidence:
         stdout = str((result.output or {}).get("stdout") or "") if result is not None else ""
+        gone = frozenset(hidden)
         return SandboxEvidence(
-            files=tuple(files),
-            read_text=read_text,
+            files=tuple(path for path in files if _workspace_path(path) not in gone),
+            read_text=_hiding(read_text, gone) if gone else read_text,
             last_run=result,
             stdout=stdout,
             metrics=_extract_metrics(stdout),
@@ -506,14 +626,21 @@ def run_sandbox_task(
             record = tracker.history[index]
             if index in tracker.finalized_from or record.result is tracker.last_result:
                 continue
-            if _evaluate(task, evidence_of(record.result, files))[1]:
+            predicted = (
+                tracker.leftovers(index, rerun_done=False) if discard_files is not None else {}
+            )
+            if _evaluate(task, evidence_of(record.result, files, predicted))[1]:
                 break
         else:
             return None
         if on_finalize is not None:
             on_finalize(index + 1)
         tracker.finalize(index)
-        results, ok = _evaluate(task, evidence())
+        stale = tracker.leftovers(index) if discard_files is not None else {}
+        results, ok = _evaluate(task, evidence_of(tracker.last_result, workspace_files(), stale))
+        if ok and stale and discard_files is not None:
+            removed = discard_files(stale)
+            tracker.forget(artifact_id for path in removed for artifact_id in stale.get(path, ()))
         return results, ok, index
 
     passed = False

@@ -32,7 +32,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -645,6 +645,28 @@ def _file_states(root: Path) -> dict[Path, tuple[int, int]]:
     return states
 
 
+def _written_paths(
+    root: Path, before: dict[Path, tuple[int, int]], after: dict[Path, tuple[int, int]]
+) -> dict[str, list[str]]:
+    """本次运行在工作区里新建 / 改写 / 删掉的文件（工作区相对路径，空的不列）。
+
+    产物引用只带文件名；收尾运行要删掉失败运行留下的文件，得知道它们在工作区的哪个位置、
+    是这次新建的还是原本就在。
+    """
+
+    def relative(paths: Iterable[Path]) -> list[str]:
+        return sorted(path.relative_to(root).as_posix() for path in paths)
+
+    written = {
+        "created_files": relative(path for path in after if path not in before),
+        "modified_files": relative(
+            path for path, state in after.items() if path in before and before[path] != state
+        ),
+        "deleted_files": relative(path for path in before if path not in after),
+    }
+    return {key: paths for key, paths in written.items() if paths}
+
+
 def clip_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
     if len(text) > limit:
         return text[:limit] + f"\n...(+{len(text) - limit} chars truncated)"
@@ -693,7 +715,9 @@ class SubprocessRunner:
     def run(
         self, code: str, ctx: ToolCallContext, timeout_s: float | None = None
     ) -> ToolResult:
-        """运行一段代码；输出 dict = exit_code / stdout / stderr / files[/ skipped_files]。"""
+        """运行一段代码；输出 dict = exit_code / stdout / stderr / files[/ skipped_files]，
+        另有本次新建 / 改写 / 删掉的工作区相对路径（created_files / modified_files /
+        deleted_files，空的不列；超时的运行也报，它写下的文件同样留在工作区）。"""
         limit = self.timeout_s if timeout_s is None else min(float(timeout_s), self.timeout_s)
         executable = self.resolve_executable()
         if executable is None:
@@ -717,6 +741,8 @@ class SubprocessRunner:
             env=runner_env(self.spec),
             timeout_s=limit,
         )
+        after = _file_states(scan_root)
+        written = _written_paths(scan_root, before, after)
         if completed.timed_out:
             return ToolResult(
                 status="timeout",
@@ -724,15 +750,17 @@ class SubprocessRunner:
                 output={
                     "stdout": clip_output(completed.stdout),
                     "stderr": clip_output(completed.stderr),
+                    **written,
                 },
             )
 
-        artifacts, skipped = self._collect_artifacts(scan_root, before, ctx)
+        artifacts, skipped = self._collect_artifacts(before, after, ctx)
         output: dict[str, Any] = {
             "exit_code": completed.returncode,
             "stdout": clip_output(completed.stdout),
             "stderr": clip_output(completed.stderr),
             "files": [ref.uri for ref in artifacts],
+            **written,
         }
         if skipped:
             output["skipped_files"] = skipped
@@ -747,13 +775,14 @@ class SubprocessRunner:
         return ToolResult(status="succeeded", output=output, artifacts=tuple(artifacts))
 
     def _collect_artifacts(
-        self, scan_root: Path, before: dict[Path, tuple[int, int]], ctx: ToolCallContext
+        self,
+        before: dict[Path, tuple[int, int]],
+        after: dict[Path, tuple[int, int]],
+        ctx: ToolCallContext,
     ) -> tuple[list[ArtifactRef], list[str]]:
         artifacts: list[ArtifactRef] = []
         skipped: list[str] = []
-        changed = sorted(
-            path for path, state in _file_states(scan_root).items() if before.get(path) != state
-        )
+        changed = sorted(path for path, state in after.items() if before.get(path) != state)
         for path in changed:
             if len(artifacts) >= MAX_ARTIFACTS:
                 skipped.append(f"{path.name} (artifact limit {MAX_ARTIFACTS})")

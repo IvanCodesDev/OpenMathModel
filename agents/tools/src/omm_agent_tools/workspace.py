@@ -20,6 +20,7 @@ import hashlib
 import os
 import shutil
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 from omm_agent_core import ArtifactRef
@@ -95,6 +96,26 @@ class TaskWorkspace:
             for path in self.root.rglob("*")
             if path.is_file()
         )
+
+    def discard(self, paths: Iterable[str]) -> list[str]:
+        """删掉工作区里的这些文件，返回真删掉的那些（收尾运行通过后清理失败运行留下的文件）。
+
+        只删工作区根内的普通文件：越界或绝对路径、目录、不存在的文件一律跳过，不抛。
+        """
+        removed: list[str] = []
+        for relative in paths:
+            try:
+                target = self.resolve(relative)
+            except WorkspaceViolation:
+                continue
+            if not target.is_file():
+                continue
+            try:
+                target.unlink()
+            except OSError:
+                continue
+            removed.append(relative)
+        return removed
 
     def delete(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)

@@ -2103,6 +2103,10 @@ def open_engine(
         governor = services.extras.get("budget_governor")
         # 沙箱运行按次预付计费：越线的那次运行根本不会启动（§4.7）
         services.tools = _BudgetedInvoker(invoker, governor) if governor else invoker
+        # 收尾运行通过后删掉失败运行留下的文件（节点经 extras 调用，只删本运行工作区内的文件）
+        services.extras["discard_workspace_files"] = TaskWorkspace(
+            runtime_settings().workspaces_dir, run.id
+        ).discard
     return engine, snapshot
 
 
