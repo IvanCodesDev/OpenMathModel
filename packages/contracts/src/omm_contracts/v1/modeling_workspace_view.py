@@ -67,6 +67,7 @@ class AgentActionKind(Enum):
     pause = "pause"
     resume = "resume"
     retry = "retry"
+    supplement = "supplement"
     none = "none"
 
 
@@ -109,6 +110,21 @@ class TaskAgentAction(BaseModel):
     option_id: None
 
 
+class SupplementAgentAction(BaseModel):
+    """
+    题意解析被读题准入门拦下（E610，题目信息不足）：请用户在本任务的对话里补充题面，补充后服务端按带题面补充的重试处理。客户端把焦点送进对话输入框，不调用动作接口。
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["supplement"]
+    label: constr(min_length=1, max_length=100)
+    target_route: Route
+    approval_id: None
+    option_id: None
+
+
 class NoneAgentAction(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -122,10 +138,20 @@ class NoneAgentAction(BaseModel):
 
 class AgentAction(
     RootModel[
-        ApproveAgentAction | NavigateAgentAction | TaskAgentAction | NoneAgentAction
+        ApproveAgentAction
+        | NavigateAgentAction
+        | TaskAgentAction
+        | SupplementAgentAction
+        | NoneAgentAction
     ]
 ):
-    root: ApproveAgentAction | NavigateAgentAction | TaskAgentAction | NoneAgentAction
+    root: (
+        ApproveAgentAction
+        | NavigateAgentAction
+        | TaskAgentAction
+        | SupplementAgentAction
+        | NoneAgentAction
+    )
 
 
 class AgentProjection(BaseModel):

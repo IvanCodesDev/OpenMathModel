@@ -13,7 +13,8 @@ export type Route =
   | "/workspace/paper-editor"
   | "/task/complete";
 export type AgentState = "QUEUED" | "WORKING" | "WAITING_APPROVAL" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
-export type AgentAction = ApproveAgentAction | NavigateAgentAction | TaskAgentAction | NoneAgentAction;
+export type AgentAction =
+  ApproveAgentAction | NavigateAgentAction | TaskAgentAction | SupplementAgentAction | NoneAgentAction;
 export type PageStatus = "PENDING" | "RUNNING" | "WAITING_APPROVAL" | "PAUSED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 /**
  * UTC ISO-8601，统一以 Z 结尾。
@@ -69,6 +70,16 @@ export interface NavigateAgentAction {
 }
 export interface TaskAgentAction {
   kind: "pause" | "resume" | "retry";
+  label: string;
+  target_route: Route;
+  approval_id: null;
+  option_id: null;
+}
+/**
+ * 题意解析被读题准入门拦下（E610，题目信息不足）：请用户在本任务的对话里补充题面，补充后服务端按带题面补充的重试处理。客户端把焦点送进对话输入框，不调用动作接口。
+ */
+export interface SupplementAgentAction {
+  kind: "supplement";
   label: string;
   target_route: Route;
   approval_id: null;

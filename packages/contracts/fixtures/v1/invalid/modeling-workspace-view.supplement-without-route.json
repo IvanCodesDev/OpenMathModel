@@ -1,0 +1,36 @@
+{
+  "run_id": "run_44444444444444444444444444444444",
+  "project_id": "proj_55555555555555555555555555555555",
+  "project_name": "城市共享单车调度优化",
+  "goal": "帮我做一下单车调度",
+  "workflow_version": "sim-0.1",
+  "run_status": "FAILED",
+  "active_node": "PROBLEM_ANALYSIS",
+  "active_page": "running",
+  "suggested_route": "/task/running",
+  "agent": {
+    "state": "FAILED",
+    "title": "问题分析执行失败",
+    "summary": "题目信息不足，无法启动建模：缺少题目正文与求解目标。",
+    "current_step": "问题分析执行失败",
+    "action": {
+      "kind": "supplement",
+      "label": "去对话里补充题面",
+      "target_route": null,
+      "approval_id": null,
+      "option_id": null
+    }
+  },
+  "pages": [
+    { "key": "running", "label": "问题分析", "route": "/task/running", "nodes": ["CREATED", "PROBLEM_ANALYSIS"], "status": "FAILED", "artifact_ids": [], "plan_text": null },
+    { "key": "data", "label": "数据准备", "route": "/workspace/data", "nodes": ["DATA_PREPARATION"], "status": "PENDING", "artifact_ids": [], "plan_text": null },
+    { "key": "model", "label": "建模方案", "route": "/workspace/model-plan", "nodes": ["MODEL_PLANNING"], "status": "PENDING", "artifact_ids": [], "plan_text": null },
+    { "key": "experiments", "label": "实验与验证", "route": "/workspace/experiments", "nodes": ["EXPERIMENTING", "VALIDATING"], "status": "PENDING", "artifact_ids": [], "plan_text": null },
+    { "key": "editor", "label": "论文编辑", "route": "/workspace/paper-editor", "nodes": ["PAPER_WRITING"], "status": "PENDING", "artifact_ids": [], "plan_text": null },
+    { "key": "complete", "label": "最终成果", "route": "/task/complete", "nodes": ["COMPLETED"], "status": "PENDING", "artifact_ids": [], "plan_text": null }
+  ],
+  "artifacts": [],
+  "pending_approval": null,
+  "latest_event_sequence": 7,
+  "updated_at": "2026-10-05T06:40:00.000000Z"
+}

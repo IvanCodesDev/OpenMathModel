@@ -142,7 +142,7 @@
     },
     "agent_action_kind": {
       "type": "string",
-      "enum": ["approve", "navigate", "pause", "resume", "retry", "none"]
+      "enum": ["approve", "navigate", "pause", "resume", "retry", "supplement", "none"]
     },
     "approve_agent_action": {
       "title": "ApproveAgentAction",
@@ -183,6 +183,20 @@
       "required": ["kind", "label", "target_route", "approval_id", "option_id"],
       "additionalProperties": false
     },
+    "supplement_agent_action": {
+      "title": "SupplementAgentAction",
+      "description": "题意解析被读题准入门拦下（E610，题目信息不足）：请用户在本任务的对话里补充题面，补充后服务端按带题面补充的重试处理。客户端把焦点送进对话输入框，不调用动作接口。",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "supplement" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "target_route": { "$ref": "#/$defs/route" },
+        "approval_id": { "type": "null" },
+        "option_id": { "type": "null" }
+      },
+      "required": ["kind", "label", "target_route", "approval_id", "option_id"],
+      "additionalProperties": false
+    },
     "none_agent_action": {
       "title": "NoneAgentAction",
       "type": "object",
@@ -201,6 +215,7 @@
         { "$ref": "#/$defs/approve_agent_action" },
         { "$ref": "#/$defs/navigate_agent_action" },
         { "$ref": "#/$defs/task_agent_action" },
+        { "$ref": "#/$defs/supplement_agent_action" },
         { "$ref": "#/$defs/none_agent_action" }
       ]
     },

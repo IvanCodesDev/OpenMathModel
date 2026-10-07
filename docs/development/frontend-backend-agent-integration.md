@@ -148,7 +148,7 @@ project_id? / run_request_token?
 
 - `summary` 是可显示纯文本，不允许内嵌 HTML。
 - `action` 是服务端允许动作，不是视觉按钮状态的猜测。
-- `action` 使用按 `kind` 判别的联合契约：`navigate` 必须有目标路由且没有审批字段；`approve` 必须有目标路由和审批 ID；`none` 的路由、审批与 option 字段都必须为空。
+- `action` 使用按 `kind` 判别的联合契约：`navigate` 必须有目标路由且没有审批字段；`approve` 必须有目标路由和审批 ID；`supplement`（题意解析因信息不足 E610 失败时代替 `retry`）必须有目标路由且没有审批字段；`none` 的路由、审批与 option 字段都必须为空。
 - 只有待审批项恰好存在一个非 `reject` 选项时，后端才自动填入 `option_id`；存在多个候选时保持为空，由接入真实 `PlanProposal` 的页面显式提交用户选择，禁止静默采用第一项。
 - 取消或不可操作终态使用 `none`，前端禁用按钮。
 
@@ -391,7 +391,7 @@ sequenceDiagram
 
 ### 7.2 暂停、恢复和重试
 
-底层 `/actions`、共享契约与 Web 控制器支持 `pause`、`resume`、`retry`，并复用幂等键。当前 workspace 投影只会在 `PAUSED` 时产生 `resume`、在 `FAILED` 时产生 `retry`；运行中不会产生 `pause`，现有页面也没有可见暂停入口。因此暂停是接口能力，不是当前工作台已经交付的用户操作。运行状态确认前不改页面步骤为成功。`navigate` 不调用后端，但必须保留 `run_id/project_id`。
+底层 `/actions`、共享契约与 Web 控制器支持 `pause`、`resume`、`retry`，并复用幂等键。当前 workspace 投影只会在 `PAUSED` 时产生 `resume`、在 `FAILED` 时产生 `retry`（题意解析因信息不足 E610 失败时改为 `supplement`：前端把焦点送进同页对话输入框、不调用后端，补充内容由对话控制面改判为带题面补充的重试）；运行中不会产生 `pause`，现有页面也没有可见暂停入口。因此暂停是接口能力，不是当前工作台已经交付的用户操作。运行状态确认前不改页面步骤为成功。`navigate` 不调用后端，但必须保留 `run_id/project_id`。
 
 API 层 `/actions` 另支持 `cancel`（按状态机校验）；当前 workspace 投影与页面主操作不暴露该动作，前端也不自行构造。
 
@@ -1234,6 +1234,19 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 - **测试**：harness `test_sandbox_agent.py` +5（来源之后的调试运行与 `ws_write` 新建的文件被删，来源之前写过的、复跑重写的、只被改写的与下发的数据都不动，删掉的 `metrics.json` 不再当指标来源；来源运行没画图、失败的调试运行画了——不清理时会靠那张图判收尾通过，开了清理就不收尾、什么都不删；原本就在的文件被删掉又重建时留着；复跑没过不删；一次没过的收尾复跑之后再收尾，它新建的文件也算遗留）；skills `test_nodes.py` +3（实验节点调试运行画的图被删、不进阶段产出、轨迹补旁白，复跑重写的结果表照留；执行侧没给删除能力就不开清理；采集拿掉产物后同名新版仍顶替原位）；tools +4（运行报出新建 / 改写 / 删掉的路径、没变化不带这三个键；超时的运行也报；`ws_write` 报是否新建；`discard` 只删工作区内的普通文件）；worker `test_runtime.py` +1、backend/api 新增 `test_finalize_cleanup_wiring.py` 1 项（删除能力经 extras 注入节点，只删本运行工作区里的文件）。
 
 当日执行并通过：`pytest backend/api/tests` 566 passed / 2 skipped；agents 五包 + worker 882 passed / 1 skipped；strict mypy 与改动前基线逐条相同、ruff 对照改动前零新增；临时 worktree 检出改动前代码跑新测试，14 条新用例全红、同文件其余 264 条全绿，放入本次改动后 278 条全绿。未验：真实运行里的清理（需要一次「后面的运行失败、收尾复跑通过」的真跑；要用上这次改动，仍须把旧 API 进程整个停掉再启动）。已知局限：模型终答叙事（approach_summary / figure_notes）可能描述的是后来没过的版本，本次未处理。
+
+### 2026-10-05 沙盒收尾通过后按采用的那次运行重写终答叙事；E610 失败的主操作改为「去对话里补充题面」
+
+上一节留下的已知局限：收尾复跑通过时，模型的终答还是波末那份，写在没过验收的运行之后——实验的 `approach_summary` / `progress_note`、清洗 / 检验 / 论文补图的 `summary` 与 `figure_notes` 可能描述的是没被采用的版本，而阶段产出、实验审稿材料与执行轨迹正文都照抄它。最常见的收尾恰好是来源与失败的几次运行在同一波（第 1 次运行就出了指标、之后几次调参没过），「取来源那一波的终答」对它无效。10-03 E610 那一节也留了一条：题意解析因信息不足失败时，失败文案让用户去对话里补题面，下面的主操作却还是「重试当前阶段」，不补题面直接点只会同输入再判一次不足。用户拍板两处：收尾通过后让模型按采用的那一版重写叙事；E610 的主按钮换成「去对话里补充题面」（不是隐藏）。
+
+- **叙事重写（`agents/harness/src/omm_agent_harness/sandbox_agent.py`）**：`run_sandbox_task(on_narrative_rewrite=…)`。收尾复跑通过且没取消时，另开一个不带工具的内环（`LoopBudget(max_turns=2)`：一轮交终答，多一轮兜住误调工具被退回；结构修复照旧一次），按同一套终答键与校验让模型重写。prompt 只给采用的那次运行的代码（保头 6000 字）、复跑 stdout（保尾 2000 字）、复跑的验收结果、工作区现有文件（最多列 80 个，图件说明只能写现有的图）与旧终答，不带任务说明（工具协议、审稿意见）与运行预算。写成就替换终答，`on_final_answer` 回传重写后那份；结构不合格、轮数用尽或调用出错都沿用原终答，任务照样通过；这次调用的用量计入报告。没触发收尾、收尾没过、已取消都不重写。
+- **节点（`agents/skills/src/omm_agent_skills/nodes.py`）**：`_narrative_note` 给清洗 / 实验 / 检验 / 论文补图四个沙盒调用点补一句执行轨迹旁白——写成了：「终答叙事已按收尾采用的第 N 次运行重写（原来那份写在没过验收的运行之后）」；没写成：带上原因（最多 120 字），说明沿用原终答、叙事可能描述的是后来没过验收的版本。下游（阶段产出、实验审稿材料、轨迹正文、图件清单）照旧读终答，拿到的就是重写后那份。
+- **E610 主操作（`backend/api/omm_api/workspace_view.py`）**：`_awaiting_problem_supplement`（运行 FAILED、停在题意解析、最近一次步骤失败码是 E610，与对话控制面 `run_control.awaiting_problem_supplement` 同一口径）成立时，工作台主操作投影为 `{"kind": "supplement", "label": "去对话里补充题面"}`；其余失败照旧 `retry`「重试当前阶段」。
+- **契约**：`modeling-workspace-view.schema.json` 的 `agent_action_kind` 加 `supplement`，`agent_action` 联合加 `supplement_agent_action`（必须有目标路由，审批与 option 字段为空），两处都是 ADDITIVE；Python / TS 生成类型与 OpenAPI 基线用脚本重生成；fixture 新增 valid `modeling-workspace-view.2.json`（E610 失败运行的视图）与 invalid `modeling-workspace-view.supplement-without-route.json`。
+- **前端（`integration/modeling-workspace-controller.ts`）**：点 `supplement` 走 `focusConversationInput`——把同页 `.chat-composer textarea` 滚入视野并聚焦，不调用动作接口；发出去的补充由对话控制面按 10-03 的口径改判为带题面补充的重试。运行页与五个阶段页的对话输入框都在工作台根节点内、与主按钮同侧。受保护入口、页面模板与路由零改动。
+- **测试**：harness `test_sandbox_agent.py` +7（重写生效；prompt 截断与必填键；重写不合格沿用原终答；重写时的工具调用被拒、不执行；重写抛错沿用原终答且任务仍通过；收尾没通过不重写；已取消不重写），既有 6 条收尾用例补一轮重写回复并断言模型调用次数；skills `test_nodes.py` 两条实验收尾用例补叙事断言（阶段产出用重写后那份、重写 prompt 带采用的代码而不带调试片段、旁白多一句）；backend/api `test_failure_error_codes.py` 的 E610 用例补工作台视图（过契约 schema、主操作逐字段相等），非 E610 的失败仍是 `retry`；`test_run_control.py` 补「补题面前主操作是 `supplement`、补完不再是」。
+
+当日执行并通过：临时 worktree 里改动涉及的 5 个测试文件 309 passed；`validate.py`（16 schema / 77 fixture）、`check_compat.py`；另起 worktree 检出改动前代码跑新测试，17 红 / 292 绿（harness 13 = 新 7 条 + 既有收尾 6 条多出的那轮重写，skills 2，backend/api 2），放入本次改动后 309 条全绿。与下一节的并行改动一起合回主工作区后跑全量：`pytest backend/api/tests` 572 passed / 5 skipped（PostgreSQL 576 passed / 1 skipped），agents 五包 + worker 889 passed / 1 skipped，`node --test` 237/237，`npm run check` / `npm run build`（web），契约 Python / TS 生成 `--check` / `--verify` 与 `export_openapi.py --check`；strict mypy 较改动前只多 1 条（生成的 `SupplementAgentAction.label` 用 `constr(...)`，与生成器既有的同款错误相同）。浏览器验收（10-07，开发服务 + 测试账号的 E610 种子运行，模型接口是本机打桩，截图在 `audit-current/2026-10-05-e610-supplement/`，不入库）：运行页主按钮由「重试当前阶段」变为「去对话里补充题面」；点击后焦点落在对话输入框且在可视区内，点击期间 0 个网络请求、运行状态与 `updated_at` 不变。未验：真实模型下的叙事重写质量（用例全部打桩），需要一次「后面的运行失败、收尾复跑通过」的真跑；要在真实运行里用上，仍须把旧 API 进程整个停掉再启动。
 
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 

@@ -21,6 +21,8 @@ sandbox-run-report.v1 同构的报告 dict。
    执行器，所以工作区、产物采集、发布代码与指标都回到那一版，下游「最后一次运行」口径不变。
    调用方给了 ``discard_files`` 时，晚于来源运行、失败版新建且复跑没有重新写出的文件在验收
    时当作不存在，复跑通过后交给它删掉——工作区与节点采集里都不再留失败版的文件。
+   收尾通过时终答还是波末那份（写在没过的运行之后），执行体再开一个不带工具的内环，把采用的
+   代码、复跑输出与验收结果交给模型重写终答；没写成就沿用原终答。
 4. **实现语言由任务卡定，模型无权换（§7.4，H7）**：``SandboxTask.language`` 是 G1
    确认下来的语言；执行体把 ``code_run`` 的 ``language`` 固定成它——模型漏传就补上，
    传了别的语言就退回一条观察（不执行、不计预算）；语言不是 python 时 ``python_run``
@@ -88,6 +90,15 @@ _FEEDBACK_CODE_CHARS = 3000
 #: 报错与预算行要装得下）。
 _OBSERVED_STDERR_CHARS = 1500
 _OBSERVED_STDOUT_CHARS = 800
+
+#: 收尾后重写叙事时交给模型的采用版代码（保头）与复跑 stdout（保尾）长度，以及列出的工作区
+#: 文件数上限（图件说明只能写现有的图）。
+_NARRATIVE_CODE_CHARS = 6000
+_NARRATIVE_STDOUT_CHARS = 2000
+_NARRATIVE_LISTED_FILES = 80
+
+#: 重写叙事的内环轮数：一轮交终答，多一轮兜住误调工具被退回（结构修复另有一次 R1）。
+_NARRATIVE_MAX_TURNS = 2
 
 _FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$", re.MULTILINE)
 
@@ -516,6 +527,81 @@ def _final_answer_example(task: SandboxTask) -> str:
     return "{" + ", ".join(pairs) + "}"
 
 
+def _assemble_narrative_prompt(
+    task: SandboxTask,
+    *,
+    source_run: int,
+    code: str,
+    result: ToolResult | None,
+    assertion_results: Sequence[Mapping[str, Any]],
+    files: Sequence[str],
+    previous: Mapping[str, Any] | None,
+) -> tuple[Message, ...]:
+    """收尾通过后重写叙事的 prompt：只给采用的那一版（代码、复跑输出、验收结果、现有文件）与旧终答。
+
+    不带任务说明（工具协议、审稿意见）与运行预算：这一轮不许再跑任何东西。
+    """
+    stdout = str((result.output or {}).get("stdout") or "").strip() if result is not None else ""
+    listed = [f"- {path}" for path in files[:_NARRATIVE_LISTED_FILES]]
+    if len(files) > _NARRATIVE_LISTED_FILES:
+        listed.append(f"- ……另有 {len(files) - _NARRATIVE_LISTED_FILES} 个文件")
+    sections = [
+        Section(name="system", content=task.system_prompt),
+        Section(name="task_frame", heading="任务目标", content=task.goal),
+        Section(
+            name="finalize_frame",
+            heading="收尾说明",
+            content=(
+                f"本任务已通过验收，采用的是第 {source_run} 次运行：最后一次运行没有通过验收，"
+                f"执行体收尾时把第 {source_run} 次运行的代码原样复跑了一遍，复跑通过，代码、产物与"
+                "指标都以这一版为准，之后的改动没有被采用。你之前的终答写在那些没通过的运行之后，"
+                "叙事可能描述的是没被采用的版本，现在按采用的这一版重写终答。"
+            ),
+        ),
+        Section(
+            name="adopted_code",
+            heading=f"采用的代码（第 {source_run} 次运行）",
+            content=code,
+            max_chars=_NARRATIVE_CODE_CHARS,
+        ),
+        Section(
+            name="adopted_stdout",
+            heading="复跑输出（尾部）",
+            content=stdout,
+            max_chars=_NARRATIVE_STDOUT_CHARS,
+            overflow="truncate_head",
+        ),
+        Section(
+            name="acceptance",
+            heading="复跑的验收结果",
+            content="\n".join(f"- [{item['id']}] {item['detail']}" for item in assertion_results),
+        ),
+        Section(name="workspace_files", heading="工作区现有文件", content="\n".join(listed)),
+        Section(
+            name="previous_answer",
+            heading="你之前的终答（写在没通过的运行之后）",
+            content=(
+                json.dumps(dict(previous), ensure_ascii=False)
+                if previous
+                else "（没有交出合法终答）"
+            ),
+        ),
+        Section(
+            name="output_spec",
+            heading="重写要求",
+            content=(
+                "不要调用任何工具，也不要再运行代码，只依据上面的材料重写。叙事只写采用的这一版：方法、"
+                "参数与指标以上面的代码、复跑输出与验收结果为准；之后没被采用的尝试不要写成结果，需要"
+                "交代时一句带过（如「后续调参没有通过验收，已回退到这一版」）；图件说明只写工作区里"
+                "现有的图。只输出一个 JSON 对象作为终答："
+                + _final_answer_example(task)
+                + "。"
+            ),
+        ),
+    ]
+    return ContextAssembler.build(sections).messages
+
+
 def _evaluate(
     task: SandboxTask, evidence: SandboxEvidence
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -560,6 +646,7 @@ def run_sandbox_task(
     on_loop_exit: Callable[[LoopOutcome], None] | None = None,
     on_finalize: Callable[[int], None] | None = None,
     discard_files: Callable[[Mapping[str, Sequence[str]]], Sequence[str]] | None = None,
+    on_narrative_rewrite: Callable[[int, str | None], None] | None = None,
 ) -> dict[str, Any]:
     """驱动一张任务卡到 sandbox-run-report.v1 形状的报告 dict。
 
@@ -575,7 +662,13 @@ def run_sandbox_task(
 
     ``on_final_answer`` 在收束前回传最后一个通过结构校验的终答对象（含
     extra_final_keys 声明的叙事键）——报告本身保持 sandbox-run-report.v1
-    形状，叙事产出经此旁路交给父节点。
+    形状，叙事产出经此旁路交给父节点。收尾通过时回传的是按采用的那次运行重写过的终答。
+
+    叙事重写：收尾通过后（取消了不做）再开一个不带工具的内环，交给模型的只有采用的代码、复跑
+    输出、验收结果、现有文件与旧终答，按同一套终答键与校验重写；模型误调工具会被退回、不执行。
+    没写成（结构不合格、轮数用尽、调用出错）就沿用原终答——任务已过验收，不会因此失败。
+    ``on_narrative_rewrite`` 回传采用的是第几次运行（从 1 数）与没写成的原因（None = 已重写），
+    父节点据此补一句执行轨迹旁白。
 
     ``on_loop_exit`` 每波内环收束后回传其 LoopOutcome：报告契约里没有退出原因，
     父节点据最后一波判定失败码（内环自己的 E120 / E330 / E331 / E332，或 R2 用尽）。
@@ -643,7 +736,39 @@ def run_sandbox_task(
             tracker.forget(artifact_id for path in removed for artifact_id in stale.get(path, ()))
         return results, ok, index
 
+    def rewrite_narrative(source: int) -> tuple[dict[str, Any] | None, str | None]:
+        """按收尾采用的那次运行重写终答：(重写好的终答, None) 或 (None, 没写成的原因)。"""
+        messages = _assemble_narrative_prompt(
+            task,
+            source_run=source + 1,
+            code=tracker.last_code,
+            result=tracker.last_result,
+            assertion_results=assertion_results,
+            files=tuple(workspace_files()),
+            previous=final_answer,
+        )
+        try:
+            outcome = run_inner_loop(
+                LoopTask(
+                    task_id=f"{task.task_id}:narrative",
+                    messages=messages,
+                    validator=_final_answer_validator(task),
+                    parser=_lenient_parse,
+                    budget=LoopBudget(max_turns=_NARRATIVE_MAX_TURNS),
+                ),
+                chat=chat,
+                cancelled=cancelled,
+            )
+        except Exception as exc:  # 任务已过验收：重写出错只沿用原终答，不能把它拖成失败
+            return None, f"{type(exc).__name__}: {exc}"
+        total_usage["tokens"] += outcome.usage.total_tokens
+        total_usage["duration_ms"] += outcome.usage.duration_ms
+        if outcome.ok and outcome.value is not None:
+            return outcome.value, None
+        return None, outcome.last_error or outcome.exit_reason
+
     passed = False
+    adopted: int | None = None  # 收尾通过时采用的模型运行（history 下标）
     while waves < task.max_waves:
         waves += 1
         outcome: LoopOutcome = run_inner_loop(
@@ -671,7 +796,9 @@ def run_sandbox_task(
             finalized = finalize()
             if finalized is not None:
                 assertion_results, passed, source = finalized
-                if not passed:
+                if passed:
+                    adopted = source
+                else:
                     finalize_note = (
                         f"（第 {source + 1} 次运行的结果曾全部通过验收，执行体收尾时把那份代码原样"
                         "复跑了一遍，复跑没能通过——下面是复跑的结果与代码）"
@@ -685,6 +812,13 @@ def run_sandbox_task(
         if tracker.exhausted or tracker.runs >= task.max_runs:
             break  # R2 运行预算已尽（§5.4）：收束为 failed 报告
         feedback = _feedback_from(assertion_results, tracker.last_code, finalize_note)
+
+    if passed and adopted is not None and not (cancelled is not None and cancelled()):
+        rewritten, problem = rewrite_narrative(adopted)
+        if rewritten is not None:
+            final_answer = rewritten
+        if on_narrative_rewrite is not None:
+            on_narrative_rewrite(adopted + 1, problem)
 
     if on_final_answer is not None and final_answer is not None:
         on_final_answer(dict(final_answer))

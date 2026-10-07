@@ -2092,6 +2092,14 @@ function renderError(root: HTMLElement, error: unknown): void {
   copy.closest<HTMLElement>(".assistant-block")?.removeAttribute("hidden");
 }
 
+/** 「去对话里补充题面」（E610）：焦点送进本页对话输入框；发出去的补充由服务端改判为带题面补充的重试。 */
+function focusConversationInput(root: HTMLElement): void {
+  const input = root.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
+  if (!input) return;
+  input.scrollIntoView({ block: "nearest" });
+  input.focus();
+}
+
 function downloadArtifactManifest(view: ModelingWorkspaceView): void {
   const rows = view.artifacts.map(artifact => [
     artifact.name,
@@ -2435,6 +2443,10 @@ export function mountModelingWorkspace(screen: ScreenId): void {
       const action = actionForScreen(currentScreen, currentView);
       if (action.kind === "navigate" && action.target_route) {
         navigateTo(action.target_route);
+        return;
+      }
+      if (action.kind === "supplement") {
+        focusConversationInput(root);
         return;
       }
       if (!["approve", "pause", "resume", "retry"].includes(action.kind)) return;

@@ -12,10 +12,13 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from omm_agent_core import TaskState
+from omm_agent_core.errors import ErrorCode
 from omm_contracts import ModelingWorkspaceView
 
 from .approval_feedback import VIEW_DESCRIPTION_CHARS, approval_description
 from .blobstore import ArtifactBlobStore, has_readable_local_content
+from .engine_glue import last_step_error_code
 from .orm import (
     AgentEventRow,
     ApprovalRequestRow,
@@ -288,10 +291,21 @@ def _revision_gate_summary(approval: ApprovalRequestRow, preselected: str | None
     )
 
 
+def _awaiting_problem_supplement(session: Session, run: TaskRunRow) -> bool:
+    """题意解析被读题准入门拦下（E610）：与对话控制面 ``awaiting_problem_supplement`` 同一口径。"""
+    return (
+        run.status == "FAILED"
+        and run.current_node == TaskState.PROBLEM_ANALYSIS.value
+        and last_step_error_code(session, run.id) == ErrorCode.INPUT_INSUFFICIENT.value
+    )
+
+
 def _agent_projection(
     run: TaskRunRow,
     active_page: dict[str, Any],
     approval: ApprovalRequestRow | None,
+    *,
+    awaiting_supplement: bool = False,
 ) -> dict[str, Any]:
     node = run.current_node or "CREATED"
     label = STAGE_LABELS.get(node, "任务准备" if node == "CREATED" else node)
@@ -336,9 +350,11 @@ def _agent_projection(
         state = "FAILED"
         label = f"{label}执行失败"
         summary = run.failure_message or "本阶段执行失败，可在保留已有产物的前提下重试。"
+        # 题目信息不足时原样重试只会再被拦一次：引导去对话里补题面，补的内容由对话控制面
+        # 改判为带题面补充的重试
         action = {
-            "kind": "retry",
-            "label": "重试当前阶段",
+            "kind": "supplement" if awaiting_supplement else "retry",
+            "label": "去对话里补充题面" if awaiting_supplement else "重试当前阶段",
             "target_route": active_page["route"],
             "approval_id": None,
             "option_id": None,
@@ -492,7 +508,12 @@ def build_modeling_workspace_view(
         active_node=active_node,
         active_page=active_page["key"],
         suggested_route=active_page["route"],
-        agent=_agent_projection(run, active_page, approval),
+        agent=_agent_projection(
+            run,
+            active_page,
+            approval,
+            awaiting_supplement=_awaiting_problem_supplement(session, run),
+        ),
         pages=pages,
         artifacts=artifacts,
         pending_approval=_approval_projection(approval),

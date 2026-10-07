@@ -1951,6 +1951,30 @@ def _finalize_note(services: NodeServices, label: str) -> Callable[[int], None]:
     return note
 
 
+#: 叙事没重写成时旁白里引用的原因长度上限。
+_NARRATIVE_PROBLEM_CHARS = 120
+
+
+def _narrative_note(services: NodeServices, label: str) -> Callable[[int, str | None], None]:
+    """收尾通过后重写叙事的执行轨迹旁白：多出来的那次模型调用是干什么的、终答叙事以哪一版为准。"""
+
+    def note(source_run: int, problem: str | None) -> None:
+        if problem is None:
+            text = (
+                f"终答叙事已按收尾采用的第 {source_run} 次运行重写"
+                "（原来那份写在没过验收的运行之后）。"
+            )
+        else:
+            text = (
+                f"按收尾采用的第 {source_run} 次运行重写叙事没有成功"
+                f"（{problem[:_NARRATIVE_PROBLEM_CHARS]}），沿用原终答："
+                "叙事可能描述的是后来没过验收的版本。"
+            )
+        _emit_progress(services, {"kind": "agent_note", "prompt_id": label, "text": text})
+
+    return note
+
+
 #: 收尾清理旁白里点名的文件数上限。
 _CLEANUP_LISTED_FILES = 8
 
@@ -2293,6 +2317,7 @@ class DataPreparationNode(LlmSkillNode):
                     on_final_answer=final_answer.update,
                     on_finalize=_finalize_note(services, CLEANING_PROMPT_ID),
                     discard_files=_finalize_cleanup(services, capture, CLEANING_PROMPT_ID),
+                    on_narrative_rewrite=_narrative_note(services, CLEANING_PROMPT_ID),
                 )
                 return ResultEnvelope(
                     status="done",
@@ -3410,6 +3435,7 @@ class ExperimentExecutionNode(LlmSkillNode):
                 ),
                 on_finalize=_finalize_note(services, template_id),
                 discard_files=_finalize_cleanup(services, capture, template_id),
+                on_narrative_rewrite=_narrative_note(services, template_id),
             )
             return report, capture, final_answer
 
@@ -4209,6 +4235,7 @@ class ValidationNode(LlmSkillNode):
                     normalize_language=normalize_language,
                     on_finalize=_finalize_note(services, template_id),
                     discard_files=_finalize_cleanup(services, capture, template_id),
+                    on_narrative_rewrite=_narrative_note(services, template_id),
                 )
                 return ResultEnvelope(
                     status="done",
@@ -5466,6 +5493,7 @@ class PaperWritingNode(LlmSkillNode):
                     normalize_language=normalize_language,
                     on_finalize=_finalize_note(services, figures_template_id),
                     discard_files=_finalize_cleanup(services, capture, figures_template_id),
+                    on_narrative_rewrite=_narrative_note(services, figures_template_id),
                 )
                 return ResultEnvelope(
                     status="done",

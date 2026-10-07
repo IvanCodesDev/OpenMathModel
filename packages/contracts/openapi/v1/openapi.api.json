@@ -13,6 +13,9 @@
             "$ref": "#/components/schemas/TaskAgentAction"
           },
           {
+            "$ref": "#/components/schemas/SupplementAgentAction"
+          },
+          {
             "$ref": "#/components/schemas/NoneAgentAction"
           }
         ],
@@ -5420,6 +5423,43 @@
           "depends_on"
         ],
         "title": "Subquestion",
+        "type": "object"
+      },
+      "SupplementAgentAction": {
+        "additionalProperties": false,
+        "description": "题意解析被读题准入门拦下（E610，题目信息不足）：请用户在本任务的对话里补充题面，补充后服务端按带题面补充的重试处理。客户端把焦点送进对话输入框，不调用动作接口。",
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "null"
+          },
+          "kind": {
+            "const": "supplement",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "option_id": {
+            "title": "Option Id",
+            "type": "null"
+          },
+          "target_route": {
+            "$ref": "#/components/schemas/Route"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "target_route",
+          "approval_id",
+          "option_id"
+        ],
+        "title": "SupplementAgentAction",
         "type": "object"
       },
       "Symbol": {
