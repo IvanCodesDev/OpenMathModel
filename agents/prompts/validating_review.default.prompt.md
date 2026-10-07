@@ -2,7 +2,7 @@
 id: validating_review.default
 stage: VALIDATING
 variant: default
-version: 3
+version: 4
 input_schema: {"type": "object", "required": ["chosen_plan", "model_assumptions", "experiment_code", "metrics", "checks_code", "checks", "rerun_report", "checks_summary"], "properties": {"chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "experiment_code": {"type": "string"}, "metrics": {"type": "string"}, "checks_code": {"type": "string"}, "checks": {"type": "string"}, "rerun_report": {"type": "string"}, "checks_summary": {"type": "string"}, "risk_points": {"type": "string"}, "stdout_tail": {"type": "string"}, "workspace_files": {"type": "string"}, "static_checks": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["verdict", "findings", "summary"], "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "issue"], "properties": {"id": {"type": "string"}, "severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "location": {"type": "string"}, "issue": {"type": "string"}, "fix_hint": {"type": "string"}}}}, "summary": {"type": "string"}}}
 ---
@@ -73,7 +73,7 @@ output_schema: {"type": "object", "required": ["verdict", "findings", "summary"]
 3. **覆盖**：`assumption_id` 指向的假设是否真被这项检查触及（打乱需求分布的检查不能挂在「成本线性」假设上）；须检验的假设里有没有被跳过的重点验证项；风险点有没有被回避。
 4. **可复现性**：随机扰动是否显式用了种子；复跑核对若显示不一致，必须判为 blocker（判定不可复现就不能进闸门与论文）。
 5. **明显缺陷**：把训练集上的表现当稳健性证据、扰动幅度小到等于没扰动、检查项之间彼此重复只为凑数、`checks` 里的 id 重复或 value 为 NaN。
-6. **跨轮核查**：「上一轮反馈」非「无」时，逐条核对其中点名的阻断性意见在本轮检验脚本里是否真的解决；上一轮未通过的检查是否以同名 id 复检、阈值是否与上一轮一致（为通过而放宽的判 blocker）、有没有被删掉或改名而「消失」（记 major 并点名）；「转为通过」的项须能在检验代码与数据里找到原因，找不到的记 blocker；仍在的问题必须再记 blocker 并在 issue 里注明「上一轮已点名」。
+6. **跨轮核查**：「上一轮反馈」非「无」时，逐条核对其中点名的阻断性意见在本轮检验脚本里是否真的解决；上一轮未通过的检查是否以同名 id 复检、阈值是否与上一轮一致（为通过而放宽的判 blocker）、有没有被删掉或改名而「消失」（记 major 并点名）；标记行 `not_rechecked` 里声明本轮不复检的项（「上一轮反馈」末尾「本轮声明不复检的上一轮检查」一行）须核查理由是否成立——确实无法复检（如所需数据本轮拿不到）才算成立，站不住的按「删掉」记 major 并点名；「转为通过」的项须能在检验代码与数据里找到原因，找不到的记 blocker；仍在的问题必须再记 blocker 并在 issue 里注明「上一轮已点名」。
 
 ## 判定纪律
 

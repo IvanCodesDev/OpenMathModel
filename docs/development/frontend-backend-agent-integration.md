@@ -1275,6 +1275,17 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过（与下一节一起回归）：agents 五包 + worker 900 passed / 1 skipped，`pytest backend/api/tests` 572 passed / 5 skipped（PostgreSQL 576 passed / 1 skipped）；CI 口径的 Python 段（compileall、契约 `validate.py` / `check_compat.py`、`generate_python.py --check` / `--verify`、API import、`export_openapi.py --check`、六包 import）全过；strict mypy 本节两个文件与改动前逐条相同；ruff 对照改动前 E501 等规则零新增，只多了中文全角标点类提示（RUF001–003，全仓同款）。临时 worktree 检出改动前代码跑新测试：harness 4 条行为用例红、4 条守卫用例绿，节点用例红。未验：真实模型拿到「上一轮回合用完」反馈与回合提醒后的表现（用例全部打桩）——要在真实运行里用上，仍须把旧 API 进程整个停掉再启动。已知局限：单波仍是 8 个回合，读大文件仍花回合；一个任务最多 3 波，三波都只读写不运行仍会判失败。
 
+### 2026-10-07 G3 跨轮对比对上号：上一轮未过的检查必须同 id 复检，或写明为什么不复检
+
+检验节点在回退重做轮产出跨轮对比 `round_comparison`（上一轮未过的检查 × 本轮检查，按 id 求交分三桶：转为通过 / 仍未通过 / 本轮未复检；09-18 进契约、09-27 结果页渲染），G3 卡片的「较上一轮」句、论文材料与结果页都据此说话；但「沿用同名 id」只写在任务卡与审稿材料的提示词里。真跑 `run_5d6bf571` 第 3 轮检验的 15 项检查 id 全换了：`forecast_target` → `forecast_target_consistency`、`pareto_front` → `pareto_nondominated`、`storage_param_sensitivity` → `storage_cost_robustness`，另有两项换了说法，只有 `data_provenance` 是真的没再复检——上一轮未过的 6 项全落进「本轮未复检」，跨轮对比形同虚设。这是用户拍板连着修的第二个缺陷。修法不做按名字的模糊配对（配错就是编出来的事实，与契约「只计数与点名、不判好坏」冲突），改为验收时强制同 id。
+
+- **验收断言（`agents/skills/src/omm_agent_skills/nodes.py`）**：回退重做轮（上一轮检验真跑通且有未过项，与跨轮对比同一口径）给检验沙盒加一条断言 `previous_checks_rechecked`：上一轮每个未过的检查 id，要么在本轮标记行的 `checks` 里同 id 出现（检查实现可以改进，id 与阈值不变），要么在标记行 `"not_rechecked": [{"id": …, "reason": …}]` 里写明不复检的原因（缺 id 或缺原因不算声明）；缺了就判不过、按 R2 打回修复，反馈点名缺了哪些（id + 名称）、本轮现有哪些 id、出口怎么写。首轮检验不加这条断言，任务卡不变。
+- **任务卡与审稿材料**：任务卡「上一轮未过检查」段改为逐项沿用原 id 复检（验收会逐个核对）、阈值照旧、确实无法复检的写进 `not_rechecked`、不要改名或悄悄删掉；检验审稿材料的「上一轮反馈」段附上本轮声明不复检的条目与原因，事实行要求审稿人核查「声明不复检的理由是否成立」；检验审稿提示词模板 `validating_review.default` 升到 v4，第 6 条「跨轮核查」同样写明：声明不复检的项须核查理由是否成立，确实无法复检（如所需数据本轮拿不到）才算成立，站不住的按「删掉」记 major 并点名。
+- **跨轮对比**：仍按 id 求交；落进「本轮未复检」的项若有声明，条目带 `reason`，G3「较上一轮」句与论文材料写成「名称：原因」（有原因时用「；」分隔，没有原因时逐字照旧）。`experiment-summary.v1` 的 `round_check_ref` 只有 id / name、API 投影只取这两键，结果页照旧——契约、OpenAPI 基线与前端不动。
+- **测试**：skills `test_nodes.py` 改 2 条（`test_validation_redo_compares_checks_across_rounds`：本轮改为声明一项不复检，断言任务卡新文案、验收清单多出新断言、对比与 G3 句带原因、审稿卡带声明，对照组首轮的验收清单没有新断言；`test_reviewer_redo_notes_carry_last_round_blockers_and_facts`：事实行新文案），新 2 条（`test_validation_redo_renaming_previous_checks_is_sent_back_for_repair`：第一波把上一轮的 id 改了名被打回，第二波改回原 id 后三桶各就各位；`test_previous_checks_rechecked_assertion_accepts_same_ids_or_declared_reasons`：断言纯函数的四种情形）；另给守卫用例 `test_reviewers_receive_last_round_feedback_in_their_task_cards` 补一条断言：检验审稿角色卡里有第 6 条的新文案。
+
+当日执行并通过：见上一节（两节一起回归）。临时 worktree 检出改动前代码（只含上一节的改动）跑新测试：改 2 新 2 共 4 条红；守卫用例 `test_reviewers_receive_last_round_feedback_in_their_task_cards` 原有断言都过，只红在新补的模板断言上。strict mypy 较改动前多 2 条 `no-untyped-def`（新断言工厂与内层 `check` 沿用同文件既有断言工厂的无注解写法，同款）。未验：真实模型会不会拿声明出口躲开没过的检查——由检验审稿人按理由是否成立把关（模板第 6 条、事实行与材料附注三处同一口径）；`run_5d6bf571` 那种整组改名的真跑复现。要在真实运行里用上，仍须把旧 API 进程整个停掉再启动。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

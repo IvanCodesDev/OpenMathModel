@@ -3199,7 +3199,7 @@ def validation_reviewer_note(ctx: NodeContext) -> str:
         facts.append(
             f"- 上一轮检验{f' {total} 项中' if total else ''} {len(failed)} 项未通过"
             "（本轮应沿用同名 id 复检：核查阈值是否与上一轮一致、未通过项有没有被删掉或改名、"
-            "「转为通过」的项能否在代码与数据里找到原因）："
+            "「转为通过」的项能否在代码与数据里找到原因、声明不复检的理由是否成立）："
         )
         facts.extend(_failed_check_lines(failed))
     summary = str(outputs.get("validation_summary") or "").strip()
@@ -3797,6 +3797,30 @@ def _normalize_checks(
     return checks
 
 
+def _declared_not_rechecked(metrics: Mapping[str, Any]) -> dict[str, str]:
+    """标记行里声明本轮不复检的上一轮检查：id → 原因（缺 id 或缺原因的不算声明）。"""
+    declared: dict[str, str] = {}
+    raw = metrics.get("not_rechecked") if metrics else None
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, Mapping):
+            continue
+        check_id = str(entry.get("id") or "").strip()
+        reason = str(entry.get("reason") or "").strip()
+        if check_id and reason:
+            declared[check_id] = reason
+    return declared
+
+
+def _declared_not_rechecked_note(metrics: Mapping[str, Any]) -> str:
+    """检验审稿材料「上一轮反馈」段的附注：本轮声明不复检的上一轮检查与原因；没有声明 → 空串。"""
+    declared = _declared_not_rechecked(metrics)
+    if not declared:
+        return ""
+    return "\n- 本轮声明不复检的上一轮检查（核查理由是否成立）：" + "；".join(
+        f"{check_id}：{reason}" for check_id, reason in declared.items()
+    )
+
+
 def _assumption_coverage(
     focus: Sequence[Mapping[str, Any]], checks: Sequence[Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -3893,6 +3917,52 @@ def _assumption_coverage_check(focus: Sequence[Mapping[str, Any]]):
     return check
 
 
+#: 标记行里声明不复检的写法（任务卡、断言反馈共用）。
+_NOT_RECHECKED_SYNTAX = (
+    '"not_rechecked": [{"id": "<上一轮的检查 id>", "reason": "为什么本轮不复检"}]'
+)
+
+
+def _previous_checks_rechecked_check(failed: Sequence[Mapping[str, Any]]):
+    """断言工厂（回退重做轮）：上一轮未过的检查逐项同 id 复检，或在标记行 not_rechecked 里写明原因。
+
+    只在提示词里要求「沿用同名 id」时模型照样每轮改名，跨轮对比按 id 求交就全落进「本轮未复检」；
+    改名或悄悄删掉在验收时就打回修复。确实无法复检的留显式出口，原因进跨轮对比。
+    """
+    expected = {
+        str(check.get("id")): str(check.get("name") or check.get("id")) for check in failed
+    }
+
+    def check(evidence) -> tuple[bool, str]:
+        metrics = evidence.metrics or {}
+        rechecked = {
+            str(entry.get("id") or "").strip()
+            for entry in metrics.get("checks") or []
+            if isinstance(entry, Mapping)
+        } - {""}
+        declared = _declared_not_rechecked(metrics)
+        missing = [
+            check_id
+            for check_id in expected
+            if check_id not in rechecked and check_id not in declared
+        ]
+        if missing:
+            return False, (
+                "上一轮未通过的检查本轮没有同 id 的复检："
+                + "、".join(f"{check_id}（{expected[check_id]}）" for check_id in missing)
+                + f"；本轮的检查 id：{'、'.join(sorted(rechecked)) or '无'}。复检时沿用上一轮的 id"
+                "（检查实现可以改进，id 与阈值不变）；确实无法复检的，在标记行里加 "
+                + _NOT_RECHECKED_SYNTAX
+            )
+        skipped = [check_id for check_id in expected if check_id not in rechecked]
+        note = f"上一轮未过的 {len(expected)} 项：同 id 复检 {len(expected) - len(skipped)} 项"
+        if skipped:
+            note += f"，声明不复检 {len(skipped)} 项（{'、'.join(skipped)}）"
+        return True, note
+
+    return check
+
+
 def _robustness_summary_text(status: str, checks: Sequence[Mapping[str, Any]]) -> str:
     """供论文引用的一句话稳健性结论：数字只来自检验脚本的标记行。"""
     if status != "passed":
@@ -3936,8 +4006,9 @@ def _previous_checks_note(previous: Mapping[str, Any], feedback: Mapping[str, An
     """检验任务卡（与审稿材料）里的「上一轮未过检查」段：数字原样，要求同名 id 复检以便对比。"""
     origin = "图按条件边自动回退" if feedback.get("auto") else "回退重做"
     lines = [
-        f"- 上一轮检验（{origin}前）未通过的检查——本轮沿用同名检查 id 复检以便跨轮对比；"
-        "阈值照旧，不得为通过而放宽："
+        f"- 上一轮检验（{origin}前）未通过的检查——本轮逐项沿用原检查 id 复检以便跨轮对比"
+        "（检查实现可以改进，id 不改；验收会逐个核对）；阈值照旧，不得为通过而放宽；"
+        f"确实无法复检的，在标记行里加 {_NOT_RECHECKED_SYNTAX}，不要改名或悄悄删掉："
     ]
     for check in previous.get("failed_checks") or []:
         name = str(check.get("name") or check.get("id") or "检查")
@@ -3951,9 +4022,15 @@ def _previous_checks_note(previous: Mapping[str, Any], feedback: Mapping[str, An
 
 
 def _round_comparison(
-    previous: Mapping[str, Any], checks: Sequence[Mapping[str, Any]], feedback: Mapping[str, Any]
+    previous: Mapping[str, Any],
+    checks: Sequence[Mapping[str, Any]],
+    feedback: Mapping[str, Any],
+    declared: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """上一轮未过项 × 本轮检查 → 跨轮对比（按检查 id 求交，纯计数与点名，不判好坏）。"""
+    """上一轮未过项 × 本轮检查 → 跨轮对比（按检查 id 求交，纯计数与点名，不判好坏）。
+
+    ``declared`` 是标记行里声明不复检的 id → 原因：落进「本轮未复检」的项带上原因。
+    """
     current = {str(check.get("id")): check for check in checks}
     resolved: list[dict[str, Any]] = []
     still_failing: list[dict[str, Any]] = []
@@ -3963,7 +4040,8 @@ def _round_comparison(
         entry = {"id": check_id, "name": str(check.get("name") or check_id)}
         now = current.get(check_id)
         if now is None:
-            not_rechecked.append(entry)
+            reason = (declared or {}).get(check_id)
+            not_rechecked.append({**entry, "reason": reason} if reason else entry)
         elif now.get("passed"):
             resolved.append(entry)
         else:
@@ -3998,8 +4076,12 @@ def _round_comparison_sentence(comparison: Mapping[str, Any]) -> str:
         names = "、".join(entry["name"] for entry in comparison["still_failing"])
         bits.append(f"{len(comparison['still_failing'])} 项仍未通过（{names}）")
     if comparison.get("not_rechecked"):
-        names = "、".join(entry["name"] for entry in comparison["not_rechecked"])
-        bits.append(f"{len(comparison['not_rechecked'])} 项本轮未复检（{names}）")
+        rows = comparison["not_rechecked"]
+        names = ("；" if any(entry.get("reason") for entry in rows) else "、").join(
+            f"{entry['name']}：{entry['reason']}" if entry.get("reason") else entry["name"]
+            for entry in rows
+        )
+        bits.append(f"{len(rows)} 项本轮未复检（{names}）")
     return f"较上一轮（{origin}）：上一轮未过的 {len(comparison.get('previous_failed') or [])} 项中 " + "、".join(bits)
 
 
@@ -4171,6 +4253,21 @@ class ValidationNode(LlmSkillNode):
         run_tool = sandbox_run_tool(language)
         waves: list[_SandboxCapture] = []
         last_envelope: dict[str, Any] = {}
+        # 回退重做轮：上一轮未过的检查同 id 复检（或写明不复检的原因）也是验收的一条
+        recheck: tuple[SandboxAssertion, ...] = ()
+        if previous is not None:
+            previous_failed = list(previous[0].get("failed_checks") or [])
+            recheck = (
+                SandboxAssertion(
+                    id="previous_checks_rechecked",
+                    description=(
+                        "上一轮未通过的检查逐项沿用原 id 复检（"
+                        + "、".join(str(check.get("id")) for check in previous_failed)
+                        + "）；确实无法复检的在标记行 not_rechecked 里写明 id 与原因"
+                    ),
+                    check=_previous_checks_rechecked_check(previous_failed),
+                ),
+            )
 
         def sandbox_wave(
             brief_suffix: str | None, max_runs: int
@@ -4208,6 +4305,7 @@ class ValidationNode(LlmSkillNode):
                         ),
                         check=_assumption_coverage_check(focus),
                     ),
+                    *recheck,
                 ),
                 seeds=dict(SANDBOX_SEEDS),
                 max_runs=max_runs,
@@ -4325,7 +4423,9 @@ class ValidationNode(LlmSkillNode):
         # 跨轮对比结果（s35）：上一轮未过项 × 本轮检查按 id 求交；G3 卡片与论文材料据此
         # 说得出「重做后哪些过了、哪些仍未过」。上一轮没有可比对象 / 本轮没跑成 → 不带键。
         if previous is not None and status == "passed":
-            robustness["round_comparison"] = _round_comparison(previous[0], checks, previous[1])
+            robustness["round_comparison"] = _round_comparison(
+                previous[0], checks, previous[1], _declared_not_rechecked(capture.metrics)
+            )
         artifacts = _union_artifacts(waves, capture)
         # 检验阶段的图件（灵敏度 / 扰动图）同样是论文的合法图源，与实验图一起编号
         robustness["figures"] = figure_manifest(
@@ -4374,7 +4474,11 @@ class ValidationNode(LlmSkillNode):
                 "risk_points": risk_points or "无",
                 "stdout_tail": capture.stdout[-_STDOUT_TAIL_CHARS:] or "无",
                 "workspace_files": workspace_files_material(ctx, files),
-                "previous_round": previous_round,
+                "previous_round": (
+                    previous_round
+                    if previous_round == "无"
+                    else previous_round + _declared_not_rechecked_note(capture.metrics)
+                ),
             }
 
         def context_slice(
