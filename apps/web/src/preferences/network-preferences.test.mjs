@@ -61,8 +61,14 @@ test("parses the panel labels for max concurrency", () => {
   assert.equal(parseMaxConcurrency(1), 1);
 });
 
+test("maps the unlimited option to null, the API's value for no cap", () => {
+  assert.equal(parseMaxConcurrency("不限"), null);
+  assert.equal(parseMaxConcurrency(" 不限 "), null);
+});
+
 test("rejects out-of-range or malformed concurrency values", () => {
-  for (const junk of ["0 个", "9 个", "", "个", null, undefined, 2.5]) {
-    assert.equal(parseMaxConcurrency(junk), null);
+  // undefined = 认不出来、不推送；不能和「不限」的 null 混在一起，否则一个坏值就把上限清掉了
+  for (const junk of ["0 个", "9 个", "", "个", "Unlimited", null, undefined, 2.5]) {
+    assert.equal(parseMaxConcurrency(junk), undefined);
   }
 });

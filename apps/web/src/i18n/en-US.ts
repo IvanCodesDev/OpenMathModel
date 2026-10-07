@@ -257,8 +257,8 @@ const TASK_START: Record<string, string> = {
     "Used by server-side outbound requests; the web app itself does not go through it",
   "作用于网页与服务端之间的接口请求（5–600 秒）":
     "Applies to API requests between the web app and the server (5–600 s)",
-  "同时排队或执行中的任务数上限，保存后立即生效；多个任务由同一执行线程逐阶段轮流推进，调大不等于并行加速":
-    "Cap on tasks queued or running at once; effective immediately after saving. Tasks advance stage by stage on a single execution thread, so a higher cap does not mean parallel speed-up",
+  "同时排队或执行中的任务数上限，默认不限、保存后立即生效；任务之间并行推进，同时跑得越多越抢本机算力和模型接口额度":
+    "Cap on tasks queued or running at once; unlimited by default and effective immediately after saving. Tasks run in parallel, so the more run at once, the more they compete for local compute and model API quota",
   "桌面端功能：网页版的下载位置由浏览器决定":
     "Desktop-only: in the browser, the download location is controlled by the browser",
   "桌面端功能：服务端临时目录由部署配置管理":
@@ -1730,6 +1730,7 @@ const SETTINGS: Record<string, string> = {
   "请求超时": "Request timeout",
   "秒": "s",
   "最大并发任务": "Max concurrent tasks",
+  "不限": "Unlimited",
   "1 个": "1",
   "3 个": "3",
   "5 个": "5",

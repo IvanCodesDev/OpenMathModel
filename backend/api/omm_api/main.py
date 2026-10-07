@@ -41,7 +41,11 @@ from .runner import RunnerThread, WorkflowAdvancer
 
 def create_app(settings: Optional[Settings] = None) -> FastAPI:
     resolved = settings or get_settings()
-    db = Database(resolved.database_url)
+    db = Database(
+        resolved.database_url,
+        pool_size=resolved.database_pool_size,
+        max_overflow=resolved.database_max_overflow,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

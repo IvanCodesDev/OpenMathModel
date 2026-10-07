@@ -4005,10 +4005,17 @@
         "description": "高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。",
         "properties": {
           "max_concurrent_runs": {
-            "maximum": 8.0,
-            "minimum": 1.0,
-            "title": "Max Concurrent Runs",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Concurrent Runs"
           }
         },
         "required": [
@@ -7033,7 +7040,7 @@
         ]
       },
       "put": {
-        "description": "最大并发任务上限存服务端而不是浏览器：创建任务的闸门在这里校验，\n放 localStorage 改个缓存就能绕过。",
+        "description": "最大并发任务上限存服务端而不是浏览器：创建任务的闸门在这里校验，\n放 localStorage 改个缓存就能绕过。null = 不限（回落部署默认值）。",
         "operationId": "update_preferences_api_account_preferences_put",
         "requestBody": {
           "content": {

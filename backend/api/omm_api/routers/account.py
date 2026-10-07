@@ -107,7 +107,7 @@ def update_preferences(
     db: Session = Depends(get_db),
 ):
     """最大并发任务上限存服务端而不是浏览器：创建任务的闸门在这里校验，
-    放 localStorage 改个缓存就能绕过。"""
+    放 localStorage 改个缓存就能绕过。null = 不限（回落部署默认值）。"""
     ctx.user.max_concurrent_runs = body.max_concurrent_runs
     db.commit()
     return {"preferences": preferences_payload(ctx.user)}

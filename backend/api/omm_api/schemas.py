@@ -134,7 +134,8 @@ class PasswordRequest(BaseModel):
 class PreferencesUpdateRequest(BaseModel):
     """高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。"""
 
-    max_concurrent_runs: int = Field(ge=1, le=MAX_CONCURRENT_RUNS_CEILING)
+    # 必传；null = 不限（回落部署默认值，默认也是不限）
+    max_concurrent_runs: int | None = Field(ge=1, le=MAX_CONCURRENT_RUNS_CEILING)
 
 
 class PrivacySettingsUpdateRequest(BaseModel):

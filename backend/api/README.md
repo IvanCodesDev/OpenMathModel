@@ -74,6 +74,9 @@ cd backend/api
 | `OMM_SECRET_KEY` | `dev-secret-change-me` | 2FA 挑战令牌签名密钥，生产必须覆盖 |
 | `OMM_RUNNER_ENABLED` | `true` | API 进程内推进线程；当前由 `agents/core` 与 `SimStageNode` 驱动 |
 | `OMM_RUNNER_TICK_SECONDS` | `1.2` | 推进节奏 |
+| `OMM_DATABASE_POOL_SIZE` | `10` | PostgreSQL 连接池常驻连接数：运行并行推进，每个在途运行都在用连接，推进锁另占一条 |
+| `OMM_DATABASE_MAX_OVERFLOW` | `40` | 连接池可临时溢出的连接数 |
+| `OMM_DEFAULT_MAX_CONCURRENT_RUNS` | 空（不限） | 「最大并发任务」的部署默认上限（用户没设时生效）；用户自己选的上限不超过 8 |
 | `OMM_AVATARS_DIR` | `backend/api/data/avatars` | 用户头像内容存储根，与运行产物目录分开 |
 | `OMM_AVATAR_MAX_BYTES` | `2097152` | 单个头像上限；前端会先压到 256×256，这是服务端兜底 |
 | `OMM_ATTACHMENT_TEXT_MAX_BYTES` | `33554432` | 正文抽取上限，比上传上限更严；超过的附件只留原文件不抽正文 |
@@ -121,7 +124,7 @@ $env:OMM_TEST_DATABASE_URL="postgresql+psycopg://openmathmodel:openmathmodel@127
 
 ## 设计要点
 
-- **当前推进器 = API 内嵌 RunnerThread + agents/core 引擎**：`run_domain_events` 表是执行事实来源（append-only 领域事件，重放即恢复），v1 行（task_runs/step_runs/artifacts/approvals/agent_events）是其投影，同一事务提交；胶水层见 `omm_api/engine_glue.py`。一次 tick 完成一个阶段步骤；完整真实 Skills 节点与独立 Worker 接线仍在后续阶段。
+- **当前推进器 = API 内嵌 RunnerThread + agents/core 引擎**：`run_domain_events` 表是执行事实来源（append-only 领域事件，重放即恢复），v1 行（task_runs/step_runs/artifacts/approvals/agent_events）是其投影，同一事务提交；胶水层见 `omm_api/engine_glue.py`。每个节拍给每个可推进的运行派一个工作线程推进一个阶段步骤（运行之间并行，同一运行同一时刻只有一个线程；跨进程由 PostgreSQL advisory lock 互斥）；完整真实 Skills 节点与独立 Worker 接线仍在后续阶段。
 - 契约对齐 `schemas/v1`：status 是生命周期枚举（QUEUED/RUNNING/WAITING_APPROVAL/...），`current_node` 是领域阶段（PROBLEM_ANALYSIS/...），两轴分离（规划 §12.3）。
 - 统一错误信封 `{code, message, request_id, details}`；`X-Request-Id` 响应头贯穿日志。
 - `agent_events` 是 UI 时间线唯一事实来源；`(run_id, sequence)` 唯一、单调递增。

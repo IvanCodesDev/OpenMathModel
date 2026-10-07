@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # （tools/pg-dev.ps1，port 5433；Docker 底座为 5432，见 infra/docker/compose.dev.yaml）。
     # SQLite 不再是任何默认路径：仅测试夹具显式传入临时库，或应急排查时显式覆盖本变量。
     database_url: str = "postgresql+psycopg://openmathmodel:openmathmodel@127.0.0.1:5433/openmathmodel"
+    # PostgreSQL 连接池：任务按运行并行推进后，每个在途运行都在用连接（推进锁另占一条），
+    # 再加 HTTP 请求、SSE 与对话轮；默认池（5 + 溢出 10）在几个任务同时跑时会让请求排队等连接。
+    database_pool_size: int = 10
+    database_max_overflow: int = 40
     # 启动探库失败且目标就是 tools/pg-dev.ps1 管的本地实例时自动 `start` 一次（仅 Windows、
     # 仅 127.0.0.1/localhost:5433），让单独起 uvicorn 与 `npm run dev` 一样不用先手动拉库。
     local_pg_autostart: bool = True
@@ -64,8 +68,9 @@ class Settings(BaseSettings):
     # 单次远程识别（每页一次调用）的超时；扫描件逐页串行，总时长 ≈ 页数 × 单次。
     ocr_api_timeout_seconds: float = 60.0
 
-    # 高级设置「最大并发任务」的默认值与可调上限；用户改动存 users 表，按用户生效。
-    default_max_concurrent_runs: int = 3
+    # 高级设置「最大并发任务」：默认不限（None），部署可设一个默认上限；用户改动存 users 表，
+    # 按用户生效。可调上限只约束用户自己选的值。
+    default_max_concurrent_runs: int | None = None
     max_concurrent_runs_ceiling: int = 8
 
     # ── 论文导出（ADR-0012 阶段 A：服务端 Tectonic 编译 PDF）──────

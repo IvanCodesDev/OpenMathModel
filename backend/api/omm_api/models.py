@@ -32,7 +32,8 @@ class User(Base):
     avatar_media_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     totp_secret: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    # 高级设置「最大并发任务」：None = 沿用部署默认值（config.DEFAULT_MAX_CONCURRENT_RUNS）。
+    # 高级设置「最大并发任务」：None = 沿用部署默认值（config.DEFAULT_MAX_CONCURRENT_RUNS）；
+    # 部署默认也是不限。
     # 可空是刻意的——SQLite 开发库靠启动补列机制加新列，只有可空列能补。
     max_concurrent_runs: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # 设置中心「自定义 API」：已保存接口列表 + 主接口 + 三个行为开关（llm.parse_llm_config 解析）。

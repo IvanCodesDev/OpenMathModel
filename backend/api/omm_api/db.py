@@ -54,7 +54,7 @@ def _add_missing_sqlite_columns(engine: Engine) -> None:
 class Database:
     """引擎与会话工厂的持有者，由 create_app 构建并挂到 app.state。"""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, pool_size: int = 5, max_overflow: int = 10) -> None:
         if database_url.startswith("sqlite"):
             db_path = database_url.split("///", 1)[-1]
             is_file_db = bool(db_path) and db_path != ":memory:"
@@ -80,6 +80,8 @@ class Database:
             self.engine = create_engine(
                 database_url,
                 pool_pre_ping=True,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
                 connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
             )
         self.session_factory = sessionmaker(

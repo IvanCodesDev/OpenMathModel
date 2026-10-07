@@ -37,7 +37,8 @@ export interface MeResponse {
 
 /** 高级设置里需要服务端生效的用户偏好；纯本机偏好仍走 localStorage。 */
 export interface AccountPreferences {
-  max_concurrent_runs: number;
+  /** null = 不限 */
+  max_concurrent_runs: number | null;
 }
 
 /** 自定义 API 的一条已保存接口；字段与设置面板一一对应。 */

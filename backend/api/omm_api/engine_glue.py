@@ -2143,8 +2143,8 @@ def advance_run(session: Session, run: TaskRunRow) -> None:
     engine, snapshot = open_engine(session, run, checkpoint=True)
     # 进程中途死亡（开发期热重载、崩溃）会留下悬挂 RUNNING 的步骤：先按引擎的
     # 修复语义把它们落定为 STEP_FAILED（"executor lost"），事件日志与 step_runs
-    # 才是闭合的；随后的 advance 以 attempt+1 重跑该阶段。进程内互斥由唯一的
-    # 推进线程保证（本函数是 checkpoint 模式的唯一入口）。
+    # 才是闭合的；随后的 advance 以 attempt+1 重跑该阶段。同一运行的进程内互斥由
+    # RunnerThread 的在途表保证（本函数是 checkpoint 模式的唯一入口）。
     # 重跑没有次数上限（2026-09-19 拍板）：中断是环境造成的、不是任务本身的错，
     # 不该替用户把运行判死；环境问题（热重载监视到沙盒目录）在启动时与每次修复
     # 落定时都写进服务端日志，由开发者处置。

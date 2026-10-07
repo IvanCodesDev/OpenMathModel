@@ -8,16 +8,23 @@
 
 import { ApiError, authApi } from "../auth/api";
 
-/** 面板选项形如「3 个」；也兼容直接存数字的历史值。 */
-export function parseMaxConcurrency(label: unknown): number | null {
+/** 面板上「不限」选项的取值；服务端用 null 表示不限。 */
+const UNLIMITED_LABEL = "不限";
+
+/**
+ * 面板选项形如「3 个」或「不限」；也兼容直接存数字的历史值。
+ * 返回上限数字，`null` 表示不限，`undefined` 表示认不出来（不该推送）。
+ */
+export function parseMaxConcurrency(label: unknown): number | null | undefined {
+  if (typeof label === "string" && label.trim() === UNLIMITED_LABEL) return null;
   const value = typeof label === "number" ? label
     : typeof label === "string" ? Number(label.match(/\d+/)?.[0] ?? Number.NaN)
       : Number.NaN;
-  return Number.isInteger(value) && value >= 1 && value <= 8 ? value : null;
+  return Number.isInteger(value) && value >= 1 && value <= 8 ? value : undefined;
 }
 
 /** 把服务端值写回原生 select 和它旁边的自定义下拉（两者都要，否则显示会分叉）。 */
-function applyToPanel(root: ParentNode, value: number): void {
+function applyToPanel(root: ParentNode, value: number | null): void {
   const select = root.querySelector<HTMLSelectElement>('select[name="maxConcurrency"]');
   if (!select) return;
   const option = Array.from(select.options)
@@ -50,7 +57,7 @@ export async function hydrateMaxConcurrency(root: ParentNode): Promise<void> {
 /** 保存设置时调用；返回要给用户看的提示文案，null 表示成功无需提示。 */
 export async function persistMaxConcurrency(label: unknown): Promise<string | null> {
   const value = parseMaxConcurrency(label);
-  if (value === null) return null;
+  if (value === undefined) return null;
   try {
     await authApi.updatePreferences({ max_concurrent_runs: value });
     return null;

@@ -88,27 +88,28 @@ def create_task_run(
         if project is None or project.owner != ctx.user.id:
             raise NotFoundError(f"项目不存在：{payload.project_id}")
 
-        # 高级设置「最大并发任务」：只数排队中和执行中的——等待审批与已暂停的
-        # 任务停在人身上、不占执行资源，不该挡住用户开新任务。
+        # 高级设置「最大并发任务」：默认不限，用户或部署设了上限才校验。只数排队中和
+        # 执行中的——等待审批与已暂停的任务停在人身上、不占执行资源，不该挡住用户开新任务。
         limit = ctx.user.max_concurrent_runs or DEFAULT_MAX_CONCURRENT_RUNS
-        active = session.execute(
-            select(func.count())
-            .select_from(TaskRunRow)
-            .join(ProjectRow, ProjectRow.id == TaskRunRow.project_id)
-            .where(
-                ProjectRow.owner == ctx.user.id,
-                TaskRunRow.status.in_(
-                    [TaskRunStatus.QUEUED.value, TaskRunStatus.RUNNING.value]
-                ),
-            )
-        ).scalar_one()
-        if active >= limit:
-            raise ApiError(
-                409,
-                "CONCURRENCY_LIMIT",
-                f"已有 {active} 个任务在排队或执行中，达到并发上限（{limit} 个）；"
-                "请等待现有任务完成，或在设置中心「高级设置」调高最大并发任务。",
-            )
+        if limit is not None:
+            active = session.execute(
+                select(func.count())
+                .select_from(TaskRunRow)
+                .join(ProjectRow, ProjectRow.id == TaskRunRow.project_id)
+                .where(
+                    ProjectRow.owner == ctx.user.id,
+                    TaskRunRow.status.in_(
+                        [TaskRunStatus.QUEUED.value, TaskRunStatus.RUNNING.value]
+                    ),
+                )
+            ).scalar_one()
+            if active >= limit:
+                raise ApiError(
+                    409,
+                    "CONCURRENCY_LIMIT",
+                    f"已有 {active} 个任务在排队或执行中，达到并发上限（{limit} 个）；"
+                    "请等待现有任务完成，或在设置中心「高级设置」把最大并发任务调高或改成不限。",
+                )
 
         now = utcnow()
         row = TaskRunRow(
