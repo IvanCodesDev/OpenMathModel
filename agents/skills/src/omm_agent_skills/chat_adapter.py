@@ -61,7 +61,10 @@ _TOOL_USAGE: dict[str, tuple[str, str]] = {
         "按任务卡实现语言执行完整脚本。",
         '{"code": "<脚本源码>", "language": "<任务卡给定的语言，如 python / r>"}',
     ),
-    "ws_write": ("写工作区 UTF-8 文本文件。", '{"path": "相对路径", "text": "内容"}'),
+    "ws_write": (
+        "写工作区 UTF-8 文本文件（整文件覆盖写入，不是追加）。",
+        '{"path": "相对路径", "text": "内容"}',
+    ),
     "ws_read": (
         "读工作区文本文件，一次一段（约 3000 字符）；结果 truncated 为 true 时"
         "带返回的 next_offset 作 offset 再读下一段。",

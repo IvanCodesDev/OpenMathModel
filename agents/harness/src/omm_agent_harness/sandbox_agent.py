@@ -12,6 +12,9 @@ sandbox-run-report.v1 同构的报告 dict。
 2. **修复梯子不跨级（§5.4）**：单波内环里的 R1（终答结构修复）仍归
    run_inner_loop；本执行体管理的是 R2（执行修复）——按"波次"推进，每波
    是一次独立装配的内环（结构化反馈接续，不转录全对话，上下文纪律 §10.1）。
+   内环结构违约 / 无进展 / 工具连败 / 取消就收束；回合用完只是这一波的配额尽了，断言没过、
+   R2 还有余额就照常开下一波，反馈开头写明上一波为什么结束（一次没运行时要它先去运行）。
+   每波的回合数写进波次提示词，本波还没运行过、只剩两个回合时观察里再提醒一次。
 3. **运行预算按次预付**：沙箱运行（python_run / code_run）超过 max_runs 的那一次
    不会执行（§4.7 "a started run is spent money" 的镜像），预算尽即收束报告。
    每次运行的观察都附「已用 k / N」，失败的运行另附 stderr / stdout 尾部（内环对失败
@@ -100,6 +103,12 @@ _NARRATIVE_LISTED_FILES = 80
 #: 重写叙事的内环轮数：一轮交终答，多一轮兜住误调工具被退回（结构修复另有一次 R1）。
 _NARRATIVE_MAX_TURNS = 2
 
+#: 内环回合用完的退出原因（LoopOutcome.exit_reason）：这种出口断言没过、R2 还有余额就再开一波。
+_TURNS_EXHAUSTED = "max_turns"
+
+#: 本波还没运行过代码、只剩这么多回合时，在观察里提醒模型直接去运行。
+_TURN_HINT_REMAINING = 2
+
 _FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$", re.MULTILINE)
 
 
@@ -135,7 +144,7 @@ class SandboxTask:
     seeds: Mapping[str, Any] = field(default_factory=dict)
     max_runs: int = 6  # R2 预算（§5.4 单一出处的拍板值）
     max_turns_per_wave: int = 8  # 单波内环轮数（§4.7 沙盒档位）
-    max_waves: int = 3  # 断言修复波次上限（每波至少消耗一次运行才有意义）
+    max_waves: int = 3  # 断言修复波次上限（回合用完后开的下一波也算一波）
     #: 终答除 summary 外要求的叙事键：(键名, 给模型看的一句话说明)。父节点
     #: 需要沙盒 Agent 的叙事产出（如实验节点的 approach_summary/progress_note）
     #: 时在此声明；校验与提示词由执行体统一生成，经 on_final_answer 回传。
@@ -303,7 +312,9 @@ class _RunTracker:
     - 观察加注：回给模型的那份附运行预算，失败的另附 stderr / stdout 尾部（原始结果照存）；
     - 收尾运行（:meth:`finalize`）：原样重跑某次模型运行，不计 ``runs``；
     - 收尾清理：按执行顺序记下每次真执行与 ws_write 新建 / 写过 / 删掉的路径，
-      :meth:`leftovers` 据此找出晚于来源运行、失败版留下的文件。
+      :meth:`leftovers` 据此找出晚于来源运行、失败版留下的文件；
+    - 按波计数（:meth:`begin_wave` 清零）：内环每个工具回合调一次执行器，调用次数就是本波已用的
+      回合数；本波还没运行过、只剩不多的回合时，这一回合的观察里加一句回合提醒。
     """
 
     def __init__(
@@ -313,12 +324,19 @@ class _RunTracker:
         *,
         language: str = DEFAULT_LANGUAGE,
         normalize_language: Callable[[Any], str] | None = None,
+        run_tool: str = PYTHON_TOOL_NAME,
     ) -> None:
         self._inner = inner
         self._max = max_runs
         self._normalize = normalize_language or _default_normalize_language
         self.language = self._normalize(language) or DEFAULT_LANGUAGE
+        self.run_tool = run_tool
         self.runs = 0
+        self._wave_max_turns = 0
+        self.wave_turns = 0
+        self.wave_runs = 0
+        #: 本波各工具的调用次数（按首次调用的先后）
+        self.wave_tools: dict[str, int] = {}
         self.exhausted = False
         self.rejected_language_calls = 0
         self.last_code: str = ""
@@ -362,9 +380,18 @@ class _RunTracker:
             return replace(call, arguments={**call.arguments, "language": self.language})
         return call
 
+    def begin_wave(self, max_turns: int) -> None:
+        """新一波开始：本波的回合、运行与各工具调用次数清零。"""
+        self._wave_max_turns = max_turns
+        self.wave_turns = 0
+        self.wave_runs = 0
+        self.wave_tools = {}
+
     def __call__(self, calls: Sequence[ToolCall]) -> Sequence[ToolResult]:
+        self.wave_turns += 1
         results: list[ToolResult] = []
         for call in calls:
+            self.wave_tools[call.name] = self.wave_tools.get(call.name, 0) + 1
             if call.name not in RUN_TOOL_NAMES:
                 passed_through = list(self._inner([call]))
                 if call.name == _WS_WRITE_TOOL:
@@ -387,10 +414,29 @@ class _RunTracker:
                 )
                 continue
             self.runs += 1
+            self.wave_runs += 1
             outcome = self._execute(routed)
             self._positions.append(len(self._timeline) - 1)
             self.history.append(_RunRecord(call=routed, result=outcome))
             results.append(self._observed(outcome))
+        return self._turn_hinted(results)
+
+    def _turn_hinted(self, results: list[ToolResult]) -> list[ToolResult]:
+        """本波还没运行过、只剩不多的回合：这一回合最后一条观察前面加回合提醒（原始结果照存）。"""
+        left = self._wave_max_turns - self.wave_turns
+        if self.wave_runs or not results or not 0 < left <= _TURN_HINT_REMAINING:
+            return results
+        hint = (
+            f"[回合提醒] 本轮 {self._wave_max_turns} 个回合已用 {self.wave_turns} 个，"
+            "还没有运行过代码；回合用完还没交终答这一轮就到此结束——下一回合请直接用 "
+            f"{self.run_tool} 运行完整脚本（源码作为 code 传入，不必先用 ws_write 落盘）"
+        )
+        last = results[-1]
+        results[-1] = (
+            replace(last, output={"turn_budget": hint, **(last.output or {})})
+            if last.ok
+            else replace(last, error=f"{last.error or last.status}\n{hint}")
+        )
         return results
 
     def finalize(self, index: int) -> ToolResult:
@@ -493,6 +539,7 @@ def _assemble_wave_prompt(
             content=(
                 _run_tool_instruction(task)
                 + _run_budget_instruction(task, task.max_runs if runs_left is None else runs_left)
+                + _turn_budget_instruction(task)
                 + "运行成功并自查达标后，只输出一个 JSON 对象作为终答："
                 + _final_answer_example(task)
                 + "。终答会触发验收断言评估，未通过会把差异反馈给你继续修复。"
@@ -517,6 +564,30 @@ def _run_budget_instruction(task: SandboxTask, runs_left: int) -> str:
     return (
         f"本任务还剩 {runs_left} 次运行（每调一次 {task.run_tool} 计 1 次，用尽后不再执行），"
         "读文件用 ws_read、不占运行次数，运行留给完整脚本；"
+    )
+
+
+def _turn_budget_instruction(task: SandboxTask) -> str:
+    return (
+        f"每一轮最多 {task.max_turns_per_wave} 个回合（调一次工具或交一次终答各算 1 个），"
+        "回合用完还没交终答这一轮就到此结束，脚本写好就直接运行；"
+    )
+
+
+def _turns_exhausted_note(task: SandboxTask, runs: int, tools: Mapping[str, int]) -> str:
+    """回合用完、断言没过的那一波之后，下一波反馈的开头：上一波为什么结束、这一波先做什么。"""
+    head = f"上一轮 {task.max_turns_per_wave} 个回合用完也没有交出终答"
+    if runs:
+        return (
+            f"{head}（期间运行了 {runs} 次）。本轮跑通、自查达标后就交终答，"
+            "不要把回合耗在重复的读写上。"
+        )
+    called = "、".join(f"{name} ×{count}" for name, count in tools.items())
+    return (
+        f"{head}，期间一次都没有运行代码{f'（调用了 {called}）' if called else ''}。"
+        f"本轮请先把完整脚本直接交给 {task.run_tool} 运行——源码作为 code 传入，不必先用 ws_write "
+        "落盘（ws_write 整文件覆盖、不是追加），也不要把回合花在分段重读整份旧文件上；"
+        "跑通、自查达标后再交终答。"
     )
 
 
@@ -651,7 +722,9 @@ def run_sandbox_task(
     """驱动一张任务卡到 sandbox-run-report.v1 形状的报告 dict。
 
     波次语义：一波 = 一次独立装配的内环（模型写码/跑码/终答）+ 一次断言
-    评估；未过则携带断言差异进入下一波。attempts 上报波次数（每波至少一次
+    评估；未过则携带断言差异进入下一波。内环以回合用完收束的那一波同样进下一波（反馈开头补
+    「上一轮 N 个回合用完也没交终答」与那一波运行 / 调用了什么）；结构违约 / 无进展 / 工具连败 /
+    取消则不再开新波。attempts 上报波次数（每波至少一次
     评估）；usage.runs 上报模型发起的沙箱运行次数（python_run 与 code_run 同计，
     即 R2 预算账本；收尾运行不计）。
 
@@ -689,6 +762,7 @@ def run_sandbox_task(
         task.max_runs,
         language=task.language,
         normalize_language=normalize_language,
+        run_tool=task.run_tool,
     )
     total_usage = {"tokens": 0, "duration_ms": 0}
     assertion_results: list[dict[str, Any]] = []
@@ -767,10 +841,14 @@ def run_sandbox_task(
             return outcome.value, None
         return None, outcome.last_error or outcome.exit_reason
 
+    def is_cancelled() -> bool:
+        return cancelled is not None and cancelled()
+
     passed = False
     adopted: int | None = None  # 收尾通过时采用的模型运行（history 下标）
     while waves < task.max_waves:
         waves += 1
+        tracker.begin_wave(task.max_turns_per_wave)
         outcome: LoopOutcome = run_inner_loop(
             LoopTask(
                 task_id=f"{task.task_id}:wave{waves}",
@@ -792,7 +870,7 @@ def run_sandbox_task(
 
         assertion_results, passed = _evaluate(task, evidence())
         finalize_note = ""
-        if not passed and not (cancelled is not None and cancelled()):
+        if not passed and not is_cancelled():
             finalized = finalize()
             if finalized is not None:
                 assertion_results, passed, source = finalized
@@ -803,17 +881,23 @@ def run_sandbox_task(
                         f"（第 {source + 1} 次运行的结果曾全部通过验收，执行体收尾时把那份代码原样"
                         "复跑了一遍，复跑没能通过——下面是复跑的结果与代码）"
                     )
-        if passed and outcome.ok:
+        if passed:
             break
-        if not outcome.ok:
-            # 内环未产出合法终答（结构违约/轮数尽/无进展/取消）：不再开新波，
-            # 断言结果保留为最后事实（失败原因由各断言 detail 承载）。
+        if not outcome.ok and (outcome.exit_reason != _TURNS_EXHAUSTED or is_cancelled()):
+            # 内环未产出合法终答（结构违约/无进展/工具连败/取消）：不再开新波（修复梯子不跨级，
+            # §5.4），断言结果保留为最后事实（失败原因由各断言 detail 承载）。回合用完是每波的
+            # 配额用尽、不是任务的预算尽：断言没过就照常凭剩下的 R2 运行预算开下一波。
             break
         if tracker.exhausted or tracker.runs >= task.max_runs:
             break  # R2 运行预算已尽（§5.4）：收束为 failed 报告
-        feedback = _feedback_from(assertion_results, tracker.last_code, finalize_note)
+        notes = [finalize_note]
+        if not outcome.ok:
+            notes.insert(0, _turns_exhausted_note(task, tracker.wave_runs, tracker.wave_tools))
+        feedback = _feedback_from(
+            assertion_results, tracker.last_code, "\n".join(note for note in notes if note)
+        )
 
-    if passed and adopted is not None and not (cancelled is not None and cancelled()):
+    if passed and adopted is not None and not is_cancelled():
         rewritten, problem = rewrite_narrative(adopted)
         if rewritten is not None:
             final_answer = rewritten
