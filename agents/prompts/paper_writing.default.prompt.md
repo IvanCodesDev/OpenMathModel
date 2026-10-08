@@ -2,7 +2,7 @@
 id: paper_writing.default
 stage: PAPER_WRITING
 variant: default
-version: 11
+version: 12
 input_schema: {"type": "object", "required": ["problem_analysis", "data_preparation", "chosen_plan", "model_assumptions", "model_symbols", "experiment_summary", "validation_summary", "frozen_numbers", "available_figures", "available_references"], "properties": {"problem_analysis": {"type": "string"}, "data_preparation": {"type": "string"}, "chosen_plan": {"type": "string"}, "model_assumptions": {"type": "string"}, "model_symbols": {"type": "string"}, "experiment_summary": {"type": "string"}, "validation_summary": {"type": "string"}, "frozen_numbers": {"type": "string"}, "available_figures": {"type": "string"}, "available_references": {"type": "string"}, "previous_round": {"type": "string"}}}
 output_schema: {"type": "object", "required": ["title", "abstract", "sections"], "properties": {"title": {"type": "string"}, "abstract": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}}, "sections": {"type": "array", "items": {"type": "object", "required": ["heading", "content"], "properties": {"heading": {"type": "string"}, "content": {"type": "string"}}}}, "progress_note": {"type": "string"}}}
 ---
@@ -71,7 +71,7 @@ output_schema: {"type": "object", "required": ["title", "abstract", "sections"],
 - 每项包含 `heading`（带编号的章节标题）与 `content`（正文 Markdown，可用小节标题、列表与表格）。
 - 数学公式一律用 LaTeX：行内 `$...$`，独立公式 `$$...$$`；「模型建立与求解」每个子问题至少一组公式化表述。
 - 正文用书面学术语言成段展开，不要通篇要点罗列；「模型建立与求解」与「结果分析与检验」两章合计不少于全文一半篇幅。
-- 所有数值只能来自数字冻结清单与输入材料（清单数值保持原样，不换算、不四舍五入），禁止编造输入中不存在的数字；检验结论中的保留意见必须在「6 结果分析与检验」如实呈现，不得淡化。
+- 所有数值只能来自数字冻结清单与输入材料，保留 4 位有效数字四舍五入（如 0.0021355180250620664 写 0.002136，1023.9937 写 1024），不换算单位，禁止编造输入中不存在的数字；指标、变量在摘要、正文与表格里一律用中文说法（按材料里的定义写），不写 `rolling_domination`、`metrics.xxx` 这类代码标识符或「键=值」写法——冻结清单的编号与英文键名只用于对账，看不出含义的指标宁可不写；检验结论中的保留意见必须在「6 结果分析与检验」如实呈现，不得淡化。
 - 图件：只准插入「可用图件清单」里的图，每张最多插一次，插图独立成段写 `![图 N 标题](文件名)`——`图 N` 的编号与文件名逐字照抄清单（不得改编号、不得换文件名或加路径），标题按清单说明拟一句，正文解读时写「图 N」；实验结果图放「5 模型建立与求解」或「6 结果分析与检验」，检验阶段的图放「6 结果分析与检验」。清单为「无」时不得插入图片、不得写「如图 N 所示」。
 - 表格：表格前一行写表题「表 N 标题」并保证正文引用编号一致。
 - 引用：正文引用只准写「可引用文献表」里的编号 `[n]`（借鉴该条先例时紧跟句末），不得写 `\cite{}`、不得引用表外文献、不得自造编号；表为「无」时不得使用任何引用标记，也不写参考文献列表——终稿会逐条核对图表引用与文献引用（编号与条目正文都核），虚构的一律记为审计发现。

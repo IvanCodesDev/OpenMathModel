@@ -11,13 +11,15 @@
 用法：清单渲染成表进论文各章的材料（模型只准引用清单与材料里的数字）、原样进
 DocumentDraft（论文页与审计链消费）；审计把正文里的数值 token 与「冻结值 ∪ 材料里出现的
 数值」对账，对不上的即为无出处数字。题面常数不进清单（用户拍板）、靠材料文本放行。
+正文按 4 位有效数字写数（``0.0021355180250620664`` 写成 ``0.002136``），所以按 token 自己的
+小数位四舍五入后等于某个允许值的也算对上；不足 3 位有效数字的只认相等。
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from omm_agent_core import TaskState
@@ -31,6 +33,8 @@ PLAN_NUMBER_LIMIT = 12
 _PLAN_CONTEXT_CHARS = 16
 #: 审计取样上限：报得再多也是同一个问题，卡片与警告只需要样例。
 AUDIT_SAMPLE_LIMIT = 8
+#: 四舍五入对账至少要的有效数字：``0.5``、``12`` 这种短数舍入后能对上太多值，只认相等。
+ROUNDED_MIN_SIGNIFICANT = 3
 
 FINDING_UNSOURCED_NUMBER = "unsourced_number"
 
@@ -220,7 +224,9 @@ def render_frozen_numbers(entries: Sequence[Mapping[str, Any]]) -> str:
     if not entries:
         return "（无：上游阶段没有产出可冻结的数字，正文只能引用材料中已有的数值）"
     lines = [
-        "正文中的数值只准引用本表与材料中已有的数字，引用时保持数值原样（不换算、不四舍五入）：",
+        "正文中的数值只准引用本表与材料中已有的数字：保留 4 位有效数字四舍五入"
+        "（如 0.0021355180250620664 写 0.002136），不换算单位、不改写成别的数；"
+        "「含义」里的英文键名只用于对账，正文用中文说法：",
         "",
         "| 编号 | 数值 | 含义 | 出处 |",
         "| --- | --- | --- | --- |",
@@ -261,11 +267,38 @@ def allowed_number_tokens(entries: Iterable[Mapping[str, Any]], *material_texts:
     return allowed
 
 
+def significant_digits(token: str) -> int:
+    """数值 token 的有效数字位数（前导零不算、小数末尾的零算）：``0.002136`` → 4，``1024.0`` → 5。"""
+    return len(token.replace(".", "").lstrip("0"))
+
+
+def rounds_to_allowed(token: str, allowed: Iterable[str]) -> bool:
+    """token 是否为某个允许值按 token 自己的小数位四舍五入的结果（至少 3 位有效数字才判）。"""
+    if significant_digits(token) < ROUNDED_MIN_SIGNIFICANT:
+        return False
+    try:
+        target = Decimal(token)
+    except InvalidOperation:
+        return False
+    exponent = target.as_tuple().exponent
+    if not isinstance(exponent, int):
+        return False
+    quantum = Decimal(1).scaleb(exponent)
+    for candidate in allowed:
+        try:
+            value = Decimal(candidate)
+            if any(value.quantize(quantum, rounding=mode) == target for mode in (ROUND_HALF_UP, ROUND_HALF_EVEN)):
+                return True
+        except InvalidOperation:
+            continue
+    return False
+
+
 def unsourced_numbers(text: str, allowed: set[str]) -> list[str]:
     """正文里对不上允许集的数值（原样 token）。
 
     一位数不计（章节号 / 序号 / 列表编号会大量误报），同一数值只报一次，
-    最多取样 AUDIT_SAMPLE_LIMIT 个。
+    最多取样 AUDIT_SAMPLE_LIMIT 个；按 4 位有效数字舍入的引用见 rounds_to_allowed。
     """
     missing: list[str] = []
     seen: set[str] = set()
@@ -276,6 +309,8 @@ def unsourced_numbers(text: str, allowed: set[str]) -> list[str]:
         if canonical is None or canonical in seen or canonical in allowed:
             continue
         seen.add(canonical)
+        if rounds_to_allowed(token, allowed):
+            continue
         missing.append(token)
         if len(missing) >= AUDIT_SAMPLE_LIMIT:
             break

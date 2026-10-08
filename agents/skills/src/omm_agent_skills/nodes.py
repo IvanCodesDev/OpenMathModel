@@ -5266,9 +5266,9 @@ class PaperWritingNode(LlmSkillNode):
                         **section_vars,
                         "__repair_error": (
                             f"content 里有 {len(unsourced)} 个数值在数字冻结清单与材料中"
-                            f"找不到出处：{'、'.join(unsourced)}。请逐个改为清单/材料中的原始"
-                            "数值，或删去无法溯源的数字与相应表述；其余内容、公式与结构不变，"
-                            "只输出同格式 JSON。"
+                            f"找不到出处：{'、'.join(unsourced)}。请逐个改为清单/材料中的数值"
+                            "（可保留 4 位有效数字四舍五入，不得换算或另编），或删去无法溯源的数字"
+                            "与相应表述；其余内容、公式与结构不变，只输出同格式 JSON。"
                         ),
                         "__previous_output": content[:2000],
                     },
