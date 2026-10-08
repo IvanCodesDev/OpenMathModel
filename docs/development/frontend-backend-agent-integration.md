@@ -1297,6 +1297,26 @@ CI 的 `api-postgres` 作业会在真实 PostgreSQL 上跑全量 API 测试，�
 
 当日执行并通过：agents 全量 857 passed / 1 skipped，其中章级审计重写用例里编造的 `300`、`99`、`1180` 照样被报。未验：真实模型按新提示词写出的中文指标名是否贴切（用例全部打桩）。要在真实运行里用上，须把旧 API 进程整个停掉再启动。已知局限：实验脚本仍不输出指标的中文名，写手只能从材料推断，材料里没有定义的指标会被略去。
 
+### 2026-10-08 报障修复：论文阶段还没开始，论文页就摆着一整篇别的任务的论文（旧全局草稿键串台）
+
+用户带图报障：「VLSI布图规划优化建模」（`run_4b46e80…`，10-03 在实验阶段失败，库里没有论文阶段产出）的论文页摆着一整篇「失联潜水器」论文（2 问题分析 / 2.1 约束分析…，底部「16,426 字 · 已恢复本机草稿」）。用户以为是写死的模板，要求论文正式开写前显示已有的加载动画。
+
+根因：代码里没有这篇稿子（全仓零命中），它属于 09-09 的项目 `proj_04371d1d…`。`legacy/openmathmodel-ui.ts` 的 `bindPaperEditor` / `savePaperDraftNow` 把本机草稿存在**不分项目的全局键** `openmathmodelPaperDraft.v1`：在任一任务的编辑器里动一下（打字、加粗、Ctrl+S）整篇正文就写进去，此后打开**任何**任务的论文页都会被灌回编辑器，状态栏显示「已恢复本机草稿」。有论文产出的任务里 `renderEditorPanel` 随后用定稿把它顶掉，所以看不出来；没有产出的任务里它就一直摆着，占位段落被顶掉，`workflow-empty` 的空态插画也挂不上。2026-09-17 那次「正文一万六千字、大纲是空态」的报障是同一篇串台稿，当时只补了大纲。task-autosave 与 `hasUserPaperDraft` 早已按项目分键，只有这把全局键在串台。串台期间若在别的任务页里点过编辑器，task-autosave 还会把这篇以 `user_edited: true` 存进那个项目的按项目键。
+
+- **前端** 新增 `tasks/paper-draft.ts`（零依赖）：`readUserPaperDraft` / `writeUserPaperDraft` / `clearPaperDraft`，按 URL 上合法的 `project_id`（否则落到 demo 档）读写 `openmathmodel.paperDraft.v1.<scope>`（`{html, saved_at, user_edited: true}`），作用域推导只剩这一份。编辑器的 `savePaperDraftNow` / `bindPaperEditor` / `resetPaperDraft`、task-autosave 的落盘与恢复、stage-content 的 `hasUserPaperDraft` 全部改走它。全局键不再读写；「恢复初始正文」照旧连它一起清。
+- **串台副本**：`demoteLeakedPaperDraft()` 在本项目记录与全局键内容一字不差时把记录改为 `user_edited: false`（正文留着不删），之后不再恢复、也不挡 Agent 正文。只在 `renderStageContent` 的 `document_draft == null` 分支调用（`dropLeakedPaperDraft`，排在 `syncPaperOutlineFromEditor` 之前）；降级后编辑器换回占位段落，字数归零，状态回到「编辑内容自动保存到本机」，大纲回到「论文大纲将在论文生成后显示。」。有论文产出的项目一概不碰：全局键记的是最后一次编辑的地方，那里一字不差的那份多半就是用户在自己论文上的修改。代价：被污染的任务第一次打开时，旧稿会一直显示到阶段产出返回（夹具实测 46 ms），之后不再出现。
+- 不动：页面模板、`workflow-empty.tsx` 的挂载规则、直播与定稿渲染、`.outline` 结构、受保护入口。
+- **测试**：新增 `tasks/paper-draft.test.mjs` 7 条：按项目隔离；全局键永不当草稿恢复，写草稿不碰全局键；非用户草稿、空正文、损坏记录一律忽略；清除只清本项目和全局键；一字不差的副本降级，正文与时间戳保留；用户自己的草稿（没有全局键 / 内容不同 / 在副本上改过）绝不降级；存储被禁用时不抛错。
+
+当日执行并通过：`npm run check`；`node --test "src/**/*.test.mjs"` 248/248；`npm run build`（index 942.21 kB）。浏览器验收用本机夹具 `.agents/paper-draft-leak-fixture.mjs`（API 走夹具、页面转发 vite，localStorage 按夹具源隔离），截图在 `audit-current/2026-10-08-paper-draft-leak/`，不入库：
+- 改前：全局键里放一篇串台稿，打开实验阶段失败、没有论文产出的运行的论文页 → 整篇旧稿 +「已恢复本机草稿」+ 大纲按旧稿建，与用户截图同形。
+- 改后：同一页面显示水母空态「把探索写成论文 / 开始撰写」，0 字，大纲空态。按项目键里放一份与全局键相同的副本 → 第 140 ms 旧稿出现、第 186 ms 换回空态，记录降为 `user_edited: false`。
+- 点「开始撰写」输入 → 700 ms 后存进本项目键、全局键原样；刷新后恢复且不降级。换一个 `project_id` → 空态。「恢复初始正文」→ 空态，本项目键与全局键都被清掉。
+- 有论文产出的运行（`run_e898…` 的真实投影，`.agents/dump-stage-outputs.py` 只读导出）：与全局键相同的用户草稿照常恢复、不降级；没有草稿时直接渲染定稿（19,872 字），全程不闪旧稿。
+- 运行页、数据、建模、实验、论文、完成 6 个路由加载均无脚本错误。
+
+未验：用户真实浏览器里各项目键的污染情况（不读取用户浏览器数据）。应用内验收待用户：刷新截图里那个任务的论文页，应看到水母空态，左侧大纲为「论文大纲将在论文生成后显示。」。已知、本次未改：失败的运行论文页右上角仍写「Agent 正在撰写」（`continue-paper` 按钮只区分是否 COMPLETED）。
+
 ### P1：新任务控制链（已落地，继续补端到端自动化）
 
 - 首页与确认页已使用现有 DOM 创建 Project/TaskRun；

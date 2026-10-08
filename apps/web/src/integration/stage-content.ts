@@ -18,6 +18,7 @@ import type {
   PlanProposal,
 } from "@openmathmodel/contracts";
 import { currentLocale, t } from "../i18n/locale";
+import { demoteLeakedPaperDraft, readUserPaperDraft } from "../tasks/paper-draft";
 import { renderMarkdown } from "../text/markdown";
 import { typesetMath } from "../text/math-typeset";
 import { approvalEvidenceStamp, describeApprovalEvidence } from "./approval-evidence";
@@ -56,8 +57,6 @@ import {
   describeAssumptions,
   describeSymbols,
 } from "./plan-tables";
-
-const PAPER_DRAFT_PREFIX = "openmathmodel.paperDraft.v1.";
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -1574,18 +1573,31 @@ function renderApprovalEvidence(root: HTMLElement, outputs: StageOutputsPayload)
 
 // ── 论文编辑页（DocumentDraft → 编辑器正文；用户草稿优先，新到正文流式呈现） ──
 
-/** 只有用户亲手编辑过的现场才算本机草稿（task-autosave 落盘时带 user_edited
- *  标记）；旧记录或 Agent/模板快照没有该标记，不阻止真实论文正文的渲染。 */
+/** 只有用户亲手编辑过的现场才算本机草稿（落盘时带 user_edited 标记）；
+ *  旧记录或 Agent/模板快照没有该标记，不阻止真实论文正文的渲染。 */
 function hasUserPaperDraft(): boolean {
-  try {
-    // 作用域推导与 task-autosave 的 urlScope 一致：非法 project_id 落到 demo 档
-    const param = new URL(window.location.href).searchParams.get("project_id") ?? "";
-    const projectId = /^proj_[0-9a-f]{32}$/.test(param) ? param : "demo";
-    const raw = localStorage.getItem(PAPER_DRAFT_PREFIX + projectId);
-    if (!raw) return false;
-    return (JSON.parse(raw) as { user_edited?: unknown }).user_edited === true;
-  } catch {
-    return false;
+  return readUserPaperDraft() !== null;
+}
+
+/** 论文阶段还没产出，编辑器里却恢复出一篇串台存进来的别的任务的论文：记录降级，
+ *  编辑器、大纲与字数回到模板空态（空态插画随占位段落重新挂上）。 */
+function dropLeakedPaperDraft(root: HTMLElement): void {
+  if (!demoteLeakedPaperDraft()) return;
+  const editor = root.querySelector<HTMLElement>('.editor-page[contenteditable="true"]');
+  if (!editor) return;
+  const placeholder = el("p", "editor-placeholder");
+  placeholder.append(el("br"));
+  editor.replaceChildren(placeholder);
+  delete editor.dataset.userEdited;
+  refreshPaperWordCount(editor);
+  const status = editor.closest(".paper-editor")?.querySelector<HTMLElement>("[data-editor-savestate]");
+  if (status) status.textContent = t("编辑内容自动保存到本机");
+  const outline = root.querySelector<HTMLElement>(".paper-editor-workspace .outline");
+  if (outline?.querySelector("a")) {
+    rebuildPaperOutline(root, []);
+    const note = el("p", "stage-empty-state outline-empty", t("论文大纲将在论文生成后显示。"));
+    note.dataset.stageEmpty = "";
+    outline.append(note);
   }
 }
 
@@ -2731,6 +2743,7 @@ export function renderStageContent(root: HTMLElement, outputs: StageOutputsPaylo
     renderEditorPanel(root, outputs.document_draft);
     renderPaperPackagePanel(root, outputs.document_draft);
   } else {
+    dropLeakedPaperDraft(root);
     // 论文阶段还没产出：编辑器里若有恢复的本机草稿（用户先写了），大纲同样按正文现状给
     syncPaperOutlineFromEditor(root);
   }

@@ -109,6 +109,7 @@ import {
   TEXT_BASE_PX,
 } from "../preferences/display-preferences";
 import { mountTaskAutosave } from "../tasks/task-autosave";
+import { clearPaperDraft, readUserPaperDraft, writeUserPaperDraft } from "../tasks/paper-draft";
 import { mountWorkflowEmptyStates } from "../integration/workflow-empty";
 
   const $ = (selector, scope = document) => scope.querySelector(selector);
@@ -3984,7 +3985,6 @@ import { mountWorkflowEmptyStates } from "../integration/workflow-empty";
   }
 
   // ── 论文编辑器（业主指定实现）：工具栏真实命令、KaTeX 公式、本机草稿、结构检查与导出 ──
-  const PAPER_DRAFT_KEY = "openmathmodelPaperDraft.v1";
   const PAPER_BLOCKS = { "正文": "p", "标题 1": "h1", "标题 2": "h2", "标题 3": "h3" };
   // 前四项映射系统字体（Windows/macOS 自带）；后三项是免费可商用的开源字体
   //（SIL OFL 授权：思源宋体/思源黑体来自 Google Noto，霞鹜文楷来自 lxgw），
@@ -4061,9 +4061,8 @@ import { mountWorkflowEmptyStates } from "../integration/workflow-empty";
     page.dataset.userEdited = "true";
     clearTimeout(paperAutosaveTimer);
     paperDirty = false;
-    try { localStorage.setItem(PAPER_DRAFT_KEY, page.innerHTML); } catch {
-      // 存储不可用时仅本次会话生效
-    }
+    // 存储不可用时仅本次会话生效
+    writeUserPaperDraft(page.innerHTML);
     const now = new Date();
     const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
     refreshPaperStatus(page, `${label} ${stamp}`);
@@ -4088,16 +4087,11 @@ import { mountWorkflowEmptyStates } from "../integration/workflow-empty";
     if (!page || !paperInitialHtml) return;
     modal("恢复初始正文", "<p>将丢弃本机草稿，恢复到本次打开时的初始正文。确认继续？</p>", () => {
       page.innerHTML = paperInitialHtml;
-      try { localStorage.removeItem(PAPER_DRAFT_KEY); } catch {}
       // 用户草稿标记与已填充版本号一并复位：真实运行的下一次刷新会重新灌入
       // Agent 定稿；不清标记的话，被丢弃的草稿会继续挡住真实正文回来。
       delete page.dataset.userEdited;
       delete page.dataset.stageDraftVersion;
-      try {
-        const projectParam = new URL(window.location.href).searchParams.get("project_id") ?? "";
-        const projectScope = /^proj_[0-9a-f]{32}$/.test(projectParam) ? projectParam : "demo";
-        localStorage.removeItem(`openmathmodel.paperDraft.v1.${projectScope}`);
-      } catch {}
+      clearPaperDraft();
       paperDirty = false;
       renderFormulas(page);
       refreshPaperStatus(page, "已恢复初始正文");
@@ -4298,15 +4292,12 @@ import { mountWorkflowEmptyStates } from "../integration/workflow-empty";
     // 先记住初始正文，「恢复初始正文」以此为准
     paperInitialHtml = page.innerHTML;
 
-    // 本机草稿：刷新或换页后不丢内容
-    try {
-      const saved = localStorage.getItem(PAPER_DRAFT_KEY);
-      if (saved && saved !== page.innerHTML) {
-        page.innerHTML = saved;
-        refreshPaperStatus(page, "已恢复本机草稿");
-      }
-    } catch {
-      // 存储不可用时使用初始正文
+    // 本机草稿：刷新或换页后不丢内容；只恢复本项目里用户亲手编辑过的正文
+    const saved = readUserPaperDraft();
+    if (saved && saved.html !== page.innerHTML) {
+      page.innerHTML = saved.html;
+      page.dataset.userEdited = "true";
+      refreshPaperStatus(page, "已恢复本机草稿");
     }
     // 草稿里保存的公式带 data-tex-done 标记，重置后重新排版，确保 KaTeX 样式加载
     $$("[data-tex]", page).forEach(node => { delete node.dataset.texDone; });
@@ -5390,7 +5381,7 @@ export function activateScreen(screen: ScreenId): void {
   resetComposerReferences();
   // 放在工作台挂载之后：恢复对话草稿要等 composer 渲染完成。
   mountTaskAutosave(screen);
-  // 两条本机草稿恢复路径（bindPaperEditor 的全局键、task-autosave 的按项目键）都已跑完：
+  // 两条本机草稿恢复路径（bindPaperEditor、task-autosave，同一份按项目的记录）都已跑完：
   // 论文大纲按编辑器里实际的章标题重建，不让恢复出来的正文配一个「将在论文生成后显示」
   // 的空目录。演示夹具的大纲是固定样张，不动。
   if (!demoMode()) syncPaperOutlineFromEditor();

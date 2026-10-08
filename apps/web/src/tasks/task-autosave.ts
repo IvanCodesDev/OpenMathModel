@@ -12,13 +12,12 @@
 import { saveHistoryEnabled } from "../preferences/privacy-preferences";
 import { autoSaveEnabled } from "../preferences/task-preferences";
 import type { ScreenId } from "../types/screens";
+import { readUserPaperDraft, writeUserPaperDraft } from "./paper-draft";
 
 export const AUTOSAVE_INTERVAL_MS = 30_000;
 
-const PAPER_KEY_PREFIX = "openmathmodel.paperDraft.v1.";
 const CHAT_KEY_PREFIX = "openmathmodel.chatDraft.v1.";
 const AUTOSAVE_SCREENS = new Set<ScreenId>(["running", "data", "model", "experiments", "editor", "complete"]);
-const PROJECT_ID_PATTERN = /^proj_[0-9a-f]{32}$/;
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/;
 
 let timer: number | undefined;
@@ -26,13 +25,9 @@ let boundScreen: ScreenId | undefined;
 let lastPaperHtml: string | undefined;
 let pagehideBound = false;
 
-function urlScope(key: "project_id" | "run_id", pattern: RegExp): string {
+function urlScope(key: "run_id", pattern: RegExp): string {
   const value = new URL(window.location.href).searchParams.get(key) ?? "";
   return pattern.test(value) ? value : "demo";
-}
-
-function paperKey(): string {
-  return PAPER_KEY_PREFIX + urlScope("project_id", PROJECT_ID_PATTERN);
 }
 
 function chatKey(index: number): string {
@@ -67,37 +62,23 @@ function savePaper(): void {
   if (editor.dataset.userEdited !== "true") return;
   const html = editor.innerHTML;
   if (html === lastPaperHtml) return;
-  try {
-    localStorage.setItem(paperKey(), JSON.stringify({ html, saved_at: Date.now(), user_edited: true }));
-    lastPaperHtml = html;
-    markSaved(new Date());
-  } catch {
-    // 存储满或被禁用时跳过本轮，不打断编辑。
-  }
+  // 存储满或被禁用时跳过本轮，不打断编辑。
+  if (!writeUserPaperDraft(html)) return;
+  lastPaperHtml = html;
+  markSaved(new Date());
 }
 
 function restorePaper(): void {
   const editor = paperElement();
   if (!editor) return;
-  try {
-    const raw = localStorage.getItem(paperKey());
-    if (!raw) return;
-    const payload = JSON.parse(raw) as { html?: unknown; saved_at?: unknown; user_edited?: unknown };
-    if (typeof payload.html !== "string" || !payload.html.trim()) return;
-    // 旧版本落盘的记录没有 user_edited 标记（可能只是模板快照）：不恢复也不删除，
-    // 让页面保持模板或真实阶段产出，避免陈旧快照顶掉两者。
-    if (payload.user_edited !== true) return;
-    lastPaperHtml = payload.html;
-    editor.dataset.userEdited = "true";
-    if (payload.html === editor.innerHTML) return;
-    // 恢复的是用户自己浏览器里存下的编辑现场，等价于其离开前的页面状态。
-    editor.innerHTML = payload.html;
-    if (typeof payload.saved_at === "number" && Number.isFinite(payload.saved_at)) {
-      markSaved(new Date(payload.saved_at));
-    }
-  } catch {
-    // 记录损坏时按没有草稿处理，保留页面原有内容。
-  }
+  const draft = readUserPaperDraft();
+  if (!draft) return;
+  lastPaperHtml = draft.html;
+  editor.dataset.userEdited = "true";
+  if (draft.html === editor.innerHTML) return;
+  // 恢复的是用户自己浏览器里存下的编辑现场，等价于其离开前的页面状态。
+  editor.innerHTML = draft.html;
+  if (draft.savedAt !== null) markSaved(new Date(draft.savedAt));
 }
 
 function saveChatDrafts(): void {
