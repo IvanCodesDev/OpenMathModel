@@ -144,16 +144,46 @@ export function inlineText(inlines: readonly Inline[]): string {
 /** 「表 1 …」「Table 2 …」：紧挨在表格前的这种段落是表题。 */
 export const TABLE_CAPTION = /^\s*(?:续?表|Table)\s*[0-9０-９]+(?:[.\-－–][0-9]+)?(?:\s|[:：.、]|$)/;
 
+const WIDE_CHAR = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+
 /** 粗略版面宽度（中文字符计 1，拉丁计 0.55，公式按源码长度折算）：表格分列宽用。 */
 export function displayWidth(inlines: readonly Inline[]): number {
   let width = 0;
   for (const inline of inlines) {
     if (inline.kind === "math") width += Math.min(inline.tex.replace(/\\[a-zA-Z]+|[{}^_\s]/g, "x").length * 0.6, 40);
     else if (inline.kind === "text") {
-      for (const char of inline.text) width += /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(char) ? 1 : char === SOFT_BREAK ? 0 : 0.55;
+      for (const char of inline.text) width += WIDE_CHAR.test(char) ? 1 : char === SOFT_BREAK ? 0 : 0.55;
     }
   }
   return width;
+}
+
+/**
+ * 最长的不可断片段（displayWidth 口径）：Word / WPS 只在空格与汉字处断行，没有空格的拉丁串
+ * （标识符、长数字）整段挪到下一行，格子比它窄就只能在格边硬断。零宽断点不算断点（Word 导出
+ * 会去掉它），不换行空格也不算；行内公式按一整段计。
+ */
+export function unbreakableWidth(inlines: readonly Inline[]): number {
+  let widest = 0;
+  let run = 0;
+  const flush = (width = 0) => {
+    widest = Math.max(widest, run, width);
+    run = 0;
+  };
+  for (const inline of inlines) {
+    if (inline.kind === "math") flush(displayWidth([inline]));
+    else if (inline.kind === "break") flush();
+    else {
+      for (const char of inline.text) {
+        if (char === SOFT_BREAK) continue;
+        if (/\s/.test(char) && char !== "\u00a0") flush();
+        else if (WIDE_CHAR.test(char)) flush(1);
+        else run += 0.55;
+      }
+    }
+  }
+  flush();
+  return widest;
 }
 
 export interface TableLayout {

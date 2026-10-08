@@ -8,7 +8,7 @@ const source = await readFile(new URL("./paper-document.ts", import.meta.url), "
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { SOFT_BREAK, TABLE_CAPTION, allowInlineMathBreaks, insertSoftBreaks, normalizeInlines, stripControlChars, tableLayout } = await import(
+const { SOFT_BREAK, TABLE_CAPTION, allowInlineMathBreaks, insertSoftBreaks, normalizeInlines, stripControlChars, tableLayout, unbreakableWidth } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`
 );
 
@@ -67,6 +67,17 @@ test("table layout: narrow tables stay centred, wide ones wrap their long text c
   assert.deepEqual(wide.wrap, [false, true, false]);
   const noHeader = tableLayout([[cell("a"), cell("b")]]);
   assert.equal(noHeader.headCount, 0);
+});
+
+test("unbreakable width: latin runs without spaces count whole, CJK characters break individually", () => {
+  const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-9, `${message}：${actual} ≠ ${expected}`);
+  near(unbreakableWidth([text("指标 milp_binary_vars_core 偏大")]), 21 * 0.55, "标识符整串");
+  near(unbreakableWidth([text("状态与影响")]), 1, "汉字之间可断");
+  near(unbreakableWidth([text("第2406小时")]), 4 * 0.55, "汉字与数字之间可断");
+  near(unbreakableWidth([text(`data${SOFT_BREAK}_source`)]), 11 * 0.55, "零宽空格不算断点");
+  near(unbreakableWidth([text("5\u00a0MW")]), 4 * 0.55, "不换行空格不算断点");
+  near(unbreakableWidth([text("ab"), { kind: "break" }, text("cde")]), 3 * 0.55, "换行处断开");
+  near(unbreakableWidth([]), 0, "空格子");
 });
 
 test("inline normalisation merges same-format text and trims leading / trailing breaks and blanks", () => {
